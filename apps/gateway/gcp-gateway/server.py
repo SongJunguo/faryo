@@ -1,0 +1,1280 @@
+#!/usr/bin/env python3
+"""Faryo public gateway with form login and route proxying."""
+
+from __future__ import annotations
+
+import argparse
+import base64
+import hashlib
+import hmac
+import http.client
+import ipaddress
+import json
+import os
+import re
+import secrets
+import shutil
+import socket
+import time
+import urllib.request
+from http import HTTPStatus
+from http.cookies import SimpleCookie
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+from typing import Any
+from urllib.parse import parse_qs, urlencode, urlparse
+
+import bcrypt
+
+COOKIE_NAME = "faryo_auth"
+COOKIE_MAX_AGE = 30 * 24 * 60 * 60
+BACKENDS = {
+    "hp": ("127.0.0.1", int(os.environ.get("FARYO_HP_OWNER_PORT", "18766")), "HP"),
+    "pc": ("127.0.0.1", int(os.environ.get("FARYO_PC_OWNER_PORT", "18765")), "PC"),
+    "gcp": ("127.0.0.1", int(os.environ.get("FARYO_GCP_OWNER_PORT", "8765")), "GCP"),
+}
+SESSION_POLICY = {"gcp": (3, 2), "hp": (4, 4), "pc": (4, 2)}
+NEW_SESSION_COMMANDS = {"codex", "claude"}
+HISTORY_SESSION_LIMITS = {"less": {"gcp": 3, "hp": 4, "pc": 4}, "more": {"gcp": 5, "pc": 6, "hp": 7}}
+HISTORY_TOTAL_LIMITS = {"less": 10, "more": 18}
+SUBACCOUNT_MAX_RUNNING = 1
+SUBACCOUNT_AGENT_IDLE_SECONDS = 30 * 60
+SUBACCOUNT_CLEANUP_MIN_INTERVAL_SECONDS = 10 * 60
+SUBACCOUNT_CLEANUP_LAST_TS = 0.0
+STATIC_DIR = Path(__file__).resolve().parent / "static"
+BRIDGE_PACKAGE_MAX_BYTES = 120 * 1024 * 1024
+BRIDGE_ASSET_MAX_BYTES = 20 * 1024 * 1024
+BRIDGE_ASSET_LIMIT = 4
+BRIDGE_MIME_EXT = {
+    "image/png": ".png",
+    "image/jpeg": ".jpg",
+    "image/webp": ".webp",
+    "image/gif": ".gif",
+    "application/pdf": ".pdf",
+    "application/msword": ".doc",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document": ".docx",
+    "application/vnd.ms-powerpoint": ".ppt",
+    "application/vnd.openxmlformats-officedocument.presentationml.presentation": ".pptx",
+    "application/vnd.ms-excel": ".xls",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": ".xlsx",
+    "application/vnd.oasis.opendocument.text": ".odt",
+    "application/vnd.oasis.opendocument.presentation": ".odp",
+    "application/vnd.oasis.opendocument.spreadsheet": ".ods",
+    "text/markdown": ".md",
+    "text/plain": ".txt",
+    "text/csv": ".csv",
+    "application/json": ".json",
+    "application/rtf": ".rtf",
+}
+BRIDGE_SUFFIX_MIME = {suffix: mime for mime, suffix in BRIDGE_MIME_EXT.items()}
+BRIDGE_SUFFIX_MIME[".jpeg"] = "image/jpeg"
+MCP_PROTOCOL_VERSION = "2025-06-18"
+MCP_SERVER_VERSION = "1.0.0"
+MCP_TOOL_NAME = "create_faryo_handoff_package"
+MCP_ATTACHMENT_SCHEMA = {"anyOf": [{"type": "object", "additionalProperties": True}, {"type": "string"}]}
+MCP_TOOL_SCHEMAS = {MCP_TOOL_NAME: {"type": "object", "properties": {"title": {"type": "string"}, "intent": {"type": "string"}, "context": {"type": "string"}, "prompt": {"type": "string"}, "attachment": MCP_ATTACHMENT_SCHEMA, "attachments": {"type": "array", "items": MCP_ATTACHMENT_SCHEMA}, "image": MCP_ATTACHMENT_SCHEMA, "images": {"type": "array", "items": MCP_ATTACHMENT_SCHEMA}}, "required": ["title", "intent", "context", "prompt"]}}
+PWA_MANIFEST = {
+    "id": "/",
+    "name": "Faryo",
+    "short_name": "Faryo",
+    "description": "Faryo handoff companion for available devices and sessions",
+    "start_url": "/",
+    "scope": "/",
+    "display": "standalone",
+    "theme_color": "#F7F0E5",
+    "background_color": "#F7F0E5",
+    "icons": [
+        {"src": "/icons/pwa-light-192.png", "sizes": "192x192", "type": "image/png"},
+        {"src": "/icons/pwa-light-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable"},
+    ],
+}
+PWA_SW = """self.addEventListener('install',()=>self.skipWaiting());
+self.addEventListener('activate',(event)=>{event.waitUntil(caches.keys().then((keys)=>Promise.all(keys.map((key)=>caches.delete(key)))).then(()=>self.clients.claim()));});
+self.addEventListener('fetch',()=>{});
+"""
+
+OWNER_STATIC_FILES = {"app.js", "style.css", "index.html", "compact-rules-codex.js", "compact-rules-claude.js"}
+OWNER_STATIC_PREFIXES = ("icons/", "pet/")
+
+HOP_BY_HOP_HEADERS = {
+    "connection",
+    "keep-alive",
+    "proxy-authenticate",
+    "proxy-authorization",
+    "te",
+    "trailer",
+    "transfer-encoding",
+    "upgrade",
+}
+
+
+def read_env(path: Path) -> dict[str, str]:
+    values: dict[str, str] = {}
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if not line or line.lstrip().startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        values[key] = value
+    return values
+
+
+def load_secret(path: Path) -> bytes:
+    if path.exists():
+        return path.read_text(encoding="utf-8").strip().encode("utf-8")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    secret = secrets.token_urlsafe(48)
+    path.write_text(secret + "\n", encoding="utf-8")
+    os.chmod(path, 0o600)
+    return secret.encode("utf-8")
+
+
+def html_escape(value: str) -> str:
+    return (
+        value.replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace('"', "&quot;")
+        .replace("'", "&#39;")
+    )
+
+
+def backend_status(route: str, timeout: float = 1.8) -> dict[str, Any]:
+    host, port, label = BACKENDS[route]
+    started = time.monotonic()
+    try:
+        conn = http.client.HTTPConnection(host, port, timeout=timeout)
+        conn.request("GET", "/health")
+        resp = conn.getresponse()
+        resp.read()
+        elapsed_ms = round((time.monotonic() - started) * 1000)
+    except OSError:
+        return {
+            "id": route,
+            "label": label,
+            "state": "offline",
+            "stateText": "Off",
+            "detail": "Owner backend is unreachable",
+        }
+    finally:
+        try:
+            conn.close()  # type: ignore[possibly-undefined]
+        except Exception:
+            pass
+    if resp.status == 200:
+        state = "slow" if elapsed_ms > 1500 else "online"
+        return {
+            "id": route,
+            "label": label,
+            "state": state,
+            "stateText": f"{elapsed_ms}ms",
+            "detail": f"{elapsed_ms} ms",
+        }
+    return {
+        "id": route,
+        "label": label,
+        "state": "error",
+        "stateText": f"E{resp.status}",
+        "detail": f"health {resp.status}",
+    }
+
+
+def now_ts() -> int:
+    return int(time.time())
+
+
+def parse_updated_ts(value: Any) -> float:
+    if isinstance(value, (int, float)): return float(value)
+    try: return float(str(value or "").strip())
+    except ValueError: pass
+    try: return time.mktime(time.strptime(str(value).replace("Z", "+0000"), "%Y-%m-%dT%H:%M:%S%z"))
+    except ValueError: return 0.0
+
+
+def display_updated_at(value: Any) -> str:
+    ts = parse_updated_ts(value)
+    if ts <= 0: return str(value or "")
+    local = time.localtime(ts)
+    fmt = "%H:%M" if time.strftime("%Y-%m-%d", local) == time.strftime("%Y-%m-%d", time.localtime()) else "%m-%d %H:%M"
+    return time.strftime(fmt, local)
+
+
+def compact_path_label(value: Any) -> str:
+    text = str(value or "").replace("\\", "/").rstrip("/")
+    return text.split("/")[-1] if text and text != "~" else text
+
+
+def display_session_title(value: Any) -> str:
+    return " ".join(str(value or "").replace("\r", "\n").split()) or "Untitled session"
+
+def clean_re(value: str | None, pattern: str) -> str | None:
+    value = (value or "").strip(); return value if re.fullmatch(pattern, value) else None
+
+
+def clean_package_id(value: str | None) -> str | None: return clean_re(value, r"[0-9]+-[a-f0-9]{8}")
+def clean_session_id(value: str | None) -> str | None: return clean_re(value, r"[A-Za-z0-9_.:-]{1,80}")
+def clean_agent_session_id(value: str | None) -> str | None: return clean_re(value, r"[A-Za-z0-9_.:-]{1,120}")
+def clean_agent_launch_command(value: str | None) -> str | None:
+    command = Path(str(value or "").strip()).name.lower()
+    return command if command in NEW_SESSION_COMMANDS else None
+
+
+def blocked_asset_ip(ip: Any) -> bool:
+    return ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_multicast or ip.is_reserved or ip.is_unspecified
+
+
+def blocked_asset_host(hostname: str | None) -> bool:
+    host = (hostname or "").strip().lower()
+    if not host or host in {"localhost", "localhost.localdomain"} or host.endswith(".localhost"):
+        return True
+    try:
+        ip = ipaddress.ip_address(host.strip("[]"))
+    except ValueError:
+        pass
+    else:
+        return blocked_asset_ip(ip)
+    try:
+        infos = socket.getaddrinfo(host, None, type=socket.SOCK_STREAM)
+    except socket.gaierror:
+        return True
+    for info in infos:
+        try:
+            resolved_ip = ipaddress.ip_address(info[4][0])
+        except (IndexError, ValueError):
+            return True
+        if blocked_asset_ip(resolved_ip):
+            return True
+    return False
+
+
+def normalize_bridge_asset_payload(value: Any) -> dict[str, str] | None:
+    if isinstance(value, str):
+        raw = value.strip()
+        if raw.startswith("data:"): return {"data_url": raw, "base64_data": "", "asset_url": "", "mime_type": "application/octet-stream", "file_name": "faryo-attachment"}
+        if raw.startswith("https://"): return {"data_url": "", "base64_data": "", "asset_url": raw, "mime_type": "application/octet-stream", "file_name": Path(urlparse(raw).path).name or "faryo-attachment"}
+        if len(raw) > 100 and re.fullmatch(r"[A-Za-z0-9+/=_-]+", raw): return {"data_url": "", "base64_data": raw, "asset_url": "", "mime_type": "image/png", "file_name": "faryo-image.png"}
+        return None
+    if not isinstance(value, dict): return None
+    data_url = str(value.get("data_url") or value.get("dataUrl") or "").strip(); base64_data = str(value.get("base64_data") or value.get("base64Data") or value.get("b64_json") or "").strip()
+    raw_data = value.get("data") or value.get("content")
+    if isinstance(raw_data, str) and not data_url and not base64_data:
+        if raw_data.strip().startswith("data:"): data_url = raw_data.strip()
+        else: base64_data = raw_data.strip()
+    asset_url = str(value.get("asset_url") or value.get("assetUrl") or value.get("image_url") or value.get("imageUrl") or value.get("url") or value.get("download_url") or value.get("downloadUrl") or "").strip()
+    if not data_url and not base64_data and not asset_url: return None
+    mime_type = str(value.get("mime_type") or value.get("mimeType") or value.get("type") or "application/octet-stream").split(";", 1)[0].strip().lower()
+    file_name = Path(str(value.get("file_name") or value.get("fileName") or value.get("name") or "faryo-attachment")).name
+    return {"data_url": data_url, "base64_data": base64_data, "asset_url": asset_url, "mime_type": mime_type, "file_name": file_name}
+
+
+def bridge_mime_type(mime_type: str, file_name: str) -> str:
+    mime_type = (mime_type or "application/octet-stream").strip().lower()
+    suffix = Path(file_name or "").suffix.lower()
+    if mime_type in BRIDGE_MIME_EXT:
+        return mime_type
+    if suffix in BRIDGE_SUFFIX_MIME:
+        return BRIDGE_SUFFIX_MIME[suffix]
+    return mime_type
+
+
+def bridge_asset_bytes_from_payload(asset: dict[str, str]) -> tuple[str, bytes]:
+    mime_type = bridge_mime_type(asset.get("mime_type") or "", asset.get("file_name") or "")
+    if asset.get("data_url"):
+        header, sep, payload = asset["data_url"].partition(",")
+        if not sep or ";base64" not in header: raise ValueError("invalid attachment data_url")
+        mime_type = (header.removeprefix("data:").split(";", 1)[0] or mime_type).strip().lower(); data = base64.b64decode(payload, validate=True)
+        mime_type = bridge_mime_type(mime_type, asset.get("file_name") or "")
+    elif asset.get("base64_data"):
+        data = base64.b64decode(asset.get("base64_data") or "", validate=True)
+    else:
+        parsed = urlparse(asset.get("asset_url") or "")
+        if parsed.scheme != "https": raise ValueError("attachment url must be https")
+        if blocked_asset_host(parsed.hostname): raise ValueError("attachment url host is not allowed")
+        with urllib.request.urlopen(urllib.request.Request(parsed.geturl(), headers={"User-Agent": "Faryo-Bridge/0.1"}), timeout=8) as resp:
+            mime_type = (resp.headers.get_content_type() or mime_type).strip().lower(); data = resp.read(BRIDGE_ASSET_MAX_BYTES + 1)
+        mime_type = bridge_mime_type(mime_type, asset.get("file_name") or Path(parsed.path).name)
+    if mime_type not in BRIDGE_MIME_EXT: raise ValueError(f"unsupported attachment type: {mime_type or 'unknown'}")
+    if len(data) > BRIDGE_ASSET_MAX_BYTES: raise ValueError("attachment is too large")
+    return mime_type, data
+
+
+def bridge_prompt_text(package: dict[str, Any]) -> str:
+    parts = ["# Faryo Handoff Package", f"Title: {package.get('title') or 'Untitled handoff'}", f"Source: {package.get('source') or 'Faryo'}", "", "## Intent", str(package.get("intent") or ""), "", "## Context", str(package.get("context") or ""), "", "## Request", str(package.get("prompt") or "")]
+    assets = package.get("assets") if isinstance(package.get("assets"), list) else []
+    if assets: parts.extend(["", "## Attachments"] + [f"- {asset.get('file_name')}: {asset.get('path')}" for asset in assets if isinstance(asset, dict)])
+    return "\n".join(parts).strip() + "\n"
+
+
+class ReusableThreadingHTTPServer(ThreadingHTTPServer):
+    allow_reuse_address = True
+
+
+class GatewayConfig:
+    def __init__(self, auth_config: Path, owner_env: Path, portal_dir: Path, secret_file: Path):
+        self.auth_config = auth_config
+        auth = json.loads(auth_config.read_text(encoding="utf-8"))
+        env = read_env(owner_env)
+        self.mcp_token = (env.get("FARYO_MCP_TOKEN") or env.get("FARYO_GUARD_TOKEN") or "").strip()
+        self.mcp_user = env.get("FARYO_MCP_USER", "").strip()
+        self.users = self.load_users(auth)
+        self.owner_tokens = self.load_owner_tokens(env)
+        self.portal_dir = portal_dir
+        self.cookie_secret = load_secret(secret_file)
+        self.guard_token = env.get("FARYO_GUARD_TOKEN", "")
+        self.bridge_root = secret_file.parent / "bridge-packages"
+        self.bridge_root.mkdir(parents=True, exist_ok=True)
+
+    def load_owner_tokens(self, env: dict[str, str]) -> dict[str, str]:
+        tokens: dict[str, str] = {}
+        missing = []
+        for route in BACKENDS:
+            key = f"FARYO_{route.upper()}_OWNER_TOKEN"
+            value = env.get(key, "").strip()
+            if not value:
+                missing.append(key)
+                continue
+            tokens[route] = value
+        if missing:
+            raise ValueError("missing route owner token env: " + ", ".join(missing))
+        return tokens
+
+    def load_users(self, auth: dict[str, Any]) -> dict[str, dict[str, Any]]:
+        if "users" in auth and isinstance(auth["users"], dict):
+            source = auth["users"]
+        else:
+            username = str(auth["username"])
+            source = {username: {"bcrypt_hash": str(auth["bcrypt_hash"]), "auth_epoch": int(auth.get("auth_epoch") or 0), "routes": list(BACKENDS)}}
+        users: dict[str, dict[str, Any]] = {}
+        for username, payload in source.items():
+            if not isinstance(payload, dict):
+                continue
+            name = str(username).strip()
+            if not name:
+                continue
+            routes = [route for route in payload.get("routes", list(BACKENDS)) if route in BACKENDS] or list(BACKENDS)
+            route_namespaces = dict(payload.get("route_namespaces") or {})
+            missing_namespaces = [route for route in routes if not route_namespaces.get(route)]
+            if missing_namespaces:
+                raise ValueError(f"user {name} missing route_namespaces for: {', '.join(missing_namespaces)}")
+            default_route = str(payload.get("default_route") or (routes[0] if routes else "gcp"))
+            if default_route not in routes and routes:
+                default_route = routes[0]
+            users[name] = {
+                "bcrypt_hash": str(payload["bcrypt_hash"]),
+                "auth_epoch": int(payload.get("auth_epoch") or 0),
+                "routes": routes,
+                "default_route": default_route,
+                "route_namespaces": route_namespaces,
+                "file_inbox_roots": dict(payload.get("file_inbox_roots") or {}),
+                "workspace_roots": dict(payload.get("workspace_roots") or {}),
+            }
+        if not users:
+            raise ValueError("gateway auth config has no valid users")
+        if not self.mcp_user or self.mcp_user not in users:
+            self.mcp_user = next(iter(users))
+        return users
+
+    def save_users(self) -> None:
+        payload = {"users": self.users}
+        tmp = self.auth_config.with_name(f".{self.auth_config.name}.tmp")
+        tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        os.chmod(tmp, 0o600)
+        os.replace(tmp, self.auth_config)
+
+    def user(self, username: str) -> dict[str, Any] | None:
+        return self.users.get(username)
+
+    def user_routes(self, username: str) -> list[str]:
+        user = self.users.get(username) or {}
+        return [route for route in user.get("routes", []) if route in BACKENDS]
+
+    def allowed_route(self, username: str, route: str) -> bool:
+        return route in self.user_routes(username)
+
+    def password_hash(self, username: str) -> bytes:
+        return str(self.users[username]["bcrypt_hash"]).encode("utf-8")
+
+    def auth_epoch(self, username: str) -> int:
+        return int(self.users[username].get("auth_epoch") or 0)
+
+    def set_password(self, username: str, password: str) -> None:
+        if username not in self.users:
+            raise ValueError("unknown user")
+        self.users[username]["bcrypt_hash"] = bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
+        self.users[username]["auth_epoch"] = int(time.time())
+        self.save_users()
+
+    def route_namespace(self, username: str, route: str) -> str | None:
+        value = (self.users.get(username) or {}).get("route_namespaces", {}).get(route)
+        return str(value) if value else None
+
+    def file_inbox_root(self, username: str, route: str) -> str | None:
+        value = (self.users.get(username) or {}).get("file_inbox_roots", {}).get(route)
+        return str(value) if value else None
+
+    def workspace_root(self, username: str, route: str) -> str | None:
+        value = (self.users.get(username) or {}).get("workspace_roots", {}).get(route)
+        return str(value) if value else None
+
+    def owner_token(self, route: str) -> str:
+        return self.owner_tokens[route]
+
+
+    def bridge_asset_sources(self, payload: dict[str, Any]) -> list[Any]:
+        assets: list[Any] = []
+        for key in ("attachments", "files", "assets", "images"):
+            values = payload.get(key)
+            if isinstance(values, list):
+                assets.extend(values)
+        for key in ("attachment", "file", "asset", "image"):
+            if payload.get(key):
+                assets.insert(0, payload.get(key))
+        return assets[:BRIDGE_ASSET_LIMIT]
+
+    def attachment_only_prompt(self, title: str) -> str:
+        return f"# Faryo Handoff Package\nTitle: {title}\n\nReview the attached files and continue from the current session context. Use the attachment paths below as the canonical source files."
+
+    def save_bridge_assets(self, package_id: str, package_dir: Path, asset_sources: list[Any], start_index: int = 1) -> list[dict[str, Any]]:
+        assets = []
+        for index, item in enumerate(asset_sources, start=start_index):
+            asset = normalize_bridge_asset_payload(item)
+            if not asset: raise ValueError("invalid attachment payload")
+            mime_type, data = bridge_asset_bytes_from_payload(asset); file_name = f"asset-{index}{BRIDGE_MIME_EXT[mime_type]}"; path = package_dir / file_name; path.write_bytes(data)
+            assets.append({"file_name": asset["file_name"], "mime_type": mime_type, "size": len(data), "path": str(path), "url": f"/bridge/packages/{package_id}/{file_name}"})
+        return assets
+
+    def user_can_access_package(self, username: str, package: dict[str, Any]) -> bool:
+        owner = str(package.get("owner") or "")
+        return owner == username or (not owner and username == self.mcp_user)
+
+    def save_bridge_package(self, payload: dict[str, Any], username: str) -> dict[str, Any]:
+        title = str(payload.get("title") or payload.get("topic") or "Untitled handoff").strip()[:120] or "Untitled handoff"; prompt = str(payload.get("prompt") or payload.get("instruction") or payload.get("handoff_prompt") or "").strip(); assets = self.bridge_asset_sources(payload)
+        if not prompt and not assets: raise ValueError("package prompt or attachment is required")
+        package_id = f"{now_ts()}-{secrets.token_hex(4)}"; package_dir = self.bridge_root / package_id; package_dir.mkdir(parents=True, exist_ok=False)
+        try:
+            package = {"id": package_id, "owner": username, "title": title, "source": str(payload.get("source") or "Faryo Gateway"), "intent": str(payload.get("intent") or ""), "context": str(payload.get("context") or payload.get("summary") or ""), "prompt": prompt or self.attachment_only_prompt(title), "assets": self.save_bridge_assets(package_id, package_dir, assets), "status": "pending", "created_at": now_ts(), "updated_at": now_ts()}
+            (package_dir / "package.json").write_text(json.dumps(package, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"); return package
+        except Exception:
+            shutil.rmtree(package_dir, ignore_errors=True); raise
+
+    def append_bridge_package_assets(self, package_id: str, asset_sources: list[Any], username: str) -> dict[str, Any]:
+        package_id = clean_package_id(package_id) or ""; package = self.bridge_package(package_id, username)
+        if not package_id: raise ValueError("invalid package id")
+        if not asset_sources: raise ValueError("attachment is required")
+        if not package: raise ValueError("package not found")
+        assets = package.get("assets") if isinstance(package.get("assets"), list) else []
+        package["assets"] = assets + self.save_bridge_assets(package_id, self.bridge_root / package_id, asset_sources[:BRIDGE_ASSET_LIMIT], len(assets) + 1)
+        package["prompt"] = str(package.get("prompt") or "").strip() or self.attachment_only_prompt(str(package.get("title") or "Handoff package")); self.update_bridge_package(package); return package
+
+    def list_bridge_packages(self, username: str, status: str | None = None) -> list[dict[str, Any]]:
+        packages = [p for p in (self.bridge_package(path.parent.name, username) for path in self.bridge_root.glob("*/package.json")) if p and (not status or p.get("status") == status)]
+        return sorted(packages, key=lambda item: int(item.get("updated_at") or item.get("created_at") or 0), reverse=True)
+
+    def bridge_package(self, package_id: str, username: str | None = None) -> dict[str, Any] | None:
+        path = self.bridge_root / (clean_package_id(package_id) or "") / "package.json"
+        try: package = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError): return None
+        if not isinstance(package, dict):
+            return None
+        if username and not self.user_can_access_package(username, package):
+            return None
+        return package
+
+    def update_bridge_package(self, package: dict[str, Any]) -> None:
+        package_id = clean_package_id(str(package.get("id") or ""))
+        if not package_id: raise ValueError("invalid package id")
+        package["updated_at"] = now_ts(); (self.bridge_root / package_id / "package.json").write_text(json.dumps(package, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
+class GatewayHandler(BaseHTTPRequestHandler):
+    server_version = "FaryoGateway/0.1"
+
+    @property
+    def config(self) -> GatewayConfig:
+        return self.server.config  # type: ignore[attr-defined]
+
+    def log_message(self, fmt: str, *args: Any) -> None:
+        safe_path = self.path.split("?", 1)[0]
+        print("[%s] %s %s" % (time.strftime("%Y-%m-%dT%H:%M:%S%z"), self.command, safe_path), flush=True)
+
+    def do_OPTIONS(self) -> None:
+        parsed = urlparse(self.path)
+        if parsed.path == "/mcp":
+            self.send_response(HTTPStatus.NO_CONTENT)
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Access-Control-Allow-Headers", "authorization, content-type, mcp-protocol-version, mcp-session-id, x-faryo-mcp-token")
+            self.send_header("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
+            self.end_headers()
+            return
+        self.send_response(HTTPStatus.NO_CONTENT)
+        self.end_headers()
+
+    def do_GET(self) -> None:
+        parsed = urlparse(self.path)
+        if parsed.path == "/manifest.json":
+            self.write_json(PWA_MANIFEST, HTTPStatus.OK)
+            return
+        if parsed.path == "/sw.js":
+            self.write_asset(PWA_SW.encode("utf-8"), "text/javascript; charset=utf-8", "no-store")
+            return
+        if parsed.path.startswith("/icons/"):
+            self.write_icon(parsed.path.rsplit("/", 1)[-1])
+            return
+        if parsed.path == "/mcp":
+            self.handle_mcp_get(parsed)
+            return
+        username = self.current_username()
+        if parsed.path == "/login":
+            if username:
+                self.redirect(self.safe_next(parsed))
+                return
+            self.write_login_page(self.safe_next(parsed))
+            return
+        if parsed.path == "/favicon.ico":
+            self.write_icon("favicon.ico")
+            return
+        if parsed.path == "/api/guard-health":
+            self.write_guard_health()
+            return
+        if parsed.path == "/logout":
+            self.send_response(HTTPStatus.SEE_OTHER)
+            self.send_header("Set-Cookie", self.expired_cookie())
+            self.send_header("Location", "/login")
+            self.end_headers()
+            return
+        if not username and self.is_api_path(parsed.path):
+            self.write_json({"ok": False, "error": "unauthorized"}, HTTPStatus.UNAUTHORIZED)
+            return
+        if not username:
+            self.redirect("/login?" + urlencode({"next": self.request_target()}))
+            return
+        if parsed.path == "/api/gateway-status":
+            routes = self.config.user_routes(username)
+            self.write_json({"ok": True, "entries": [backend_status(route) for route in routes]}, HTTPStatus.OK)
+            return
+        if parsed.path == "/api/workbench":
+            history_mode = parse_qs(parsed.query).get("history", ["less"])[0]
+            self.write_json(self.workbench_payload(username, history_mode), HTTPStatus.OK)
+            return
+        if parsed.path == "/api/bridge-packages":
+            self.write_json({"ok": True, "packages": self.config.list_bridge_packages(username)}, HTTPStatus.OK)
+            return
+        if parsed.path.startswith("/bridge/packages/"):
+            self.write_bridge_package_asset(parsed.path, username)
+            return
+        if parsed.path == "/password":
+            self.write_password_page()
+            return
+        route = self.route_for(parsed)
+        if route:
+            self.proxy(parsed, route, username)
+            return
+        if parsed.path == "/":
+            self.serve_portal(username)
+            return
+        self.write_not_found(parsed.path)
+
+    def write_guard_health(self) -> None:
+        token = self.headers.get("X-Faryo-Guard-Token", "")
+        if not self.config.guard_token or not hmac.compare_digest(token, self.config.guard_token):
+            self.write_json({"ok": False, "error": "forbidden"}, HTTPStatus.FORBIDDEN)
+            return
+        gcp_status = backend_status("gcp")
+        ok = gcp_status.get("state") in {"online", "slow"}
+        status = HTTPStatus.OK if ok else HTTPStatus.SERVICE_UNAVAILABLE
+        self.write_json({"ok": ok, "gcp": gcp_status, "updatedAt": int(time.time())}, status)
+
+    def do_POST(self) -> None:
+        parsed = urlparse(self.path)
+        if parsed.path == "/mcp":
+            self.handle_mcp_post(parsed)
+            return
+        if parsed.path == "/login":
+            self.handle_login(parsed)
+            return
+        username = self.current_username()
+        if not username:
+            self.write_json({"ok": False, "error": "unauthorized"}, HTTPStatus.UNAUTHORIZED)
+            return
+        if parsed.path == "/password":
+            self.handle_password_change(username)
+            return
+        if parsed.path == "/api/bridge-packages":
+            self.handle_bridge_package_create(username)
+            return
+        if parsed.path == "/api/bridge-package-assets":
+            self.handle_bridge_package_assets(username)
+            return
+        if parsed.path == "/api/bridge-inject":
+            self.handle_bridge_inject(username)
+            return
+        if parsed.path == "/api/agent/new":
+            self.handle_agent_new(username)
+            return
+        if parsed.path == "/api/agent/resume":
+            self.handle_agent_resume(username)
+            return
+        route = self.route_for(parsed)
+        if route:
+            self.proxy(parsed, route, username)
+            return
+        self.write_not_found(parsed.path)
+
+    def handle_mcp_get(self, parsed: Any) -> None:
+        if not self.require_mcp_token():
+            return
+        self.send_response(HTTPStatus.METHOD_NOT_ALLOWED); self.send_header("Access-Control-Allow-Origin", "*"); self.send_header("Allow", "POST, OPTIONS"); self.send_header("Cache-Control", "no-store"); self.end_headers()
+
+    def handle_mcp_post(self, parsed: Any) -> None:
+        if not self.require_mcp_token():
+            return
+        try: payload = self.read_json_payload(BRIDGE_PACKAGE_MAX_BYTES)
+        except ValueError as exc: self.write_mcp_json(self.mcp_error(None, -32700, str(exc)), HTTPStatus.BAD_REQUEST); return
+        try: response = self.mcp_response(payload)
+        except ValueError as exc: self.write_mcp_json(self.mcp_error(None, -32700, str(exc)), HTTPStatus.BAD_REQUEST); return
+        if response is None: self.send_response(HTTPStatus.ACCEPTED); self.send_header("Access-Control-Allow-Origin", "*"); self.end_headers(); return
+        self.write_mcp_json(response)
+
+    def mcp_response(self, payload: Any) -> dict[str, Any] | list[dict[str, Any]] | None:
+        if isinstance(payload, list):
+            responses = []
+            for item in payload:
+                response = self.mcp_response(item) if isinstance(item, dict) else self.mcp_error(None, -32600, "invalid JSON-RPC message")
+                if isinstance(response, list): responses.extend(response)
+                elif response is not None: responses.append(response)
+            return responses or None
+        if not isinstance(payload, dict): return self.mcp_error(None, -32600, "invalid JSON-RPC message")
+        request_id = payload.get("id"); method = str(payload.get("method") or ""); params = payload.get("params") if isinstance(payload.get("params"), dict) else {}
+        if request_id is None: return None
+        try:
+            if method == "initialize": return self.mcp_result(request_id, {"protocolVersion": str(params.get("protocolVersion") or MCP_PROTOCOL_VERSION), "capabilities": {"tools": {"listChanged": True}}, "serverInfo": {"name": "faryo-bridge", "version": MCP_SERVER_VERSION}, "instructions": "Create Faryo handoff packages for cross-session, cross-device, or external workflow transfer."})
+            if method == "tools/list": return self.mcp_result(request_id, {"tools": self.mcp_tool_descriptors()})
+            if method == "resources/list": return self.mcp_result(request_id, {"resources": []})
+            if method == "resources/read": return self.mcp_result(request_id, {"contents": []})
+            if method == "ping": return self.mcp_result(request_id, {})
+            if method == "tools/call":
+                name = str(params.get("name") or ""); arguments = params.get("arguments") if isinstance(params.get("arguments"), dict) else {}
+                if name == MCP_TOOL_NAME: return self.mcp_result(request_id, self.mcp_create_handoff(arguments))
+                return self.mcp_error(request_id, -32602, f"unknown tool: {name}")
+            return self.mcp_error(request_id, -32601, f"method not found: {method}")
+        except ValueError as exc: return self.mcp_error(request_id, -32602, str(exc))
+        except Exception as exc: return self.mcp_error(request_id, -32000, str(exc))
+
+    def mcp_result(self, request_id: Any, result: dict[str, Any]) -> dict[str, Any]: return {"jsonrpc": "2.0", "id": request_id, "result": result}
+    def mcp_error(self, request_id: Any, code: int, message: str) -> dict[str, Any]: return {"jsonrpc": "2.0", "id": request_id, "error": {"code": code, "message": message}}
+
+    def mcp_tool_descriptors(self) -> list[dict[str, Any]]:
+        return [
+            {"name": MCP_TOOL_NAME, "title": "Create Faryo handoff package", "description": "Create a Faryo Inbox handoff package for cross-session, cross-device, or external workflow transfer. Attachments may be file objects, data_url strings, https URLs, or base64_data; do not pass local sandbox paths such as /mnt/data.", "inputSchema": MCP_TOOL_SCHEMAS[MCP_TOOL_NAME], "annotations": {"readOnlyHint": False, "destructiveHint": False, "idempotentHint": False, "openWorldHint": False}, "_meta": {"openai/fileParams": ["attachment", "attachments", "image", "images"], "openai/toolInvocation/invoking": "Creating Faryo handoff package...", "openai/toolInvocation/invoked": "Faryo handoff package created."}},
+        ]
+
+    def mcp_create_handoff(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        package = self.config.save_bridge_package({"title": str(arguments.get("title") or "").strip(), "source": "Faryo MCP", "intent": str(arguments.get("intent") or "").strip(), "context": str(arguments.get("context") or arguments.get("summary") or "").strip(), "prompt": str(arguments.get("prompt") or "").strip(), "attachment": arguments.get("attachment"), "attachments": arguments.get("attachments") if isinstance(arguments.get("attachments"), list) else [], "image": arguments.get("image"), "images": arguments.get("images") if isinstance(arguments.get("images"), list) else []}, self.config.mcp_user)
+        structured = {"ok": True, "package_id": package["id"], "title": package["title"], "assets": package["assets"], "gateway_url": self.public_base_url() + "/"}
+        return {"structuredContent": structured, "content": [{"type": "text", "text": json.dumps(structured, ensure_ascii=False)}], "_meta": {}}
+
+    def public_base_url(self) -> str:
+        return f"{self.headers.get('X-Forwarded-Proto') or 'https'}://{self.headers.get('X-Forwarded-Host') or self.headers.get('Host') or ''}".rstrip("/")
+
+    def write_mcp_json(self, data: dict[str, Any], status: HTTPStatus = HTTPStatus.OK) -> None:
+        body = json.dumps(data, ensure_ascii=False).encode("utf-8"); self.send_response(status); self.send_header("Content-Type", "application/json; charset=utf-8"); self.send_header("Access-Control-Allow-Origin", "*"); self.send_header("Cache-Control", "no-store"); self.send_header("Content-Length", str(len(body))); self.end_headers(); self.write_bytes(body)
+
+    def require_mcp_token(self) -> bool:
+        auth = self.headers.get("Authorization", "").strip()
+        token = self.headers.get("X-Faryo-Mcp-Token", "").strip()
+        if auth.lower().startswith("bearer "):
+            token = auth[7:].strip()
+        if self.config.mcp_token and token and hmac.compare_digest(token, self.config.mcp_token):
+            return True
+        self.write_mcp_json(self.mcp_error(None, -32001, "unauthorized"), HTTPStatus.UNAUTHORIZED)
+        return False
+
+    def handle_login(self, parsed: Any) -> None:
+        length = int(self.headers.get("Content-Length", "0") or "0")
+        raw = self.rfile.read(min(length, 8192)).decode("utf-8", errors="replace")
+        form = parse_qs(raw)
+        username = form.get("username", [""])[0].strip()
+        password = form.get("password", [""])[0]
+        next_target = form.get("next", [self.safe_next(parsed)])[0] or "/"
+        user = self.config.user(username)
+        ok = bool(user) and bcrypt.checkpw(password.encode("utf-8"), self.config.password_hash(username))
+        if not ok:
+            self.write_login_page(self.safe_target(next_target), error="Invalid username or password")
+            return
+        self.send_response(HTTPStatus.SEE_OTHER)
+        self.send_header("Set-Cookie", self.auth_cookie(username))
+        self.send_header("Location", self.safe_target(next_target))
+        self.end_headers()
+
+    def handle_password_change(self, username: str) -> None:
+        length = int(self.headers.get("Content-Length", "0") or "0")
+        raw = self.rfile.read(min(length, 8192)).decode("utf-8", errors="replace")
+        form = parse_qs(raw)
+        current = form.get("current_password", [""])[0]
+        new_password = form.get("new_password", [""])[0]
+        confirm = form.get("confirm_password", [""])[0]
+        if not bcrypt.checkpw(current.encode("utf-8"), self.config.password_hash(username)):
+            self.write_password_page(error="Current password is incorrect")
+            return
+        if len(new_password) < 12:
+            self.write_password_page(error="New password must be at least 12 characters")
+            return
+        if new_password != confirm:
+            self.write_password_page(error="New password confirmation does not match")
+            return
+        self.config.set_password(username, new_password)
+        self.send_response(HTTPStatus.SEE_OTHER)
+        self.send_header("Set-Cookie", self.auth_cookie(username))
+        self.send_header("Location", "/?password=changed")
+        self.end_headers()
+
+
+    def read_json_body(self, max_bytes: int = BRIDGE_PACKAGE_MAX_BYTES) -> dict[str, Any]:
+        payload = self.read_json_payload(max_bytes)
+        if not isinstance(payload, dict): raise ValueError("invalid JSON object")
+        return payload
+
+    def read_json_payload(self, max_bytes: int = BRIDGE_PACKAGE_MAX_BYTES) -> Any:
+        length = int(self.headers.get("Content-Length", "0") or "0")
+        if length <= 0: raise ValueError("empty JSON body")
+        if length > max_bytes: raise ValueError("request too large")
+        try: return json.loads(self.rfile.read(length).decode("utf-8"))
+        except json.JSONDecodeError as exc: raise ValueError("invalid JSON body") from exc
+
+    def handle_bridge_package_create(self, username: str) -> None:
+        try: self.write_json({"ok": True, "package": self.config.save_bridge_package(self.read_json_body(), username)}, HTTPStatus.OK)
+        except ValueError as exc: self.write_json({"ok": False, "error": str(exc)}, HTTPStatus.BAD_REQUEST)
+
+    def handle_bridge_package_assets(self, username: str) -> None:
+        try:
+            payload = self.read_json_body(); assets = self.config.bridge_asset_sources(payload); package_id = str(payload.get("package_id") or payload.get("packageId") or "")
+            self.write_json({"ok": True, "package": self.config.append_bridge_package_assets(package_id, assets, username)}, HTTPStatus.OK)
+        except ValueError as exc: self.write_json({"ok": False, "error": str(exc)}, HTTPStatus.BAD_REQUEST)
+
+    def handle_bridge_inject(self, username: str) -> None:
+        try:
+            payload = self.read_json_body(65536); package_id = clean_package_id(str(payload.get("package_id") or payload.get("packageId") or "")); route = str(payload.get("route") or "").strip(); session = clean_session_id(str(payload.get("session") or "")); agent_session_id = clean_agent_session_id(str(payload.get("agent_session_id") or "")); source = str(payload.get("source") or "")
+            if not package_id or route not in BACKENDS or (not session and not agent_session_id): raise ValueError("package_id, route and session or agent_session_id are required")
+            if agent_session_id and not source: raise ValueError("source is required with agent_session_id")
+            if not self.config.allowed_route(username, route): self.write_json({"ok": False, "error": "forbidden"}, HTTPStatus.FORBIDDEN); return
+            package = self.config.bridge_package(package_id, username)
+            if not package: self.write_json({"ok": False, "error": "package not found"}, HTTPStatus.NOT_FOUND); return
+            target_session = session
+            if not target_session:
+                resume_response = self.owner_json_request(route, "/api/agent/resume", {"agent_session_id": agent_session_id, "source": source, "max_running": self.max_running_for(username, route)}, username)
+                if not resume_response.get("ok"): self.write_json({"ok": False, "error": resume_response.get("error") or "owner resume failed"}, HTTPStatus.BAD_GATEWAY); return
+                target_session = clean_session_id(str(resume_response.get("session") or ""))
+                if not target_session: self.write_json({"ok": False, "error": "owner did not return target session"}, HTTPStatus.BAD_GATEWAY); return
+            target_package = self.package_for_owner(route, package, username)
+            response = self.owner_json_request(route, "/api/send", {"session": target_session, "text": bridge_prompt_text(target_package)}, username)
+            if not response.get("ok"): self.write_json({"ok": False, "error": response.get("error") or "owner inject failed"}, HTTPStatus.BAD_GATEWAY); return
+            package["status"] = "injected"; package["target"] = {"route": route, "session": target_session, "agentSessionId": agent_session_id or "", "source": source}; self.config.update_bridge_package(package)
+            self.write_json({"ok": True, "redirect": f"/{route}/?session={target_session}", "package": package}, HTTPStatus.OK)
+        except ValueError as exc: self.write_json({"ok": False, "error": str(exc)}, HTTPStatus.BAD_REQUEST)
+
+    def package_for_owner(self, route: str, package: dict[str, Any], username: str) -> dict[str, Any]:
+        assets = package.get("assets") if isinstance(package.get("assets"), list) else []
+        if not assets:
+            return package
+        delivered = []
+        for asset in assets:
+            if not isinstance(asset, dict):
+                continue
+            delivered.append(self.upload_bridge_asset(route, asset, username))
+        target_package = dict(package)
+        target_package["assets"] = delivered
+        return target_package
+
+    def upload_bridge_asset(self, route: str, asset: dict[str, Any], username: str) -> dict[str, Any]:
+        path = Path(str(asset.get("path") or ""))
+        if not path.is_file() or self.config.bridge_root not in path.resolve().parents:
+            raise ValueError("bridge asset is missing")
+        result = self.owner_attachment_request(route, path, str(asset.get("mime_type") or "application/octet-stream"), str(asset.get("file_name") or path.name), username)
+        owner_path = str(result.get("path") or "")
+        if not result.get("ok") or not owner_path:
+            raise ValueError(str(result.get("error") or "owner attachment upload failed"))
+        delivered = dict(asset)
+        delivered["source_path"] = str(path)
+        delivered["path"] = owner_path
+        delivered["owner_path"] = owner_path
+        return delivered
+
+    def handle_agent_resume(self, username: str) -> None:
+        try:
+            payload = self.read_json_body(65536); route = str(payload.get("route") or "").strip(); agent_session_id = clean_agent_session_id(str(payload.get("agent_session_id") or "")); source = str(payload.get("source") or "")
+            if route not in BACKENDS or not agent_session_id or not source: raise ValueError("route, agent_session_id and source are required")
+            if not self.config.allowed_route(username, route): self.write_json({"ok": False, "error": "forbidden"}, HTTPStatus.FORBIDDEN); return
+            response = self.owner_json_request(route, "/api/agent/resume", {"agent_session_id": agent_session_id, "source": source, "max_running": self.max_running_for(username, route)}, username)
+            target_session = clean_session_id(str(response.get("session") or "")) if response.get("ok") else ""
+            if not target_session: self.write_json({"ok": False, "error": response.get("error") or "owner resume failed"}, HTTPStatus.BAD_GATEWAY); return
+            self.write_json({"ok": True, "redirect": f"/{route}/?session={target_session}", "session": target_session}, HTTPStatus.OK)
+        except ValueError as exc: self.write_json({"ok": False, "error": str(exc)}, HTTPStatus.BAD_REQUEST)
+
+    def handle_agent_new(self, username: str) -> None:
+        try:
+            payload = self.read_json_body(4096); route = str(payload.get("route") or "").strip(); command = clean_agent_launch_command(str(payload.get("command") or ""))
+            if route not in BACKENDS or not command: raise ValueError("route and command are required")
+            if not self.config.allowed_route(username, route): self.write_json({"ok": False, "error": "forbidden"}, HTTPStatus.FORBIDDEN); return
+            if username != self.config.mcp_user and command != "codex": self.write_json({"ok": False, "error": "forbidden command"}, HTTPStatus.FORBIDDEN); return
+            response = self.owner_json_request(route, "/api/agent/new", {"command": command, "max_running": self.max_running_for(username, route)}, username)
+            target_session = clean_session_id(str(response.get("session") or "")) if response.get("ok") else ""
+            if not target_session: self.write_json({"ok": False, "error": response.get("error") or "owner new session failed"}, HTTPStatus.BAD_GATEWAY); return
+            self.write_json({"ok": True, "redirect": f"/{route}/?session={target_session}", "session": target_session}, HTTPStatus.OK)
+        except ValueError as exc: self.write_json({"ok": False, "error": str(exc)}, HTTPStatus.BAD_REQUEST)
+
+    def owner_headers(self, route: str, username: str) -> dict[str, str]:
+        host, port, label = BACKENDS[route]; headers = {"Host": f"{host}:{port}", "X-Faryo-Owner-Label": label, "X-Owner-Token": self.config.owner_token(route), "X-Faryo-User": username}
+        if username != self.config.mcp_user: headers["X-Faryo-History-Scope"] = "workspace"
+        if namespace := self.config.route_namespace(username, route): headers["X-Faryo-Session-Namespace"] = namespace
+        if file_root := self.config.file_inbox_root(username, route): headers["X-Faryo-File-Inbox-Root"] = file_root
+        if workspace_root := self.config.workspace_root(username, route): headers["X-Faryo-Workspace-Root"] = workspace_root
+        return headers
+
+    def owner_json_request(self, route: str, path: str, payload: dict[str, Any] | None, username: str, method: str = "POST", timeout: float = 10) -> dict[str, Any]:
+        host, port, _label = BACKENDS[route]; headers = self.owner_headers(route, username); body = None
+        if payload is not None: body = json.dumps(payload, ensure_ascii=False).encode("utf-8"); headers.update({"Content-Type": "application/json; charset=utf-8", "Content-Length": str(len(body))})
+        conn = http.client.HTTPConnection(host, port, timeout=timeout)
+        try: conn.request(method, path, body=body, headers=headers); resp = conn.getresponse(); data = resp.read()
+        except OSError as exc: return {"ok": False, "error": str(exc)}
+        finally: conn.close()
+        try: result = json.loads(data.decode("utf-8"))
+        except Exception: result = {"ok": False, "error": f"owner returned HTTP {resp.status}"}
+        if resp.status >= 400 and isinstance(result, dict): result["ok"] = False
+        return result if isinstance(result, dict) else {"ok": False, "error": "invalid owner response"}
+
+    def owner_attachment_request(self, route: str, path: Path, mime_type: str, filename: str, username: str) -> dict[str, Any]:
+        host, port, _label = BACKENDS[route]
+        boundary = "----FaryoBoundary" + secrets.token_hex(12)
+        safe_name = Path(filename).name.replace('"', "_").replace("\r", "_").replace("\n", "_") or path.name
+        data = path.read_bytes()
+        body = (
+            f"--{boundary}\r\n"
+            f"Content-Disposition: form-data; name=\"file\"; filename=\"{safe_name}\"\r\n"
+            f"Content-Type: {mime_type}\r\n\r\n"
+        ).encode("utf-8") + data + f"\r\n--{boundary}--\r\n".encode("utf-8")
+        headers = self.owner_headers(route, username)
+        headers.update({"Content-Type": f"multipart/form-data; boundary={boundary}", "Content-Length": str(len(body))})
+        conn = http.client.HTTPConnection(host, port, timeout=20)
+        try:
+            conn.request("POST", "/api/attachment", body=body, headers=headers); resp = conn.getresponse(); response_body = resp.read()
+        except OSError as exc:
+            return {"ok": False, "error": str(exc)}
+        finally:
+            conn.close()
+        try:
+            result = json.loads(response_body.decode("utf-8"))
+        except Exception:
+            result = {"ok": False, "error": f"owner returned HTTP {resp.status}"}
+        if resp.status >= 400 and isinstance(result, dict): result["ok"] = False
+        return result if isinstance(result, dict) else {"ok": False, "error": "invalid owner response"}
+
+    def max_running_for(self, username: str, route: str) -> int:
+        return SESSION_POLICY[route][1] if username == self.config.mcp_user else SUBACCOUNT_MAX_RUNNING
+
+    def cleanup_child_agents(self, username: str) -> None:
+        if username != self.config.mcp_user:
+            return
+        global SUBACCOUNT_CLEANUP_LAST_TS
+        now = time.monotonic()
+        if now - SUBACCOUNT_CLEANUP_LAST_TS < SUBACCOUNT_CLEANUP_MIN_INTERVAL_SECONDS:
+            return
+        SUBACCOUNT_CLEANUP_LAST_TS = now
+        protected = {self.config.route_namespace(username, route) for route in self.config.user_routes(username)}
+        namespaces: dict[str, set[str]] = {}
+        for child in self.config.users:
+            if child == username:
+                continue
+            for route in self.config.user_routes(child):
+                namespace = self.config.route_namespace(child, route)
+                if namespace and namespace not in protected:
+                    namespaces.setdefault(route, set()).add(namespace)
+        for route, values in namespaces.items():
+            self.owner_json_request(route, "/api/agent/cleanup-idle", {"idle_seconds": SUBACCOUNT_AGENT_IDLE_SECONDS, "namespaces": sorted(values)}, username, timeout=1.5)
+
+    def owner_agent_sessions(self, route: str, username: str, history_mode: str = "less") -> dict[str, Any]:
+        history_mode = history_mode if history_mode in HISTORY_SESSION_LIMITS else "less"
+        history = HISTORY_SESSION_LIMITS[history_mode].get(route, SESSION_POLICY[route][0])
+        max_running = self.max_running_for(username, route)
+        result = self.owner_json_request(route, f"/api/agent-sessions?limit={history}", None, username, method="GET")
+        sessions = []
+        active_count = int(result.get("activeCount") or 0)
+        limit_reached = active_count >= max_running
+        raw_sessions = result.get("sessions", []) if result.get("ok") and isinstance(result.get("sessions"), list) else []
+        for item in raw_sessions:
+            if not isinstance(item, dict):
+                continue
+            updated_raw = item.get("updatedAt") or item.get("updated_at") or result.get("updatedAt") or ""
+            tmux_session = str(item.get("tmuxSession") or item.get("session") or "")
+            active = bool(tmux_session)
+            cwd = str(item.get("cwd") or "")
+            sessions.append({"id": str(item.get("id") or ""), "title": display_session_title(item.get("title") or item.get("label") or item.get("id") or "Untitled session"), "gitLabel": str(item.get("gitLabel") or item.get("git_label") or ""), "route": route, "routeLabel": BACKENDS[route][2], "cwd": cwd, "cwdLabel": compact_path_label(cwd), "updatedAt": display_updated_at(updated_raw), "updatedTs": float(item.get("updatedTs") or parse_updated_ts(updated_raw)), "tmuxSession": tmux_session, "active": active, "limitReached": (not active and limit_reached), "source": str(item.get("source") or "")})
+        return {"sessions": sessions, "activeCount": active_count, "maxRunning": max_running, "canCreate": not limit_reached}
+
+    def workbench_payload(self, username: str, history_mode: str = "less") -> dict[str, Any]:
+        history_mode = history_mode if history_mode in HISTORY_SESSION_LIMITS else "less"
+        self.cleanup_child_agents(username)
+        routes = self.config.user_routes(username)
+        route_payloads = {route: self.owner_agent_sessions(route, username, history_mode) for route in routes}
+        sessions = [item for route in routes for item in route_payloads[route]["sessions"]]
+        sessions.sort(key=lambda item: float(item.get("updatedTs") or 0), reverse=True)
+        entries = []
+        for item in [backend_status(route) for route in routes]:
+            item.update({key: route_payloads[item["id"]][key] for key in ("activeCount", "maxRunning", "canCreate")})
+            entries.append(item)
+        pending = self.config.list_bridge_packages(username, "pending")
+        inbox = pending[:1] if pending else self.config.list_bridge_packages(username)[:1]
+        return {"ok": True, "entries": entries, "sessions": sessions[:HISTORY_TOTAL_LIMITS[history_mode]], "history": {"mode": history_mode, "total": HISTORY_TOTAL_LIMITS[history_mode]}, "newSessionCommands": sorted(NEW_SESSION_COMMANDS if username == self.config.mcp_user else {"codex"}), "packages": inbox, "inbox": inbox, "updatedAt": now_ts()}
+
+    def write_bridge_package_asset(self, path: str, username: str) -> None:
+        match = re.match(r"^/bridge/packages/([0-9]+-[a-f0-9]{8})/([^/]+)$", path)
+        if not match: self.write_not_found(path); return
+        if not self.config.bridge_package(match.group(1), username):
+            self.write_not_found(path); return
+        filename = match.group(2); asset_path = self.config.bridge_root / match.group(1) / filename
+        if filename != Path(filename).name or not asset_path.is_file(): self.write_not_found(path); return
+        self.write_asset(asset_path.read_bytes(), BRIDGE_SUFFIX_MIME.get(Path(filename).suffix.lower(), "application/octet-stream"), "private, no-store")
+
+    def route_for(self, parsed: Any) -> tuple[str, str] | None:
+        match = re.match(r"^/(hp|pc|gcp)/(.*)$", parsed.path)
+        if not match:
+            return None
+        route_name, tail = match.group(1), match.group(2)
+        if tail == "":
+            return (route_name, "/") if parse_qs(parsed.query).get("session") else None
+        if tail.startswith("api/") or tail in OWNER_STATIC_FILES or tail.startswith(OWNER_STATIC_PREFIXES):
+            return route_name, "/" + tail
+        return None
+
+    def is_api_path(self, path: str) -> bool:
+        return path.startswith("/api/") or bool(re.match(r"^/(hp|pc|gcp)/api/", path))
+
+    def proxy(self, parsed: Any, route: tuple[str, str], username: str) -> None:
+        route_name, upstream_path = route
+        is_api = upstream_path.startswith("/api/")
+        if not self.config.allowed_route(username, route_name):
+            if is_api:
+                self.write_json({"ok": False, "error": "forbidden"}, HTTPStatus.FORBIDDEN)
+            else:
+                self.write_html("Access denied for this endpoint", HTTPStatus.FORBIDDEN)
+            return
+        host, port, label = BACKENDS[route_name]
+        if parsed.query:
+            upstream_path += "?" + parsed.query
+        length = int(self.headers.get("Content-Length", "0") or "0")
+        body = self.rfile.read(length) if length else None
+        blocked_headers = {"host", "content-length", "x-owner-token", "x-faryo-owner-label", "x-faryo-user", "x-faryo-history-scope", "x-faryo-session-namespace", "x-faryo-file-inbox-root", "x-faryo-workspace-root"}
+        headers = {key: value for key, value in self.headers.items() if key.lower() not in HOP_BY_HOP_HEADERS and key.lower() not in blocked_headers}
+        headers["Host"] = f"{host}:{port}"
+        headers["X-Faryo-Owner-Label"] = label
+        headers["X-Owner-Token"] = self.config.owner_token(route_name)
+        headers["X-Faryo-User"] = username
+        if username != self.config.mcp_user: headers["X-Faryo-History-Scope"] = "workspace"
+        namespace = self.config.route_namespace(username, route_name)
+        if namespace:
+            headers["X-Faryo-Session-Namespace"] = namespace
+        file_root = self.config.file_inbox_root(username, route_name)
+        if file_root:
+            headers["X-Faryo-File-Inbox-Root"] = file_root
+        workspace_root = self.config.workspace_root(username, route_name)
+        if workspace_root:
+            headers["X-Faryo-Workspace-Root"] = workspace_root
+        if body is not None:
+            headers["Content-Length"] = str(len(body))
+        conn = None
+        try:
+            conn = http.client.HTTPConnection(host, port, timeout=20)
+            conn.request(self.command, upstream_path, body=body, headers=headers)
+            resp = conn.getresponse()
+        except OSError:
+            if conn:
+                conn.close()
+            if is_api:
+                self.write_json({"ok": False, "error": "upstream unavailable"}, HTTPStatus.BAD_GATEWAY)
+            else:
+                self.write_html("Upstream owner is unavailable", HTTPStatus.BAD_GATEWAY)
+            return
+        try:
+            response_headers = resp.getheaders()
+            content_type = next((value for key, value in response_headers if key.lower() == "content-type"), "")
+            is_event_stream = content_type.lower().startswith("text/event-stream")
+            self.send_response(resp.status, resp.reason)
+            for key, value in response_headers:
+                lower = key.lower()
+                if lower in HOP_BY_HOP_HEADERS or lower == "content-length":
+                    continue
+                self.send_header(key, value)
+            if is_event_stream:
+                self.send_header("Cache-Control", "no-store, no-transform")
+                self.end_headers()
+                while True:
+                    chunk = resp.readline()
+                    if not chunk:
+                        break
+                    try:
+                        self.wfile.write(chunk)
+                        self.wfile.flush()
+                    except (BrokenPipeError, ConnectionResetError, TimeoutError):
+                        break
+                return
+            data = resp.read()
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.write_bytes(data)
+        finally:
+            conn.close()
+
+    def serve_portal(self, username: str) -> None:
+        self.write_page(portal_html(username, self.config.user_routes(username)))
+
+    def is_authenticated(self) -> bool:
+        return self.current_username() is not None
+
+    def current_username(self) -> str | None:
+        raw = self.headers.get("Cookie", "")
+        if not raw:
+            return None
+        cookie = SimpleCookie(raw)
+        morsel = cookie.get(COOKIE_NAME)
+        if not morsel:
+            return None
+        try:
+            payload_b64, sig = morsel.value.rsplit(".", 1)
+            payload = base64.urlsafe_b64decode(payload_b64.encode("ascii")).decode("utf-8")
+            expected = hmac.new(self.config.cookie_secret, payload_b64.encode("ascii"), hashlib.sha256).hexdigest()
+            if not hmac.compare_digest(sig, expected):
+                return None
+            parts = payload.split("|")
+            if len(parts) == 3:
+                username, issued_at, _nonce = parts
+                cookie_epoch = 0
+            elif len(parts) == 4:
+                username, issued_at, epoch, _nonce = parts
+                cookie_epoch = int(epoch)
+            else:
+                return None
+            if username not in self.config.users:
+                return None
+            auth_epoch = self.config.auth_epoch(username)
+            if auth_epoch and cookie_epoch != auth_epoch:
+                return None
+            if time.time() - int(issued_at) >= COOKIE_MAX_AGE:
+                return None
+            return username
+        except Exception:
+            return None
+
+    def auth_cookie(self, username: str) -> str:
+        epoch = self.config.auth_epoch(username)
+        payload = f"{username}|{int(time.time())}|{epoch}|{secrets.token_urlsafe(18)}"
+        payload_b64 = base64.urlsafe_b64encode(payload.encode("utf-8")).decode("ascii")
+        sig = hmac.new(self.config.cookie_secret, payload_b64.encode("ascii"), hashlib.sha256).hexdigest()
+        return f"{COOKIE_NAME}={payload_b64}.{sig}; Path=/; Max-Age={COOKIE_MAX_AGE}; HttpOnly; Secure; SameSite=Lax"
+
+    def expired_cookie(self) -> str:
+        return f"{COOKIE_NAME}=; Path=/; Max-Age=0; HttpOnly; Secure; SameSite=Lax"
+
+    def safe_next(self, parsed: Any) -> str:
+        return self.safe_target(parse_qs(parsed.query).get("next", ["/"])[0])
+
+    def safe_target(self, value: str) -> str:
+        if not value.startswith("/") or value.startswith("//"):
+            return "/"
+        return value
+
+    def request_target(self) -> str:
+        return self.path if self.path.startswith("/") and not self.path.startswith("//") else "/"
+
+    def redirect(self, target: str) -> None:
+        self.send_response(HTTPStatus.SEE_OTHER)
+        self.send_header("Location", self.safe_target(target))
+        self.end_headers()
+
+    def write_not_found(self, path: str) -> None:
+        if self.is_api_path(path):
+            self.write_json({"ok": False, "error": "not found"}, HTTPStatus.NOT_FOUND)
+            return
+        self.send_error(HTTPStatus.NOT_FOUND)
+
+    def write_login_page(self, next_target: str, error: str = "") -> None:
+        self.write_page(login_html(next_target, error))
+
+    def write_password_page(self, error: str = "") -> None:
+        self.write_page(password_html(error))
+
+    def write_page(self, html: str, status: HTTPStatus = HTTPStatus.OK) -> None:
+        body = html.encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.write_bytes(body)
+
+    def write_asset(self, body: bytes, content_type: str, cache: str = "public, max-age=86400") -> None:
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Cache-Control", cache)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.write_bytes(body)
+
+    def write_icon(self, filename: str) -> None:
+        if filename not in {"pwa-light-192.png", "pwa-light-512.png", "favicon.png", "favicon.ico", "faryo-mark.png"}:
+            self.write_not_found("/icons/" + filename)
+            return
+        path = STATIC_DIR / "icons" / filename
+        if not path.is_file():
+            self.write_not_found("/icons/" + filename)
+            return
+        content_type = "image/x-icon" if filename.endswith(".ico") else "image/png"
+        self.write_asset(path.read_bytes(), content_type)
+
+    def write_html(self, message: str, status: HTTPStatus) -> None:
+        self.write_page(f"<!doctype html><meta charset='utf-8'><title>{status.value}</title><p>{html_escape(message)}</p>", status)
+
+    def write_json(self, data: dict[str, Any], status: HTTPStatus) -> None:
+        body = json.dumps(data, ensure_ascii=False).encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.write_bytes(body)
+
+    def write_bytes(self, body: bytes) -> bool:
+        try:
+            self.wfile.write(body)
+            return True
+        except (BrokenPipeError, ConnectionResetError):
+            return False
+
+PORTAL_CSS = """:root{color-scheme:light dark;--font-step:0px}@media(prefers-color-scheme:light){:root{--bg:#F7F0E5;--panel:#FFFDF8;--panel2:#EDE5D9;--text:#3E3026;--muted:#6F6257;--line:#D9C9B8;--accent:#856344;--on-accent:#FFFFFF;--accent2:#63734F;--ok:#5F6B4D;--warn:#8A641F;--danger:#B54A3D;--shadow:0 18px 50px rgba(83,56,36,.14)}}@media(prefers-color-scheme:dark){:root{--bg:#17130F;--panel:#211A15;--panel2:#2B241D;--text:#F7F0E5;--muted:#C7B8A6;--line:#4B3D32;--accent:#E0C29D;--on-accent:#2A1F17;--accent2:#9FA985;--ok:#9FA985;--warn:#D9AF80;--danger:#F2B8AC;--shadow:0 18px 50px rgba(0,0,0,.38)}}
+*{box-sizing:border-box}body{margin:0;min-height:100vh;padding:calc(env(safe-area-inset-top) + 14px) 14px calc(env(safe-area-inset-bottom) + 18px);background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;font-size:calc(14px + var(--font-step));letter-spacing:0}.shell{width:min(100%,720px);margin:0 auto}header{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:12px}.brand{display:flex;align-items:center;gap:10px;min-width:0}.brand-logo{width:38px;height:38px;border-radius:10px}h1{margin:0;font-size:24px;line-height:1.1}.subtitle,.count,.route-state,.session-meta,.package-meta{color:var(--muted);font-size:calc(12px + var(--font-step))}.subtitle{margin-top:4px}.settings{position:relative;z-index:12}.settings-trigger{position:relative;width:39px;height:39px;display:grid;place-items:center;border:1px solid color-mix(in srgb,var(--accent) 30%,var(--line));border-radius:13px;background:radial-gradient(circle at 30% 22%,color-mix(in srgb,var(--accent) 20%,transparent),transparent 42%),linear-gradient(145deg,color-mix(in srgb,var(--panel) 92%,var(--panel2)),color-mix(in srgb,var(--panel2) 84%,var(--panel)));color:var(--text);box-shadow:var(--shadow);transition:transform .18s ease,border-color .18s ease,background .18s ease}.settings-trigger:active{transform:scale(.96)}.settings.open .settings-trigger{border-color:color-mix(in srgb,var(--accent2) 52%,var(--accent));background:radial-gradient(circle at 28% 20%,color-mix(in srgb,var(--accent2) 28%,transparent),transparent 48%),linear-gradient(145deg,color-mix(in srgb,var(--panel2) 88%,var(--panel)),var(--panel))}.settings-icon{font-size:18px;line-height:1}
+.settings-menu{position:absolute;right:0;top:47px;z-index:20;display:none;width:min(72vw,248px);min-width:210px;padding:10px;border:1px solid color-mix(in srgb,var(--accent) 28%,var(--line));border-radius:20px;background:linear-gradient(145deg,color-mix(in srgb,var(--panel) 94%,var(--panel2)),color-mix(in srgb,var(--panel2) 82%,var(--panel)));box-shadow:var(--shadow);backdrop-filter:blur(18px) saturate(1.18);transform-origin:calc(100% - 24px) 0;animation:settings-bloom .16s ease-out}.settings-menu::after{content:"";position:absolute;right:18px;top:-7px;width:14px;height:14px;transform:rotate(45deg);border-left:1px solid color-mix(in srgb,var(--accent) 26%,var(--line));border-top:1px solid color-mix(in srgb,var(--accent) 26%,var(--line));background:color-mix(in srgb,var(--panel) 94%,var(--panel2))}.settings.open .settings-menu{display:grid;gap:6px}.settings-menu .menu-title{padding:6px 4px 0;color:color-mix(in srgb,var(--muted) 82%,transparent);font-size:10px;font-weight:850;letter-spacing:.10em;text-transform:uppercase}.settings-row{width:100%;min-height:46px;display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:8px;padding:8px 10px;border:1px solid color-mix(in srgb,var(--line) 72%,transparent);border-radius:14px;background:color-mix(in srgb,var(--panel2) 56%,transparent);color:var(--text);text-align:left;text-decoration:none;font:inherit}.settings-row:hover,.settings-row:focus-visible{border-color:color-mix(in srgb,var(--accent) 42%,var(--line));background:color-mix(in srgb,var(--panel2) 78%,transparent);outline:none}.settings-row strong{display:block;font-size:12px;line-height:1.2}.settings-row small{display:block;margin-top:2px;color:var(--muted);font-size:10px;line-height:1.2}.settings-row em{color:var(--accent2);font-size:14px;font-style:normal}.settings-row.install-row{border-color:color-mix(in srgb,var(--accent2) 42%,var(--line));background:linear-gradient(135deg,color-mix(in srgb,var(--accent2) 14%,var(--panel2)),color-mix(in srgb,var(--accent) 10%,var(--panel)))}.settings-menu [hidden]{display:none!important}@keyframes settings-bloom{from{opacity:0;transform:translateY(-4px) scale(.96)}to{opacity:1;transform:translateY(0) scale(1)}}
+.routes{display:flex;flex-wrap:wrap;gap:8px;overflow:visible;min-height:42px;margin-bottom:10px;padding:1px}.route-chip{display:flex;align-items:center;gap:5px;white-space:nowrap;padding:7px 8px;border:1px solid var(--line);border-radius:999px;background:var(--panel);color:var(--text);text-decoration:none;font-size:12px}.dot{width:8px;height:8px;border-radius:999px;background:var(--muted)}.online .dot{background:var(--ok)}.slow .dot{background:var(--warn)}.offline .dot,.error .dot{background:var(--danger)}.handoff-strip{display:grid;grid-template-columns:minmax(0,1fr) minmax(160px,200px);gap:10px;align-items:stretch;margin-bottom:12px}.handoff{padding:9px;border:1px solid var(--line);border-radius:8px;background:var(--panel);box-shadow:var(--shadow)}.handoff.drop-ready{border-color:var(--accent2)}.handoff-head,.section-head{display:flex;align-items:center;justify-content:space-between;gap:8px}.handoff-head{margin-bottom:7px}.eyebrow{margin:0 0 2px;color:var(--accent2);font-size:10px;font-weight:800;letter-spacing:.08em;text-transform:uppercase}h2{margin:0;font-size:calc(15px + var(--font-step));line-height:1.2}.mini-btn{padding:6px 8px;border:1px solid var(--line);border-radius:7px;background:var(--panel);color:var(--text);font:inherit;font-size:calc(12px + var(--font-step));white-space:nowrap}.primary-btn{border-color:color-mix(in srgb,var(--accent) 44%,var(--line));color:var(--accent)}.package-list{min-height:48px}.package-card{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;align-items:center;padding:8px;border:1px solid var(--line);border-radius:7px;background:var(--panel2);touch-action:none}.package-card.dragging{opacity:.55}.drag-ghost{position:fixed;z-index:9999;pointer-events:none;transform:translate(-50%,-50%);box-shadow:var(--shadow)}.package-card strong{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:calc(13px + var(--font-step))}.package-meta{display:block;margin-top:3px;line-height:1.35}main{display:grid;gap:8px}.sessions{display:grid;gap:8px}.session-card{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;align-items:center;width:100%;padding:11px;border:1px solid var(--line);border-radius:8px;background:var(--panel);color:var(--text);text-decoration:none;text-align:left;font:inherit}.new-session-slot{display:grid;gap:8px}.new-session-slot .session-card{min-height:44px}.session-card>div:first-child{min-width:0}.session-card.inactive{opacity:.72}.session-card.drop-target{border-color:var(--accent);box-shadow:0 0 0 3px color-mix(in srgb,var(--accent) 24%,transparent)}.session-title{font-size:calc(15px + var(--font-step));font-weight:760;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.session-meta{margin-top:4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.arrow{color:var(--muted);font-size:20px}.modal{position:fixed;inset:0;z-index:20;display:none;place-items:end center;padding:16px;background:rgba(0,0,0,.42)}.modal.open{display:grid}.sheet{width:min(100%,420px);padding:14px;border:1px solid var(--line);border-radius:12px;background:var(--panel);box-shadow:var(--shadow)}.sheet h3{margin:0 0 6px;font-size:18px}.sheet p{margin:0 0 12px;color:var(--muted);font-size:13px;line-height:1.45}.choice-list{display:grid;gap:8px}.choice-btn{width:100%;padding:11px;border:1px solid var(--line);border-radius:8px;background:var(--panel2);color:var(--text);text-align:left;font:inherit}.choice-btn strong{display:block}.choice-btn span{display:block;margin-top:3px;color:var(--muted);font-size:12px}.choice-btn.danger{border-color:color-mix(in srgb,var(--danger) 55%,var(--line));color:var(--danger)}.choice-btn:disabled{opacity:.45}.modal-actions{display:flex;justify-content:flex-end;margin-top:10px}.empty-state{padding:10px;border:1px dashed var(--line);border-radius:7px;background:var(--panel2);color:var(--muted);font-size:12px;text-align:center}html[data-theme="light"]{--bg:#F7F0E5;--panel:#FFFDF8;--panel2:#EDE5D9;--text:#3E3026;--muted:#6F6257;--line:#D9C9B8;--accent:#856344;--on-accent:#FFFFFF;--accent2:#63734F;--ok:#5F6B4D;--warn:#8A641F;--danger:#B54A3D;--shadow:0 18px 50px rgba(83,56,36,.14);color-scheme:light}html[data-theme="dark"]{--bg:#17130F;--panel:#211A15;--panel2:#2B241D;--text:#F7F0E5;--muted:#C7B8A6;--line:#4B3D32;--accent:#E0C29D;--on-accent:#2A1F17;--accent2:#9FA985;--ok:#9FA985;--warn:#D9AF80;--danger:#F2B8AC;--shadow:0 18px 50px rgba(0,0,0,.38);color-scheme:dark}html[data-size="small"]{--font-step:-1px}html[data-size="large"]{--font-step:1px}html[data-font="serif"] body{font-family:"Songti SC","Noto Serif CJK SC",Georgia,serif}html[data-font="rounded"] body{font-family:ui-rounded,"SF Pro Rounded","Segoe UI",sans-serif}html[data-font="mono"] body{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}@media(max-width:620px){.handoff-strip{grid-template-columns:minmax(0,1fr) minmax(142px,38%)}.handoff{box-shadow:none}}
+.modal.open.anchored{display:block}.modal.anchored .sheet{position:absolute;left:var(--sheet-left,16px);top:var(--sheet-top,16px);width:min(320px,calc(100vw - 32px))}"""
+PORTAL_JS_TEMPLATE = """let installPrompt=null,lastAnchorRect=null;const APPEARANCE={theme:{key:'faryoTheme',values:['system','light','dark'],title:'Theme',labels:{system:'System',light:'Light',dark:'Dark'}},font:{key:'faryoFont',values:['default','serif','rounded','mono'],title:'Font',labels:{default:'Default',serif:'Serif',rounded:'Rounded',mono:'Mono'}},size:{key:'faryoTextSize',values:['normal','large','small'],title:'Size',labels:{normal:'Normal',large:'Large',small:'Small'}}},HISTORY={key:'faryoHistoryDensity',values:['less','more'],labels:{less:'Less',more:'More'},totals:{less:10,more:18}};function historyValue(){const value=localStorage.getItem(HISTORY.key);return HISTORY.values.includes(value)?value:HISTORY.values[0];}function applyHistorySetting(){const value=historyValue(),btn=document.getElementById('historyBtn'),count=document.getElementById('sessionCount');if(btn){const meta=btn.querySelector('small');if(meta)meta.textContent=HISTORY.labels[value];}if(count)count.textContent=`Latest ${HISTORY.totals[value]}`;}function cycleHistory(){const values=HISTORY.values;localStorage.setItem(HISTORY.key,values[(values.indexOf(historyValue())+1)%values.length]);applyHistorySetting();refreshWorkbench().catch(()=>{});}function appearanceValue(name){const cfg=APPEARANCE[name],value=localStorage.getItem(cfg.key);return cfg.values.includes(value)?value:cfg.values[0];}function applyAppearance(){const root=document.documentElement;for(const name of Object.keys(APPEARANCE)){const cfg=APPEARANCE[name],value=appearanceValue(name);if(value===cfg.values[0])root.removeAttribute('data-'+name);else root.setAttribute('data-'+name,value);const btn=document.getElementById(name+'Btn');if(btn){const title=btn.querySelector('strong'),meta=btn.querySelector('small');if(title&&meta){title.textContent=cfg.title;meta.textContent=cfg.labels[value];}else btn.textContent=`${cfg.title}: ${cfg.labels[value]}`;}}}function cycleAppearance(name){const cfg=APPEARANCE[name],values=cfg.values;localStorage.setItem(cfg.key,values[(values.indexOf(appearanceValue(name))+1)%values.length]);applyAppearance();}applyAppearance();applyHistorySetting();if('serviceWorker'in navigator)navigator.serviceWorker.register('/sw.js').catch(()=>{});window.addEventListener('beforeinstallprompt',(event)=>{event.preventDefault();installPrompt=event;const btn=document.getElementById('installApp');if(btn)btn.hidden=false;});document.addEventListener('pointerdown',(event)=>{const el=event.target.closest('button,a,.session-card,.package-card,[role="button"]');if(!el)return;const rect=el.getBoundingClientRect();lastAnchorRect={left:rect.left,right:rect.right,top:rect.top,bottom:rect.bottom};},{capture:true,passive:true});document.addEventListener('click',(event)=>{const settings=document.getElementById('settings');if(event.target.closest('#settings>button'))settings.classList.toggle('open');else if(!event.target.closest('#settings'))settings.classList.remove('open');const appearanceBtn=event.target.closest?.('.appearance-btn');if(appearanceBtn?.id==='themeBtn'){cycleAppearance('theme');return;}if(appearanceBtn?.id==='fontBtn'){cycleAppearance('font');return;}if(appearanceBtn?.id==='sizeBtn'){cycleAppearance('size');return;}if(event.target.closest?.('#historyBtn')){cycleHistory();return;}const installBtn=event.target.closest?.('#installApp');if(installBtn&&installPrompt){installPrompt.prompt();installPrompt=null;installBtn.hidden=true;}});
+const WORKBENCH_CACHE_KEY='faryoWorkbenchSnapshot';const labels=__LABELS_JS__;let draggedPackage=null;let touchDrag=null;let assetTargetPackage=null;let actionBusy=false;
+function storeWorkbench(data){try{sessionStorage.setItem(WORKBENCH_CACHE_KEY,JSON.stringify({storedAt:Date.now(),data}));}catch(_error){}}
+function restoreWorkbench(){try{const cached=JSON.parse(sessionStorage.getItem(WORKBENCH_CACHE_KEY)||'null');if(cached?.data)renderWorkbench(cached.data);}catch(_error){}}
+function markRoutes(entries){for(const item of entries||[]){const chip=document.getElementById(`route-${item.id}`);if(!chip)continue;chip.className=`route-chip ${item.state||'error'}`;const state=chip.querySelector('.route-state');if(state){state.textContent=item.stateText||'—';state.title=item.detail||item.stateText||'';}}}
+function localSessionTime(item){const ts=Number(item.updatedTs||0);if(!Number.isFinite(ts)||ts<=0)return item.updatedAt||'';const date=new Date(ts*1000),now=new Date(),sameDay=date.toDateString()===now.toDateString();return new Intl.DateTimeFormat(undefined,sameDay?{hour:'2-digit',minute:'2-digit'}:{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'}).format(date);}
+function moveGhost(touch){if(!touchDrag)return;touchDrag.ghost.style.left=`${touch.clientX}px`;touchDrag.ghost.style.top=`${touch.clientY}px`;}
+function clearDropTargets(){document.querySelectorAll('.session-card.drop-target').forEach(el=>el.classList.remove('drop-target'));}function childByKey(container,key){return Array.from(container.children).find(el=>el.dataset.key===key);}function cardSig(item){try{return JSON.stringify(item);}catch(_err){return '';}}function syncChildren(container,items,keyFn,renderFn,emptyText){const list=items||[];if(!list.length){if(container.dataset.empty!==emptyText){container.replaceChildren(empty(emptyText));container.dataset.empty=emptyText;}return;}container.dataset.empty='';const seen=new Set();list.forEach((item,index)=>{const key=String(keyFn(item)),sig=cardSig(item);let node=childByKey(container,key);if(!node||node.dataset.sig!==sig){const next=renderFn(item);next.dataset.key=key;next.dataset.sig=sig;if(node)node.replaceWith(next);node=next;}seen.add(key);const ref=container.children[index];if(ref!==node)container.insertBefore(node,ref||null);});Array.from(container.children).forEach(node=>{if(!seen.has(node.dataset.key||''))node.remove();});}
+function packageCard(item){const card=document.createElement('div');card.className='package-card';card.draggable=item.status==='pending';card.dataset.packageId=item.id;const assets=(item.assets||[]).length,status=item.status==='pending'?'Pending':'Delivered',source=item.source||'Faryo';card.innerHTML=`<div><strong>${escapeHtml(item.title||'Untitled handoff')}</strong><span class="package-meta">${status} · ${assets} attachment${assets===1?'':'s'} · ${escapeHtml(source)}</span></div>${item.status==='pending'?'<button class="mini-btn add-asset" type="button">Add</button>':''}`;const addBtn=card.querySelector('.add-asset');addBtn?.addEventListener('click',(event)=>{event.preventDefault();event.stopPropagation();assetTargetPackage=item.id;document.getElementById('packageAssetInput')?.click();});addBtn?.addEventListener('touchstart',(event)=>event.stopPropagation(),{passive:true});card.addEventListener('dragstart',(event)=>{if(item.status!=='pending')return;draggedPackage=item.id;event.dataTransfer.setData('text/plain',item.id);card.classList.add('dragging');});card.addEventListener('dragend',()=>{draggedPackage=null;card.classList.remove('dragging');clearDropTargets();});card.addEventListener('touchstart',(event)=>{if(item.status!=='pending')return;const touch=event.touches[0];draggedPackage=item.id;card.classList.add('dragging');const ghost=card.cloneNode(true);ghost.classList.add('drag-ghost');ghost.style.width=`${card.getBoundingClientRect().width}px`;document.body.appendChild(ghost);touchDrag={ghost};moveGhost(touch);},{passive:false});card.addEventListener('touchmove',(event)=>{if(!touchDrag)return;event.preventDefault();const touch=event.touches[0];moveGhost(touch);clearDropTargets();const target=document.elementFromPoint(touch.clientX,touch.clientY)?.closest('.session-card');if(target&&target.dataset.agentSessionId)target.classList.add('drop-target');},{passive:false});card.addEventListener('touchend',async(event)=>{if(touchDrag)event.preventDefault();const touch=event.changedTouches[0];const target=document.elementFromPoint(touch.clientX,touch.clientY)?.closest('.session-card');card.classList.remove('dragging');clearDropTargets();if(touchDrag)touchDrag.ghost.remove();touchDrag=null;if(target&&target.dataset.agentSessionId)await injectPackage(item.id,target.dataset.route,target.dataset.session,target.dataset.agentSessionId,target.dataset.source);draggedPackage=null;},{passive:false});card.addEventListener('touchcancel',()=>{card.classList.remove('dragging');clearDropTargets();if(touchDrag)touchDrag.ghost.remove();touchDrag=null;draggedPackage=null;});return card;}
+function placeSheet(modal){if(!lastAnchorRect){modal.classList.remove('anchored');return;}const margin=16,gap=8,sheet=modal.querySelector('.sheet'),width=Math.min(320,innerWidth-margin*2),center=(lastAnchorRect.left+lastAnchorRect.right)/2;modal.classList.add('open','anchored');const height=sheet.offsetHeight,left=innerWidth<620?(innerWidth-width)/2:Math.max(margin,Math.min(innerWidth-width-margin,center-width/2)),below=lastAnchorRect.bottom+gap,above=lastAnchorRect.top-height-gap,top=below+height+margin<=innerHeight?below:Math.max(margin,above);modal.style.setProperty('--sheet-left',`${left}px`);modal.style.setProperty('--sheet-top',`${top}px`);}
+function sheet(title,body,choices){return new Promise(resolve=>{const modal=document.getElementById('modal'),list=document.getElementById('modalChoices'),actions=document.getElementById('modalActions');document.getElementById('modalTitle').textContent=title;document.getElementById('modalBody').textContent=body||'';const done=(value)=>{modal.classList.remove('open','anchored');modal.onclick=null;resolve(value);};list.replaceChildren(...(choices||[]).map(item=>{const btn=document.createElement('button');btn.type='button';btn.className=`choice-btn${item.danger?' danger':''}`;btn.disabled=!!item.disabled;btn.innerHTML=`<strong>${escapeHtml(item.label)}</strong>${item.meta?`<span>${escapeHtml(item.meta)}</span>`:''}`;btn.addEventListener('click',()=>done(item.value));return btn;}));const cancel=document.createElement('button');cancel.type='button';cancel.className='mini-btn';cancel.textContent='Cancel';cancel.addEventListener('click',()=>done(null));actions.replaceChildren(cancel);modal.onclick=(event)=>{if(event.target===modal)done(null);};placeSheet(modal);modal.classList.add('open');});}
+async function notice(title,body){await sheet(title,body,[{label:'OK',value:'ok'}]);}
+async function withBusy(task){if(actionBusy)return;actionBusy=true;try{return await task();}catch(error){await notice('Action failed',error.message||String(error));}finally{actionBusy=false;}}
+async function selectNewRoute(entries,label){const online=(entries||[]).filter(e=>['online','slow'].includes(e.state));if(!online.length){await notice('No endpoint online','No online endpoint can start sessions.');return null;}const choices=online.map(e=>({label:e.label||labels[e.id]||e.id,meta:`${e.id} · ${e.activeCount||0}/${e.maxRunning||0}${e.canCreate?'':' · limit reached'}`,value:e.id,disabled:!e.canCreate}));const available=choices.filter(item=>!item.disabled);if(!available.length){await sheet('Agent limit reached','Close a running session first.',choices);return null;}if(online.length===1&&available.length===1)return available[0].value;return await sheet('Select endpoint',`Choose where ${label} starts.`,choices);}
+function newAgentCard(item){const {entries,command,label}=item,card=document.createElement('button');card.type='button';card.className='session-card';card.innerHTML=`<div><div class="session-title">+ ${label}</div><div class="session-meta">$ ${command}</div></div><div class="arrow">›</div>`;card.addEventListener('click',()=>withBusy(async()=>{const route=await selectNewRoute(entries,label);if(!route)return;const original=card.innerHTML;card.disabled=true;card.innerHTML=`<div><div class="session-title">Starting ${label}...</div><div class="session-meta">$ ${command}</div></div><div class="arrow">↗</div>`;try{await agentNew(route,command);}finally{card.disabled=false;card.innerHTML=original;}}));return card;}
+function sessionCard(item){const targetSession=item.tmuxSession||'',agentSessionId=item.id||'',source=item.source||'',active=!!targetSession,blocked=!!item.limitReached;const card=document.createElement('div');card.className=`session-card${active?'':' inactive'}`;card.dataset.route=item.route;card.dataset.session=targetSession;card.dataset.agentSessionId=agentSessionId;card.dataset.source=source;const state=active?'Running':(blocked?'Limit reached':'Resume'),where=item.cwdLabel||item.cwd||'',updatedAt=localSessionTime(item),agent=source==='claude-code'?'Claude':(source==='codex-cli'?'Codex':'Runtime'),title=[item.title||item.id||'Untitled session',item.gitLabel||''].filter(Boolean).join(' ');card.innerHTML=`<div><div class="session-title">${escapeHtml(title)}</div><div class="session-meta">${escapeHtml(item.routeLabel||labels[item.route]||item.route)} · ${agent}${where?` · ${escapeHtml(where)}`:''} · ${escapeHtml(updatedAt)} · ${state}</div></div><div>${active?'<button class="mini-btn close-session" type="button">Close</button>':'<span class="arrow">›</span>'}</div>`;card.title=[title,item.cwd||'',updatedAt,state].filter(Boolean).join(' · ');card.addEventListener('click',(event)=>withBusy(async()=>{if(event.target.closest('.close-session')){event.preventDefault();event.stopPropagation();await closeSession(item.route,targetSession);return;}if(active){location.href=`/${item.route}/?session=${encodeURIComponent(targetSession)}`;return;}if(!agentSessionId)return;event.preventDefault();if(blocked){await notice('Agent limit reached','Close a running session first.');return;}await resumeSession(item.route,agentSessionId,source);}));card.addEventListener('dragover',(event)=>{if(draggedPackage&&agentSessionId){event.preventDefault();card.classList.add('drop-target');}});card.addEventListener('dragleave',()=>card.classList.remove('drop-target'));card.addEventListener('drop',async(event)=>{event.preventDefault();card.classList.remove('drop-target');const packageId=event.dataTransfer.getData('text/plain')||draggedPackage;if(packageId)await injectPackage(packageId,item.route,targetSession,agentSessionId,source);});return card;}
+async function agentNew(route,command){const res=await fetch('/api/agent/new',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({route,command})}),data=await res.json();if(!data.ok)throw new Error(data.error||'Failed to create session');location.href=data.redirect;}
+async function resumeSession(route,agentSessionId,source){const res=await fetch('/api/agent/resume',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({route,agent_session_id:agentSessionId,source})}),data=await res.json();if(!data.ok)throw new Error(data.error||'Failed to resume session');location.href=data.redirect||`/${route}/?session=${encodeURIComponent(data.session)}`;}
+async function closeSession(route,session){const ok=await sheet('Close Session','This closes the running session. Busy sessions may refuse to close.',[{label:'Close Session',meta:session,value:'ok',danger:true}]);if(ok!=='ok')return;const res=await fetch(`/${route}/api/session/close`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({session})}),data=await res.json();if(!data.ok)throw new Error(data.error||'Failed to close session');await refreshWorkbench();}
+async function injectPackage(packageId,route,session,agentSessionId,source){const payload={package_id:packageId,route};if(session)payload.session=session;if(agentSessionId){payload.agent_session_id=agentSessionId;payload.source=source;}const res=await fetch('/api/bridge-inject',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)}),data=await res.json();if(!data.ok)throw new Error(data.error||'Failed to inject package');location.href=data.redirect||`/${route}/${session?`?session=${encodeURIComponent(session)}`:''}`;}
+function renderWorkbench(data){markRoutes(data.entries||[]);const packages=data.inbox||data.packages||[],sessions=data.sessions||[],entries=data.entries||[],pkg=packages[0],packageItems=pkg?[pkg]:[],allowedCommands=new Set(data.newSessionCommands||['codex']),launchers=[{id:'new-codex',command:'codex',label:'Codex CLI',entries},{id:'new-claude',command:'claude',label:'Claude Code',entries}].filter(item=>allowedCommands.has(item.command));document.getElementById('packageCount').textContent=pkg?(pkg.status==='pending'?'· New':'· Done'):'· Empty';syncChildren(document.getElementById('packageList'),packageItems,item=>`pkg-${item.id}`,packageCard,'No handoff package');syncChildren(document.getElementById('newSessionSlot'),launchers,item=>item.id,newAgentCard,'');syncChildren(document.getElementById('sessionList'),sessions,item=>`session-${item.route}-${item.id}-${item.tmuxSession||''}`,sessionCard,'No sessions');}
+async function refreshWorkbench(){const res=await fetch(`/api/workbench?history=${encodeURIComponent(historyValue())}`,{cache:'no-store'}),data=await res.json();storeWorkbench(data);renderWorkbench(data);return data;}
+function empty(text){const el=document.createElement('div');el.className='empty-state';el.textContent=text;return el;}
+function escapeHtml(value){return String(value).replace(/[&<>"']/g,(ch)=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));}
+function fileToAttachment(file){return new Promise((resolve,reject)=>{if(file.size>20*1024*1024){reject(new Error('Attachment must be 20 MB or smaller'));return;}const reader=new FileReader();reader.onload=()=>resolve({file_name:file.name||'attachment',mime_type:file.type||'application/octet-stream',data_url:String(reader.result||'')});reader.onerror=()=>reject(reader.error||new Error('Failed to read attachment'));reader.readAsDataURL(file);});}
+async function filesToAttachments(fileList){const files=Array.from(fileList||[]).slice(0,4),attachments=[];for(const file of files)attachments.push(await fileToAttachment(file));return attachments;}
+async function createPackage(files){const attachments=await filesToAttachments(files);if(!attachments.length)return;const title=attachments.length===1?attachments[0].file_name:`${attachments.length} files`;const res=await fetch('/api/bridge-packages',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({title,source:'Manual upload',intent:'Transfer these attachments to a selected session.',attachments})}),data=await res.json();if(!data.ok)throw new Error(data.error||'Failed to create handoff package');await refreshWorkbench();}
+async function appendAttachmentsToPackage(packageId,files){const attachments=await filesToAttachments(files);if(!attachments.length)return;const res=await fetch('/api/bridge-package-assets',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({package_id:packageId,attachments})}),data=await res.json();if(!data.ok)throw new Error(data.error||'Failed to add attachments');await refreshWorkbench();}
+document.getElementById('newPackage')?.addEventListener('click',()=>document.getElementById('packageInput')?.click());
+document.getElementById('packageInput')?.addEventListener('change',async(event)=>{try{await createPackage(event.target.files);}catch(error){alert(error.message||error);}finally{event.target.value='';}});
+document.getElementById('packageAssetInput')?.addEventListener('change',async(event)=>{try{if(assetTargetPackage)await appendAttachmentsToPackage(assetTargetPackage,event.target.files);}catch(error){alert(error.message||error);}finally{assetTargetPackage=null;event.target.value='';}});
+const handoffBox=document.getElementById('handoffBox');handoffBox?.addEventListener('dragover',(event)=>{if(event.dataTransfer?.types?.includes('Files')){event.preventDefault();handoffBox.classList.add('drop-ready');}});handoffBox?.addEventListener('dragleave',()=>handoffBox.classList.remove('drop-ready'));handoffBox?.addEventListener('drop',async(event)=>{if(!event.dataTransfer?.files?.length)return;event.preventDefault();handoffBox.classList.remove('drop-ready');try{await createPackage(event.dataTransfer.files);}catch(error){alert(error.message||error);}});
+function initialRefresh(){refreshWorkbench().catch(()=>{document.getElementById('sessionList').replaceChildren(empty('Workbench failed to load'));});}
+function scheduleInitialRefresh(){const run=()=>requestAnimationFrame(()=>setTimeout(initialRefresh,180));if(document.readyState==='complete')run();else window.addEventListener('load',run,{once:true});}
+restoreWorkbench();
+scheduleInitialRefresh();
+setInterval(refreshWorkbench,120000);"""
+
+
+def portal_html(username: str, routes: list[str]) -> str:
+    safe_user = html_escape(username)
+    safe_routes = [route for route in routes if route in BACKENDS]
+    chips = []
+    for route in safe_routes:
+        _host, _port, label = BACKENDS[route]
+        chips.append(f'<div class="route-chip" id="route-{route}"><span class="dot"></span><strong>{html_escape(label)}</strong><span class="route-state">…</span></div>')
+    chips_html = "\n".join(chips) or '<div class="empty-state">No endpoints available</div>'
+    labels_js = "{" + ",".join(f"{json.dumps(route)}:{json.dumps(BACKENDS[route][2], ensure_ascii=False)}" for route in safe_routes) + "}"
+    portal_js = PORTAL_JS_TEMPLATE.replace("__LABELS_JS__", labels_js)
+    return f'''<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"><title>Faryo</title><meta name="theme-color" content="#F7F0E5" media="(prefers-color-scheme: light)"><meta name="theme-color" content="#17130F" media="(prefers-color-scheme: dark)"><link rel="manifest" href="/manifest.json"><link rel="icon" href="/icons/favicon.png?v=faryo-ui-1" type="image/png"><link rel="apple-touch-icon" href="/icons/pwa-light-192.png">
+<style>
+{PORTAL_CSS}
+</style></head><body><div class="shell">
+<header><div class="brand"><img class="brand-logo" src="/icons/faryo-mark.png?v=faryo-ui-1" alt=""><div><h1>Faryo</h1><div class="subtitle">{safe_user} · Carry work forward</div></div></div><div class="settings" id="settings"><button class="settings-trigger" type="button" aria-label="Settings"><span class="settings-icon">⚙</span></button><div class="settings-menu" aria-label="Settings panel"><button id="installApp" class="settings-row install-row" type="button" hidden><span><strong>Install app</strong><small>Add Faryo to home screen</small></span><em>↗</em></button><div class="menu-title">Appearance</div><button id="themeBtn" class="settings-row appearance-btn" type="button"><span><strong>Theme</strong><small>System</small></span><em>↻</em></button><button id="fontBtn" class="settings-row appearance-btn" type="button"><span><strong>Font</strong><small>Default</small></span><em>↻</em></button><button id="sizeBtn" class="settings-row appearance-btn" type="button"><span><strong>Size</strong><small>Normal</small></span><em>↻</em></button><button id="historyBtn" class="settings-row" type="button"><span><strong>History</strong><small>Less</small></span><em>↻</em></button><div class="menu-title">Account</div><a class="settings-row" href="/password"><span><strong>Change password</strong></span><em>›</em></a><a class="settings-row" href="/logout"><span><strong>Sign out</strong></span><em>›</em></a></div></div></header>
+<nav class="routes" aria-label="Endpoint status">{chips_html}</nav><div class="handoff-strip"><section class="handoff" id="handoffBox" aria-label="Handoff inbox"><div class="handoff-head"><h2>Handoff <span class="count" id="packageCount">Empty</span></h2><button class="mini-btn primary-btn" id="newPackage" type="button">Add files</button></div><input id="packageInput" type="file" accept="image/*,.pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx,.odt,.odp,.ods,.md,.txt,.csv,.json,.rtf" multiple hidden><input id="packageAssetInput" type="file" accept="image/*,.pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx,.odt,.odp,.ods,.md,.txt,.csv,.json,.rtf" multiple hidden><div class="package-list" id="packageList"><div class="empty-state">No handoff package</div></div></section><div class="new-session-slot" id="newSessionSlot"><div class="empty-state">Loading</div></div></div>
+<main><div class="section-head"><h2>Session History</h2><span class="count" id="sessionCount">Latest 10</span></div><section class="sessions" id="sessionList"><div class="empty-state">Loading sessions...</div></section></main>
+</div><div class="modal" id="modal"><div class="sheet"><h3 id="modalTitle"></h3><p id="modalBody"></p><div class="choice-list" id="modalChoices"></div><div class="modal-actions" id="modalActions"></div></div></div><script>
+{portal_js}
+</script></body></html>'''
+
+
+AUTH_CSS = """:root{color-scheme:light dark}@media(prefers-color-scheme:light){:root{--bg:#F7F0E5;--panel:#FFFDF8;--text:#3E3026;--muted:#6F6257;--line:#D9C9B8;--accent:#856344;--on-accent:#FFFFFF;--danger:#B54A3D;--toggle-bg:#EDE5D9}}@media(prefers-color-scheme:dark){:root{--bg:#17130F;--panel:#211A15;--text:#F7F0E5;--muted:#C7B8A6;--line:#4B3D32;--accent:#E0C29D;--on-accent:#2A1F17;--danger:#F2B8AC;--toggle-bg:#2B241D}}*{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;padding:24px;background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}main{width:min(100%,420px)}.auth-brand{display:flex;align-items:center;gap:12px;margin-bottom:8px}.auth-logo{width:48px;height:48px;border-radius:13px;flex:0 0 auto}h1{margin:0 0 8px;font-size:26px;letter-spacing:0}p{margin:0 0 22px;color:var(--muted);line-height:1.5}label{display:block;margin:12px 0 7px;color:var(--muted);font-size:14px}input{width:100%;height:52px;border:1px solid var(--line);border-radius:8px;padding:0 13px;background:var(--panel);color:var(--text);font:inherit;outline:none}input:focus{border-color:var(--accent)}.password-row{position:relative}.password-row input{padding-right:58px}.toggle{position:absolute;right:6px;top:6px;display:grid;place-items:center;width:40px;height:40px;min-height:40px;border:0;border-radius:8px;background:var(--toggle-bg);color:var(--text)}.toggle svg{width:21px;height:21px;stroke:currentColor;stroke-width:2;fill:none;stroke-linecap:round;stroke-linejoin:round}.toggle .eye-off,.toggle.is-visible .eye{display:none}.toggle.is-visible .eye-off{display:block}.submit{width:100%;height:52px;margin-top:18px;border:0;border-radius:8px;background:var(--accent);color:var(--on-accent);font-weight:700;font-size:16px}.secondary{display:block;margin-top:14px;color:var(--muted);text-align:center;text-decoration:none}.error{min-height:20px;margin-top:12px;color:var(--danger);font-size:14px}"""
+AUTH_SCRIPT = """document.querySelectorAll('.password-row').forEach((row)=>{const input=row.querySelector('input');const toggle=row.querySelector('button');toggle.addEventListener('click',()=>{const visible=input.type==='text';input.type=visible?'password':'text';toggle.classList.toggle('is-visible',!visible);toggle.setAttribute('aria-label',visible?'Show password':'Hide password');toggle.title=visible?'Show password':'Hide password';});});"""
+EYE_BUTTON = """<button class="toggle" type="button" aria-label="Show password" title="Show password"><svg class="eye" viewBox="0 0 24 24"><path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6-10-6-10-6z"/><circle cx="12" cy="12" r="3"/></svg><svg class="eye-off" viewBox="0 0 24 24"><path d="M3 3l18 18"/><path d="M10.7 5.2A10.8 10.8 0 0 1 12 5c6.5 0 10 7 10 7a17.7 17.7 0 0 1-3.2 4.1"/><path d="M6.6 6.6C3.6 8.6 2 12 2 12s3.5 7 10 7a10.5 10.5 0 0 0 4.2-.9"/><path d="M9.9 9.9a3 3 0 0 0 4.2 4.2"/></svg></button>"""
+
+
+def password_field(field_id: str, name: str, label: str, autocomplete: str, minlength: int | None = None) -> str:
+    min_attr = f' minlength="{minlength}"' if minlength else ""
+    return f"""<label for="{field_id}">{label}</label><div class="password-row"><input id="{field_id}" name="{name}" type="password" autocomplete="{autocomplete}" autocapitalize="none" spellcheck="false"{min_attr} required>{EYE_BUTTON}</div>"""
+
+
+def auth_page(title: str, heading: str, intro: str, action: str, autocomplete: str, body: str, error: str) -> str:
+    return f"""<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"><title>{title}</title><meta name="theme-color" content="#F7F0E5" media="(prefers-color-scheme: light)"><meta name="theme-color" content="#17130F" media="(prefers-color-scheme: dark)"><link rel="icon" href="/icons/favicon.png?v=faryo-ui-1" type="image/png"><link rel="apple-touch-icon" href="/icons/pwa-light-192.png"><style>{AUTH_CSS}</style></head>
+<body><main><div class="auth-brand"><img class="auth-logo" src="/icons/faryo-mark.png?v=faryo-ui-1" alt=""><div><h1>{heading}</h1><p>{intro}</p></div></div><form method="post" action="{action}" autocomplete="{autocomplete}">{body}<div class="error">{html_escape(error)}</div></form></main><script>{AUTH_SCRIPT}</script></body></html>"""
+
+
+def login_html(next_target: str, error: str = "") -> str:
+    body = (
+        f'<input type="hidden" name="next" value="{html_escape(next_target)}">'
+        '<label for="username">Username</label><input id="username" name="username" autocomplete="username" autocapitalize="none" spellcheck="false" required>'
+        + password_field("password", "password", "Password", "current-password")
+        + '<button class="submit" type="submit">Sign in</button>'
+    )
+    return auth_page("Faryo Sign In", "Faryo", "Enter your gateway username and password.", "/login", "on", body, error)
+
+
+def password_html(error: str = "") -> str:
+    body = (
+        password_field("current_password", "current_password", "Current password", "current-password")
+        + password_field("new_password", "new_password", "New password", "new-password", 12)
+        + password_field("confirm_password", "confirm_password", "Confirm new password", "new-password", 12)
+        + '<button class="submit" type="submit">Save password</button><a class="secondary" href="/">Back to Faryo</a>'
+    )
+    return auth_page("Faryo Change Password", "Change password", "Update the gateway password. Changes take effect immediately.", "/password", "off", body, error)
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--host", default="127.0.0.1")
+    parser.add_argument("--port", type=int, default=8780)
+    parser.add_argument("--auth-config", required=True)
+    parser.add_argument("--owner-env", required=True)
+    parser.add_argument("--portal-dir", required=True)
+    parser.add_argument("--secret-file", required=True)
+    args = parser.parse_args()
+
+    server = ReusableThreadingHTTPServer((args.host, args.port), GatewayHandler)
+    server.config = GatewayConfig(  # type: ignore[attr-defined]
+        Path(args.auth_config),
+        Path(args.owner_env),
+        Path(args.portal_dir),
+        Path(args.secret_file),
+    )
+    print(f"Faryo Gateway listening on http://{args.host}:{args.port}", flush=True)
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        server.server_close()
+
+
+if __name__ == "__main__":
+    main()

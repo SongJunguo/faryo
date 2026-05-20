@@ -1,0 +1,12 @@
+[Unit]
+Description=Faryo Owner keepalive timer
+
+[Timer]
+OnActiveSec=20s
+OnUnitActiveSec=30s
+AccuracySec=5s
+Persistent=true
+Unit=faryo-owner-keepalive.service
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,5 @@
+faryo.env
+gateway-auth.json
+*.local
+*.log
+.token*

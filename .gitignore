@@ -1,0 +1,15 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+apps/*/state/
+apps/*/config/faryo.env
+apps/*/config/gateway-auth.json
+apps/*/config/*.local
+apps/*/config/*.log
+apps/*/config/.token*
+
+.faryo/
+dist/

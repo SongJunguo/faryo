@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+set -euo pipefail
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=_lib.sh
+source "$SCRIPT_DIR/_lib.sh"
+load_env
+cd "$FARYO_OWNER_ROOT/local-tmux-owner"
+exec env FARYO_OWNER_TOKEN="$FARYO_OWNER_TOKEN" \
+  FARYO_OWNER_LABEL="$FARYO_OWNER_LABEL" \
+  FARYO_OWNER_DATA="$FARYO_OWNER_DATA" \
+  FARYO_OWNER_INBOX_DIR="$FARYO_OWNER_INBOX_DIR" \
+  FARYO_OWNER_ARTIFACTS_DIR="$FARYO_OWNER_ARTIFACTS_DIR" \
+  FARYO_OWNER_CACHE_DIR="$FARYO_OWNER_CACHE_DIR" \
+  FARYO_OWNER_LOGS_DIR="$FARYO_OWNER_LOGS_DIR" \
+  FARYO_OWNER_FILE_INBOX="$FARYO_OWNER_FILE_INBOX" \
+  PATH="$HOME/.local/share/npm-global/bin:$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH" \
+  python3 server.py --session "$FARYO_OWNER_DIRECT_SESSION" --host "$FARYO_OWNER_HOST" --port "$FARYO_OWNER_PORT"

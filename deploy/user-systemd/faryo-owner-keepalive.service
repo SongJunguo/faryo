@@ -1,0 +1,12 @@
+[Unit]
+Description=Faryo Owner keepalive
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=@FARYO_ROOT@/apps/owner
+Environment=FARYO_HOME=@FARYO_HOME@
+ExecStart=@FARYO_ROOT@/apps/owner/scripts/faryo-owner-keepalive.sh
+TimeoutStartSec=30
+KillMode=process

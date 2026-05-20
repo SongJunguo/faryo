@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>dev.faryo.owner.keepalive</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>@FARYO_ROOT@/apps/owner/scripts/faryo-owner-keepalive.sh</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>@FARYO_ROOT@/apps/owner</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>FARYO_HOME</key>
+    <string>@FARYO_HOME@</string>
+    <key>PATH</key>
+    <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+  </dict>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>StartInterval</key>
+  <integer>30</integer>
+  <key>StandardOutPath</key>
+  <string>@FARYO_HOME@/owner/logs/owner-keepalive.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>@FARYO_HOME@/owner/logs/owner-keepalive.err.log</string>
+</dict>
+</plist>

@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>Faryo Owner v1.0.0</title>
+  <meta name="theme-color" content="#F7F0E5" media="(prefers-color-scheme: light)" />
+  <meta name="theme-color" content="#17130F" media="(prefers-color-scheme: dark)" />
+  <link rel="stylesheet" href="style.css?v=faryo-owner-pet-12" />
+</head>
+<body>
+  <div class="app">
+    <header>
+      <div class="title-row">
+        <div>
+          <strong id="sessionTitle" class="brand-title">
+            <img class="brand-logo" src="icons/faryo-logo.png?v=faryo-owner-3" alt="" />
+            <span id="ownerText">HP</span>
+            <span id="topicText">session unknown</span>
+          </strong>
+        </div>
+        <button id="draftState" type="button">folder</button>
+      </div>
+      <div class="meta-row">
+        <div id="subTitle" class="subtitle meta-main">
+          <span id="ctxText">Ctx --</span>
+          <button id="quotaTop" class="quota-status quota-top" type="button" aria-label="Quota unknown" title="Quota unknown">
+            <span class="quota-bars" aria-hidden="true">
+              <span class="quota-bar"><span id="quotaFill"></span></span>
+              <span class="quota-bar week-bar"><span id="quotaWeekFill"></span></span>
+            </span>
+          </button>
+          <span id="modelText">Connecting...</span>
+        </div>
+        <span id="phasePill" class="pill git-pill">git --</span>
+      </div>
+    </header>
+    <div id="sessionMenu" class="session-menu hidden" role="menu" aria-label="Switch session"></div>
+
+    <main id="outputWrap">
+      <pre id="output" class="output">Waiting for output...</pre>
+      <button id="bottomBtn" class="bottom-btn hidden" type="button" aria-label="Scroll to latest" title="Latest">↓</button>
+    </main>
+
+    <footer>
+      <div class="status-line">
+        <span class="key-nav">
+          <button id="upBtn" type="button">↑</button>
+          <button id="downBtn" type="button">↓</button>
+          <button id="approveSmallBtn" type="button">Confirm</button>
+        </span>
+        <div id="attachmentPreview" class="attachment-preview hidden"></div>
+        <button id="versionToggle" class="product-mark" type="button" title="Faryo v1.0.0">Faryo 1.0.0</button>
+        <button id="statusLeft" class="quota-status hidden" type="button" aria-label="Quota unknown" title="Quota unknown"></button>
+      </div>
+      <div class="composer">
+        <div id="dockMenu" class="dock-menu hidden" role="menu" aria-label="Composer tools">
+          <div class="dock-menu-title">Quick tools</div>
+          <button id="attachmentBtn" class="dock-action" type="button" role="menuitem">
+            <span class="dock-action-icon">＋</span>
+            <span>
+              <strong>Attach</strong>
+              <small>Image, PDF, docs</small>
+            </span>
+          </button>
+          <div class="dock-mode-rail" aria-label="Output mode">
+            <button id="refreshBtn" type="button">Chat</button>
+            <button id="dockFullBtn" type="button">Raw</button>
+          </div>
+        </div>
+        <div class="command-dock">
+          <div id="commandSuggest" class="command-suggest hidden" role="listbox" aria-label="Command suggestions"></div>
+          <div class="prompt-shell">
+            <div id="petControl" class="pet-control pet-offline" aria-label="Faryo offline; tap to interrupt"></div>
+            <textarea id="promptInput" placeholder="Ask Faryo" rows="1"></textarea>
+            <button id="dockPlusBtn" class="dock-plus" type="button" aria-label="Open input tools" aria-expanded="false" aria-controls="dockMenu">+</button>
+            <button id="sendBtn" class="dock-send hidden" type="button" aria-label="Send">↑</button>
+          </div>
+        </div>
+        <input id="attachmentInput" class="hidden" type="file" accept="image/*,.pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx,.odt,.odp,.ods,.md,.txt,.csv,.json,.rtf" multiple />
+        <div id="errorBox" class="error hidden"></div>
+      </div>
+    </footer>
+  </div>
+  <script src="compact-rules-codex.js?v=faryo-owner-compact-codex-1"></script>
+  <script src="compact-rules-claude.js?v=faryo-owner-compact-claude-1"></script>
+  <script src="app.js?v=faryo-owner-compact-claude-1"></script>
+</body>
+</html>

@@ -1,0 +1,55 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  client-packages:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install packaging tools
+        run: sudo apt-get update && sudo apt-get install -y rsync dpkg-dev
+
+      - name: Verify release version
+        env:
+          TAG_NAME: ${{ github.ref_name }}
+        run: |
+          expected="${TAG_NAME#v}"
+          actual="$(awk -F= '$1 == "version" {print $2}' apps/owner/RELEASE | sed 's/^v//')"
+          test "$actual" = "$expected"
+
+      - name: Run release checks
+        run: scripts/package-client.sh check
+
+      - name: Build client packages
+        run: scripts/package-client.sh release
+
+      - name: Upload release asset
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG_NAME: ${{ github.ref_name }}
+        run: |
+          test "$TAG_NAME" != "main"
+          notes="docs/releases/$TAG_NAME.md"
+          if [[ ! -f "$notes" ]]; then
+            printf 'Faryo %s endpoint release.\n\nSee SHA256SUMS for artifact checksums.\n' "${TAG_NAME#v}" > release-notes.md
+            notes="release-notes.md"
+          fi
+          if gh release view "$TAG_NAME" >/dev/null 2>&1; then
+            gh release edit "$TAG_NAME" --title "Faryo ${TAG_NAME#v}" --notes-file "$notes"
+          else
+            gh release create "$TAG_NAME" --title "Faryo ${TAG_NAME#v}" --notes-file "$notes"
+          fi
+          version="${TAG_NAME#v}"
+          gh release upload "$TAG_NAME" \
+            "dist/faryo_${version}_all.deb" \
+            "dist/faryo_${version}_macos.tar.gz" \
+            dist/SHA256SUMS \
+            --clobber
