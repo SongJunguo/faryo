@@ -73,7 +73,7 @@ AGENT_SESSION_LIST_LIMIT = 20
 EMPTY_MANAGED_SESSION_TTL_SECONDS = 60
 DEFAULT_MANAGED_SESSION_NAMESPACE = "direct"
 MAX_MANAGED_AGENT_IDLE_SECONDS = 24 * 60 * 60
-RUNTIME_LOCK = threading.Lock()
+RUNTIME_LOCK = threading.RLock()
 RELEASE_VERSION_CACHE: str | None = None
 FARYO_OWNER_DATA = Path(os.environ.get("FARYO_OWNER_DATA", str(Path.home() / ".faryo" / "owner" / "data"))).expanduser()
 FILE_INBOX_ROOT = Path(os.environ.get("FARYO_OWNER_INBOX_DIR", str(FARYO_OWNER_DATA / "inbox"))).expanduser()
@@ -358,6 +358,11 @@ def active_codex_thread_state(config: Config, session_namespace: str | None) -> 
     superseded: set[str] = set()
     for name in tmux_sessions(config):
         if managed_session(config, name, session_namespace):
+            source = tmux_session_option(config, name, "@faryo_agent_source")
+            session_id = tmux_session_option(config, name, "@faryo_agent_session_id")
+            if source == CODEX_PROFILE.source and session_id:
+                active[session_id] = name
+                continue
             target = target_config(config, name); cwd = get_pane_cwd(target)
             threads = active_agent_threads(target, cwd)
             if not threads:
@@ -380,7 +385,7 @@ def active_claude_session_map(config: Config, session_namespace: str | None) -> 
     active: dict[str, str] = {}
     for name in tmux_sessions(config):
         if managed_session(config, name, session_namespace) and tmux_session_option(config, name, "@faryo_agent_source") == "claude-code" and agent_in_pane(Config(name, config.token, config.pane_width)):
-            if session_id := tmux_session_option(config, name, "@faryo_agent_id"): active[session_id] = name
+            if session_id := (tmux_session_option(config, name, "@faryo_agent_session_id") or tmux_session_option(config, name, "@faryo_agent_id")): active[session_id] = name
     return active
 
 
@@ -513,7 +518,9 @@ def start_agent_runtime(config: Config, session_namespace: str | None, cwd: Path
         res = tmux(config, ["new-session", "-d", "-s", name, "-c", str(cwd), shell, "-lc", launch], timeout=5)
         if res.returncode != 0: raise OwnerError(res.stderr.strip() or "tmux session start failed", HTTPStatus.INTERNAL_SERVER_ERROR)
         if source := AGENT_SOURCE_BY_COMMAND.get(command): tmux_session_option(config, name, "@faryo_agent_source", source)
-        if agent_id: tmux_session_option(config, name, "@faryo_agent_id", agent_id)
+        if agent_id:
+            tmux_session_option(config, name, "@faryo_agent_session_id", agent_id)
+            if command == "claude": tmux_session_option(config, name, "@faryo_agent_id", agent_id)
     if not wait_ready:
         return name
     target = Config(name, config.token, config.pane_width); deadline = time.monotonic() + 10.0
@@ -527,18 +534,21 @@ def start_agent_runtime(config: Config, session_namespace: str | None, cwd: Path
 def resume_codex_thread_session(config: Config, session_namespace: str | None, thread_id: str, max_running: int = 0, history_root: str | None = None) -> str:
     clean_id = clean_agent_session_id(thread_id)
     if not clean_id: raise OwnerError("invalid agent session id")
-    active = active_codex_thread_map(config, session_namespace).get(clean_id)
-    if active: return active
-    thread = codex_thread_by_id(clean_id)
-    if not thread: raise OwnerError("agent session not found", HTTPStatus.NOT_FOUND)
-    if history_root is not None and not path_under_root(str(thread.get("cwd") or ""), history_root): raise OwnerError("agent session not found", HTTPStatus.NOT_FOUND)
-    cwd = Path(str(thread.get("cwd") or Path.home())).expanduser(); cwd = cwd if cwd.is_dir() else Path.home()
-    return start_agent_runtime(config, session_namespace, cwd, "codex", ["resume", clean_id], max_running)
+    with RUNTIME_LOCK:
+        active = active_codex_thread_map(config, session_namespace).get(clean_id)
+        if active: return active
+        thread = codex_thread_by_id(clean_id)
+        if not thread: raise OwnerError("agent session not found", HTTPStatus.NOT_FOUND)
+        if history_root is not None and not path_under_root(str(thread.get("cwd") or ""), history_root): raise OwnerError("agent session not found", HTTPStatus.NOT_FOUND)
+        cwd = Path(str(thread.get("cwd") or Path.home())).expanduser(); cwd = cwd if cwd.is_dir() else Path.home()
+        return start_agent_runtime(config, session_namespace, cwd, "codex", ["resume", clean_id], max_running, agent_id=clean_id)
 
 def resume_claude_session(config: Config, session_namespace: str | None, session_id: str, max_running: int = 0, history_root: str | None = None) -> str:
     if not (clean_id := clean_agent_session_id(session_id)): raise OwnerError("invalid claude session id")
-    if not (item := next((item for item in claude_history_items(history_root) if item.get("id") == clean_id), None)): raise OwnerError("claude session not found", HTTPStatus.NOT_FOUND)
-    cwd = Path(str(item.get("cwd") or Path.home())).expanduser(); cwd = cwd if cwd.is_dir() else Path.home(); return start_agent_runtime(config, session_namespace, cwd, "claude", ["--resume", clean_id], max_running, wait_ready=False, agent_id=clean_id)
+    with RUNTIME_LOCK:
+        if active := active_claude_session_map(config, session_namespace).get(clean_id): return active
+        if not (item := next((item for item in claude_history_items(history_root) if item.get("id") == clean_id), None)): raise OwnerError("claude session not found", HTTPStatus.NOT_FOUND)
+        cwd = Path(str(item.get("cwd") or Path.home())).expanduser(); cwd = cwd if cwd.is_dir() else Path.home(); return start_agent_runtime(config, session_namespace, cwd, "claude", ["--resume", clean_id], max_running, wait_ready=False, agent_id=clean_id)
 
 def resume_agent_session(config: Config, session_namespace: str | None, session_id: str, source: str, max_running: int = 0, history_root: str | None = None) -> str:
     if source == "codex-cli":
