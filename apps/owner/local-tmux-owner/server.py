@@ -51,6 +51,7 @@ APP_DIR = Path(__file__).resolve().parent
 STATIC_DIR = APP_DIR / "static"
 RELEASE_FILE = APP_DIR.parent / "RELEASE"
 AGENT_STATE_DB = Path.home() / ".codex" / "state_5.sqlite"
+CODEX_SESSION_INDEX = Path.home() / ".codex" / "session_index.jsonl"
 CLAUDE_PROJECTS_ROOT = Path(os.environ.get("CLAUDE_CONFIG_DIR", str(Path.home() / ".claude"))).expanduser() / "projects"
 DEFAULT_SESSION = "__faryo_no_default__"
 DEFAULT_PORT = 8765
@@ -248,6 +249,10 @@ def session_title_topic(value: Any, fallback: str = "Untitled session") -> str:
     return topic or fallback
 
 
+def session_index_title(value: Any) -> str:
+    return " ".join(str(value or "").replace("\r", "\n").split())
+
+
 def session_git_label(cwd: str | None, cache: dict[str, str]) -> str:
     if not cwd:
         return ""
@@ -397,6 +402,33 @@ def codex_rows(where: str, params: tuple[Any, ...], limit: int | None = None) ->
     return agent_state_rows(sql, params)
 
 
+def codex_session_index_titles() -> dict[str, str]:
+    if not CODEX_SESSION_INDEX.exists(): return {}
+    titles: dict[str, str] = {}
+    try:
+        with CODEX_SESSION_INDEX.open(encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                try:
+                    row = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if not isinstance(row, dict):
+                    continue
+                thread_id = str(row.get("id") or "").strip()
+                title = session_index_title(row.get("thread_name"))
+                if thread_id and title:
+                    titles[thread_id] = title
+    except OSError:
+        return {}
+    return titles
+
+
+def codex_thread_title(thread: dict[str, Any], fallback: str = "Untitled session", index_titles: dict[str, str] | None = None) -> str:
+    thread_id = str(thread.get("id") or "").strip()
+    titles = index_titles if index_titles is not None else codex_session_index_titles()
+    return titles.get(thread_id) or session_title_topic(thread.get("title"), fallback)
+
+
 def path_under_root(path_value: str | None, root_value: str | None) -> bool:
     try: return bool(path_value and root_value and Path(path_value).expanduser().resolve().is_relative_to(Path(root_value).expanduser().resolve()))
     except OSError: return False
@@ -432,14 +464,16 @@ def claude_history_items(history_root: str | None = None) -> list[dict[str, Any]
     return items
 
 def codex_history_items(config: Config, session_namespace: str | None, history_root: str | None = None) -> list[dict[str, Any]]:
-    active, superseded = active_codex_thread_state(config, session_namespace); items = []; git_labels: dict[str, str] = {}
+    active, superseded = active_codex_thread_state(config, session_namespace); index_titles = codex_session_index_titles(); items = []; git_labels: dict[str, str] = {}
     for item in codex_rows("source = 'cli' AND thread_source = 'user' AND COALESCE(archived, 0) = 0", (), AGENT_SESSION_LIST_LIMIT):
         cwd = str(item.get("cwd") or "")
         if history_root is not None and not path_under_root(cwd, history_root): continue
         thread_id = str(item.get("id") or ""); tmux_session = active.get(thread_id, "")
         if thread_id in superseded: continue
         updated_ts = time.time() if tmux_session else parse_sqlite_timestamp(item.get("updated_at"))
-        items.append({"id": thread_id, "title": session_title_topic(item.get("title"), short_path(cwd) or thread_id or "Untitled session"), "gitLabel": session_git_label(cwd, git_labels), "cwd": short_path(cwd), "createdAt": item.get("created_at") or "", "updatedAt": now_iso() if tmux_session else item.get("updated_at") or "", "updatedTs": updated_ts, "rolloutPath": item.get("rollout_path") or "", "model": item.get("model") or "", "reasoningEffort": item.get("reasoning_effort") or "", "source": "codex-cli", "tmuxSession": tmux_session, "active": bool(tmux_session)})
+        fallback = short_path(cwd) or thread_id or "Untitled session"
+        title = codex_thread_title(item, fallback, index_titles)
+        items.append({"id": thread_id, "title": title, "gitLabel": session_git_label(cwd, git_labels), "cwd": short_path(cwd), "createdAt": item.get("created_at") or "", "updatedAt": now_iso() if tmux_session else item.get("updated_at") or "", "updatedTs": updated_ts, "rolloutPath": item.get("rollout_path") or "", "model": item.get("model") or "", "reasoningEffort": item.get("reasoning_effort") or "", "source": "codex-cli", "tmuxSession": tmux_session, "active": bool(tmux_session)})
     return items
 
 
@@ -456,7 +490,7 @@ def agent_session_items(config: Config, session_namespace: str | None, history_r
         target = target_config(config, name)
         if not agent_in_pane(target): continue
         cwd = get_pane_cwd(target); thread = active_agent_thread(target, cwd) or {}; thread_id = str(thread.get("id") or name)
-        items.append({"id": thread_id, "title": session_title_topic(thread.get("title"), short_path(cwd) or name), "gitLabel": session_git_label(cwd, git_labels), "cwd": short_path(cwd), "createdAt": "", "updatedAt": now_iso(), "updatedTs": time.time(), "rolloutPath": "", "model": "", "reasoningEffort": "", "source": tmux_session_option(config, name, "@faryo_agent_source") or "runtime", "tmuxSession": name, "active": True})
+        items.append({"id": thread_id, "title": codex_thread_title(thread, short_path(cwd) or name) if thread else short_path(cwd) or name, "gitLabel": session_git_label(cwd, git_labels), "cwd": short_path(cwd), "createdAt": "", "updatedAt": now_iso(), "updatedTs": time.time(), "rolloutPath": "", "model": "", "reasoningEffort": "", "source": tmux_session_option(config, name, "@faryo_agent_source") or "runtime", "tmuxSession": name, "active": True})
     return sorted(items, key=lambda item: float(item.get("updatedTs") or 0), reverse=True)
 
 
@@ -1387,6 +1421,7 @@ def status_payload(config: Config) -> dict[str, Any]:
     agent_active = profile is not None
     agent_running = bool(agent_active and not agent_ready_for_input(config, capture_profile))
     target_alive = tmux_alive
+    session_title = codex_thread_title(thread, str(thread.get("id") or "Untitled session")) if thread else (claude_item.get("title") if claude_item else None)
     return {
         "ok": tmux_alive,
         "tmuxAlive": tmux_alive,
@@ -1402,7 +1437,7 @@ def status_payload(config: Config) -> dict[str, Any]:
         "reasoningEffort": reasoning_effort,
         "fastStatus": fast_status,
         "gitStatus": git_status(cwd),
-        "sessionTitle": (thread.get("title") if thread else None) or (claude_item.get("title") if claude_item else None),
+        "sessionTitle": session_title,
         "sessionId": (thread.get("id") if thread else None) or (claude_item.get("id") if claude_item else None),
         "contextUsage": context_usage,
         "weeklyRateLimit": weekly_rate_limit,
