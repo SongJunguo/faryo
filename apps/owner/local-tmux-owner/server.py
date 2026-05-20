@@ -618,10 +618,6 @@ def close_shell_session(config: Config, session: str | None, namespace: str | No
     name = clean_tmux_session_name(session)
     if not managed_session(config, name, namespace):
         raise OwnerError("tmux session not found", HTTPStatus.NOT_FOUND)
-    target = Config(name, config.token, config.pane_width)
-    profile = agent_profile_in_pane(target)
-    if profile and not agent_ready_for_input(target, profile):
-        raise OwnerError("session appears busy; enter it and interrupt first", HTTPStatus.CONFLICT)
     res = tmux(config, ["kill-session", "-t", name], timeout=3)
     if res.returncode != 0:
         raise OwnerError(res.stderr.strip() or "tmux kill-session failed", HTTPStatus.INTERNAL_SERVER_ERROR)
