@@ -475,10 +475,10 @@ def codex_history_items(config: Config, session_namespace: str | None, history_r
         if history_root is not None and not path_under_root(cwd, history_root): continue
         thread_id = str(item.get("id") or ""); tmux_session = active.get(thread_id, "")
         if thread_id in superseded: continue
-        updated_ts = time.time() if tmux_session else parse_sqlite_timestamp(item.get("updated_at"))
+        updated_ts = parse_sqlite_timestamp(item.get("updated_at"))
         fallback = short_path(cwd) or thread_id or "Untitled session"
         title = codex_thread_title(item, fallback, index_titles)
-        items.append({"id": thread_id, "title": title, "gitLabel": session_git_label(cwd, git_labels), "cwd": short_path(cwd), "createdAt": item.get("created_at") or "", "updatedAt": now_iso() if tmux_session else item.get("updated_at") or "", "updatedTs": updated_ts, "rolloutPath": item.get("rollout_path") or "", "model": item.get("model") or "", "reasoningEffort": item.get("reasoning_effort") or "", "source": "codex-cli", "tmuxSession": tmux_session, "active": bool(tmux_session)})
+        items.append({"id": thread_id, "title": title, "gitLabel": session_git_label(cwd, git_labels), "cwd": short_path(cwd), "createdAt": item.get("created_at") or "", "updatedAt": item.get("updated_at") or "", "updatedTs": updated_ts, "rolloutPath": item.get("rollout_path") or "", "model": item.get("model") or "", "reasoningEffort": item.get("reasoning_effort") or "", "source": "codex-cli", "tmuxSession": tmux_session, "active": bool(tmux_session)})
     return items
 
 
@@ -487,7 +487,7 @@ def agent_session_items(config: Config, session_namespace: str | None, history_r
     seen_tmux = {item.get("tmuxSession") for item in items if item.get("tmuxSession")}
     active = active_claude_session_map(config, session_namespace)
     for item in claude_history_items(history_root):
-        if tmux_session := active.get(str(item.get("id") or "")): item.update({"updatedAt": now_iso(), "updatedTs": time.time(), "tmuxSession": tmux_session, "active": True}); seen_tmux.add(tmux_session)
+        if tmux_session := active.get(str(item.get("id") or "")): item.update({"tmuxSession": tmux_session, "active": True}); seen_tmux.add(tmux_session)
         items.append(item)
     git_labels: dict[str, str] = {}
     for name in tmux_sessions(config):
@@ -495,7 +495,8 @@ def agent_session_items(config: Config, session_namespace: str | None, history_r
         target = target_config(config, name)
         if not agent_in_pane(target): continue
         cwd = get_pane_cwd(target); thread = active_agent_thread(target, cwd) or {}; thread_id = str(thread.get("id") or name)
-        items.append({"id": thread_id, "title": codex_thread_title(thread, short_path(cwd) or name) if thread else short_path(cwd) or name, "gitLabel": session_git_label(cwd, git_labels), "cwd": short_path(cwd), "createdAt": "", "updatedAt": now_iso(), "updatedTs": time.time(), "rolloutPath": "", "model": "", "reasoningEffort": "", "source": tmux_session_option(config, name, "@faryo_agent_source") or "runtime", "tmuxSession": name, "active": True})
+        updated_ts = session_created_ts(target); updated_at = iso_from_ts(updated_ts) if updated_ts else ""
+        items.append({"id": thread_id, "title": codex_thread_title(thread, short_path(cwd) or name) if thread else short_path(cwd) or name, "gitLabel": session_git_label(cwd, git_labels), "cwd": short_path(cwd), "createdAt": "", "updatedAt": updated_at, "updatedTs": updated_ts, "rolloutPath": "", "model": "", "reasoningEffort": "", "source": tmux_session_option(config, name, "@faryo_agent_source") or "runtime", "tmuxSession": name, "active": True})
     return sorted(items, key=lambda item: float(item.get("updatedTs") or 0), reverse=True)
 
 
@@ -579,6 +580,16 @@ def session_idle_seconds(config: Config) -> float:
     res = tmux(config, ["display-message", "-p", "-t", tmux_target(config), "#{session_activity}"], timeout=2)
     try: return max(0.0, time.time() - float(res.stdout.strip())) if res.returncode == 0 else 0.0
     except ValueError: return 0.0
+
+
+def session_created_ts(config: Config) -> float:
+    res = tmux(config, ["display-message", "-p", "-t", tmux_target(config), "#{session_created}"], timeout=2)
+    try: return float(res.stdout.strip()) if res.returncode == 0 else 0.0
+    except ValueError: return 0.0
+
+
+def iso_from_ts(value: float) -> str:
+    return _dt.datetime.fromtimestamp(value, _dt.timezone.utc).astimezone().isoformat(timespec="seconds") if value else ""
 
 
 def cleanup_managed_sessions(config: Config, namespace: str | None, agent_idle_seconds: int = 0) -> None:
