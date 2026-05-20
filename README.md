@@ -1,5 +1,10 @@
 # Faryo
 
+## Documentation
+
+- Launch guide: docs/launch/faryo-1.0.0.md
+- Troubleshooting: docs/launch/faryo-1.0.0.md#troubleshooting--deployment-verification
+
 Canonical repository: https://github.com/Snailflyer/faryo
 
 Faryo is a lightweight phone and desktop workbench for the same live
@@ -48,6 +53,8 @@ cp /opt/faryo/apps/owner/config/faryo.env.example ~/.faryo/owner/config/faryo.en
 $EDITOR ~/.faryo/owner/config/faryo.env
 curl --noproxy '*' http://127.0.0.1:8765/health
 ```
+
+- [Troubleshooting & Deployment Verification](docs/launch/faryo-1.0.0.md#troubleshooting--deployment-verification)
 
 Owner should bind to `127.0.0.1`. Public access should go through Gateway, which
 injects Owner tokens server-side so browsers do not receive raw Owner tokens.

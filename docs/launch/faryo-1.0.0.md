@@ -105,3 +105,83 @@ Use these exact phrases when looking for or referencing the project:
 - Faryo terminal AI sessions
 - Faryo Android Chrome PWA
 - Faryo tmux-backed AI coding sessions
+
+## Troubleshooting & Deployment Verification
+
+### Troubleshooting Overview
+Full setup and debugging guide:
+- README.md
+- docs/launch/faryo-1.0.0.md
+
+---
+
+### Gateway Verification
+
+Check if Gateway is reachable:
+
+```bash
+curl -I http://localhost:<gateway-port>
+```
+
+Expected:
+
+- HTTP 200 - Gateway reachable
+- OR 302/303 redirect - login/workbench route
+
+Owner Health Check (/health)
+
+Owner runs locally on loopback only (127.0.0.1)
+
+Check health endpoint:
+
+```bash
+curl http://127.0.0.1:8765/health
+```
+
+Expected:
+
+HTTP 200
+
+JSON response:
+```json
+{
+  "ok": true
+}
+```
+
+---
+
+### Login / Session Issues
+
+- Ensure Gateway → Owner routing is correctly configured
+- Confirm session mapping exists before requests
+- If sessions reset, check tmux session persistence
+
+---
+
+### Common Failures
+
+- Wrong port configuration between Gateway and Owner
+- Owner not started before Gateway
+- Missing tmux session
+- Invalid or expired session state
+- Browser caching old session routes
+
+---
+
+### Safe Debugging Rules
+
+- Never share Owner tokens publicly
+- Do not expose loopback endpoints externally
+- Redact hostnames, tokens, session IDs before sharing logs
+- Avoid copying sensitive config files
+
+---
+
+### Reference Model
+
+- Owner = local runtime (loopback only)
+- Gateway = public routing + login layer
+- tmux = source of truth for session continuity
+
+
