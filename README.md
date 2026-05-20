@@ -2,121 +2,55 @@
 
 Canonical repository: https://github.com/Snailflyer/faryo
 
-Faryo is a lightweight mobile workbench for tmux-backed Codex CLI, Claude Code,
-and shell sessions.
+Faryo is a lightweight phone and desktop workbench for the same live
+`tmux`-backed Codex CLI, Claude Code, or shell session.
 
-It turns long-running Codex, Claude, and shell-based sessions into a mobile
-workbench without replacing the terminal runtime. The browser is only the
-control surface. The original `tmux` session remains the source of truth.
+Use it to check output, send one instruction, approve or interrupt an agent,
+attach context, and return to the same desktop terminal. It is not remote
+desktop, a hosted IDE, a browser terminal, or a second AI chat history.
 
 Read the launch note:
 [`Faryo: mobile workbench for tmux-backed Codex and Claude sessions`](docs/launch/faryo-1.0.0.md).
 
-## Why Faryo Exists
+<p>
+  <img src="docs/assets/screenshots/faryo-gateway-workbench-redacted.png" alt="Faryo Gateway workbench showing route health, handoff package, launch shortcuts, and session history" width="280">
+  <img src="docs/assets/screenshots/faryo-owner-session-redacted.png" alt="Faryo Owner session view showing compact output, agent metadata, approval controls, and composer" width="280">
+</p>
 
-1. AI development is no longer limited to one desk session.
-   Work continues while the user is walking, commuting, waiting, reviewing, or
-   thinking through the next instruction.
+## Use It For
 
-2. Remote access is not the same as work continuity.
-   A remote terminal can show a screen, but it usually does not solve the harder
-   problem: phone and desktop must keep operating the same session history.
+- check a long-running terminal AI task from a phone
+- send a short follow-up without opening a raw terminal
+- approve, interrupt, attach files, or hand off notes
+- keep phone and desktop on the same `tmux` session history
 
-3. The session is the valuable object.
-   The useful state is not a web page. It is the live terminal process, its
-   scrollback, approvals, interruptions, working directory, attachments, and
-   resumable AI context.
+Best-supported path:
 
-4. Mobile AI work should not create a second branch of history.
-   If a phone instruction cannot be seen and continued later from the desktop,
-   the workflow is broken.
+```text
+Linux endpoint
+  + tmux
+  + Codex CLI
+  + Chrome / Android Chrome PWA
+```
 
-5. `tmux` is the smallest reliable truth layer for this job.
-   It already keeps terminal processes alive, preserves scrollback, supports
-   attach/detach, and works with Codex, Claude, and shell TUIs without asking
-   them to change.
+macOS Owner packaging, iOS Safari, Claude Code session discovery, and generic
+shell TUIs are supported but less polished.
 
-6. Lightweight matters because this is a high-frequency tool.
-   The user may open it dozens of times a day to check output, send one
-   instruction, approve an action, or attach a file. Heavy dependencies would
-   make the product harder to trust and easier to abandon.
+## Quickstart
 
-7. Faryo should not own speech-to-text.
-   Phone keyboards and system dictation already handle voice input well. Faryo's
-   responsibility starts after text exists: deliver it into the right live work
-   session without breaking continuity.
+```bash
+curl -LO https://github.com/Snailflyer/faryo/releases/download/v1.0.0/faryo_1.0.0_all.deb
+sudo dpkg -i faryo_1.0.0_all.deb
+systemctl --user daemon-reload
+systemctl --user enable --now faryo-owner-keepalive.timer
+mkdir -p ~/.faryo/owner/config
+cp /opt/faryo/apps/owner/config/faryo.env.example ~/.faryo/owner/config/faryo.env
+$EDITOR ~/.faryo/owner/config/faryo.env
+curl --noproxy '*' http://127.0.0.1:8765/health
+```
 
-8. Multi-endpoint work needs one cockpit.
-   HP, PC, and cloud machines should feel like available places in one work
-   network, not isolated URLs with separate memory.
-
-9. Handoff needs more than a prompt box.
-   Real work often carries screenshots, logs, files, notes, and intent. Faryo
-   packages those materials and brings them into the target session.
-
-10. Open source matters because this is personal infrastructure.
-    The tool controls local terminals and developer context. It should be small,
-    inspectable, self-hostable, and easy to adapt without a hosted platform
-    dependency.
-
-## What Faryo Is
-
-1. A mobile workbench for terminal AI sessions.
-   It lets a phone or desktop browser inspect output, send instructions, approve
-   actions, and continue work without opening a raw terminal.
-
-2. A continuity layer over `tmux`.
-   Faryo does not replace the terminal runtime. It keeps the live tmux session,
-   process, scrollback, and working directory as the shared truth.
-
-3. A Gateway for public access and policy.
-   Gateway handles login, route authorization, endpoint health, session
-   selection, handoff packages, and controlled proxying to Owner endpoints.
-
-4. A local Owner endpoint for execution control.
-   Owner binds to loopback, captures tmux output, sends text, handles
-   interrupts and approvals, uploads attachments, and discovers resumable
-   Codex/Claude history.
-
-5. A cross-device session history surface.
-   The phone and desktop operate the same session history instead of creating
-   separate mobile-only or desktop-only branches.
-
-6. A handoff package inbox.
-   Prompts, notes, screenshots, files, and intent can be packaged and injected
-   into a selected live session.
-
-7. A multi-endpoint cockpit.
-   HP, PC, and cloud endpoints appear as routable places in one workbench while
-   keeping their execution tokens and local runtimes separate.
-
-8. A thin PWA interface.
-   The UI is intentionally small: compact output, raw output, session switching,
-   attachment upload, and command input.
-
-9. A self-hosted endpoint runtime.
-   The packaged Owner runtime is suitable for local machines. Gateway remains
-   source-deployed as the public routing and policy layer.
-
-10. A deliberately small tool, not a platform lock-in.
-    Faryo is not a hosted IDE, not a remote desktop, not a speech-to-text
-    service, and not another AI chat product.
-
-## Product Shape
-
-Faryo is a thin workbench over terminal-native AI sessions.
-
-The user wants the phone and computer to operate the same living workspace:
-
-- one shared terminal-backed session history
-- fast phone input without opening a full terminal
-- desktop continuity after mobile instructions
-- Codex and Claude resume instead of disposable chat pages
-- attachments and notes carried into the active context
-- lightweight runtime behavior with few dependencies and no remote desktop stack
-
-Faryo does not ship speech-to-text. Use the phone keyboard, system dictation, or
-any input method you prefer; Faryo's job is to keep the workbench continuous.
+Owner should bind to `127.0.0.1`. Public access should go through Gateway, which
+injects Owner tokens server-side so browsers do not receive raw Owner tokens.
 
 ## How It Works
 
@@ -213,16 +147,9 @@ convergence.
 
 ## UI Interaction Model
 
-Faryo's UI is a cockpit, not a document editor and not a chat clone. The main
-screen is optimized for repeated mobile checks and short control actions.
-
-Screenshots below are redacted examples. Session titles and project discussion
-content are replaced with representative labels.
-
-<p>
-  <img src="docs/assets/screenshots/faryo-gateway-workbench-redacted.png" alt="Faryo Gateway workbench showing route health, handoff package, launch shortcuts, and session history" width="280">
-  <img src="docs/assets/screenshots/faryo-owner-session-redacted.png" alt="Faryo Owner session view showing compact output, agent metadata, approval controls, and composer" width="280">
-</p>
+Faryo's UI is a workbench, not a document editor or chat clone. The main screen
+is optimized for repeated mobile checks and short control actions. Screenshots
+near the top are redacted examples.
 
 Core interactions:
 
