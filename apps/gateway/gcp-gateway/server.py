@@ -330,7 +330,9 @@ class GatewayConfig:
         self.guard_token = env.get("FARYO_GUARD_TOKEN", "")
         self.bridge_root = secret_file.parent / "bridge-packages"
         self.project_workbench_index = secret_file.parent / "project-workbench.jsonl"
+        self.project_downlink_root = secret_file.parent / "project-workbench-downlinks"
         self.bridge_root.mkdir(parents=True, exist_ok=True)
+        self.project_downlink_root.mkdir(parents=True, exist_ok=True)
 
     def load_owner_tokens(self, env: dict[str, str]) -> dict[str, str]:
         tokens: dict[str, str] = {}
@@ -610,6 +612,15 @@ class GatewayHandler(BaseHTTPRequestHandler):
         if parsed.path == "/login":
             self.handle_login(parsed)
             return
+        if parsed.path == "/api/project-workbench/sync":
+            self.handle_project_workbench_sync()
+            return
+        if parsed.path == "/api/project-workbench/downlink/claim":
+            self.handle_project_workbench_downlink_claim()
+            return
+        if parsed.path == "/api/project-workbench/downlink/ack":
+            self.handle_project_workbench_downlink_ack()
+            return
         username = self.current_username()
         if not username:
             self.write_json({"ok": False, "error": "unauthorized"}, HTTPStatus.UNAUTHORIZED)
@@ -628,6 +639,9 @@ class GatewayHandler(BaseHTTPRequestHandler):
             return
         if parsed.path == "/api/project-workbench":
             self.handle_project_workbench_save()
+            return
+        if parsed.path == "/api/project-workbench/submit":
+            self.handle_project_workbench_submit(username)
             return
         if parsed.path == "/api/agent/new":
             self.handle_agent_new(username)
@@ -776,6 +790,219 @@ class GatewayHandler(BaseHTTPRequestHandler):
             self.write_json({"ok": True, "workbench": {"projects": self.read_project_rows()}}, HTTPStatus.OK)
         except ValueError as exc:
             self.write_json({"ok": False, "error": str(exc)}, HTTPStatus.BAD_REQUEST)
+
+    def handle_project_workbench_submit(self, username: str) -> None:
+        try:
+            payload = self.read_json_body(512 * 1024)
+            source = payload.get("projects")
+            if not isinstance(source, list):
+                raise ValueError("projects must be a list")
+            rows = [self.clean_project_row(project, index) for index, project in enumerate(source, 1) if isinstance(project, dict)]
+            self.write_project_rows(rows)
+            target_rows = self.project_downlink_target_rows(rows, payload)
+            if not target_rows:
+                self.write_json({
+                    "ok": True,
+                    "workbench": {"projects": self.read_project_rows()},
+                    "downlink": {"status": "skipped"},
+                }, HTTPStatus.OK)
+                return
+            package = self.save_project_downlink(target_rows, username)
+            notice = self.notify_project_downlink(package, username)
+            self.write_json({
+                "ok": True,
+                "workbench": {"projects": self.read_project_rows()},
+                "downlink": {
+                    "package_id": package["id"],
+                    "status": notice.get("status") or package.get("status"),
+                },
+            }, HTTPStatus.OK)
+        except ValueError as exc:
+            self.write_json({"ok": False, "error": str(exc)}, HTTPStatus.BAD_REQUEST)
+
+    def handle_project_workbench_sync(self) -> None:
+        if not self.require_project_sync_owner():
+            return
+        try:
+            payload = self.read_json_body(512 * 1024)
+            source = payload.get("projects")
+            if not isinstance(source, list):
+                raise ValueError("projects must be a list")
+            rows = self.project_sync_rows([project for project in source if isinstance(project, dict)])
+            self.write_project_rows(rows)
+            self.write_json({"ok": True, "workbench": {"projects": self.read_project_rows()}}, HTTPStatus.OK)
+        except ValueError as exc:
+            self.write_json({"ok": False, "error": str(exc)}, HTTPStatus.BAD_REQUEST)
+
+    def require_project_sync_owner(self) -> bool:
+        if self.project_sync_owner_route():
+            return True
+        self.write_json({"ok": False, "error": "forbidden"}, HTTPStatus.FORBIDDEN)
+        return False
+
+    def project_sync_owner_route(self) -> str:
+        owner_label = self.headers.get("X-Faryo-Owner-Label", "").strip().lower()
+        owner_route = owner_label if owner_label in BACKENDS else ""
+        owner_token = self.headers.get("X-Owner-Token", "")
+        if owner_route and hmac.compare_digest(owner_token, self.config.owner_token(owner_route)):
+            return owner_route
+        return ""
+
+    def handle_project_workbench_downlink_claim(self) -> None:
+        if not self.require_project_sync_owner():
+            return
+        try:
+            payload = self.read_json_body(64 * 1024)
+            package = self.project_downlink_package(str(payload.get("package_id") or ""))
+            if not package:
+                raise ValueError("downlink package not found")
+            if package.get("target") != self.project_sync_owner_route():
+                self.write_json({"ok": False, "error": "forbidden"}, HTTPStatus.FORBIDDEN)
+                return
+            self.write_json({"ok": True, "package": package}, HTTPStatus.OK)
+        except ValueError as exc:
+            self.write_json({"ok": False, "error": str(exc)}, HTTPStatus.BAD_REQUEST)
+
+    def handle_project_workbench_downlink_ack(self) -> None:
+        if not self.require_project_sync_owner():
+            return
+        try:
+            payload = self.read_json_body(64 * 1024)
+            package_id = str(payload.get("package_id") or "")
+            package = self.project_downlink_package(package_id)
+            if not package:
+                raise ValueError("downlink package not found")
+            if package.get("target") != self.project_sync_owner_route():
+                self.write_json({"ok": False, "error": "forbidden"}, HTTPStatus.FORBIDDEN)
+                return
+            ack_ok = bool(payload.get("ok"))
+            status = str(payload.get("status") or ("applied" if ack_ok else "failed")).strip() or "failed"
+            message = self.compact_text(payload.get("message"))
+            hash_error = self.project_downlink_hash_error(package, payload) if ack_ok else ""
+            if hash_error:
+                ack_ok = False
+                status = "failed"
+                message = hash_error
+            applied_count = payload.get("applied")
+            package["status"] = status
+            package["ack"] = {
+                "ok": ack_ok,
+                "status": status,
+                "message": message,
+                "applied": applied_count if ack_ok and isinstance(applied_count, int) else 0,
+                "updated_at": now_ts(),
+            }
+            self.write_project_downlink_package(package)
+            self.write_json({"ok": True, "package": {"id": package["id"], "status": package["status"]}}, HTTPStatus.OK)
+        except ValueError as exc:
+            self.write_json({"ok": False, "error": str(exc)}, HTTPStatus.BAD_REQUEST)
+
+    def project_sync_rows(self, source: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        existing_rows = self.read_project_rows()
+        existing = {row.get("id"): row for row in existing_rows}
+        incoming_ids = {self.project_id(project) for project in source}
+        rows = [row for row in existing_rows if row.get("id") not in incoming_ids]
+        for index, project in enumerate(source, 1):
+            project_id = self.project_id(project)
+            previous = existing.get(project_id) or {}
+            row = dict(project)
+            if not row.get("bucket"):
+                row["bucket"] = previous.get("bucket") or "B"
+            if not row.get("rank"):
+                row["rank"] = previous.get("rank") or index
+            if not row.get("path"):
+                row["path"] = previous.get("path") or ""
+            rows.append(self.clean_project_row(row, index))
+        return rows
+
+    def project_downlink_target_rows(self, rows: list[dict[str, Any]], payload: dict[str, Any]) -> list[dict[str, Any]]:
+        raw_ids = payload.get("downlink_project_ids")
+        if raw_ids is None:
+            return []
+        if not isinstance(raw_ids, list):
+            raise ValueError("downlink_project_ids must be a list")
+        ids = {self.project_id({"id": item}) for item in raw_ids if str(item or "").strip()}
+        if not ids:
+            return []
+        by_id = {row["id"]: row for row in rows}
+        missing = sorted(ids - set(by_id))
+        if missing:
+            raise ValueError("unknown downlink project id: " + ", ".join(missing))
+        return [row for row in self.sorted_project_rows(rows) if row["id"] in ids]
+
+    def save_project_downlink(self, rows: list[dict[str, Any]], username: str) -> dict[str, Any]:
+        package = {
+            "id": f"pwb-{int(time.time())}-{secrets.token_hex(4)}",
+            "type": "project-workbench",
+            "target": "hp",
+            "status": "pending",
+            "created_at": now_ts(),
+            "created_by": username,
+            "projects": [self.project_downlink_project(row) for row in self.sorted_project_rows(rows)],
+        }
+        self.write_project_downlink_package(package)
+        return package
+
+    def notify_project_downlink(self, package: dict[str, Any], username: str) -> dict[str, Any]:
+        notice = self.owner_json_request("hp", "/api/project-workbench/downlink/apply", {"gateway_url": self.public_base_url(), "package_id": package["id"]}, username, timeout=15)
+        current = self.project_downlink_package(str(package["id"])) or package
+        if notice.get("ok"):
+            current["status"] = str(notice.get("status") or "applied")
+            current["notice"] = {"ok": True, "updated_at": now_ts()}
+        else:
+            current["notice"] = {"ok": False, "error": self.compact_text(notice.get("error")), "updated_at": now_ts()}
+        self.write_project_downlink_package(current)
+        return {"ok": bool(notice.get("ok")), "status": current.get("status") or "failed", "error": notice.get("error")}
+
+    def project_downlink_hash_error(self, package: dict[str, Any], payload: dict[str, Any]) -> str:
+        actual = payload.get("hashes")
+        if not isinstance(actual, dict):
+            return "missing downlink hashes"
+        expected = {}
+        for project in package.get("projects") if isinstance(package.get("projects"), list) else []:
+            if isinstance(project, dict):
+                project_id = self.project_id(project)
+                expected[project_id] = self.compact_text(project.get("hash"))
+        if not expected:
+            return "downlink package has no hash"
+        mismatched = [project_id for project_id, digest in expected.items() if not digest or actual.get(project_id) != digest]
+        return "downlink hash mismatch: " + ", ".join(mismatched) if mismatched else ""
+
+    def project_downlink_package(self, package_id: str) -> dict[str, Any] | None:
+        clean_id = re.sub(r"[^A-Za-z0-9._-]", "", package_id)
+        if not clean_id:
+            return None
+        path = self.config.project_downlink_root / clean_id / "package.json"
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return None
+        return payload if isinstance(payload, dict) else None
+
+    def write_project_downlink_package(self, package: dict[str, Any]) -> None:
+        package_id = re.sub(r"[^A-Za-z0-9._-]", "", str(package.get("id") or ""))
+        if not package_id:
+            raise ValueError("invalid downlink package id")
+        path = self.config.project_downlink_root / package_id / "package.json"
+        self.write_atomic_text(path, json.dumps(package, ensure_ascii=False, indent=2) + "\n")
+
+    def project_truth_row(self, row: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "id": row["id"],
+            "name": row["name"],
+            "brief": row["brief"],
+            "current_d": row["current_d"],
+            "items": row["items"],
+        }
+
+    def project_downlink_project(self, row: dict[str, Any]) -> dict[str, Any]:
+        project = self.project_truth_row(row)
+        project["hash"] = self.project_workbench_hash(project)
+        return project
+
+    def project_workbench_hash(self, project: dict[str, Any]) -> str:
+        body = json.dumps(project, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        return hashlib.sha256(body).hexdigest()
 
     def read_project_rows(self) -> list[dict[str, Any]]:
         rows = []

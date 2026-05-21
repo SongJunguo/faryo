@@ -1,5 +1,6 @@
 const listEl = document.getElementById('projectList');
 const syncEl = document.getElementById('syncStatus');
+const submitBtn = document.getElementById('submitChanges');
 const sheet = document.getElementById('deckSheet');
 const stageEl = document.getElementById('deckStage');
 const titleEl = document.getElementById('deckTitle');
@@ -18,9 +19,18 @@ const TYPES = {
 
 let state = null;
 let deck = { projectId: '', type: 'decision', index: 0 };
+let dirty = false;
+const downlinkProjectIds = new Set();
 
 function projects() { return state?.projects || []; }
 function setSync(text) { syncEl.textContent = text; }
+function setDirty(value) { dirty = value; updateSubmit(); }
+function updateSubmit() { submitBtn.disabled = !state || !dirty; submitBtn.textContent = dirty ? 'Submit' : 'Submitted'; }
+function saveDraft(project = null, downlink = true) {
+  if (downlink && project?.id) downlinkProjectIds.add(project.id);
+  setDirty(true);
+  return persist();
+}
 
 function activeItems(project, type) {
   const done = TYPES[type].done;
@@ -46,11 +56,13 @@ function projectCard(project) {
       <div>
         <div class="project-title">
           <span class="project-name">${escapeHtml(project.name || 'Untitled')}</span>
-          <span class="bucket">${escapeHtml(project.bucket || 'B')}</span>
           <span class="project-brief">${escapeHtml(project.brief || '')}</span>
         </div>
       </div>
-      <span class="chevron">›</span>
+      <div class="project-controls">
+        <button class="bucket" type="button" aria-label="Change project bucket">${escapeHtml(project.bucket || 'B')}</button>
+        <span class="chevron">›</span>
+      </div>
     </section>
     <section class="pile-row">
       ${pileButton('decision', counts.decision)}
@@ -66,8 +78,20 @@ function projectCard(project) {
       openGoal(project);
     }
   });
+  card.querySelector('.bucket').addEventListener('click', event => {
+    event.stopPropagation();
+    cycleBucket(project);
+  });
   card.querySelectorAll('.pile').forEach(button => button.addEventListener('click', () => openDeck(project.id, button.dataset.type)));
   return card;
+}
+
+function cycleBucket(project) {
+  const order = ['S', 'A', 'B'];
+  const current = order.indexOf(project.bucket || 'B');
+  project.bucket = order[(current + 1) % order.length];
+  render();
+  saveDraft(null, false);
 }
 
 function pileButton(type, count) {
@@ -92,7 +116,7 @@ function openGoal(project) {
     project.current_d = next;
     closeDeck();
     render();
-    persist();
+    saveDraft(project);
   });
   stageEl.replaceChildren(form);
   form.elements.goal.focus();
@@ -183,8 +207,13 @@ function applyItemAction(project, item, action) {
     item.status = 'pending';
   }
   render();
-  persist();
-  renderDeck();
+  if (activeItems(project, deck.type).length) {
+    renderDeck();
+    saveDraft(project).then(() => { if (!sheet.hidden) renderDeck(); });
+  } else {
+    closeDeck();
+    saveDraft(project);
+  }
 }
 
 function openItemEditor(project, item) {
@@ -209,8 +238,8 @@ function openItemEditor(project, item) {
     item.body = form.elements.body.value.trim();
     item.recommendation = form.elements.recommendation.value.trim();
     render();
-    persist();
     renderDeck();
+    saveDraft(project).then(() => { if (!sheet.hidden) renderDeck(); });
   });
   form.querySelector('[data-cancel]').addEventListener('click', renderDeck);
   stageEl.replaceChildren(form);
@@ -265,6 +294,7 @@ async function load() {
     const data = await response.json();
     if (!data.ok) throw new Error(data.error || 'Load failed');
     state = data.workbench;
+    setDirty(false);
     setSync('Loaded');
     render();
   } catch (error) {
@@ -285,9 +315,39 @@ async function persist() {
     const data = await response.json();
     if (!data.ok) throw new Error(data.error || 'Save failed');
     state = data.workbench;
-    setSync('Saved');
+    setSync(dirty ? 'Draft' : 'Saved');
+    render();
+    updateSubmit();
   } catch (error) {
     setSync('Failed');
+  }
+}
+
+async function submitChanges() {
+  if (!state) return;
+  submitBtn.disabled = true;
+  setSync('Submitting');
+  try {
+    const response = await fetch('/api/project-workbench/submit', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...state, downlink_project_ids: [...downlinkProjectIds] }),
+    });
+    const data = await response.json();
+    if (!data.ok) throw new Error(data.error || 'Submit failed');
+    state = data.workbench;
+    const status = data.downlink?.status || '';
+    if (status === 'applied' || status === 'skipped') {
+      downlinkProjectIds.clear();
+      setDirty(false);
+    } else {
+      setDirty(true);
+    }
+    setSync(status === 'applied' ? 'Applied' : (status === 'skipped' ? 'Saved' : (status === 'failed' ? 'Failed' : 'Pending HP')));
+    render();
+  } catch (error) {
+    setSync('Submit failed');
+    updateSubmit();
   }
 }
 
@@ -306,5 +366,6 @@ prevBtn.addEventListener('click', () => { deck.index -= 1; renderDeck(); });
 nextBtn.addEventListener('click', () => { deck.index += 1; renderDeck(); });
 document.getElementById('deckClose').addEventListener('click', closeDeck);
 sheet.addEventListener('click', event => { if (event.target.matches('[data-close]')) closeDeck(); });
+submitBtn.addEventListener('click', submitChanges);
 
 load();

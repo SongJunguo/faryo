@@ -45,9 +45,20 @@ button { -webkit-tap-highlight-color: transparent; }
 .brand strong { display: block; font-size: 20px; line-height: 1.05; }
 .brand small, .sync, .project-brief, .item-body, .deck-status { color: var(--muted); font-size: 12px; }
 
+.top-actions { display: inline-flex; align-items: center; gap: 7px; }
+
 .sync {
   max-width: 96px; padding: 5px 8px; border: 1px solid var(--line); border-radius: 999px;
   background: var(--panel); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
+.submit-btn {
+  min-height: 34px; padding: 0 12px; border: 1px solid color-mix(in srgb, var(--accent) 42%, var(--line));
+  border-radius: 8px; background: var(--accent); color: var(--panel); font-weight: 850;
+}
+
+.submit-btn:disabled {
+  border-color: var(--line); background: var(--panel2); color: var(--muted);
 }
 
 .project-list { display: grid; gap: 9px; }
@@ -70,14 +81,14 @@ button { -webkit-tap-highlight-color: transparent; }
 }
 
 .project-name {
-  flex: 0 0 auto; max-width: 42%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  flex: 0 0 auto; max-width: 54%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   font-size: 21px; font-weight: 850;
 }
 
 .bucket {
-  flex: 0 0 auto; padding: 2px 7px; border-radius: 999px;
+  width: 44px; height: 36px; padding: 0; border-radius: 8px;
   border: 1px solid color-mix(in srgb, var(--accent) 42%, var(--line));
-  color: var(--accent); font-size: 12px; font-weight: 850;
+  background: var(--panel); color: var(--accent); font-size: 16px; font-weight: 900;
 }
 
 .project-brief {
@@ -85,6 +96,7 @@ button { -webkit-tap-highlight-color: transparent; }
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 
+.project-controls { display: inline-flex; align-items: center; gap: 5px; }
 .chevron { color: var(--muted); font-size: 20px; align-self: center; }
 
 .pile-row {

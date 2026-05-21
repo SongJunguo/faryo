@@ -12,6 +12,7 @@ import datetime as _dt
 from email import policy
 from email.parser import BytesParser
 import gzip
+import hashlib
 import html as _html
 import io
 import json
@@ -38,6 +39,8 @@ from http import HTTPStatus
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Callable, NamedTuple
+import urllib.error
+import urllib.request
 from urllib.parse import parse_qs, quote, urlencode, urlparse
 
 try:
@@ -111,6 +114,8 @@ ALLOWED_ATTACHMENT_SUFFIXES = {
     ".pdf", ".doc", ".docx", ".ppt", ".pptx", ".xls", ".xlsx",
     ".odt", ".odp", ".ods", ".md", ".txt", ".csv", ".json", ".rtf",
 }
+PROJECT_ITEM_TYPES = {"decision", "action", "watch"}
+PROJECT_DONE_STATUSES = {"accepted", "paused", "done", "skipped", "seen"}
 IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp", ".gif", ".heic", ".heif"}
 IMAGE_CONTENT_TYPES = {
     ".jpg": "image/jpeg",
@@ -1562,6 +1567,134 @@ def resolve_local_image_path(path_value: str | None, config: Config, workspace_r
     return resolve_local_path(path_value, config, IMAGE_SUFFIXES, workspace_root)
 
 
+def compact_text(value: Any) -> str:
+    return " ".join(str(value or "").split())
+
+
+def project_slug(value: Any) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "-", str(value or "").strip().lower()).strip("-")
+    return slug or "project"
+
+
+def clean_project_workbench(project: dict[str, Any]) -> dict[str, Any]:
+    project_id = project_slug(project.get("id") or project.get("name"))
+    items = []
+    for index, item in enumerate(project.get("items") if isinstance(project.get("items"), list) else [], 1):
+        if not isinstance(item, dict):
+            continue
+        item_type = str(item.get("type") or "").strip()
+        title = compact_text(item.get("title"))
+        status = str(item.get("status") or "open").strip()
+        if item_type not in PROJECT_ITEM_TYPES or not title or status in PROJECT_DONE_STATUSES:
+            continue
+        items.append({
+            "id": compact_text(item.get("id")) or f"item-{index}",
+            "type": item_type,
+            "title": title,
+            "body": compact_text(item.get("body")),
+            "recommendation": compact_text(item.get("recommendation")),
+            "status": status,
+        })
+    return {
+        "id": project_id,
+        "name": compact_text(project.get("name") or project_id),
+        "brief": compact_text(project.get("brief")),
+        "current_d": compact_text(project.get("current_d")),
+        "items": items,
+    }
+
+
+def project_workbench_root(project: dict[str, Any]) -> Path:
+    root = Path(env_value("FARYO_PROJECT_WORKBENCH_PROJECTS_ROOT", default=str(Path.home() / "brain" / "projects"))).expanduser()
+    keys = {project_slug(project.get("id")), project_slug(project.get("name"))}
+    try:
+        for child in root.iterdir():
+            if child.is_dir() and project_slug(child.name) in keys:
+                return child
+    except OSError as exc:
+        raise OwnerError("project root not found", HTTPStatus.NOT_FOUND) from exc
+    raise OwnerError(f"project not found: {project.get('name') or project.get('id')}", HTTPStatus.NOT_FOUND)
+
+
+def write_project_workbench_file(path: Path, project: dict[str, Any]) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f".{path.name}.tmp")
+    tmp.write_text(json.dumps(project, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    os.replace(tmp, path)
+    return path
+
+
+def project_workbench_hash(project: dict[str, Any]) -> str:
+    body = json.dumps(project, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(body).hexdigest()
+
+
+def gateway_json_request(config: Config, gateway_url: str, path: str, payload: dict[str, Any], timeout: float = 20) -> dict[str, Any]:
+    base = gateway_url.rstrip("/")
+    if not base:
+        raise OwnerError("missing gateway_url")
+    body = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    request = urllib.request.Request(
+        base + path,
+        data=body,
+        method="POST",
+        headers={
+            "Content-Type": "application/json; charset=utf-8",
+            "X-Owner-Token": config.token,
+            "X-Faryo-Owner-Label": owner_label(),
+        },
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            response_body = response.read().decode("utf-8")
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")
+        raise OwnerError(f"gateway HTTP {exc.code}: {detail}", HTTPStatus.BAD_GATEWAY) from exc
+    except urllib.error.URLError as exc:
+        raise OwnerError(f"gateway unreachable: {exc.reason}", HTTPStatus.BAD_GATEWAY) from exc
+    try:
+        result = json.loads(response_body)
+    except json.JSONDecodeError as exc:
+        raise OwnerError("gateway returned invalid JSON", HTTPStatus.BAD_GATEWAY) from exc
+    if not isinstance(result, dict) or not result.get("ok"):
+        raise OwnerError(str((result or {}).get("error") or "gateway request failed"), HTTPStatus.BAD_GATEWAY)
+    return result
+
+
+def apply_project_workbench_downlink(config: Config, payload: dict[str, Any]) -> dict[str, Any]:
+    gateway_url = compact_text(payload.get("gateway_url") or env_value("FARYO_PROJECT_WORKBENCH_GATEWAY_URL"))
+    package_id = compact_text(payload.get("package_id"))
+    if not package_id:
+        raise OwnerError("missing package_id")
+    claim = gateway_json_request(config, gateway_url, "/api/project-workbench/downlink/claim", {"package_id": package_id})
+    package = claim.get("package") if isinstance(claim.get("package"), dict) else {}
+    projects = package.get("projects") if isinstance(package.get("projects"), list) else []
+    if not projects:
+        raise OwnerError("downlink package has no projects")
+    clean_projects = [clean_project_workbench(project) for project in projects if isinstance(project, dict)]
+    expected_hashes = {project_slug(project.get("id") or project.get("name")): compact_text(project.get("hash")) for project in projects if isinstance(project, dict)}
+    targets = [(project_workbench_root(project) / "00-system" / "workbench.json", project) for project in clean_projects]
+    written = [write_project_workbench_file(path, project) for path, project in targets]
+    hashes = {}
+    for path, project in zip(written, clean_projects):
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        actual = clean_project_workbench(payload if isinstance(payload, dict) else {})
+        hashes[project["id"]] = project_workbench_hash(actual)
+    mismatched = [project_id for project_id, digest in expected_hashes.items() if digest and hashes.get(project_id) != digest]
+    ok = not mismatched
+    ack = gateway_json_request(config, gateway_url, "/api/project-workbench/downlink/ack", {
+        "package_id": package_id,
+        "ok": ok,
+        "status": "applied" if ok else "failed",
+        "applied": len(written) if ok else 0,
+        "hashes": hashes,
+        "message": ("hash mismatch: " + ", ".join(mismatched)) if mismatched else "",
+    })
+    if not ok:
+        raise OwnerError("downlink hash mismatch: " + ", ".join(mismatched), HTTPStatus.CONFLICT)
+    return {"ok": True, "status": "applied", "package_id": package_id, "applied": len(written), "ack_ok": bool(ack.get("ok")), "updatedAt": now_iso()}
+
+
 class MultipartFile:
     def __init__(self, filename: str, content_type: str, data: bytes) -> None:
         self.filename = filename
@@ -1801,6 +1934,9 @@ class Handler(SimpleHTTPRequestHandler):
                     if namespace:
                         cleanup_managed_sessions(self.config, namespace, idle_seconds)
                 self.write_json({"ok": True, "updatedAt": now_iso()})
+                return
+            if parsed.path == "/api/project-workbench/downlink/apply":
+                self.write_json(apply_project_workbench_downlink(self.config, payload))
                 return
             if parsed.path == "/api/session/close":
                 close_shell_session(self.config, str(payload.get("session") or ""), self.session_namespace())
