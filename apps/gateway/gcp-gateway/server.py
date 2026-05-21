@@ -100,37 +100,9 @@ GATEWAY_STATIC_FILES = {
     "projects.js": "text/javascript; charset=utf-8",
 }
 PROJECT_ITEM_TYPES = {"decision", "action", "watch"}
-PROJECT_SEED = {
-    "projects": [{
-        "id": "asterion",
-        "name": "Asterion",
-        "bucket": "S1",
-        "brief": "平台型 alpha 研究生产、提交质量管理与本地真值治理。",
-        "current_d": "保护顾问机会与每天前 4 个高价值提交槽位，只推进 submit-ready output。",
-        "items": [
-            {
-                "id": "ast-decision-y",
-                "type": "decision",
-                "title": "是否继续停用 Y 路线",
-                "body": "当前没有新证据，不恢复 Y 可以避免打乱 X/Z/W 的生产节奏。",
-                "recommendation": "保持停用，除非今天的候选质量证据明显不足。",
-                "status": "pending",
-            },
-            {
-                "id": "ast-decision-nightly",
-                "type": "decision",
-                "title": "nightly 是否更名 production",
-                "body": "更名会影响现有生产线和提交回灌口径，需要单独窗口确认。",
-                "recommendation": "今天先保持观察，不进入施工队列。",
-                "status": "pending",
-            },
-            {"id": "ast-action-report", "type": "action", "title": "读取 hourly 与 daily report", "body": "确认云端生产线是否正常产出。", "status": "ready"},
-            {"id": "ast-action-top4", "type": "action", "title": "筛出当天前 4 个高价值候选", "body": "优先 X/Z/W 生产路线，弱候选不进入提交。", "status": "ready"},
-            {"id": "ast-action-verify", "type": "action", "title": "按提交标准验真候选", "body": "只推进 submit-ready output，不为凑数提交弱候选。", "status": "ready"},
-            {"id": "ast-watch-intake", "type": "watch", "title": "cloud intake 仍是手动提交前置", "body": "云端产物需要先接回 HP 本地真值层，再进入提交判断。", "status": "open"},
-        ],
-    }]
-}
+PROJECT_BUCKETS = {"S", "A", "B"}
+PROJECT_DONE_STATUSES = {"accepted", "paused", "done", "skipped", "seen"}
+PROJECT_BUCKET_ORDER = {"S": 0, "A": 1, "B": 2}
 
 HOP_BY_HOP_HEADERS = {
     "connection",
@@ -357,7 +329,7 @@ class GatewayConfig:
         self.cookie_secret = load_secret(secret_file)
         self.guard_token = env.get("FARYO_GUARD_TOKEN", "")
         self.bridge_root = secret_file.parent / "bridge-packages"
-        self.project_workbench_cache = secret_file.parent / "project-workbench.json"
+        self.project_workbench_index = secret_file.parent / "project-workbench.jsonl"
         self.bridge_root.mkdir(parents=True, exist_ok=True)
 
     def load_owner_tokens(self, env: dict[str, str]) -> dict[str, str]:
@@ -791,56 +763,106 @@ class GatewayHandler(BaseHTTPRequestHandler):
         except json.JSONDecodeError as exc: raise ValueError("invalid JSON body") from exc
 
     def read_project_workbench(self) -> dict[str, Any]:
-        try:
-            data = json.loads(self.config.project_workbench_cache.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            data = PROJECT_SEED
-        return {"ok": True, "workbench": self.clean_project_workbench(data)}
+        return {"ok": True, "workbench": {"projects": self.read_project_rows()}}
 
     def handle_project_workbench_save(self) -> None:
         try:
-            data = self.clean_project_workbench(self.read_json_body(128 * 1024))
-            self.config.project_workbench_cache.parent.mkdir(parents=True, exist_ok=True)
-            tmp = self.config.project_workbench_cache.with_name(f".{self.config.project_workbench_cache.name}.tmp")
-            tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-            os.chmod(tmp, 0o600)
-            os.replace(tmp, self.config.project_workbench_cache)
-            self.write_json({"ok": True, "workbench": data}, HTTPStatus.OK)
+            payload = self.read_json_body(128 * 1024)
+            source = payload.get("projects")
+            if not isinstance(source, list):
+                raise ValueError("projects must be a list")
+            rows = [self.clean_project_row(project, index) for index, project in enumerate(source, 1) if isinstance(project, dict)]
+            self.write_project_rows(rows)
+            self.write_json({"ok": True, "workbench": {"projects": self.read_project_rows()}}, HTTPStatus.OK)
         except ValueError as exc:
             self.write_json({"ok": False, "error": str(exc)}, HTTPStatus.BAD_REQUEST)
 
-    def clean_project_workbench(self, data: dict[str, Any]) -> dict[str, Any]:
-        projects = []
-        source = data.get("projects") if isinstance(data.get("projects"), list) else []
-        for index, item in enumerate(source, 1):
-            if not isinstance(item, dict):
+    def read_project_rows(self) -> list[dict[str, Any]]:
+        rows = []
+        try:
+            lines = self.config.project_workbench_index.read_text(encoding="utf-8").splitlines()
+        except OSError:
+            return rows
+        for line in lines:
+            if not line.strip():
                 continue
-            seed = PROJECT_SEED["projects"][0]
-            project = {key: str(item.get(key) or seed.get(key) or "").strip() for key in ("id", "name", "bucket", "brief", "current_d")}
-            project["rank"] = index
-            project["items"] = self.clean_project_items(item.get("items"))
-            projects.append(project)
-        return {"projects": projects or PROJECT_SEED["projects"]}
+            try:
+                row = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(row, dict):
+                continue
+            rows.append(self.clean_project_row(row, len(rows) + 1))
+        return self.sorted_project_rows(rows)
+
+    def write_project_rows(self, rows: list[dict[str, Any]]) -> None:
+        self.config.project_workbench_index.parent.mkdir(parents=True, exist_ok=True)
+        lines = [json.dumps(row, ensure_ascii=False, separators=(",", ":")) for row in self.sorted_project_rows(rows)]
+        self.write_atomic_text(self.config.project_workbench_index, "\n".join(lines) + ("\n" if lines else ""))
+
+    def sorted_project_rows(self, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        return sorted(rows, key=lambda row: (PROJECT_BUCKET_ORDER.get(str(row.get("bucket")), 9), int(row.get("rank") or 9999), str(row.get("id"))))
+
+    def clean_project_row(self, source: dict[str, Any], rank: int) -> dict[str, Any]:
+        project_id = self.project_id(source)
+        return {
+            "id": project_id,
+            "path": self.compact_text(source.get("path")),
+            "bucket": self.clean_project_bucket(source.get("bucket")),
+            "rank": self.clean_rank(source.get("rank") or rank),
+            "name": self.compact_text(source.get("name") or project_id),
+            "brief": self.compact_text(source.get("brief")),
+            "current_d": self.compact_text(source.get("current_d")),
+            "items": self.clean_project_items(source.get("items")),
+        }
 
     def clean_project_items(self, items: Any) -> list[dict[str, str]]:
-        source = items if isinstance(items, list) else PROJECT_SEED["projects"][0]["items"]
+        source = items if isinstance(items, list) else []
         clean_items = []
         for index, item in enumerate(source, 1):
             if not isinstance(item, dict):
                 continue
             item_type = str(item.get("type") or "").strip()
-            title = " ".join(str(item.get("title") or "").split())
+            title = self.compact_text(item.get("title"))
             if item_type not in PROJECT_ITEM_TYPES or not title:
+                continue
+            status = str(item.get("status") or "open").strip()
+            if status in PROJECT_DONE_STATUSES:
                 continue
             clean_items.append({
                 "id": str(item.get("id") or f"item-{index}").strip(),
                 "type": item_type,
                 "title": title,
-                "body": " ".join(str(item.get("body") or "").split()),
-                "recommendation": " ".join(str(item.get("recommendation") or "").split()),
-                "status": str(item.get("status") or "open").strip(),
+                "body": self.compact_text(item.get("body")),
+                "recommendation": self.compact_text(item.get("recommendation")),
+                "status": status,
             })
         return clean_items
+
+    def project_id(self, data: dict[str, Any]) -> str:
+        raw = str(data.get("id") or data.get("name") or "project").strip().lower()
+        slug = re.sub(r"[^a-z0-9]+", "-", raw).strip("-")
+        return slug or "project"
+
+    def clean_project_bucket(self, value: Any) -> str:
+        bucket = str(value or "B").strip().upper()[:1]
+        return bucket if bucket in PROJECT_BUCKETS else "B"
+
+    def clean_rank(self, value: Any) -> int:
+        try:
+            return max(1, int(value))
+        except (TypeError, ValueError):
+            return 9999
+
+    def compact_text(self, value: Any) -> str:
+        return " ".join(str(value or "").split())
+
+    def write_atomic_text(self, path: Path, text: str) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_name(f".{path.name}.tmp")
+        tmp.write_text(text, encoding="utf-8")
+        os.chmod(tmp, 0o600)
+        os.replace(tmp, path)
 
     def handle_bridge_package_create(self, username: str) -> None:
         try: self.write_json({"ok": True, "package": self.config.save_bridge_package(self.read_json_body(), username)}, HTTPStatus.OK)

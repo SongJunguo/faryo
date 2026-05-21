@@ -46,7 +46,7 @@ function projectCard(project) {
       <div>
         <div class="project-title">
           <span class="project-name">${escapeHtml(project.name || 'Untitled')}</span>
-          <span class="bucket">${escapeHtml(project.bucket || 'A1')}</span>
+          <span class="bucket">${escapeHtml(project.bucket || 'B')}</span>
           <span class="project-brief">${escapeHtml(project.brief || '')}</span>
         </div>
       </div>
