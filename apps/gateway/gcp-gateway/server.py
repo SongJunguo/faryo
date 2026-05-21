@@ -95,6 +95,42 @@ self.addEventListener('fetch',()=>{});
 
 OWNER_STATIC_FILES = {"app.js", "style.css", "index.html", "compact-rules-codex.js", "compact-rules-claude.js"}
 OWNER_STATIC_PREFIXES = ("icons/", "pet/")
+GATEWAY_STATIC_FILES = {
+    "projects.css": "text/css; charset=utf-8",
+    "projects.js": "text/javascript; charset=utf-8",
+}
+PROJECT_ITEM_TYPES = {"decision", "action", "watch"}
+PROJECT_SEED = {
+    "projects": [{
+        "id": "asterion",
+        "name": "Asterion",
+        "bucket": "S1",
+        "brief": "平台型 alpha 研究生产、提交质量管理与本地真值治理。",
+        "current_d": "保护顾问机会与每天前 4 个高价值提交槽位，只推进 submit-ready output。",
+        "items": [
+            {
+                "id": "ast-decision-y",
+                "type": "decision",
+                "title": "是否继续停用 Y 路线",
+                "body": "当前没有新证据，不恢复 Y 可以避免打乱 X/Z/W 的生产节奏。",
+                "recommendation": "保持停用，除非今天的候选质量证据明显不足。",
+                "status": "pending",
+            },
+            {
+                "id": "ast-decision-nightly",
+                "type": "decision",
+                "title": "nightly 是否更名 production",
+                "body": "更名会影响现有生产线和提交回灌口径，需要单独窗口确认。",
+                "recommendation": "今天先保持观察，不进入施工队列。",
+                "status": "pending",
+            },
+            {"id": "ast-action-report", "type": "action", "title": "读取 hourly 与 daily report", "body": "确认云端生产线是否正常产出。", "status": "ready"},
+            {"id": "ast-action-top4", "type": "action", "title": "筛出当天前 4 个高价值候选", "body": "优先 X/Z/W 生产路线，弱候选不进入提交。", "status": "ready"},
+            {"id": "ast-action-verify", "type": "action", "title": "按提交标准验真候选", "body": "只推进 submit-ready output，不为凑数提交弱候选。", "status": "ready"},
+            {"id": "ast-watch-intake", "type": "watch", "title": "cloud intake 仍是手动提交前置", "body": "云端产物需要先接回 HP 本地真值层，再进入提交判断。", "status": "open"},
+        ],
+    }]
+}
 
 HOP_BY_HOP_HEADERS = {
     "connection",
@@ -321,6 +357,7 @@ class GatewayConfig:
         self.cookie_secret = load_secret(secret_file)
         self.guard_token = env.get("FARYO_GUARD_TOKEN", "")
         self.bridge_root = secret_file.parent / "bridge-packages"
+        self.project_workbench_cache = secret_file.parent / "project-workbench.json"
         self.bridge_root.mkdir(parents=True, exist_ok=True)
 
     def load_owner_tokens(self, env: dict[str, str]) -> dict[str, str]:
@@ -555,6 +592,9 @@ class GatewayHandler(BaseHTTPRequestHandler):
             history_mode = parse_qs(parsed.query).get("history", ["less"])[0]
             self.write_json(self.workbench_payload(username, history_mode), HTTPStatus.OK)
             return
+        if parsed.path == "/api/project-workbench":
+            self.write_json(self.read_project_workbench(), HTTPStatus.OK)
+            return
         if parsed.path == "/api/bridge-packages":
             self.write_json({"ok": True, "packages": self.config.list_bridge_packages(username)}, HTTPStatus.OK)
             return
@@ -567,6 +607,13 @@ class GatewayHandler(BaseHTTPRequestHandler):
         route = self.route_for(parsed)
         if route:
             self.proxy(parsed, route, username)
+            return
+        if parsed.path == "/projects":
+            self.write_static_file("projects.html", "text/html; charset=utf-8", "no-store")
+            return
+        if parsed.path.lstrip("/") in GATEWAY_STATIC_FILES:
+            filename = parsed.path.lstrip("/")
+            self.write_static_file(filename, GATEWAY_STATIC_FILES[filename], "no-store")
             return
         if parsed.path == "/":
             self.serve_portal(username)
@@ -606,6 +653,9 @@ class GatewayHandler(BaseHTTPRequestHandler):
             return
         if parsed.path == "/api/bridge-inject":
             self.handle_bridge_inject(username)
+            return
+        if parsed.path == "/api/project-workbench":
+            self.handle_project_workbench_save()
             return
         if parsed.path == "/api/agent/new":
             self.handle_agent_new(username)
@@ -739,6 +789,58 @@ class GatewayHandler(BaseHTTPRequestHandler):
         if length > max_bytes: raise ValueError("request too large")
         try: return json.loads(self.rfile.read(length).decode("utf-8"))
         except json.JSONDecodeError as exc: raise ValueError("invalid JSON body") from exc
+
+    def read_project_workbench(self) -> dict[str, Any]:
+        try:
+            data = json.loads(self.config.project_workbench_cache.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            data = PROJECT_SEED
+        return {"ok": True, "workbench": self.clean_project_workbench(data)}
+
+    def handle_project_workbench_save(self) -> None:
+        try:
+            data = self.clean_project_workbench(self.read_json_body(128 * 1024))
+            self.config.project_workbench_cache.parent.mkdir(parents=True, exist_ok=True)
+            tmp = self.config.project_workbench_cache.with_name(f".{self.config.project_workbench_cache.name}.tmp")
+            tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+            os.chmod(tmp, 0o600)
+            os.replace(tmp, self.config.project_workbench_cache)
+            self.write_json({"ok": True, "workbench": data}, HTTPStatus.OK)
+        except ValueError as exc:
+            self.write_json({"ok": False, "error": str(exc)}, HTTPStatus.BAD_REQUEST)
+
+    def clean_project_workbench(self, data: dict[str, Any]) -> dict[str, Any]:
+        projects = []
+        source = data.get("projects") if isinstance(data.get("projects"), list) else []
+        for index, item in enumerate(source, 1):
+            if not isinstance(item, dict):
+                continue
+            seed = PROJECT_SEED["projects"][0]
+            project = {key: str(item.get(key) or seed.get(key) or "").strip() for key in ("id", "name", "bucket", "brief", "current_d")}
+            project["rank"] = index
+            project["items"] = self.clean_project_items(item.get("items"))
+            projects.append(project)
+        return {"projects": projects or PROJECT_SEED["projects"]}
+
+    def clean_project_items(self, items: Any) -> list[dict[str, str]]:
+        source = items if isinstance(items, list) else PROJECT_SEED["projects"][0]["items"]
+        clean_items = []
+        for index, item in enumerate(source, 1):
+            if not isinstance(item, dict):
+                continue
+            item_type = str(item.get("type") or "").strip()
+            title = " ".join(str(item.get("title") or "").split())
+            if item_type not in PROJECT_ITEM_TYPES or not title:
+                continue
+            clean_items.append({
+                "id": str(item.get("id") or f"item-{index}").strip(),
+                "type": item_type,
+                "title": title,
+                "body": " ".join(str(item.get("body") or "").split()),
+                "recommendation": " ".join(str(item.get("recommendation") or "").split()),
+                "status": str(item.get("status") or "open").strip(),
+            })
+        return clean_items
 
     def handle_bridge_package_create(self, username: str) -> None:
         try: self.write_json({"ok": True, "package": self.config.save_bridge_package(self.read_json_body(), username)}, HTTPStatus.OK)
@@ -1117,6 +1219,13 @@ class GatewayHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.write_bytes(body)
 
+    def write_static_file(self, filename: str, content_type: str, cache: str = "public, max-age=86400") -> None:
+        path = STATIC_DIR / filename
+        if filename != Path(filename).name or not path.is_file():
+            self.write_not_found("/" + filename)
+            return
+        self.write_asset(path.read_bytes(), content_type, cache)
+
     def write_icon(self, filename: str) -> None:
         if filename not in {"pwa-light-192.png", "pwa-light-512.png", "favicon.png", "favicon.ico", "faryo-mark.png"}:
             self.write_not_found("/icons/" + filename)
@@ -1148,7 +1257,7 @@ class GatewayHandler(BaseHTTPRequestHandler):
             return False
 
 PORTAL_CSS = """:root{color-scheme:light dark;--font-step:0px}@media(prefers-color-scheme:light){:root{--bg:#F7F0E5;--panel:#FFFDF8;--panel2:#EDE5D9;--text:#3E3026;--muted:#6F6257;--line:#D9C9B8;--accent:#856344;--on-accent:#FFFFFF;--accent2:#63734F;--ok:#5F6B4D;--warn:#8A641F;--danger:#B54A3D;--shadow:0 18px 50px rgba(83,56,36,.14)}}@media(prefers-color-scheme:dark){:root{--bg:#17130F;--panel:#211A15;--panel2:#2B241D;--text:#F7F0E5;--muted:#C7B8A6;--line:#4B3D32;--accent:#E0C29D;--on-accent:#2A1F17;--accent2:#9FA985;--ok:#9FA985;--warn:#D9AF80;--danger:#F2B8AC;--shadow:0 18px 50px rgba(0,0,0,.38)}}
-*{box-sizing:border-box}body{margin:0;min-height:100vh;padding:calc(env(safe-area-inset-top) + 14px) 14px calc(env(safe-area-inset-bottom) + 18px);background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;font-size:calc(14px + var(--font-step));letter-spacing:0}.shell{width:min(100%,720px);margin:0 auto}header{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:12px}.brand{display:flex;align-items:center;gap:10px;min-width:0}.brand-logo{width:38px;height:38px;border-radius:10px}h1{margin:0;font-size:24px;line-height:1.1}.subtitle,.count,.route-state,.session-meta,.package-meta{color:var(--muted);font-size:calc(12px + var(--font-step))}.subtitle{margin-top:4px}.settings{position:relative;z-index:12}.settings-trigger{position:relative;width:39px;height:39px;display:grid;place-items:center;border:1px solid color-mix(in srgb,var(--accent) 30%,var(--line));border-radius:13px;background:radial-gradient(circle at 30% 22%,color-mix(in srgb,var(--accent) 20%,transparent),transparent 42%),linear-gradient(145deg,color-mix(in srgb,var(--panel) 92%,var(--panel2)),color-mix(in srgb,var(--panel2) 84%,var(--panel)));color:var(--text);box-shadow:var(--shadow);transition:transform .18s ease,border-color .18s ease,background .18s ease}.settings-trigger:active{transform:scale(.96)}.settings.open .settings-trigger{border-color:color-mix(in srgb,var(--accent2) 52%,var(--accent));background:radial-gradient(circle at 28% 20%,color-mix(in srgb,var(--accent2) 28%,transparent),transparent 48%),linear-gradient(145deg,color-mix(in srgb,var(--panel2) 88%,var(--panel)),var(--panel))}.settings-icon{font-size:18px;line-height:1}
+*{box-sizing:border-box}body{margin:0;min-height:100vh;padding:calc(env(safe-area-inset-top) + 14px) 14px calc(env(safe-area-inset-bottom) + 18px);background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;font-size:calc(14px + var(--font-step));letter-spacing:0}.shell{width:min(100%,720px);margin:0 auto}header{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:12px}.brand{display:flex;align-items:center;gap:10px;min-width:0;color:inherit;text-decoration:none}.brand-logo{width:38px;height:38px;border-radius:10px}h1{margin:0;font-size:24px;line-height:1.1}.subtitle,.count,.route-state,.session-meta,.package-meta{color:var(--muted);font-size:calc(12px + var(--font-step))}.subtitle{margin-top:4px}.settings{position:relative;z-index:12}.settings-trigger{position:relative;width:39px;height:39px;display:grid;place-items:center;border:1px solid color-mix(in srgb,var(--accent) 30%,var(--line));border-radius:13px;background:radial-gradient(circle at 30% 22%,color-mix(in srgb,var(--accent) 20%,transparent),transparent 42%),linear-gradient(145deg,color-mix(in srgb,var(--panel) 92%,var(--panel2)),color-mix(in srgb,var(--panel2) 84%,var(--panel)));color:var(--text);box-shadow:var(--shadow);transition:transform .18s ease,border-color .18s ease,background .18s ease}.settings-trigger:active{transform:scale(.96)}.settings.open .settings-trigger{border-color:color-mix(in srgb,var(--accent2) 52%,var(--accent));background:radial-gradient(circle at 28% 20%,color-mix(in srgb,var(--accent2) 28%,transparent),transparent 48%),linear-gradient(145deg,color-mix(in srgb,var(--panel2) 88%,var(--panel)),var(--panel))}.settings-icon{font-size:18px;line-height:1}
 .settings-menu{position:absolute;right:0;top:47px;z-index:20;display:none;width:min(72vw,248px);min-width:210px;padding:10px;border:1px solid color-mix(in srgb,var(--accent) 28%,var(--line));border-radius:20px;background:linear-gradient(145deg,color-mix(in srgb,var(--panel) 94%,var(--panel2)),color-mix(in srgb,var(--panel2) 82%,var(--panel)));box-shadow:var(--shadow);backdrop-filter:blur(18px) saturate(1.18);transform-origin:calc(100% - 24px) 0;animation:settings-bloom .16s ease-out}.settings-menu::after{content:"";position:absolute;right:18px;top:-7px;width:14px;height:14px;transform:rotate(45deg);border-left:1px solid color-mix(in srgb,var(--accent) 26%,var(--line));border-top:1px solid color-mix(in srgb,var(--accent) 26%,var(--line));background:color-mix(in srgb,var(--panel) 94%,var(--panel2))}.settings.open .settings-menu{display:grid;gap:6px}.settings-menu .menu-title{padding:6px 4px 0;color:color-mix(in srgb,var(--muted) 82%,transparent);font-size:10px;font-weight:850;letter-spacing:.10em;text-transform:uppercase}.settings-row{width:100%;min-height:46px;display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:8px;padding:8px 10px;border:1px solid color-mix(in srgb,var(--line) 72%,transparent);border-radius:14px;background:color-mix(in srgb,var(--panel2) 56%,transparent);color:var(--text);text-align:left;text-decoration:none;font:inherit}.settings-row:hover,.settings-row:focus-visible{border-color:color-mix(in srgb,var(--accent) 42%,var(--line));background:color-mix(in srgb,var(--panel2) 78%,transparent);outline:none}.settings-row strong{display:block;font-size:12px;line-height:1.2}.settings-row small{display:block;margin-top:2px;color:var(--muted);font-size:10px;line-height:1.2}.settings-row em{color:var(--accent2);font-size:14px;font-style:normal}.settings-row.install-row{border-color:color-mix(in srgb,var(--accent2) 42%,var(--line));background:linear-gradient(135deg,color-mix(in srgb,var(--accent2) 14%,var(--panel2)),color-mix(in srgb,var(--accent) 10%,var(--panel)))}.settings-menu [hidden]{display:none!important}@keyframes settings-bloom{from{opacity:0;transform:translateY(-4px) scale(.96)}to{opacity:1;transform:translateY(0) scale(1)}}
 .routes{display:flex;flex-wrap:wrap;gap:8px;overflow:visible;min-height:42px;margin-bottom:10px;padding:1px}.route-chip{display:flex;align-items:center;gap:5px;white-space:nowrap;padding:7px 8px;border:1px solid var(--line);border-radius:999px;background:var(--panel);color:var(--text);text-decoration:none;font-size:12px}.dot{width:8px;height:8px;border-radius:999px;background:var(--muted)}.online .dot{background:var(--ok)}.slow .dot{background:var(--warn)}.offline .dot,.error .dot{background:var(--danger)}.handoff-strip{display:grid;grid-template-columns:minmax(0,1fr) minmax(160px,200px);gap:10px;align-items:stretch;margin-bottom:12px}.handoff{padding:9px;border:1px solid var(--line);border-radius:8px;background:var(--panel);box-shadow:var(--shadow)}.handoff.drop-ready{border-color:var(--accent2)}.handoff-head,.section-head{display:flex;align-items:center;justify-content:space-between;gap:8px}.handoff-head{margin-bottom:7px}.eyebrow{margin:0 0 2px;color:var(--accent2);font-size:10px;font-weight:800;letter-spacing:.08em;text-transform:uppercase}h2{margin:0;font-size:calc(15px + var(--font-step));line-height:1.2}.mini-btn{padding:6px 8px;border:1px solid var(--line);border-radius:7px;background:var(--panel);color:var(--text);font:inherit;font-size:calc(12px + var(--font-step));white-space:nowrap}.primary-btn{border-color:color-mix(in srgb,var(--accent) 44%,var(--line));color:var(--accent)}.package-list{min-height:48px}.package-card{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;align-items:center;padding:8px;border:1px solid var(--line);border-radius:7px;background:var(--panel2);touch-action:none}.package-card.dragging{opacity:.55}.drag-ghost{position:fixed;z-index:9999;pointer-events:none;transform:translate(-50%,-50%);box-shadow:var(--shadow)}.package-card strong{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:calc(13px + var(--font-step))}.package-meta{display:block;margin-top:3px;line-height:1.35}main{display:grid;gap:8px}.sessions{display:grid;gap:8px}.session-card{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;align-items:center;width:100%;padding:11px;border:1px solid var(--line);border-radius:8px;background:var(--panel);color:var(--text);text-decoration:none;text-align:left;font:inherit}.new-session-slot{display:grid;gap:8px}.new-session-slot .session-card{min-height:44px}.session-card>div:first-child{min-width:0}.session-card.inactive{opacity:.72}.session-card.drop-target{border-color:var(--accent);box-shadow:0 0 0 3px color-mix(in srgb,var(--accent) 24%,transparent)}.session-title{font-size:calc(15px + var(--font-step));font-weight:760;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.session-meta{margin-top:4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.arrow{color:var(--muted);font-size:20px}.modal{position:fixed;inset:0;z-index:20;display:none;place-items:end center;padding:16px;background:rgba(0,0,0,.42)}.modal.open{display:grid}.sheet{width:min(100%,420px);padding:14px;border:1px solid var(--line);border-radius:12px;background:var(--panel);box-shadow:var(--shadow)}.sheet h3{margin:0 0 6px;font-size:18px}.sheet p{margin:0 0 12px;color:var(--muted);font-size:13px;line-height:1.45}.choice-list{display:grid;gap:8px}.choice-btn{width:100%;padding:11px;border:1px solid var(--line);border-radius:8px;background:var(--panel2);color:var(--text);text-align:left;font:inherit}.choice-btn strong{display:block}.choice-btn span{display:block;margin-top:3px;color:var(--muted);font-size:12px}.choice-btn.danger{border-color:color-mix(in srgb,var(--danger) 55%,var(--line));color:var(--danger)}.choice-btn:disabled{opacity:.45}.modal-actions{display:flex;justify-content:flex-end;margin-top:10px}.empty-state{padding:10px;border:1px dashed var(--line);border-radius:7px;background:var(--panel2);color:var(--muted);font-size:12px;text-align:center}html[data-theme="light"]{--bg:#F7F0E5;--panel:#FFFDF8;--panel2:#EDE5D9;--text:#3E3026;--muted:#6F6257;--line:#D9C9B8;--accent:#856344;--on-accent:#FFFFFF;--accent2:#63734F;--ok:#5F6B4D;--warn:#8A641F;--danger:#B54A3D;--shadow:0 18px 50px rgba(83,56,36,.14);color-scheme:light}html[data-theme="dark"]{--bg:#17130F;--panel:#211A15;--panel2:#2B241D;--text:#F7F0E5;--muted:#C7B8A6;--line:#4B3D32;--accent:#E0C29D;--on-accent:#2A1F17;--accent2:#9FA985;--ok:#9FA985;--warn:#D9AF80;--danger:#F2B8AC;--shadow:0 18px 50px rgba(0,0,0,.38);color-scheme:dark}html[data-size="small"]{--font-step:-1px}html[data-size="large"]{--font-step:1px}html[data-font="serif"] body{font-family:"Songti SC","Noto Serif CJK SC",Georgia,serif}html[data-font="rounded"] body{font-family:ui-rounded,"SF Pro Rounded","Segoe UI",sans-serif}html[data-font="mono"] body{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}@media(max-width:620px){.handoff-strip{grid-template-columns:minmax(0,1fr) minmax(142px,38%)}.handoff{box-shadow:none}}
 .modal.open.anchored{display:block}.modal.anchored .sheet{position:absolute;left:var(--sheet-left,16px);top:var(--sheet-top,16px);width:min(320px,calc(100vw - 32px))}"""
@@ -1206,7 +1315,7 @@ def portal_html(username: str, routes: list[str]) -> str:
 <style>
 {PORTAL_CSS}
 </style></head><body><div class="shell">
-<header><div class="brand"><img class="brand-logo" src="/icons/faryo-mark.png?v=faryo-ui-1" alt=""><div><h1>Faryo</h1><div class="subtitle">{safe_user} · Carry work forward</div></div></div><div class="settings" id="settings"><button class="settings-trigger" type="button" aria-label="Settings"><span class="settings-icon">⚙</span></button><div class="settings-menu" aria-label="Settings panel"><button id="installApp" class="settings-row install-row" type="button" hidden><span><strong>Install app</strong><small>Add Faryo to home screen</small></span><em>↗</em></button><div class="menu-title">Appearance</div><button id="themeBtn" class="settings-row appearance-btn" type="button"><span><strong>Theme</strong><small>System</small></span><em>↻</em></button><button id="fontBtn" class="settings-row appearance-btn" type="button"><span><strong>Font</strong><small>Default</small></span><em>↻</em></button><button id="sizeBtn" class="settings-row appearance-btn" type="button"><span><strong>Size</strong><small>Normal</small></span><em>↻</em></button><button id="historyBtn" class="settings-row" type="button"><span><strong>History</strong><small>Less</small></span><em>↻</em></button><div class="menu-title">Account</div><a class="settings-row" href="/password"><span><strong>Change password</strong></span><em>›</em></a><a class="settings-row" href="/logout"><span><strong>Sign out</strong></span><em>›</em></a></div></div></header>
+<header><a class="brand" href="/projects" aria-label="Open project table"><img class="brand-logo" src="/icons/faryo-mark.png?v=faryo-ui-1" alt=""><div><h1>Faryo</h1><div class="subtitle">{safe_user} · Carry work forward</div></div></a><div class="settings" id="settings"><button class="settings-trigger" type="button" aria-label="Settings"><span class="settings-icon">⚙</span></button><div class="settings-menu" aria-label="Settings panel"><button id="installApp" class="settings-row install-row" type="button" hidden><span><strong>Install app</strong><small>Add Faryo to home screen</small></span><em>↗</em></button><div class="menu-title">Appearance</div><button id="themeBtn" class="settings-row appearance-btn" type="button"><span><strong>Theme</strong><small>System</small></span><em>↻</em></button><button id="fontBtn" class="settings-row appearance-btn" type="button"><span><strong>Font</strong><small>Default</small></span><em>↻</em></button><button id="sizeBtn" class="settings-row appearance-btn" type="button"><span><strong>Size</strong><small>Normal</small></span><em>↻</em></button><button id="historyBtn" class="settings-row" type="button"><span><strong>History</strong><small>Less</small></span><em>↻</em></button><div class="menu-title">Account</div><a class="settings-row" href="/password"><span><strong>Change password</strong></span><em>›</em></a><a class="settings-row" href="/logout"><span><strong>Sign out</strong></span><em>›</em></a></div></div></header>
 <nav class="routes" aria-label="Endpoint status">{chips_html}</nav><div class="handoff-strip"><section class="handoff" id="handoffBox" aria-label="Handoff inbox"><div class="handoff-head"><h2>Handoff <span class="count" id="packageCount">Empty</span></h2><button class="mini-btn primary-btn" id="newPackage" type="button">Add files</button></div><input id="packageInput" type="file" accept="image/*,.pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx,.odt,.odp,.ods,.md,.txt,.csv,.json,.rtf" multiple hidden><input id="packageAssetInput" type="file" accept="image/*,.pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx,.odt,.odp,.ods,.md,.txt,.csv,.json,.rtf" multiple hidden><div class="package-list" id="packageList"><div class="empty-state">No handoff package</div></div></section><div class="new-session-slot" id="newSessionSlot"><div class="empty-state">Loading</div></div></div>
 <main><div class="section-head"><h2>Session History</h2><span class="count" id="sessionCount">Latest 10</span></div><section class="sessions" id="sessionList"><div class="empty-state">Loading sessions...</div></section></main>
 </div><div class="modal" id="modal"><div class="sheet"><h3 id="modalTitle"></h3><p id="modalBody"></p><div class="choice-list" id="modalChoices"></div><div class="modal-actions" id="modalActions"></div></div></div><script>
