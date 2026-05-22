@@ -14,6 +14,14 @@ const openImportBtn = document.getElementById('openImport');
 const importSheet = document.getElementById('importSheet');
 const importForm = document.getElementById('importForm');
 const importStatus = document.getElementById('importStatus');
+const faryoController = document.getElementById('faryoController');
+const faryoPet = document.getElementById('faryoPet');
+const faryoBubble = document.getElementById('faryoBubble');
+const faryoActivity = document.getElementById('faryoActivity');
+const faryoForm = document.getElementById('faryoForm');
+const faryoPrompt = document.getElementById('faryoPrompt');
+const faryoSend = document.getElementById('faryoSend');
+const faryoOpen = document.getElementById('faryoOpen');
 
 const TYPES = {
   decision: { label: 'Decision', done: ['accepted', 'paused'] },
@@ -24,6 +32,9 @@ const TYPES = {
 let state = null;
 let deck = { projectId: '', type: 'decision', index: 0 };
 let dirty = false;
+let faryoSession = '';
+let faryoAgentRunning = false;
+let faryoStream = null;
 const downlinkProjectIds = new Set();
 
 function projects() { return state?.projects || []; }
@@ -421,6 +432,196 @@ function empty(text) {
   return div;
 }
 
+function setFaryoPhase(phase) {
+  faryoPet.className = `controller-pet pet-${phase}`;
+}
+
+function setFaryoBusy(value) {
+  faryoSend.disabled = value;
+  faryoOpen.disabled = value;
+}
+
+function setFaryoStatus(label, activity, phase = 'resting') {
+  faryoController.dataset.state = label;
+  faryoController.title = label;
+  faryoActivity.textContent = activity;
+  setFaryoPhase(phase);
+}
+
+function setFaryoExpanded(value) {
+  faryoController.classList.toggle('is-expanded', value);
+  faryoController.classList.toggle('is-collapsed', !value);
+  if (value) {
+    faryoPrompt.focus();
+    resizeFaryoPrompt();
+  }
+}
+
+function toggleFaryoExpanded() {
+  setFaryoExpanded(!faryoController.classList.contains('is-expanded'));
+}
+
+function resizeFaryoPrompt() {
+  faryoPrompt.style.height = '';
+  faryoPrompt.style.height = `${Math.min(faryoPrompt.scrollHeight, 104)}px`;
+}
+
+function lastActivityLine(text) {
+  const lines = String(text || '').split('\n').map(line => line.trim()).filter(Boolean);
+  return (lines.pop() || '').replace(/\s+/g, ' ').slice(0, 180);
+}
+
+function closeFaryoStream() {
+  if (faryoStream) faryoStream.close();
+  faryoStream = null;
+}
+
+function applyFaryoStatus(data) {
+  if (data?.conflict) {
+    faryoSession = '';
+    faryoAgentRunning = false;
+    closeFaryoStream();
+    setFaryoStatus('Conflict', 'Close extra Faryo sessions.', 'offline');
+    return;
+  }
+  const nextSession = data?.running ? data.session : '';
+  faryoAgentRunning = false;
+  if (!nextSession) {
+    faryoSession = '';
+    closeFaryoStream();
+    setFaryoStatus('Idle', 'Standing by.', 'offline');
+    return;
+  }
+  const changed = faryoSession !== nextSession;
+  if (!changed && faryoStream) return;
+  faryoSession = nextSession;
+  setFaryoStatus('Ready', 'Ready.', 'resting');
+  if (changed || !faryoStream) startFaryoStream();
+}
+
+function startFaryoStream() {
+  closeFaryoStream();
+  if (!window.EventSource || !faryoSession) return;
+  const source = new EventSource(`/gcp/api/events?session=${encodeURIComponent(faryoSession)}&lines=60`);
+  faryoStream = source;
+  source.addEventListener('capture', event => {
+    const capture = JSON.parse(event.data || '{}');
+    faryoAgentRunning = Boolean(capture.agentRunning);
+    const line = lastActivityLine(capture.text);
+    setFaryoStatus(faryoAgentRunning ? 'Working' : 'Ready', line || 'Ready.', faryoAgentRunning ? 'running' : 'resting');
+  });
+  source.onerror = () => {
+    if (faryoStream !== source) return;
+    closeFaryoStream();
+    loadFaryoStatus().catch(() => setFaryoStatus('Offline', 'Standing by.', 'offline'));
+  };
+}
+
+async function loadFaryoStatus() {
+  try {
+    const response = await fetch('/api/faryo/status', { cache: 'no-store' });
+    const data = await response.json();
+    if (!data.ok) throw new Error(data.error || 'Faryo status failed');
+    applyFaryoStatus(data);
+    return data;
+  } catch (error) {
+    faryoSession = '';
+    faryoAgentRunning = false;
+    closeFaryoStream();
+    setFaryoStatus('Offline', error.message || 'Faryo unavailable.', 'offline');
+    return { ok: false, running: false };
+  }
+}
+
+async function ensureFaryoSession(prompt = '') {
+  const status = await loadFaryoStatus();
+  if (status?.running && faryoSession) return { session: faryoSession, redirect: `/gcp/?session=${encodeURIComponent(faryoSession)}` };
+  setFaryoBusy(true);
+  setFaryoStatus('Waking', prompt ? 'Resuming.' : 'Starting.', 'running');
+  try {
+    const response = await fetch('/api/faryo/start', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ prompt }) });
+    const data = await response.json();
+    if (!data.ok) throw new Error(data.error || 'Failed to wake Faryo');
+    faryoSession = data.session || '';
+    if (!faryoSession) throw new Error('Faryo session missing');
+    setFaryoStatus('Ready', 'Ready.', 'resting');
+    startFaryoStream();
+    return data;
+  } finally {
+    setFaryoBusy(false);
+  }
+}
+
+async function sendToFaryoSession(text) {
+  const response = await fetch('/gcp/api/send', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ session: faryoSession, text }),
+  });
+  const data = await response.json();
+  if (!data.ok) throw new Error(data.error || 'Send failed');
+  return data;
+}
+
+async function sendFaryoPrompt(event) {
+  event.preventDefault();
+  const text = faryoPrompt.value.trim();
+  if (!text) return;
+  setFaryoBusy(true);
+  try {
+    const status = await loadFaryoStatus();
+    if (!status?.running) {
+      await ensureFaryoSession(text);
+    } else {
+      try {
+        await sendToFaryoSession(text);
+      } catch (_error) {
+        faryoSession = '';
+        closeFaryoStream();
+        await ensureFaryoSession(text);
+      }
+    }
+    faryoPrompt.value = '';
+    resizeFaryoPrompt();
+    setFaryoExpanded(false);
+    faryoAgentRunning = true;
+    setFaryoStatus('Working', 'Sent.', 'running');
+  } catch (error) {
+    setFaryoStatus('Failed', error.message || 'Send failed.', 'offline');
+  } finally {
+    setFaryoBusy(false);
+  }
+}
+
+async function openFaryoSession() {
+  try {
+    const data = await ensureFaryoSession();
+    location.href = data.redirect || `/gcp/?session=${encodeURIComponent(faryoSession)}`;
+  } catch (error) {
+    setFaryoStatus('Failed', error.message || 'Open failed.', 'offline');
+  }
+}
+
+async function tapFaryoPet() {
+  try {
+    if (!faryoSession || !faryoAgentRunning) {
+      return;
+    }
+    setFaryoStatus('Stopping', 'Stopping.', 'working');
+    const response = await fetch('/gcp/api/interrupt', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ session: faryoSession }),
+    });
+    const data = await response.json();
+    if (!data.ok) throw new Error(data.error || 'Interrupt failed');
+    faryoAgentRunning = false;
+    setFaryoStatus('Ready', 'Ready.', 'resting');
+  } catch (error) {
+    setFaryoStatus('Failed', error.message || 'Faryo action failed.', 'offline');
+  }
+}
+
 function escapeHtml(value) {
   return String(value).replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
 }
@@ -433,5 +634,20 @@ submitBtn.addEventListener('click', submitChanges);
 openImportBtn.addEventListener('click', openImport);
 importForm.addEventListener('submit', importProject);
 importSheet.addEventListener('click', event => { if (event.target.matches('[data-import-close]')) closeImport(); });
+faryoForm.addEventListener('submit', sendFaryoPrompt);
+faryoOpen.addEventListener('click', openFaryoSession);
+faryoBubble.addEventListener('click', toggleFaryoExpanded);
+faryoPet.addEventListener('click', tapFaryoPet);
+faryoPrompt.addEventListener('input', resizeFaryoPrompt);
+faryoPrompt.addEventListener('keydown', event => {
+  if (event.key !== 'Enter' || !(event.ctrlKey || event.metaKey)) return;
+  event.preventDefault();
+  faryoForm.requestSubmit();
+});
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) closeFaryoStream();
+  else loadFaryoStatus().catch(() => {});
+});
 
 load();
+loadFaryoStatus();

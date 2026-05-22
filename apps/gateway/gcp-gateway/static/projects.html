@@ -7,7 +7,7 @@
   <title>Faryo Projects</title>
   <link rel="icon" href="/icons/favicon.png">
   <link rel="apple-touch-icon" href="/icons/pwa-light-192.png">
-  <link rel="stylesheet" href="/projects.css?v=deck-7">
+  <link rel="stylesheet" href="/projects.css?v=deck-8">
 </head>
 <body>
   <div class="shell">
@@ -29,6 +29,20 @@
     <main>
       <section class="project-list" id="projectList" aria-label="Project deck"></section>
     </main>
+
+    <section class="controller-dock is-collapsed" id="faryoController" aria-label="Faryo">
+      <button class="controller-pet pet-offline" type="button" id="faryoPet" aria-label="Interrupt Faryo"></button>
+      <div class="controller-panel">
+        <button class="controller-bubble" type="button" id="faryoBubble" aria-label="Toggle Faryo input">
+          <span id="faryoActivity">Standing by.</span>
+        </button>
+        <form class="controller-form" id="faryoForm">
+          <textarea id="faryoPrompt" name="faryo_prompt" rows="1" autocomplete="off" autocorrect="off" autocapitalize="sentences" spellcheck="false"></textarea>
+          <button type="submit" id="faryoSend">Send</button>
+          <button type="button" id="faryoOpen">Open</button>
+        </form>
+      </div>
+    </section>
   </div>
 
   <section class="deck-sheet" id="deckSheet" hidden>
@@ -78,6 +92,6 @@
     </div>
   </section>
 
-  <script src="/projects.js?v=deck-7"></script>
+  <script src="/projects.js?v=deck-8"></script>
 </body>
 </html>
