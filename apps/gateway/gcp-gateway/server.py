@@ -218,6 +218,9 @@ def compact_path_label(value: Any) -> str:
 def display_session_title(value: Any) -> str:
     return " ".join(str(value or "").replace("\r", "\n").split()) or "Untitled session"
 
+def clean_session_title(value: Any) -> str:
+    return display_session_title(value)[:48]
+
 def clean_re(value: str | None, pattern: str) -> str | None:
     value = (value or "").strip(); return value if re.fullmatch(pattern, value) else None
 
@@ -337,7 +340,10 @@ class GatewayConfig:
         self.project_downlink_root = secret_file.parent / "project-workbench-downlinks"
         self.gateway_home = secret_file.parent.parent
         self.faryo_profile_name = env.get("FARYO_CONTROLLER_CODEX_PROFILE", "faryo").strip() or "faryo"
+        self.faryo_session_title = clean_session_title(env.get("FARYO_CONTROLLER_SESSION_TITLE") or "Faryo")
+        self.faryo_work_root = Path(env.get("FARYO_CONTROLLER_WORK_ROOT", str(Path.home()))).expanduser()
         self.faryo_project_root = Path(env.get("FARYO_CONTROLLER_PROJECT_ROOT", str(Path.home() / ".faryo" / "projects" / "faryo"))).expanduser()
+        self.owner_project_roots = self.load_owner_project_roots(env)
         self.faryo_codex_home = Path(env.get("CODEX_HOME") or os.environ.get("CODEX_HOME") or str(Path.home() / ".codex")).expanduser()
         self.faryo_codex_config = self.faryo_codex_home / f"{self.faryo_profile_name}.config.toml"
         self.faryo_codex_state = self.faryo_codex_home / "state_5.sqlite"
@@ -346,6 +352,7 @@ class GatewayConfig:
         self.project_downlink_root.mkdir(parents=True, exist_ok=True)
 
     def install_faryo_codex_profile(self) -> None:
+        self.faryo_work_root.mkdir(parents=True, exist_ok=True)
         self.faryo_project_root.mkdir(parents=True, exist_ok=True)
         self.faryo_profile_runtime.parent.mkdir(parents=True, exist_ok=True)
         self.faryo_codex_home.mkdir(parents=True, exist_ok=True)
@@ -353,7 +360,8 @@ class GatewayConfig:
             "",
             "## Runtime Paths",
             "",
-            f"- Faryo project root: `{self.faryo_project_root}`",
+            f"- Faryo controller work root: `{self.faryo_work_root}`",
+            f"- Faryo project truth root: `{self.faryo_project_root}`",
             f"- Gateway workbench projection: `{self.project_workbench_index}`",
             f"- Gateway downlink packages: `{self.project_downlink_root}`",
             "",
@@ -368,14 +376,23 @@ class GatewayConfig:
             'sandbox_mode = "workspace-write"',
             f"model_instructions_file = {json.dumps(str(self.faryo_profile_runtime))}",
             "",
-            f'[projects.{json.dumps(str(self.faryo_project_root))}]',
-            'trust_level = "trusted"',
-            "",
-            f'[projects.{json.dumps(str(self.gateway_home))}]',
+            f'[projects.{json.dumps(str(self.faryo_work_root))}]',
             'trust_level = "trusted"',
             "",
         ])
         self.faryo_codex_config.write_text(config_text, encoding="utf-8")
+
+    def load_owner_project_roots(self, env: dict[str, str]) -> dict[str, str]:
+        roots: dict[str, str] = {}
+        default_root = str(Path.home() / "brain" / "projects")
+        for route in BACKENDS:
+            value = (
+                env.get(f"FARYO_{route.upper()}_PROJECTS_ROOT")
+                or env.get(f"FARYO_{route.upper()}_PROJECT_ROOT")
+                or default_root
+            ).strip()
+            roots[route] = str(Path(value).expanduser())
+        return roots
 
     def load_owner_tokens(self, env: dict[str, str]) -> dict[str, str]:
         tokens: dict[str, str] = {}
@@ -577,6 +594,8 @@ class GatewayHandler(BaseHTTPRequestHandler):
             self.handle_mcp_get(parsed)
             return
         username = self.current_username()
+        if not username and parsed.path == "/api/faryo/status":
+            username = self.controller_token_username()
         if parsed.path == "/login":
             if username:
                 self.redirect(self.safe_next(parsed))
@@ -667,7 +686,8 @@ class GatewayHandler(BaseHTTPRequestHandler):
         if parsed.path == "/api/project-workbench/downlink/ack":
             self.handle_project_workbench_downlink_ack()
             return
-        username = self.current_username()
+        controller_paths = {"/api/faryo/dispatch", "/api/faryo/start"}
+        username = self.controller_token_username() if parsed.path in controller_paths else self.current_username()
         if not username:
             self.write_json({"ok": False, "error": "unauthorized"}, HTTPStatus.UNAUTHORIZED)
             return
@@ -694,6 +714,9 @@ class GatewayHandler(BaseHTTPRequestHandler):
             return
         if parsed.path == "/api/faryo/start":
             self.handle_faryo_start(username)
+            return
+        if parsed.path == "/api/faryo/dispatch":
+            self.handle_faryo_dispatch(username)
             return
         if parsed.path == "/api/agent/new":
             self.handle_agent_new(username)
@@ -853,21 +876,52 @@ class GatewayHandler(BaseHTTPRequestHandler):
             self.write_project_rows(rows)
             target_rows = self.project_downlink_target_rows(rows, payload)
             if not target_rows:
+                downlink = {"status": "skipped"}
                 self.write_json({
                     "ok": True,
                     "workbench": {"projects": self.read_project_rows()},
-                    "downlink": {"status": "skipped"},
+                    "downlink": downlink,
+                    "faryo": self.wake_faryo_after_project_submit(username, rows, downlink),
                 }, HTTPStatus.OK)
                 return
             packages = self.save_project_downlinks(target_rows, username)
             notices = [self.notify_project_downlink(package, username) for package in packages]
+            downlink = self.project_downlink_response(packages, notices)
             self.write_json({
                 "ok": True,
                 "workbench": {"projects": self.read_project_rows()},
-                "downlink": self.project_downlink_response(packages, notices),
+                "downlink": downlink,
+                "faryo": self.wake_faryo_after_project_submit(username, target_rows, downlink),
             }, HTTPStatus.OK)
         except ValueError as exc:
             self.write_json({"ok": False, "error": str(exc)}, HTTPStatus.BAD_REQUEST)
+
+    def project_submit_prompt(self, rows: list[dict[str, Any]], downlink: dict[str, Any]) -> str:
+        projects = []
+        for row in self.sorted_project_rows(rows):
+            projects.append({
+                "id": row["id"],
+                "name": row["name"],
+                "bucket": row["bucket"],
+                "rank": row["rank"],
+                "owner_route": row.get("owner_route") or "",
+                "workbench_path": row.get("workbench_path") or "",
+                "current_d": row.get("current_d") or "",
+                "items": row.get("items") or [],
+            })
+        payload = {"event": "project_workbench_submit", "downlink": downlink, "projects": projects}
+        return "\n".join([
+            "项目工作台刚完成一次用户裁决提交，你现在接棒。",
+            "先读取 Gateway project-workbench 投影和相关项目真值；如果同步或回执异常，先指出阻塞。",
+            "只允许列出 0-3 条额外提醒，且必须是业务优先级、重大安全风险或会影响执行成败的事项；没有就不要提醒。",
+            "随后按用户已裁决内容调度可见 Codex 会话执行：一个受影响项目对应一个可见项目 worker，会话必须出现在 Gateway 历史会话里，不得使用 headless。",
+            "每个 worker 必须带项目 id、Owner route、workbench 路径、已裁决事项和收尾回执要求。",
+            json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
+        ])
+
+    def wake_faryo_after_project_submit(self, username: str, rows: list[dict[str, Any]], downlink: dict[str, Any]) -> dict[str, Any]:
+        result = self.ensure_faryo_controller(username, self.project_submit_prompt(rows, downlink))
+        return {"ok": bool(result.get("ok")), "session": result.get("session") or "", "error": result.get("error") or ""}
 
     def handle_project_workbench_import(self, username: str) -> None:
         try:
@@ -1296,6 +1350,88 @@ class GatewayHandler(BaseHTTPRequestHandler):
             self.write_json({"ok": True, "redirect": f"/{route}/?session={target_session}", "session": target_session}, HTTPStatus.OK)
         except ValueError as exc: self.write_json({"ok": False, "error": str(exc)}, HTTPStatus.BAD_REQUEST)
 
+    def handle_faryo_dispatch(self, username: str) -> None:
+        try:
+            payload = self.read_json_body(128 * 1024)
+            project = self.dispatch_project(payload)
+            route = project["owner_route"]
+            prompt = str(payload.get("prompt") or "").strip()
+            if not prompt:
+                raise ValueError("prompt is required")
+            title = clean_session_title(payload.get("title") or f"P:{project['name']}")
+            session = ""
+            selected_cwd = ""
+            last_error = ""
+            for cwd in project["cwd_candidates"]:
+                launch = {"command": "codex", "cwd": cwd, "title": title, "max_running": self.max_running_for(username, route)}
+                response = self.owner_json_request(route, "/api/agent/new", launch, username, timeout=10, extra_headers={"X-Faryo-Workspace-Root": cwd})
+                session = clean_session_id(str(response.get("session") or "")) if response.get("ok") else ""
+                if session:
+                    selected_cwd = cwd
+                    break
+                last_error = self.compact_text(response.get("error")) or "owner new session failed"
+            if not session:
+                self.write_json({"ok": False, "error": last_error or "owner new session failed", "route": route}, HTTPStatus.BAD_GATEWAY); return
+            sent = self.owner_json_request(route, "/api/send", {"session": session, "text": prompt}, username, timeout=10)
+            if not sent.get("ok"):
+                self.write_json({"ok": False, "error": sent.get("error") or "owner send failed", "route": route, "session": session}, HTTPStatus.BAD_GATEWAY); return
+            self.write_json({"ok": True, "route": route, "session": session, "title": title, "cwd": selected_cwd, "redirect": f"/{route}/?session={session}"}, HTTPStatus.OK)
+        except ValueError as exc:
+            self.write_json({"ok": False, "error": str(exc)}, HTTPStatus.BAD_REQUEST)
+
+    def dispatch_project(self, payload: dict[str, Any]) -> dict[str, Any]:
+        project_id = self.project_id({"id": payload.get("project_id") or payload.get("projectId") or payload.get("id") or ""})
+        if not project_id or project_id == "project":
+            raise ValueError("project_id is required")
+        row = next((item for item in self.read_project_rows() if item["id"] == project_id), None)
+        if not row:
+            raise ValueError("project not found")
+        route = row.get("owner_route") or ""
+        name = row.get("name") or row["id"]
+        if route not in BACKENDS:
+            raise ValueError("project owner_route is invalid")
+        cwd_candidates = self.project_worker_cwd_candidates(row)
+        if not cwd_candidates:
+            raise ValueError("project cwd is missing")
+        return {"id": project_id, "name": name, "owner_route": route, "cwd_candidates": cwd_candidates}
+
+    def project_worker_cwd_candidates(self, row: dict[str, Any]) -> list[str]:
+        marker = "/00-system/workbench.json"
+        path = self.compact_text(row.get("path"))
+        workbench = self.compact_text(row.get("workbench_path"))
+        candidates: list[str] = []
+
+        def add(value: Any) -> None:
+            candidate = self.compact_text(value)
+            if candidate and candidate not in candidates:
+                candidates.append(candidate)
+
+        if workbench.endswith(marker):
+            add(workbench[: -len(marker)])
+        if path.endswith(marker):
+            add(path[: -len(marker)])
+        if path.startswith("/"):
+            add(path)
+        if workbench:
+            add(str(Path(workbench).parent.parent))
+        if not candidates:
+            root = self.config.owner_project_roots.get(self.compact_text(row.get("owner_route")), "")
+            for segment in self.project_dir_segments(row):
+                add(str(Path(root) / segment))
+        return candidates
+
+    def project_dir_segments(self, row: dict[str, Any]) -> list[str]:
+        name = self.compact_text(row.get("name"))
+        values = [name, self.compact_text(row.get("id")), name.lower() if name else ""]
+        segments: list[str] = []
+        for value in values:
+            segment = self.compact_text(value)
+            if not segment or segment in {".", ".."} or "/" in segment or "\\" in segment or "\x00" in segment:
+                continue
+            if segment not in segments:
+                segments.append(segment)
+        return segments
+
     def handle_faryo_status(self, username: str) -> None:
         if not self.config.allowed_route(username, "gcp"):
             self.write_json({"ok": False, "error": "forbidden"}, HTTPStatus.FORBIDDEN)
@@ -1315,26 +1451,39 @@ class GatewayHandler(BaseHTTPRequestHandler):
 
     def handle_faryo_start(self, username: str) -> None:
         try:
-            if not self.config.allowed_route(username, "gcp"):
-                self.write_json({"ok": False, "error": "forbidden"}, HTTPStatus.FORBIDDEN)
+            result = self.ensure_faryo_controller(username, self.faryo_start_prompt())
+            if not result.get("ok"):
+                status = HTTPStatus.CONFLICT if result.get("sessions") else HTTPStatus.BAD_GATEWAY
+                if result.get("error") == "forbidden":
+                    status = HTTPStatus.FORBIDDEN
+                self.write_json(result, status)
                 return
-            session = self.faryo_session_name(username)
-            prompt = self.faryo_start_prompt()
-            self.config.install_faryo_codex_profile()
-            sessions = self.live_faryo_sessions(username)
-            if len(sessions) > 1:
-                self.write_json({"ok": False, "error": "multiple Faryo profile sessions are running; close extras first", "sessions": sessions}, HTTPStatus.CONFLICT)
-                return
-            if sessions:
-                session = sessions[0]
-            else:
-                if self.tmux_session_exists(session):
-                    self.mark_faryo_session(session, username)
-                else:
-                    self.start_faryo_session(session, username, self.latest_faryo_thread_id(), prompt)
-            self.write_json({"ok": True, "redirect": f"/gcp/?session={session}", "session": session}, HTTPStatus.OK)
+            self.write_json(result, HTTPStatus.OK)
         except ValueError as exc:
             self.write_json({"ok": False, "error": str(exc)}, HTTPStatus.BAD_REQUEST)
+
+    def ensure_faryo_controller(self, username: str, prompt: str = "") -> dict[str, Any]:
+        if not self.config.allowed_route(username, "gcp"):
+            return {"ok": False, "error": "forbidden"}
+        session = self.faryo_session_name(username)
+        self.config.install_faryo_codex_profile()
+        sessions = self.live_faryo_sessions(username)
+        if len(sessions) > 1:
+            return {"ok": False, "error": "multiple Faryo profile sessions are running; close extras first", "sessions": sessions}
+        started = False
+        if sessions:
+            session = sessions[0]
+            self.mark_faryo_session(session, username)
+        elif self.tmux_session_exists(session):
+            self.mark_faryo_session(session, username)
+        else:
+            self.start_faryo_session(session, username, self.latest_faryo_thread_id(), prompt)
+            started = True
+        if prompt and not started:
+            sent = self.owner_json_request("gcp", "/api/send", {"session": session, "text": prompt}, username, timeout=6)
+            if not sent.get("ok"):
+                return {"ok": False, "error": self.compact_text(sent.get("error")) or "failed to send prompt to Faryo", "session": session}
+        return {"ok": True, "redirect": f"/gcp/?session={session}", "session": session}
 
     def faryo_start_prompt(self) -> str:
         length = int(self.headers.get("Content-Length", "0") or "0")
@@ -1354,7 +1503,7 @@ class GatewayHandler(BaseHTTPRequestHandler):
         path = self.config.faryo_codex_state
         if not path.is_file():
             return ""
-        cwd = str(self.config.faryo_project_root)
+        cwd = str(self.config.faryo_work_root)
         try:
             conn = sqlite3.connect(f"file:{path.as_posix()}?mode=ro", uri=True, timeout=1)
             try:
@@ -1396,6 +1545,7 @@ class GatewayHandler(BaseHTTPRequestHandler):
 
     def mark_faryo_session(self, session: str, username: str, thread_id: str = "") -> None:
         self.tmux_session_option(session, "@faryo_agent_source", "codex-cli")
+        self.tmux_session_option(session, "@faryo_session_title", self.config.faryo_session_title)
         self.tmux_session_option(session, "@faryo_controller_profile", self.config.faryo_profile_name)
         self.tmux_session_option(session, "@faryo_controller_owner", self.faryo_controller_owner(username))
         if thread_id:
@@ -1417,13 +1567,13 @@ class GatewayHandler(BaseHTTPRequestHandler):
         shell = shutil.which("zsh") or "/usr/bin/zsh"
         initial_prompt = prompt or "启动 Faryo 主控。先读取项目工作台投影和 Faryo 运行真值，给出当前项目优先级、需要用户裁决的事项，并等待用户下一步指令。"
         if thread_id:
-            command = shlex.join([codex, "resume", "--profile-v2", self.config.faryo_profile_name, "--cd", str(self.config.faryo_project_root), thread_id, initial_prompt])
+            command = shlex.join([codex, "resume", "--profile-v2", self.config.faryo_profile_name, "--cd", str(self.config.faryo_work_root), thread_id, initial_prompt])
         else:
-            command = shlex.join([codex, "--profile-v2", self.config.faryo_profile_name, "--cd", str(self.config.faryo_project_root), initial_prompt])
+            command = shlex.join([codex, "--profile-v2", self.config.faryo_profile_name, "--cd", str(self.config.faryo_work_root), initial_prompt])
         launch = f"{command}; exec {shlex.quote(shell)} -l"
         try:
             result = subprocess.run(
-                ["tmux", "new-session", "-d", "-s", session, "-c", str(self.config.faryo_project_root), shell, "-lc", launch],
+                ["tmux", "new-session", "-d", "-s", session, "-c", str(self.config.faryo_work_root), shell, "-lc", launch],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
@@ -1445,8 +1595,10 @@ class GatewayHandler(BaseHTTPRequestHandler):
         if workspace_root := self.config.workspace_root(username, route): headers["X-Faryo-Workspace-Root"] = workspace_root
         return headers
 
-    def owner_json_request(self, route: str, path: str, payload: dict[str, Any] | None, username: str, method: str = "POST", timeout: float = 10) -> dict[str, Any]:
+    def owner_json_request(self, route: str, path: str, payload: dict[str, Any] | None, username: str, method: str = "POST", timeout: float = 10, extra_headers: dict[str, str] | None = None) -> dict[str, Any]:
         host, port, _label = BACKENDS[route]; headers = self.owner_headers(route, username); body = None
+        if extra_headers:
+            headers.update({key: value for key, value in extra_headers.items() if value})
         if payload is not None: body = json.dumps(payload, ensure_ascii=False).encode("utf-8"); headers.update({"Content-Type": "application/json; charset=utf-8", "Content-Length": str(len(body))})
         conn = http.client.HTTPConnection(host, port, timeout=timeout)
         try: conn.request(method, path, body=body, headers=headers); resp = conn.getresponse(); data = resp.read()
@@ -1643,6 +1795,12 @@ class GatewayHandler(BaseHTTPRequestHandler):
 
     def is_authenticated(self) -> bool:
         return self.current_username() is not None
+
+    def controller_token_username(self) -> str | None:
+        token = self.headers.get("X-Faryo-Guard-Token", "")
+        if self.config.guard_token and self.config.mcp_user and hmac.compare_digest(token, self.config.guard_token):
+            return self.config.mcp_user
+        return None
 
     def current_username(self) -> str | None:
         raw = self.headers.get("Cookie", "")

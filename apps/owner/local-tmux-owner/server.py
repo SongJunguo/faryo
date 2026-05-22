@@ -483,6 +483,8 @@ def codex_history_items(config: Config, session_namespace: str | None, history_r
         updated_ts = parse_sqlite_timestamp(item.get("updated_at"))
         fallback = short_path(cwd) or thread_id or "Untitled session"
         title = codex_thread_title(item, fallback, index_titles)
+        if tmux_session:
+            title = tmux_session_option(config, tmux_session, "@faryo_session_title") or title
         items.append({"id": thread_id, "title": title, "gitLabel": session_git_label(cwd, git_labels), "cwd": short_path(cwd), "createdAt": item.get("created_at") or "", "updatedAt": item.get("updated_at") or "", "updatedTs": updated_ts, "rolloutPath": item.get("rollout_path") or "", "model": item.get("model") or "", "reasoningEffort": item.get("reasoning_effort") or "", "source": "codex-cli", "tmuxSession": tmux_session, "active": bool(tmux_session)})
     return items
 
@@ -501,7 +503,8 @@ def agent_session_items(config: Config, session_namespace: str | None, history_r
         if not agent_in_pane(target): continue
         cwd = get_pane_cwd(target); thread = active_agent_thread(target, cwd) or {}; thread_id = str(thread.get("id") or name)
         updated_ts = session_created_ts(target); updated_at = iso_from_ts(updated_ts) if updated_ts else ""
-        items.append({"id": thread_id, "title": codex_thread_title(thread, short_path(cwd) or name) if thread else short_path(cwd) or name, "gitLabel": session_git_label(cwd, git_labels), "cwd": short_path(cwd), "createdAt": "", "updatedAt": updated_at, "updatedTs": updated_ts, "rolloutPath": "", "model": "", "reasoningEffort": "", "source": tmux_session_option(config, name, "@faryo_agent_source") or "runtime", "tmuxSession": name, "active": True})
+        title = tmux_session_option(config, name, "@faryo_session_title") or (codex_thread_title(thread, short_path(cwd) or name) if thread else short_path(cwd) or name)
+        items.append({"id": thread_id, "title": title, "gitLabel": session_git_label(cwd, git_labels), "cwd": short_path(cwd), "createdAt": "", "updatedAt": updated_at, "updatedTs": updated_ts, "rolloutPath": "", "model": "", "reasoningEffort": "", "source": tmux_session_option(config, name, "@faryo_agent_source") or "runtime", "tmuxSession": name, "active": True})
     return sorted(items, key=lambda item: float(item.get("updatedTs") or 0), reverse=True)
 
 
@@ -516,7 +519,7 @@ def agent_launch_executable(command: str) -> str:
     return shutil.which(command) or command
 
 
-def start_agent_runtime(config: Config, session_namespace: str | None, cwd: Path, command: str, args: list[str], max_running: int = 0, wait_ready: bool = True, agent_id: str = "") -> str:
+def start_agent_runtime(config: Config, session_namespace: str | None, cwd: Path, command: str, args: list[str], max_running: int = 0, wait_ready: bool = True, agent_id: str = "", title: str = "") -> str:
     with RUNTIME_LOCK:
         if max_running and managed_agent_count(config, session_namespace) >= max_running: raise OwnerError("running agent limit reached", HTTPStatus.CONFLICT)
         name = f"{managed_session_prefix(session_namespace)}{_dt.datetime.now():%m%d-%H%M%S}-{secrets.token_hex(2)}"; executable = agent_launch_executable(command)
@@ -524,6 +527,8 @@ def start_agent_runtime(config: Config, session_namespace: str | None, cwd: Path
         res = tmux(config, ["new-session", "-d", "-s", name, "-c", str(cwd), shell, "-lc", launch], timeout=5)
         if res.returncode != 0: raise OwnerError(res.stderr.strip() or "tmux session start failed", HTTPStatus.INTERNAL_SERVER_ERROR)
         if source := AGENT_SOURCE_BY_COMMAND.get(command): tmux_session_option(config, name, "@faryo_agent_source", source)
+        if title:
+            tmux_session_option(config, name, "@faryo_session_title", clean_session_title(title))
         if agent_id:
             tmux_session_option(config, name, "@faryo_agent_session_id", agent_id)
             if command == "claude": tmux_session_option(config, name, "@faryo_agent_id", agent_id)
@@ -1571,6 +1576,10 @@ def compact_text(value: Any) -> str:
     return " ".join(str(value or "").split())
 
 
+def clean_session_title(value: Any) -> str:
+    return compact_text(value)[:48]
+
+
 def project_slug(value: Any) -> str:
     slug = re.sub(r"[^a-z0-9]+", "-", str(value or "").strip().lower()).strip("-")
     return slug or "project"
@@ -2044,13 +2053,21 @@ class Handler(SimpleHTTPRequestHandler):
                 return
             payload = self.read_json()
             if parsed.path == "/api/agent/new":
-                cwd = Path(self.workspace_root() or get_pane_cwd(self.config) or str(Path.home())).expanduser(); cwd = cwd if cwd.is_dir() else Path.home()
+                workspace_root = self.workspace_root()
+                raw_cwd = compact_text(payload.get("cwd") or payload.get("project_root"))
+                if raw_cwd:
+                    cwd = Path(raw_cwd).expanduser()
+                    if not cwd.is_dir():
+                        raise OwnerError("cwd not found", HTTPStatus.BAD_REQUEST)
+                else:
+                    cwd = Path(workspace_root or get_pane_cwd(self.config) or str(Path.home())).expanduser(); cwd = cwd if cwd.is_dir() else Path.home()
                 namespace = self.session_namespace()
                 command = clean_agent_launch_command(str(payload.get("command") or ""))
                 if not command:
                     raise OwnerError("invalid launch command")
+                title = clean_session_title(payload.get("title"))
                 agent_id = str(uuid.uuid4()) if command == "claude" else ""; args = ["--session-id", agent_id] if agent_id else []
-                name = start_agent_runtime(self.config, namespace, cwd, command, args, bounded_max_running(payload, namespace), wait_ready=False, agent_id=agent_id)
+                name = start_agent_runtime(self.config, namespace, cwd, command, args, bounded_max_running(payload, namespace), wait_ready=False, agent_id=agent_id, title=title)
                 self.write_json({"ok": True, "session": name, "updatedAt": now_iso()})
                 return
             if parsed.path == "/api/agent/cleanup-idle":
