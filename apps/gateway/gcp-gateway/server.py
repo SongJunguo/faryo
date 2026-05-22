@@ -42,6 +42,7 @@ HISTORY_SESSION_LIMITS = {"less": {"gcp": 3, "hp": 4, "pc": 4}, "more": {"gcp": 
 HISTORY_TOTAL_LIMITS = {"less": 10, "more": 18}
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 FARYO_PROFILE_SOURCE = Path(__file__).resolve().parent / "faryo_profile.md"
+WORKORDER_TEMPLATE_SOURCE = Path(__file__).resolve().parent / "templates" / "workorder.md"
 BRIDGE_PACKAGE_MAX_BYTES = 120 * 1024 * 1024
 BRIDGE_ASSET_MAX_BYTES = 20 * 1024 * 1024
 BRIDGE_ASSET_LIMIT = 4
@@ -673,7 +674,7 @@ class GatewayHandler(BaseHTTPRequestHandler):
         if parsed.path == "/api/project-workbench/downlink/ack":
             self.handle_project_workbench_downlink_ack()
             return
-        controller_paths = {"/api/faryo/dispatch", "/api/faryo/start"}
+        controller_paths = {"/api/faryo/dispatch", "/api/faryo/start", "/api/faryo/workorder/verify"}
         username = self.controller_token_username() if parsed.path in controller_paths else self.current_username()
         if not username:
             self.write_json({"ok": False, "error": "unauthorized"}, HTTPStatus.UNAUTHORIZED)
@@ -704,6 +705,9 @@ class GatewayHandler(BaseHTTPRequestHandler):
             return
         if parsed.path == "/api/faryo/dispatch":
             self.handle_faryo_dispatch(username)
+            return
+        if parsed.path == "/api/faryo/workorder/verify":
+            self.handle_faryo_workorder_verify(username)
             return
         if parsed.path == "/api/agent/new":
             self.handle_agent_new(username)
@@ -1359,10 +1363,43 @@ class GatewayHandler(BaseHTTPRequestHandler):
                 last_error = self.compact_text(response.get("error")) or "owner new session failed"
             if not session:
                 self.write_json({"ok": False, "error": last_error or "owner new session failed", "route": route}, HTTPStatus.BAD_GATEWAY); return
-            sent = self.owner_json_request(route, "/api/send", {"session": session, "text": prompt}, username, timeout=10)
+            workorder_id = self.new_workorder_id()
+            workorder = self.owner_json_request(route, "/api/workorder/create", {
+                "project_root": selected_cwd,
+                "workorder_id": workorder_id,
+                "content": self.render_workorder(project, selected_cwd, workorder_id, prompt),
+            }, username, timeout=10)
+            if not workorder.get("ok"):
+                self.owner_json_request(route, "/api/session/close", {"session": session}, username, timeout=4)
+                self.write_json({"ok": False, "error": workorder.get("error") or "owner workorder create failed", "route": route, "session": session}, HTTPStatus.BAD_GATEWAY); return
+            sent = self.owner_json_request(route, "/api/send", {"session": session, "text": self.workorder_dispatch_prompt(project, workorder)}, username, timeout=10)
             if not sent.get("ok"):
+                self.owner_json_request(route, "/api/session/close", {"session": session}, username, timeout=4)
                 self.write_json({"ok": False, "error": sent.get("error") or "owner send failed", "route": route, "session": session}, HTTPStatus.BAD_GATEWAY); return
-            self.write_json({"ok": True, "route": route, "session": session, "title": title, "cwd": selected_cwd, "redirect": f"/{route}/?session={session}"}, HTTPStatus.OK)
+            self.write_json({"ok": True, "route": route, "session": session, "title": title, "cwd": selected_cwd, "workorder": workorder, "redirect": f"/{route}/?session={session}"}, HTTPStatus.OK)
+        except ValueError as exc:
+            self.write_json({"ok": False, "error": str(exc)}, HTTPStatus.BAD_REQUEST)
+
+    def handle_faryo_workorder_verify(self, username: str) -> None:
+        try:
+            payload = self.read_json_body(4096)
+            project = self.dispatch_project(payload)
+            workorder_id = self.compact_text(payload.get("workorder_id") or payload.get("workorderId"))
+            if not workorder_id:
+                raise ValueError("workorder_id is required")
+            route = project["owner_route"]
+            last_error = ""
+            for cwd in project["cwd_candidates"]:
+                result = self.owner_json_request(route, "/api/workorder/verify", {"project_root": cwd, "workorder_id": workorder_id}, username, timeout=10)
+                if result.get("ok"):
+                    projection_synced = self.project_workbench_hash(project["row"]) == self.compact_text(result.get("workbenchHash"))
+                    result["projectionSynced"] = projection_synced
+                    result["closed"] = bool(result.get("closed") and projection_synced)
+                    result.update({"route": route, "project_id": project["id"], "cwd": cwd})
+                    self.write_json(result, HTTPStatus.OK)
+                    return
+                last_error = self.compact_text(result.get("error")) or "owner verify failed"
+            self.write_json({"ok": False, "error": last_error, "route": route}, HTTPStatus.BAD_GATEWAY)
         except ValueError as exc:
             self.write_json({"ok": False, "error": str(exc)}, HTTPStatus.BAD_REQUEST)
 
@@ -1380,7 +1417,52 @@ class GatewayHandler(BaseHTTPRequestHandler):
         cwd_candidates = self.project_worker_cwd_candidates(row)
         if not cwd_candidates:
             raise ValueError("project cwd is missing")
-        return {"id": project_id, "name": name, "owner_route": route, "cwd_candidates": cwd_candidates}
+        return {"id": project_id, "name": name, "owner_route": route, "cwd_candidates": cwd_candidates, "row": row}
+
+    def workorder_dispatch_prompt(self, project: dict[str, Any], workorder: dict[str, Any]) -> str:
+        path = self.compact_text(workorder.get("path"))
+        relative_path = self.compact_text(workorder.get("relative_path"))
+        workorder_id = self.compact_text(workorder.get("id"))
+        return "\n".join([
+            f"执行 Faryo 工单 `{workorder_id}`。",
+            f"项目：`{project['id']}`；Owner route（归属端路由）：`{project['owner_route']}`。",
+            f"工单路径：`{path}`" + (f"（相对路径：`{relative_path}`）" if relative_path else "") + "。",
+            "先读取工单，再按工单施工；完成前必须在工单 Receipt（回执）区写收尾结果。",
+            "同时维护 `00-system/workbench.json` 的当前活跃状态，并把已结算事项追加到独立自包含的 `00-system/workbench.history.jsonl`。",
+            "禁止只追加新 items 而不结算旧 items；未完成收尾不得声称完成。",
+        ])
+
+    def new_workorder_id(self) -> str:
+        return f"wo-{time.strftime('%Y%m%d-%H%M%S', time.gmtime())}-{secrets.token_hex(4)}"
+
+    def render_workorder(self, project: dict[str, Any], cwd: str, workorder_id: str, prompt: str) -> str:
+        row = project["row"]
+        items = row.get("items") if isinstance(row.get("items"), list) else []
+        item_lines = []
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            title = self.compact_text(item.get("title"))
+            if title:
+                item_lines.append(
+                    f"- `{self.compact_text(item.get('id'))}` "
+                    f"[{self.compact_text(item.get('type'))}/{self.compact_text(item.get('status'))}] {title}"
+                )
+        values = {
+            "workorder_id": workorder_id,
+            "project_id": project["id"],
+            "project_name": project["name"],
+            "owner_route": project["owner_route"],
+            "project_root": cwd,
+            "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "current_goal": self.compact_text(row.get("current_d")) or "未设置。",
+            "active_items": "\n".join(item_lines) if item_lines else "- 当前工单未绑定具体活跃事项；按任务目标施工并在收尾时更新当前状态。",
+            "task": prompt,
+        }
+        template = WORKORDER_TEMPLATE_SOURCE.read_text(encoding="utf-8")
+        for key, value in values.items():
+            template = template.replace("{{" + key + "}}", str(value))
+        return template
 
     def project_worker_cwd_candidates(self, row: dict[str, Any]) -> list[str]:
         marker = "/00-system/workbench.json"

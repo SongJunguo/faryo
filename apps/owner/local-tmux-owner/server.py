@@ -1746,6 +1746,155 @@ def project_workbench_hash(project: dict[str, Any]) -> str:
     return hashlib.sha256(body).hexdigest()
 
 
+def project_root_from_payload(payload: dict[str, Any]) -> Path:
+    raw_root = compact_text(payload.get("project_root") or payload.get("cwd"))
+    if not raw_root:
+        raise OwnerError("missing project_root")
+    root = Path(raw_root).expanduser().resolve()
+    if not root.is_dir():
+        raise OwnerError("project root not found", HTTPStatus.NOT_FOUND)
+    allowed_roots = project_workbench_allowed_roots()
+    if not allowed_roots or not any(root == allowed or allowed in root.parents for allowed in allowed_roots):
+        raise OwnerError("project root is outside allowed roots", HTTPStatus.FORBIDDEN)
+    return root
+
+
+def clean_workorder_id(value: Any) -> str:
+    cleaned = re.sub(r"[^A-Za-z0-9._-]+", "-", str(value or "").strip()).strip("-")
+    return cleaned[:80]
+
+
+def new_workorder_id() -> str:
+    stamp = _dt.datetime.now(_dt.timezone.utc).strftime("%Y%m%d-%H%M%S")
+    return f"wo-{stamp}-{secrets.token_hex(4)}"
+
+
+def project_git_exclude_info(project_root: Path) -> tuple[Path, str] | None:
+    exclude_result = run_cmd(["git", "-C", str(project_root), "rev-parse", "--git-path", "info/exclude"], timeout=2)
+    root_result = run_cmd(["git", "-C", str(project_root), "rev-parse", "--show-toplevel"], timeout=2)
+    if exclude_result.returncode != 0 or root_result.returncode != 0:
+        return None
+    raw_path = exclude_result.stdout.strip()
+    raw_root = root_result.stdout.strip()
+    if not raw_path:
+        return None
+    git_root = Path(raw_root).expanduser().resolve() if raw_root else project_root
+    path = Path(raw_path)
+    exclude_path = path if path.is_absolute() else project_root / path
+    try:
+        workorders_rel = (project_root / "00-system" / "workorders").resolve().relative_to(git_root)
+    except ValueError:
+        return None
+    marker = "/" + workorders_rel.as_posix().rstrip("/") + "/"
+    return exclude_path, marker
+
+
+def ensure_workorders_git_ignored(project_root: Path) -> bool:
+    info = project_git_exclude_info(project_root)
+    if info is None:
+        return False
+    path, marker = info
+    try:
+        current = path.read_text(encoding="utf-8") if path.exists() else ""
+        if marker in current.splitlines():
+            return True
+        path.parent.mkdir(parents=True, exist_ok=True)
+        suffix = "" if current.endswith("\n") or not current else "\n"
+        path.write_text(current + suffix + marker + "\n", encoding="utf-8")
+        return True
+    except OSError:
+        return False
+
+
+def create_project_workorder(payload: dict[str, Any]) -> dict[str, Any]:
+    if not project_workbench_enabled():
+        raise OwnerError("project workbench is disabled", HTTPStatus.FORBIDDEN)
+    project_root = project_root_from_payload(payload)
+    workorder_id = clean_workorder_id(payload.get("workorder_id")) or new_workorder_id()
+    text = str(payload.get("content") or "")
+    if not text.strip():
+        raise OwnerError("missing workorder content")
+    workorders_root = project_root / "00-system" / "workorders"
+    path = workorders_root / f"{workorder_id}.md"
+    if path.exists():
+        raise OwnerError("workorder already exists", HTTPStatus.CONFLICT)
+    workorders_root.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f".{path.name}.{secrets.token_hex(4)}.tmp")
+    try:
+        tmp.write_text(text, encoding="utf-8")
+        os.replace(tmp, path)
+    except OSError as exc:
+        try:
+            tmp.unlink()
+        except FileNotFoundError:
+            pass
+        raise OwnerError("failed to write workorder", HTTPStatus.INTERNAL_SERVER_ERROR) from exc
+    ignored = ensure_workorders_git_ignored(project_root)
+    digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    return {
+        "ok": True,
+        "id": workorder_id,
+        "path": str(path),
+        "relative_path": str(path.relative_to(project_root)),
+        "sha256": digest,
+        "gitIgnored": ignored,
+        "updatedAt": now_iso(),
+    }
+
+
+def verify_history_jsonl(path: Path, workorder_id: str) -> tuple[int, list[str]]:
+    if not path.exists():
+        return 0, []
+    errors: list[str] = []
+    count = 0
+    required = {"ts", "project_id", "type", "title", "final_status", "summary", "evidence", "actor"}
+    for line_no, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+        if not line.strip():
+            continue
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError:
+            errors.append(f"history line {line_no} is invalid JSON")
+            continue
+        if isinstance(record, dict) and record.get("workorder_id") == workorder_id:
+            count += 1
+            missing = [key for key in required if not compact_text(record.get(key))]
+            if missing:
+                errors.append(f"history line {line_no} missing {','.join(missing)}")
+    return count, errors
+
+
+def verify_project_workorder(payload: dict[str, Any]) -> dict[str, Any]:
+    project_root = project_root_from_payload(payload)
+    workorder_id = clean_workorder_id(payload.get("workorder_id"))
+    if not workorder_id:
+        raise OwnerError("missing workorder_id")
+    workorder_path = project_root / "00-system" / "workorders" / f"{workorder_id}.md"
+    if not workorder_path.is_file():
+        raise OwnerError("workorder not found", HTTPStatus.NOT_FOUND)
+    text = workorder_path.read_text(encoding="utf-8")
+    receipt_ready = "## Receipt" in text and "- Status: pending" not in text
+    workbench_path = project_root / "00-system" / "workbench.json"
+    try:
+        workbench = clean_project_workbench(json.loads(workbench_path.read_text(encoding="utf-8")))
+        workbench_ok = True
+    except (OSError, json.JSONDecodeError):
+        workbench = {}
+        workbench_ok = False
+    history_count, history_errors = verify_history_jsonl(project_root / "00-system" / "workbench.history.jsonl", workorder_id)
+    ok = receipt_ready and workbench_ok and not history_errors
+    return {
+        "ok": True,
+        "closed": ok,
+        "receiptReady": receipt_ready,
+        "workbenchOk": workbench_ok,
+        "workbenchHash": project_workbench_hash(workbench) if workbench_ok else "",
+        "historyRows": history_count,
+        "historyErrors": history_errors,
+        "updatedAt": now_iso(),
+    }
+
+
 def import_project_workbench(payload: dict[str, Any]) -> dict[str, Any]:
     if not project_workbench_enabled():
         raise OwnerError("project workbench is disabled", HTTPStatus.FORBIDDEN)
@@ -2098,6 +2247,12 @@ class Handler(SimpleHTTPRequestHandler):
                 return
             if parsed.path == "/api/project-workbench/downlink/apply":
                 self.write_json(apply_project_workbench_downlink(self.config, payload))
+                return
+            if parsed.path == "/api/workorder/create":
+                self.write_json(create_project_workorder(payload))
+                return
+            if parsed.path == "/api/workorder/verify":
+                self.write_json(verify_project_workorder(payload))
                 return
             if parsed.path == "/api/project-workbench/import":
                 self.write_json(import_project_workbench(payload))
