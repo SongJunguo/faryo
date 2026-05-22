@@ -72,6 +72,7 @@ def read_project(path: Path) -> dict:
         raise SystemExit(f"workbench must be a JSON object: {file_path}")
     row = dict(payload)
     row.setdefault("path", compact_path(file_path))
+    row.setdefault("workbench_path", str(file_path.resolve()))
     return row
 
 

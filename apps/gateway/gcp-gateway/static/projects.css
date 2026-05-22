@@ -26,7 +26,7 @@ body {
   font-size: 15px; letter-spacing: 0;
 }
 
-button, input { font: inherit; }
+button, input, select, textarea { font: inherit; }
 button { -webkit-tap-highlight-color: transparent; }
 
 .shell { width: min(100%, 760px); margin: 0 auto; }
@@ -52,9 +52,17 @@ button { -webkit-tap-highlight-color: transparent; }
   background: var(--panel); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 
-.submit-btn {
+.submit-btn, .import-btn {
   min-height: 34px; padding: 0 12px; border: 1px solid color-mix(in srgb, var(--accent) 42%, var(--line));
-  border-radius: 8px; background: var(--accent); color: var(--panel); font-weight: 850;
+  border-radius: 8px; font-weight: 850;
+}
+
+.submit-btn {
+  background: var(--accent); color: var(--panel);
+}
+
+.import-btn {
+  background: var(--panel); color: var(--accent);
 }
 
 .submit-btn:disabled {
@@ -210,6 +218,27 @@ button { -webkit-tap-highlight-color: transparent; }
   border: 1px solid var(--line); border-radius: 8px;
   background: var(--panel2); color: var(--text); font: inherit; line-height: 1.45;
 }
+
+.import-form {
+  display: grid; gap: 11px;
+}
+
+.import-form label {
+  display: grid; gap: 6px; color: var(--muted); font-size: 12px; font-weight: 780;
+}
+
+.import-form input, .import-form select {
+  width: 100%; min-height: 42px; padding: 0 10px; border: 1px solid var(--line); border-radius: 8px;
+  background: var(--panel2); color: var(--text);
+}
+
+.import-submit {
+  min-height: 42px; border: 1px solid color-mix(in srgb, var(--accent) 44%, var(--line));
+  border-radius: 8px; background: var(--accent); color: var(--panel); font-weight: 850;
+}
+
+.import-submit:disabled { opacity: .55; }
+.import-status { min-height: 18px; margin: 0; color: var(--muted); font-size: 12px; }
 
 .empty {
   padding: 18px; border: 1px dashed var(--line); border-radius: 8px;

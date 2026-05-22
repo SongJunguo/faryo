@@ -20,6 +20,7 @@
         </span>
       </a>
       <div class="top-actions">
+        <button class="import-btn" type="button" id="openImport">Import</button>
         <button class="submit-btn" type="button" id="submitChanges" disabled>Submit</button>
         <span class="sync" id="syncStatus">Loading</span>
       </div>
@@ -47,6 +48,33 @@
         <button type="button" id="prevCard">Previous</button>
         <button type="button" id="nextCard">Next</button>
       </div>
+    </div>
+  </section>
+
+  <section class="deck-sheet" id="importSheet" hidden>
+    <div class="sheet-backdrop" data-import-close></div>
+    <div class="sheet-panel" role="dialog" aria-modal="true" aria-labelledby="importTitle">
+      <div class="sheet-head">
+        <span>Manual</span>
+        <h2 id="importTitle">Import Project</h2>
+        <button class="icon-btn" type="button" data-import-close aria-label="Close">×</button>
+      </div>
+      <form class="import-form" id="importForm">
+        <label>
+          <span>Owner</span>
+          <select name="owner_route">
+            <option value="gcp">GCP</option>
+            <option value="hp">HP</option>
+            <option value="pc">PC</option>
+          </select>
+        </label>
+        <label>
+          <span>Project Root</span>
+          <input name="project_root" autocomplete="off" placeholder="/home/summer/brain/projects/Asterion">
+        </label>
+        <button class="primary import-submit" type="submit">Import</button>
+        <p class="import-status" id="importStatus"></p>
+      </form>
     </div>
   </section>
 

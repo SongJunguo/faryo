@@ -10,6 +10,10 @@ const deckGoalText = document.getElementById('deckGoalText');
 const prevBtn = document.getElementById('prevCard');
 const nextBtn = document.getElementById('nextCard');
 const deckNav = document.querySelector('.deck-nav');
+const openImportBtn = document.getElementById('openImport');
+const importSheet = document.getElementById('importSheet');
+const importForm = document.getElementById('importForm');
+const importStatus = document.getElementById('importStatus');
 
 const TYPES = {
   decision: { label: 'Decision', done: ['accepted', 'paused'] },
@@ -351,6 +355,55 @@ async function submitChanges() {
   }
 }
 
+function openImport() {
+  importSheet.hidden = false;
+  importStatus.textContent = dirty ? 'Submit current draft before importing.' : '';
+  importForm.elements.project_root.focus();
+}
+
+function closeImport() {
+  importSheet.hidden = true;
+}
+
+async function importProject(event) {
+  event.preventDefault();
+  if (dirty) {
+    importStatus.textContent = 'Submit current draft before importing.';
+    return;
+  }
+  const ownerRoute = importForm.elements.owner_route.value;
+  const projectRoot = importForm.elements.project_root.value.trim();
+  if (!projectRoot) {
+    importStatus.textContent = 'Project Root is required.';
+    return;
+  }
+  const button = importForm.querySelector('button[type="submit"]');
+  button.disabled = true;
+  importStatus.textContent = 'Importing';
+  setSync('Importing');
+  try {
+    const response = await fetch('/api/project-workbench/import', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ owner_route: ownerRoute, project_root: projectRoot }),
+    });
+    const data = await response.json();
+    if (!data.ok) throw new Error(data.error || 'Import failed');
+    state = data.workbench;
+    setDirty(false);
+    setSync('Imported');
+    importForm.elements.project_root.value = '';
+    closeImport();
+    render();
+  } catch (error) {
+    importStatus.textContent = error.message || 'Import failed';
+    setSync('Import failed');
+    updateSubmit();
+  } finally {
+    button.disabled = false;
+  }
+}
+
 function empty(text) {
   const div = document.createElement('div');
   div.className = 'empty';
@@ -367,5 +420,8 @@ nextBtn.addEventListener('click', () => { deck.index += 1; renderDeck(); });
 document.getElementById('deckClose').addEventListener('click', closeDeck);
 sheet.addEventListener('click', event => { if (event.target.matches('[data-close]')) closeDeck(); });
 submitBtn.addEventListener('click', submitChanges);
+openImportBtn.addEventListener('click', openImport);
+importForm.addEventListener('submit', importProject);
+importSheet.addEventListener('click', event => { if (event.target.matches('[data-import-close]')) closeImport(); });
 
 load();

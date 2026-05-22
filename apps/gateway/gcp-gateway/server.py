@@ -643,6 +643,9 @@ class GatewayHandler(BaseHTTPRequestHandler):
         if parsed.path == "/api/project-workbench/submit":
             self.handle_project_workbench_submit(username)
             return
+        if parsed.path == "/api/project-workbench/import":
+            self.handle_project_workbench_import(username)
+            return
         if parsed.path == "/api/agent/new":
             self.handle_agent_new(username)
             return
@@ -807,16 +810,33 @@ class GatewayHandler(BaseHTTPRequestHandler):
                     "downlink": {"status": "skipped"},
                 }, HTTPStatus.OK)
                 return
-            package = self.save_project_downlink(target_rows, username)
-            notice = self.notify_project_downlink(package, username)
+            packages = self.save_project_downlinks(target_rows, username)
+            notices = [self.notify_project_downlink(package, username) for package in packages]
             self.write_json({
                 "ok": True,
                 "workbench": {"projects": self.read_project_rows()},
-                "downlink": {
-                    "package_id": package["id"],
-                    "status": notice.get("status") or package.get("status"),
-                },
+                "downlink": self.project_downlink_response(packages, notices),
             }, HTTPStatus.OK)
+        except ValueError as exc:
+            self.write_json({"ok": False, "error": str(exc)}, HTTPStatus.BAD_REQUEST)
+
+    def handle_project_workbench_import(self, username: str) -> None:
+        try:
+            payload = self.read_json_body(64 * 1024)
+            owner_route = self.clean_owner_route(payload.get("owner_route") or payload.get("owner"))
+            project_root = self.compact_text(payload.get("project_root") or payload.get("path"))
+            if not owner_route:
+                raise ValueError("owner_route is required")
+            if not project_root:
+                raise ValueError("project_root is required")
+            result = self.owner_json_request(owner_route, "/api/project-workbench/import", {"project_root": project_root}, username, timeout=15)
+            if not result.get("ok"):
+                raise ValueError(self.compact_text(result.get("error")) or "import failed")
+            project = result.get("project")
+            if not isinstance(project, dict):
+                raise ValueError("owner returned no project")
+            row = self.merge_project_import(project, owner_route)
+            self.write_json({"ok": True, "project": row, "workbench": {"projects": self.read_project_rows()}}, HTTPStatus.OK)
         except ValueError as exc:
             self.write_json({"ok": False, "error": str(exc)}, HTTPStatus.BAD_REQUEST)
 
@@ -828,7 +848,7 @@ class GatewayHandler(BaseHTTPRequestHandler):
             source = payload.get("projects")
             if not isinstance(source, list):
                 raise ValueError("projects must be a list")
-            rows = self.project_sync_rows([project for project in source if isinstance(project, dict)])
+            rows = self.project_sync_rows([project for project in source if isinstance(project, dict)], self.project_sync_owner_route())
             self.write_project_rows(rows)
             self.write_json({"ok": True, "workbench": {"projects": self.read_project_rows()}}, HTTPStatus.OK)
         except ValueError as exc:
@@ -897,7 +917,7 @@ class GatewayHandler(BaseHTTPRequestHandler):
         except ValueError as exc:
             self.write_json({"ok": False, "error": str(exc)}, HTTPStatus.BAD_REQUEST)
 
-    def project_sync_rows(self, source: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    def project_sync_rows(self, source: list[dict[str, Any]], owner_route: str) -> list[dict[str, Any]]:
         existing_rows = self.read_project_rows()
         existing = {row.get("id"): row for row in existing_rows}
         incoming_ids = {self.project_id(project) for project in source}
@@ -912,8 +932,27 @@ class GatewayHandler(BaseHTTPRequestHandler):
                 row["rank"] = previous.get("rank") or index
             if not row.get("path"):
                 row["path"] = previous.get("path") or ""
+            if not row.get("owner_route"):
+                row["owner_route"] = previous.get("owner_route") or owner_route
+            if not row.get("workbench_path"):
+                row["workbench_path"] = previous.get("workbench_path") or row.get("path") or ""
             rows.append(self.clean_project_row(row, index))
         return rows
+
+    def merge_project_import(self, project: dict[str, Any], owner_route: str) -> dict[str, Any]:
+        rows = self.read_project_rows()
+        project_id = self.project_id(project)
+        previous = next((row for row in rows if row.get("id") == project_id), {})
+        merged = dict(previous)
+        merged.update(project)
+        merged["owner_route"] = owner_route
+        if not merged.get("bucket"):
+            merged["bucket"] = previous.get("bucket") or "B"
+        if not merged.get("rank"):
+            merged["rank"] = previous.get("rank") or len(rows) + 1
+        row = self.clean_project_row(merged, int(merged.get("rank") or len(rows) + 1))
+        self.write_project_rows([item for item in rows if item.get("id") != row["id"]] + [row])
+        return row
 
     def project_downlink_target_rows(self, rows: list[dict[str, Any]], payload: dict[str, Any]) -> list[dict[str, Any]]:
         raw_ids = payload.get("downlink_project_ids")
@@ -930,11 +969,23 @@ class GatewayHandler(BaseHTTPRequestHandler):
             raise ValueError("unknown downlink project id: " + ", ".join(missing))
         return [row for row in self.sorted_project_rows(rows) if row["id"] in ids]
 
-    def save_project_downlink(self, rows: list[dict[str, Any]], username: str) -> dict[str, Any]:
+    def save_project_downlinks(self, rows: list[dict[str, Any]], username: str) -> list[dict[str, Any]]:
+        packages = []
+        grouped: dict[str, list[dict[str, Any]]] = {}
+        for row in rows:
+            owner_route = str(row.get("owner_route") or "").strip()
+            if owner_route not in BACKENDS:
+                raise ValueError(f"project {row['id']} has no valid owner_route")
+            grouped.setdefault(owner_route, []).append(row)
+        for owner_route, owner_rows in sorted(grouped.items()):
+            packages.append(self.save_project_downlink(owner_route, owner_rows, username))
+        return packages
+
+    def save_project_downlink(self, owner_route: str, rows: list[dict[str, Any]], username: str) -> dict[str, Any]:
         package = {
             "id": f"pwb-{int(time.time())}-{secrets.token_hex(4)}",
             "type": "project-workbench",
-            "target": "hp",
+            "target": owner_route,
             "status": "pending",
             "created_at": now_ts(),
             "created_by": username,
@@ -944,7 +995,8 @@ class GatewayHandler(BaseHTTPRequestHandler):
         return package
 
     def notify_project_downlink(self, package: dict[str, Any], username: str) -> dict[str, Any]:
-        notice = self.owner_json_request("hp", "/api/project-workbench/downlink/apply", {"gateway_url": self.public_base_url(), "package_id": package["id"]}, username, timeout=15)
+        owner_route = str(package.get("target") or "")
+        notice = self.owner_json_request(owner_route, "/api/project-workbench/downlink/apply", {"gateway_url": self.public_base_url(), "package_id": package["id"]}, username, timeout=15)
         current = self.project_downlink_package(str(package["id"])) or package
         if notice.get("ok"):
             current["status"] = str(notice.get("status") or "applied")
@@ -953,6 +1005,19 @@ class GatewayHandler(BaseHTTPRequestHandler):
             current["notice"] = {"ok": False, "error": self.compact_text(notice.get("error")), "updated_at": now_ts()}
         self.write_project_downlink_package(current)
         return {"ok": bool(notice.get("ok")), "status": current.get("status") or "failed", "error": notice.get("error")}
+
+    def project_downlink_response(self, packages: list[dict[str, Any]], notices: list[dict[str, Any]]) -> dict[str, Any]:
+        statuses = [str(notice.get("status") or package.get("status") or "") for package, notice in zip(packages, notices)]
+        if any(status == "failed" for status in statuses):
+            status = "failed"
+        elif statuses and all(status == "applied" for status in statuses):
+            status = "applied"
+        else:
+            status = "pending"
+        return {
+            "status": status,
+            "packages": [{"package_id": package["id"], "target": package["target"], "status": notice.get("status") or package.get("status")} for package, notice in zip(packages, notices)],
+        }
 
     def project_downlink_hash_error(self, package: dict[str, Any], payload: dict[str, Any]) -> str:
         actual = payload.get("hashes")
@@ -997,11 +1062,13 @@ class GatewayHandler(BaseHTTPRequestHandler):
 
     def project_downlink_project(self, row: dict[str, Any]) -> dict[str, Any]:
         project = self.project_truth_row(row)
+        project["workbench_path"] = row.get("workbench_path") or row.get("path") or ""
         project["hash"] = self.project_workbench_hash(project)
         return project
 
     def project_workbench_hash(self, project: dict[str, Any]) -> str:
-        body = json.dumps(project, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        truth = self.project_truth_row(project)
+        body = json.dumps(truth, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
         return hashlib.sha256(body).hexdigest()
 
     def read_project_rows(self) -> list[dict[str, Any]]:
@@ -1035,6 +1102,8 @@ class GatewayHandler(BaseHTTPRequestHandler):
         return {
             "id": project_id,
             "path": self.compact_text(source.get("path")),
+            "owner_route": self.clean_owner_route(source.get("owner_route")),
+            "workbench_path": self.compact_text(source.get("workbench_path") or source.get("path")),
             "bucket": self.clean_project_bucket(source.get("bucket")),
             "rank": self.clean_rank(source.get("rank") or rank),
             "name": self.compact_text(source.get("name") or project_id),
@@ -1074,6 +1143,10 @@ class GatewayHandler(BaseHTTPRequestHandler):
     def clean_project_bucket(self, value: Any) -> str:
         bucket = str(value or "B").strip().upper()[:1]
         return bucket if bucket in PROJECT_BUCKETS else "B"
+
+    def clean_owner_route(self, value: Any) -> str:
+        route = str(value or "").strip().lower()
+        return route if route in BACKENDS else ""
 
     def clean_rank(self, value: Any) -> int:
         try:

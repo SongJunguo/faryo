@@ -1,0 +1,24 @@
+{
+  "id": "faryo",
+  "name": "Faryo",
+  "brief": "多端 AI 工作台与项目总控运行时。",
+  "current_d": "把项目工作台能力从 HP 特例升级为多 Owner 通用路由，并用 Faryo 自身在 GCP 端验证闭环。",
+  "items": [
+    {
+      "id": "faryo-action-owner-routing",
+      "type": "action",
+      "title": "泛化项目工作台 Owner 路由",
+      "body": "下达包不再写死 HP，而是按项目 owner_route 和 workbench_path 分发到对应端。",
+      "recommendation": "先用 Faryo 自身验证 GCP 端写回，再进入多端安装升级。",
+      "status": "open"
+    },
+    {
+      "id": "faryo-watch-version-upgrade",
+      "type": "watch",
+      "title": "准备 1.0.5 安装升级验证",
+      "body": "项目工作台能力应随 Owner 版本统一安装，多端是否承接由项目配置决定。",
+      "recommendation": "泛化通过后再做远端同步和两端安装。",
+      "status": "open"
+    }
+  ]
+}

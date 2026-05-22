@@ -1576,6 +1576,10 @@ def project_slug(value: Any) -> str:
     return slug or "project"
 
 
+def project_workbench_enabled() -> bool:
+    return env_value("FARYO_PROJECT_WORKBENCH_ENABLE", default="1").strip().lower() not in {"0", "false", "no", "off"}
+
+
 def clean_project_workbench(project: dict[str, Any]) -> dict[str, Any]:
     project_id = project_slug(project.get("id") or project.get("name"))
     items = []
@@ -1605,7 +1609,8 @@ def clean_project_workbench(project: dict[str, Any]) -> dict[str, Any]:
 
 
 def project_workbench_root(project: dict[str, Any]) -> Path:
-    root = Path(env_value("FARYO_PROJECT_WORKBENCH_PROJECTS_ROOT", default=str(Path.home() / "brain" / "projects"))).expanduser()
+    root_value = env_value("FARYO_PROJECT_WORKBENCH_PROJECTS_ROOT").strip() or str(Path.home() / "brain" / "projects")
+    root = Path(root_value).expanduser()
     keys = {project_slug(project.get("id")), project_slug(project.get("name"))}
     try:
         for child in root.iterdir():
@@ -1614,6 +1619,56 @@ def project_workbench_root(project: dict[str, Any]) -> Path:
     except OSError as exc:
         raise OwnerError("project root not found", HTTPStatus.NOT_FOUND) from exc
     raise OwnerError(f"project not found: {project.get('name') or project.get('id')}", HTTPStatus.NOT_FOUND)
+
+
+def project_workbench_allowed_roots() -> list[Path]:
+    default = os.pathsep.join([str(Path.home() / "brain" / "projects"), str(Path.home() / "brain" / "tools")])
+    raw_roots = env_value("FARYO_PROJECT_WORKBENCH_ALLOWED_ROOTS").strip() or default
+    roots = []
+    for chunk in raw_roots.split(os.pathsep):
+        item = chunk.strip()
+        if item:
+            roots.append(Path(item).expanduser().resolve())
+    return roots
+
+
+def ensure_project_workbench_path(path: Path) -> Path:
+    resolved = path.expanduser().resolve()
+    if resolved.name != "workbench.json":
+        resolved = resolved / "00-system" / "workbench.json"
+    allowed_roots = project_workbench_allowed_roots()
+    if not allowed_roots or not any(resolved == root or root in resolved.parents for root in allowed_roots):
+        raise OwnerError("project workbench path is outside allowed roots", HTTPStatus.FORBIDDEN)
+    return resolved
+
+
+def project_workbench_path(project: dict[str, Any]) -> Path:
+    raw_path = compact_text(project.get("workbench_path"))
+    if raw_path:
+        path = Path(raw_path).expanduser()
+        if path.is_absolute():
+            return ensure_project_workbench_path(path)
+        roots = project_workbench_allowed_roots()
+        if not roots:
+            raise OwnerError("project workbench allowed roots not configured", HTTPStatus.FORBIDDEN)
+        return ensure_project_workbench_path(roots[0] / path)
+    return project_workbench_root(project) / "00-system" / "workbench.json"
+
+
+def project_workbench_import_path(raw_path: str) -> tuple[Path, Path]:
+    if not raw_path:
+        raise OwnerError("missing project_root")
+    path = Path(raw_path).expanduser()
+    if not path.is_absolute():
+        roots = project_workbench_allowed_roots()
+        if not roots:
+            raise OwnerError("project workbench allowed roots not configured", HTTPStatus.FORBIDDEN)
+        path = roots[0] / path
+    workbench_path = ensure_project_workbench_path(path)
+    project_root = workbench_path.parent.parent if workbench_path.parent.name == "00-system" else workbench_path.parent
+    if not project_root.is_dir():
+        raise OwnerError("project root not found", HTTPStatus.NOT_FOUND)
+    return project_root, workbench_path
 
 
 def write_project_workbench_file(path: Path, project: dict[str, Any]) -> Path:
@@ -1627,6 +1682,33 @@ def write_project_workbench_file(path: Path, project: dict[str, Any]) -> Path:
 def project_workbench_hash(project: dict[str, Any]) -> str:
     body = json.dumps(project, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
     return hashlib.sha256(body).hexdigest()
+
+
+def import_project_workbench(payload: dict[str, Any]) -> dict[str, Any]:
+    if not project_workbench_enabled():
+        raise OwnerError("project workbench is disabled", HTTPStatus.FORBIDDEN)
+    project_root, path = project_workbench_import_path(compact_text(payload.get("project_root") or payload.get("path")))
+    if path.is_file():
+        try:
+            source = json.loads(path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            raise OwnerError("invalid workbench.json", HTTPStatus.BAD_REQUEST) from exc
+        if not isinstance(source, dict):
+            raise OwnerError("workbench must be a JSON object", HTTPStatus.BAD_REQUEST)
+        project = clean_project_workbench(source)
+    else:
+        project = clean_project_workbench({
+            "id": project_slug(project_root.name),
+            "name": project_root.name,
+            "brief": "",
+            "current_d": "",
+            "items": [],
+        })
+        write_project_workbench_file(path, project)
+    row = dict(project)
+    row["path"] = str(path)
+    row["workbench_path"] = str(path)
+    return {"ok": True, "project": row, "updatedAt": now_iso()}
 
 
 def gateway_json_request(config: Config, gateway_url: str, path: str, payload: dict[str, Any], timeout: float = 20) -> dict[str, Any]:
@@ -1662,6 +1744,8 @@ def gateway_json_request(config: Config, gateway_url: str, path: str, payload: d
 
 
 def apply_project_workbench_downlink(config: Config, payload: dict[str, Any]) -> dict[str, Any]:
+    if not project_workbench_enabled():
+        raise OwnerError("project workbench is disabled", HTTPStatus.FORBIDDEN)
     gateway_url = compact_text(payload.get("gateway_url") or env_value("FARYO_PROJECT_WORKBENCH_GATEWAY_URL"))
     package_id = compact_text(payload.get("package_id"))
     if not package_id:
@@ -1673,7 +1757,7 @@ def apply_project_workbench_downlink(config: Config, payload: dict[str, Any]) ->
         raise OwnerError("downlink package has no projects")
     clean_projects = [clean_project_workbench(project) for project in projects if isinstance(project, dict)]
     expected_hashes = {project_slug(project.get("id") or project.get("name")): compact_text(project.get("hash")) for project in projects if isinstance(project, dict)}
-    targets = [(project_workbench_root(project) / "00-system" / "workbench.json", project) for project in clean_projects]
+    targets = [(project_workbench_path(raw_project), clean_project_workbench(raw_project)) for raw_project in projects if isinstance(raw_project, dict)]
     written = [write_project_workbench_file(path, project) for path, project in targets]
     hashes = {}
     for path, project in zip(written, clean_projects):
@@ -1937,6 +2021,9 @@ class Handler(SimpleHTTPRequestHandler):
                 return
             if parsed.path == "/api/project-workbench/downlink/apply":
                 self.write_json(apply_project_workbench_downlink(self.config, payload))
+                return
+            if parsed.path == "/api/project-workbench/import":
+                self.write_json(import_project_workbench(payload))
                 return
             if parsed.path == "/api/session/close":
                 close_shell_session(self.config, str(payload.get("session") or ""), self.session_namespace())
