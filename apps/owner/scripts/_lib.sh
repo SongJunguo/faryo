@@ -8,7 +8,7 @@ ENV_FILE="${FARYO_OWNER_ENV:-${FARYO_ENV_FILE:-$FARYO_HOME/owner/config/faryo.en
 load_env() {
   if [[ ! -f "$ENV_FILE" ]]; then
     echo "missing env file: $ENV_FILE" >&2
-    echo "copy config/faryo.env.example to config/faryo.env and fill FARYO_OWNER_TOKEN" >&2
+    echo "run scripts/init-owner-env.sh with FARYO_PROJECT_WORKBENCH_GATEWAY_URL" >&2
     exit 2
   fi
   # shellcheck disable=SC1090

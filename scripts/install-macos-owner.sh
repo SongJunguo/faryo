@@ -14,6 +14,7 @@ ENV_FILE="${FARYO_OWNER_ENV:-$FARYO_HOME/owner/config/faryo.env}"
 PLIST_LABEL="dev.faryo.owner.keepalive"
 PLIST_DIR="$HOME/Library/LaunchAgents"
 PLIST_PATH="$PLIST_DIR/$PLIST_LABEL.plist"
+GATEWAY_URL="${FARYO_PROJECT_WORKBENCH_GATEWAY_URL:-${1:-}}"
 
 require_cmd() {
   if ! command -v "$1" >/dev/null 2>&1; then
@@ -29,6 +30,11 @@ require_cmd curl
 require_cmd rsync
 
 mkdir -p "$FARYO_RUNTIME_ROOT/apps/owner" "$FARYO_HOME/owner/config" "$FARYO_HOME/owner/data/inbox" "$FARYO_HOME/owner/data/artifacts" "$FARYO_HOME/owner/data/cache" "$FARYO_HOME/owner/data/logs" "$PLIST_DIR"
+if [[ -z "$GATEWAY_URL" && ! -f "$ENV_FILE" ]]; then
+  echo "missing FARYO_PROJECT_WORKBENCH_GATEWAY_URL" >&2
+  echo "set it or pass the Gateway URL as the first argument" >&2
+  exit 2
+fi
 
 rsync -a --delete \
   --exclude='__pycache__/' \
@@ -37,24 +43,10 @@ rsync -a --delete \
   --exclude='config/faryo.env' \
   "$ROOT/apps/owner/" "$FARYO_RUNTIME_ROOT/apps/owner/"
 
-if [[ ! -f "$ENV_FILE" ]]; then
-  token="$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')"
-  cat > "$ENV_FILE" <<EOF
-FARYO_OWNER_HOST=127.0.0.1
-FARYO_OWNER_PORT=8765
-FARYO_OWNER_TOKEN=$token
-FARYO_OWNER_DIRECT_SESSION=__faryo_no_default__
-FARYO_OWNER_TMUX_SESSION=local-tmux-owner
-FARYO_OWNER_LABEL=MAC
-FARYO_OWNER_DATA=$FARYO_HOME/owner/data
-FARYO_OWNER_INBOX_DIR=$FARYO_HOME/owner/data/inbox
-FARYO_OWNER_ARTIFACTS_DIR=$FARYO_HOME/owner/data/artifacts
-FARYO_OWNER_CACHE_DIR=$FARYO_HOME/owner/data/cache
-FARYO_OWNER_LOGS_DIR=$FARYO_HOME/owner/data/logs
-TMUX_HISTORY_LIMIT=500
-WEB_CAPTURE_LINES=800
-EOF
-  chmod 0600 "$ENV_FILE"
+if [[ -n "$GATEWAY_URL" || ! -f "$ENV_FILE" ]]; then
+  FARYO_OWNER_LABEL="${FARYO_OWNER_LABEL:-MAC}" \
+  FARYO_PROJECT_WORKBENCH_GATEWAY_URL="$GATEWAY_URL" \
+  "$FARYO_RUNTIME_ROOT/apps/owner/scripts/init-owner-env.sh"
 else
   echo "keep existing $ENV_FILE"
 fi
