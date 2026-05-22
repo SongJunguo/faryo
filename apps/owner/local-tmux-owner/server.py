@@ -74,7 +74,6 @@ RATE_LIMIT_CACHE_TTL = 120.0
 THREAD_COLUMNS = "id, title, rollout_path, tokens_used, model, reasoning_effort, cwd, updated_at, source, thread_source"
 AGENT_SESSION_LIST_LIMIT = 20
 EMPTY_MANAGED_SESSION_TTL_SECONDS = 60
-DEFAULT_MANAGED_SESSION_NAMESPACE = "direct"
 MAX_MANAGED_AGENT_IDLE_SECONDS = 24 * 60 * 60
 RUNTIME_LOCK = threading.RLock()
 RELEASE_VERSION_CACHE: str | None = None
@@ -358,11 +357,11 @@ def parse_sqlite_timestamp(value: Any) -> float:
     except ValueError: return 0.0
 
 
-def active_codex_thread_state(config: Config, session_namespace: str | None) -> tuple[dict[str, str], set[str]]:
+def active_codex_thread_state(config: Config) -> tuple[dict[str, str], set[str]]:
     active: dict[str, str] = {}
     superseded: set[str] = set()
     for name in tmux_sessions(config):
-        if managed_session(config, name, session_namespace):
+        if managed_session(config, name):
             source = tmux_session_option(config, name, "@faryo_agent_source")
             session_id = tmux_session_option(config, name, "@faryo_agent_session_id")
             if source == CODEX_PROFILE.source and session_id:
@@ -377,8 +376,8 @@ def active_codex_thread_state(config: Config, session_namespace: str | None) -> 
             superseded.update(str(row.get("id") or "") for row in threads[1:] if row.get("id"))
     return active, superseded
 
-def active_codex_thread_map(config: Config, session_namespace: str | None) -> dict[str, str]:
-    active, _superseded = active_codex_thread_state(config, session_namespace)
+def active_codex_thread_map(config: Config) -> dict[str, str]:
+    active, _superseded = active_codex_thread_state(config)
     return active
 
 def tmux_session_option(config: Config, session: str, key: str, value: str | None = None) -> str:
@@ -386,10 +385,10 @@ def tmux_session_option(config: Config, session: str, key: str, value: str | Non
         tmux(config, ["set-option", "-q", "-t", session, key, value], timeout=2); return value
     res = tmux(config, ["show-options", "-qv", "-t", session, key], timeout=2); return res.stdout.strip() if res.returncode == 0 else ""
 
-def active_claude_session_map(config: Config, session_namespace: str | None) -> dict[str, str]:
+def active_claude_session_map(config: Config) -> dict[str, str]:
     active: dict[str, str] = {}
     for name in tmux_sessions(config):
-        if managed_session(config, name, session_namespace) and tmux_session_option(config, name, "@faryo_agent_source") == "claude-code" and agent_in_pane(Config(name, config.token, config.pane_width)):
+        if managed_session(config, name) and tmux_session_option(config, name, "@faryo_agent_source") == "claude-code" and agent_in_pane(Config(name, config.token, config.pane_width)):
             if session_id := (tmux_session_option(config, name, "@faryo_agent_session_id") or tmux_session_option(config, name, "@faryo_agent_id")): active[session_id] = name
     return active
 
@@ -473,8 +472,8 @@ def claude_history_items(history_root: str | None = None) -> list[dict[str, Any]
         items.append({"id": session_id, "title": session_title_topic(title or last_prompt, short_path(cwd) or session_id or "Untitled session"), "gitLabel": session_git_label(cwd, git_labels), "cwd": short_path(cwd), "createdAt": "", "updatedAt": updated_at, "updatedTs": stat.st_mtime, "historyPath": path.as_posix(), "rolloutPath": "", "model": "", "reasoningEffort": "", "source": "claude-code", "tmuxSession": "", "active": False})
     return items
 
-def codex_history_items(config: Config, session_namespace: str | None, history_root: str | None = None) -> list[dict[str, Any]]:
-    active, superseded = active_codex_thread_state(config, session_namespace); index_titles = codex_session_index_titles(); items = []; git_labels: dict[str, str] = {}
+def codex_history_items(config: Config, history_root: str | None = None) -> list[dict[str, Any]]:
+    active, superseded = active_codex_thread_state(config); index_titles = codex_session_index_titles(); items = []; git_labels: dict[str, str] = {}
     for item in codex_rows("source = 'cli' AND thread_source = 'user' AND COALESCE(archived, 0) = 0", (), AGENT_SESSION_LIST_LIMIT):
         cwd = str(item.get("cwd") or "")
         if history_root is not None and not path_under_root(cwd, history_root): continue
@@ -489,16 +488,16 @@ def codex_history_items(config: Config, session_namespace: str | None, history_r
     return items
 
 
-def agent_session_items(config: Config, session_namespace: str | None, history_root: str | None = None) -> list[dict[str, Any]]:
-    items = codex_history_items(config, session_namespace, history_root)
+def agent_session_items(config: Config, history_root: str | None = None) -> list[dict[str, Any]]:
+    items = codex_history_items(config, history_root)
     seen_tmux = {item.get("tmuxSession") for item in items if item.get("tmuxSession")}
-    active = active_claude_session_map(config, session_namespace)
+    active = active_claude_session_map(config)
     for item in claude_history_items(history_root):
         if tmux_session := active.get(str(item.get("id") or "")): item.update({"tmuxSession": tmux_session, "active": True}); seen_tmux.add(tmux_session)
         items.append(item)
     git_labels: dict[str, str] = {}
     for name in tmux_sessions(config):
-        if not managed_session(config, name, session_namespace) or name in seen_tmux: continue
+        if not managed_session(config, name) or name in seen_tmux: continue
         target = target_config(config, name)
         if not agent_in_pane(target): continue
         cwd = get_pane_cwd(target); thread = active_agent_thread(target, cwd) or {}; thread_id = str(thread.get("id") or name)
@@ -519,10 +518,10 @@ def agent_launch_executable(command: str) -> str:
     return shutil.which(command) or command
 
 
-def start_agent_runtime(config: Config, session_namespace: str | None, cwd: Path, command: str, args: list[str], max_running: int = 0, wait_ready: bool = True, agent_id: str = "", title: str = "") -> str:
+def start_agent_runtime(config: Config, cwd: Path, command: str, args: list[str], max_running: int = 0, wait_ready: bool = True, agent_id: str = "", title: str = "") -> str:
     with RUNTIME_LOCK:
-        if max_running and managed_agent_count(config, session_namespace) >= max_running: raise OwnerError("running agent limit reached", HTTPStatus.CONFLICT)
-        name = f"{managed_session_prefix(session_namespace)}{_dt.datetime.now():%m%d-%H%M%S}-{secrets.token_hex(2)}"; executable = agent_launch_executable(command)
+        if max_running and managed_agent_count(config) >= max_running: raise OwnerError("running agent limit reached", HTTPStatus.CONFLICT)
+        name = f"faryo-{_dt.datetime.now():%m%d-%H%M%S}-{secrets.token_hex(2)}"; executable = agent_launch_executable(command)
         shell = shutil.which("zsh") or "/usr/bin/zsh"; launch = f"{shlex.join([executable, *args])}; exec {shlex.quote(shell)} -l"
         res = tmux(config, ["new-session", "-d", "-s", name, "-c", str(cwd), shell, "-lc", launch], timeout=5)
         if res.returncode != 0: raise OwnerError(res.stderr.strip() or "tmux session start failed", HTTPStatus.INTERNAL_SERVER_ERROR)
@@ -542,30 +541,30 @@ def start_agent_runtime(config: Config, session_namespace: str | None, cwd: Path
     raise OwnerError("agent runtime did not become ready", HTTPStatus.BAD_GATEWAY)
 
 
-def resume_codex_thread_session(config: Config, session_namespace: str | None, thread_id: str, max_running: int = 0, history_root: str | None = None) -> str:
+def resume_codex_thread_session(config: Config, thread_id: str, max_running: int = 0, history_root: str | None = None) -> str:
     clean_id = clean_agent_session_id(thread_id)
     if not clean_id: raise OwnerError("invalid agent session id")
     with RUNTIME_LOCK:
-        active = active_codex_thread_map(config, session_namespace).get(clean_id)
+        active = active_codex_thread_map(config).get(clean_id)
         if active: return active
         thread = codex_thread_by_id(clean_id)
         if not thread: raise OwnerError("agent session not found", HTTPStatus.NOT_FOUND)
         if history_root is not None and not path_under_root(str(thread.get("cwd") or ""), history_root): raise OwnerError("agent session not found", HTTPStatus.NOT_FOUND)
         cwd = Path(str(thread.get("cwd") or Path.home())).expanduser(); cwd = cwd if cwd.is_dir() else Path.home()
-        return start_agent_runtime(config, session_namespace, cwd, "codex", ["resume", clean_id], max_running, agent_id=clean_id)
+        return start_agent_runtime(config, cwd, "codex", ["resume", clean_id], max_running, agent_id=clean_id)
 
-def resume_claude_session(config: Config, session_namespace: str | None, session_id: str, max_running: int = 0, history_root: str | None = None) -> str:
+def resume_claude_session(config: Config, session_id: str, max_running: int = 0, history_root: str | None = None) -> str:
     if not (clean_id := clean_agent_session_id(session_id)): raise OwnerError("invalid claude session id")
     with RUNTIME_LOCK:
-        if active := active_claude_session_map(config, session_namespace).get(clean_id): return active
+        if active := active_claude_session_map(config).get(clean_id): return active
         if not (item := next((item for item in claude_history_items(history_root) if item.get("id") == clean_id), None)): raise OwnerError("claude session not found", HTTPStatus.NOT_FOUND)
-        cwd = Path(str(item.get("cwd") or Path.home())).expanduser(); cwd = cwd if cwd.is_dir() else Path.home(); return start_agent_runtime(config, session_namespace, cwd, "claude", ["--resume", clean_id], max_running, wait_ready=False, agent_id=clean_id)
+        cwd = Path(str(item.get("cwd") or Path.home())).expanduser(); cwd = cwd if cwd.is_dir() else Path.home(); return start_agent_runtime(config, cwd, "claude", ["--resume", clean_id], max_running, wait_ready=False, agent_id=clean_id)
 
-def resume_agent_session(config: Config, session_namespace: str | None, session_id: str, source: str, max_running: int = 0, history_root: str | None = None) -> str:
+def resume_agent_session(config: Config, session_id: str, source: str, max_running: int = 0, history_root: str | None = None) -> str:
     if source == "codex-cli":
-        return resume_codex_thread_session(config, session_namespace, session_id, max_running, history_root)
+        return resume_codex_thread_session(config, session_id, max_running, history_root)
     if source == "claude-code":
-        return resume_claude_session(config, session_namespace, session_id, max_running, history_root)
+        return resume_claude_session(config, session_id, max_running, history_root)
     raise OwnerError("unsupported agent source", HTTPStatus.BAD_REQUEST)
 
 def target_config(config: Config, session: str | None) -> Config:
@@ -576,14 +575,11 @@ def target_config(config: Config, session: str | None) -> Config:
     return Config(session, config.token, config.pane_width)
 
 
-def managed_session_prefix(namespace: str | None) -> str:
-    return f"{namespace or DEFAULT_MANAGED_SESSION_NAMESPACE}-faryo-"
 
-
-def managed_session(config: Config, name: str | None, namespace: str | None) -> bool:
+def managed_session(config: Config, name: str | None) -> bool:
     if not name or name not in tmux_sessions(config):
         return False
-    return str(name).startswith(managed_session_prefix(namespace))
+    return bool(tmux_session_option(config, name, "@faryo_agent_source"))
 
 
 def session_idle_seconds(config: Config) -> float:
@@ -602,10 +598,10 @@ def iso_from_ts(value: float) -> str:
     return _dt.datetime.fromtimestamp(value, _dt.timezone.utc).astimezone().isoformat(timespec="seconds") if value else ""
 
 
-def cleanup_managed_sessions(config: Config, namespace: str | None, agent_idle_seconds: int = 0) -> None:
+def cleanup_managed_sessions(config: Config, agent_idle_seconds: int = 0) -> None:
     for name in tmux_sessions(config):
         target = Config(name, config.token, config.pane_width)
-        if not managed_session(config, name, namespace):
+        if not managed_session(config, name):
             continue
         profile = agent_profile_in_pane(target)
         has_agent = profile is not None
@@ -614,16 +610,13 @@ def cleanup_managed_sessions(config: Config, namespace: str | None, agent_idle_s
             tmux(config, ["kill-session", "-t", name], timeout=3)
 
 
-def managed_agent_count(config: Config, namespace: str | None) -> int:
-    cleanup_managed_sessions(config, namespace)
-    return sum(1 for name in tmux_sessions(config) if managed_session(config, name, namespace) and agent_in_pane(Config(name, config.token, config.pane_width)))
+def managed_agent_count(config: Config) -> int:
+    cleanup_managed_sessions(config)
+    return sum(1 for name in tmux_sessions(config) if managed_session(config, name) and agent_in_pane(Config(name, config.token, config.pane_width)))
 
 
-def bounded_max_running(payload: dict[str, Any], namespace: str | None) -> int:
-    value = int(payload.get("max_running") or payload.get("maxRunning") or 0)
-    if namespace and value <= 0:
-        raise OwnerError("max_running is required for session creation", HTTPStatus.BAD_REQUEST)
-    return value
+def bounded_max_running(payload: dict[str, Any]) -> int:
+    return int(payload.get("max_running") or payload.get("maxRunning") or 0)
 
 
 def agent_tail_ignorable(line: str, profile: AgentProfile) -> bool:
@@ -645,9 +638,9 @@ def agent_ready_for_input(config: Config, profile: AgentProfile = CODEX_PROFILE)
     return bool(lines and profile.input_prompt_re.match(lines[-1]))
 
 
-def close_shell_session(config: Config, session: str | None, namespace: str | None) -> None:
+def close_shell_session(config: Config, session: str | None) -> None:
     name = clean_tmux_session_name(session)
-    if not managed_session(config, name, namespace):
+    if not managed_session(config, name):
         raise OwnerError("tmux session not found", HTTPStatus.NOT_FOUND)
     res = tmux(config, ["kill-session", "-t", name], timeout=3)
     if res.returncode != 0:
@@ -1931,7 +1924,7 @@ class Handler(SimpleHTTPRequestHandler):
             if parsed.path == "/api/agent-sessions":
                 self.require_token(parsed)
                 query = parse_qs(parsed.query); limit = max(1, min(int(query.get("limit", [str(AGENT_SESSION_LIST_LIMIT)])[0]), AGENT_SESSION_LIST_LIMIT))
-                self.write_json({"ok": True, "sessions": self.agent_session_items(limit), "activeCount": managed_agent_count(self.config, self.session_namespace()), "updatedAt": now_iso()})
+                self.write_json({"ok": True, "sessions": self.agent_session_items(limit), "activeCount": managed_agent_count(self.config), "updatedAt": now_iso()})
                 return
             if parsed.path == "/api/capture":
                 self.require_token(parsed)
@@ -2061,21 +2054,17 @@ class Handler(SimpleHTTPRequestHandler):
                         raise OwnerError("cwd not found", HTTPStatus.BAD_REQUEST)
                 else:
                     cwd = Path(workspace_root or get_pane_cwd(self.config) or str(Path.home())).expanduser(); cwd = cwd if cwd.is_dir() else Path.home()
-                namespace = self.session_namespace()
                 command = clean_agent_launch_command(str(payload.get("command") or ""))
                 if not command:
                     raise OwnerError("invalid launch command")
                 title = clean_session_title(payload.get("title"))
                 agent_id = str(uuid.uuid4()) if command == "claude" else ""; args = ["--session-id", agent_id] if agent_id else []
-                name = start_agent_runtime(self.config, namespace, cwd, command, args, bounded_max_running(payload, namespace), wait_ready=False, agent_id=agent_id, title=title)
+                name = start_agent_runtime(self.config, cwd, command, args, bounded_max_running(payload), wait_ready=False, agent_id=agent_id, title=title)
                 self.write_json({"ok": True, "session": name, "updatedAt": now_iso()})
                 return
             if parsed.path == "/api/agent/cleanup-idle":
                 idle_seconds = max(60, min(int(payload.get("idle_seconds") or payload.get("idleSeconds") or 0), MAX_MANAGED_AGENT_IDLE_SECONDS))
-                raw_namespaces = payload.get("namespaces") if isinstance(payload.get("namespaces"), list) else [self.session_namespace()]
-                for namespace in {clean_tmux_session_name(str(item)) for item in raw_namespaces if item}:
-                    if namespace:
-                        cleanup_managed_sessions(self.config, namespace, idle_seconds)
+                cleanup_managed_sessions(self.config, idle_seconds)
                 self.write_json({"ok": True, "updatedAt": now_iso()})
                 return
             if parsed.path == "/api/project-workbench/downlink/apply":
@@ -2085,7 +2074,7 @@ class Handler(SimpleHTTPRequestHandler):
                 self.write_json(import_project_workbench(payload))
                 return
             if parsed.path == "/api/session/close":
-                close_shell_session(self.config, str(payload.get("session") or ""), self.session_namespace())
+                close_shell_session(self.config, str(payload.get("session") or ""))
                 self.write_json({"ok": True, "updatedAt": now_iso()})
                 return
             if parsed.path == "/api/agent/resume":
@@ -2095,8 +2084,7 @@ class Handler(SimpleHTTPRequestHandler):
                     raise OwnerError("missing agent session id")
                 if not source:
                     raise OwnerError("missing agent source")
-                namespace = self.session_namespace()
-                session = resume_agent_session(self.config, namespace, agent_session_id, source, bounded_max_running(payload, namespace), self.history_root())
+                session = resume_agent_session(self.config, agent_session_id, source, bounded_max_running(payload), self.history_root())
                 self.write_json({"ok": True, "session": session, "updatedAt": now_iso()})
                 return
             target = self.target_from_payload(payload)
@@ -2128,8 +2116,6 @@ class Handler(SimpleHTTPRequestHandler):
             return
         self.send_error(HTTPStatus.NOT_FOUND)
 
-    def session_namespace(self) -> str | None:
-        return clean_tmux_session_name(self.headers.get("X-Faryo-Session-Namespace"))
 
     def file_inbox_root(self) -> str | None:
         value = self.headers.get("X-Faryo-File-Inbox-Root")
@@ -2150,7 +2136,7 @@ class Handler(SimpleHTTPRequestHandler):
         return target_config(self.config, session)
 
     def agent_session_items(self, limit: int = AGENT_SESSION_LIST_LIMIT) -> list[dict[str, Any]]:
-        return agent_session_items(self.config, self.session_namespace(), self.history_root())[:limit]
+        return agent_session_items(self.config, self.history_root())[:limit]
 
     def read_multipart_form(self) -> dict[str, Any]:
         content_type = self.headers.get("Content-Type", "")

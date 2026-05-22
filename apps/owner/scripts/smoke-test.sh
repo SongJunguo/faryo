@@ -6,9 +6,8 @@ source "$SCRIPT_DIR/_lib.sh"
 load_env
 
 SMOKE_DIRECT="faryo-smoke-direct-$$"
-SMOKE_ALLOWED="faryo-smoke-$$"
-SMOKE_MANAGED="$SMOKE_ALLOWED-faryo-0101-000000-abcd"
-SMOKE_OTHER="$SMOKE_ALLOWED-prod"
+SMOKE_MANAGED="faryo-smoke-$$"
+SMOKE_OTHER="faryo-smoke-other-$$"
 SMOKE_FILE="$FARYO_OWNER_INBOX_DIR/faryo-smoke-$$.md"
 SMOKE_OUTSIDE=$(mktemp --suffix=.md)
 TMP_EVENTS=$(mktemp)
@@ -16,7 +15,6 @@ TMP=$(mktemp)
 cleanup() {
   rm -f "$TMP_EVENTS" "$TMP" "$TMP.sessions" "$TMP.status" "$TMP.forbidden" "$TMP.file" "$TMP.view" "$SMOKE_FILE" "$SMOKE_OUTSIDE"
   tmux kill-session -t "$SMOKE_DIRECT" 2>/dev/null || true
-  tmux kill-session -t "$SMOKE_ALLOWED" 2>/dev/null || true
   tmux kill-session -t "$SMOKE_MANAGED" 2>/dev/null || true
   tmux kill-session -t "$SMOKE_OTHER" 2>/dev/null || true
 }
@@ -58,7 +56,7 @@ PY
 
 echo
 echo "== agent sessions =="
-curl_quiet -H "X-Owner-Token: $FARYO_OWNER_TOKEN" -H "X-Faryo-Session-Namespace: $SMOKE_ALLOWED" "$(api_url "agent-sessions?limit=3")" > "$TMP.sessions"
+curl_quiet -H "X-Owner-Token: $FARYO_OWNER_TOKEN" "$(api_url "agent-sessions?limit=3")" > "$TMP.sessions"
 python3 - <<'PY' "$TMP.sessions"
 import json, sys
 payload=json.load(open(sys.argv[1], encoding='utf-8'))

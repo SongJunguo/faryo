@@ -40,10 +40,6 @@ SESSION_POLICY = {"gcp": (3, 2), "hp": (4, 4), "pc": (4, 2)}
 NEW_SESSION_COMMANDS = {"codex", "claude"}
 HISTORY_SESSION_LIMITS = {"less": {"gcp": 3, "hp": 4, "pc": 4}, "more": {"gcp": 5, "pc": 6, "hp": 7}}
 HISTORY_TOTAL_LIMITS = {"less": 10, "more": 18}
-SUBACCOUNT_MAX_RUNNING = 1
-SUBACCOUNT_AGENT_IDLE_SECONDS = 30 * 60
-SUBACCOUNT_CLEANUP_MIN_INTERVAL_SECONDS = 10 * 60
-SUBACCOUNT_CLEANUP_LAST_TS = 0.0
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 FARYO_PROFILE_SOURCE = Path(__file__).resolve().parent / "faryo_profile.md"
 BRIDGE_PACKAGE_MAX_BYTES = 120 * 1024 * 1024
@@ -422,10 +418,6 @@ class GatewayConfig:
             if not name:
                 continue
             routes = [route for route in payload.get("routes", list(BACKENDS)) if route in BACKENDS] or list(BACKENDS)
-            route_namespaces = dict(payload.get("route_namespaces") or {})
-            missing_namespaces = [route for route in routes if not route_namespaces.get(route)]
-            if missing_namespaces:
-                raise ValueError(f"user {name} missing route_namespaces for: {', '.join(missing_namespaces)}")
             default_route = str(payload.get("default_route") or (routes[0] if routes else "gcp"))
             if default_route not in routes and routes:
                 default_route = routes[0]
@@ -434,7 +426,6 @@ class GatewayConfig:
                 "auth_epoch": int(payload.get("auth_epoch") or 0),
                 "routes": routes,
                 "default_route": default_route,
-                "route_namespaces": route_namespaces,
                 "file_inbox_roots": dict(payload.get("file_inbox_roots") or {}),
                 "workspace_roots": dict(payload.get("workspace_roots") or {}),
             }
@@ -473,10 +464,6 @@ class GatewayConfig:
         self.users[username]["bcrypt_hash"] = bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
         self.users[username]["auth_epoch"] = int(time.time())
         self.save_users()
-
-    def route_namespace(self, username: str, route: str) -> str | None:
-        value = (self.users.get(username) or {}).get("route_namespaces", {}).get(route)
-        return str(value) if value else None
 
     def file_inbox_root(self, username: str, route: str) -> str | None:
         value = (self.users.get(username) or {}).get("file_inbox_roots", {}).get(route)
@@ -1493,11 +1480,7 @@ class GatewayHandler(BaseHTTPRequestHandler):
         return str(payload.get("prompt") or "").strip()
 
     def faryo_session_name(self, username: str) -> str:
-        namespace = self.config.route_namespace(username, "gcp") or username
-        clean = re.sub(r"[^A-Za-z0-9_.:-]+", "-", namespace).strip("-")[:48]
-        if not clean:
-            clean = "faryo"
-        return f"{clean}-faryo-main"
+        return "faryo-main"
 
     def latest_faryo_thread_id(self) -> str:
         path = self.config.faryo_codex_state
@@ -1547,18 +1530,13 @@ class GatewayHandler(BaseHTTPRequestHandler):
         self.tmux_session_option(session, "@faryo_agent_source", "codex-cli")
         self.tmux_session_option(session, "@faryo_session_title", self.config.faryo_session_title)
         self.tmux_session_option(session, "@faryo_controller_profile", self.config.faryo_profile_name)
-        self.tmux_session_option(session, "@faryo_controller_owner", self.faryo_controller_owner(username))
         if thread_id:
             self.tmux_session_option(session, "@faryo_agent_session_id", thread_id)
 
-    def faryo_controller_owner(self, username: str) -> str:
-        return self.config.route_namespace(username, "gcp") or username
-
     def live_faryo_sessions(self, username: str) -> list[str]:
-        owner = self.faryo_controller_owner(username)
         sessions = []
         for session in self.tmux_sessions():
-            if self.tmux_session_option(session, "@faryo_controller_profile") == self.config.faryo_profile_name and self.tmux_session_option(session, "@faryo_controller_owner") == owner:
+            if self.tmux_session_option(session, "@faryo_controller_profile") == self.config.faryo_profile_name:
                 sessions.append(session)
         return sorted(set(sessions))
 
@@ -1590,7 +1568,6 @@ class GatewayHandler(BaseHTTPRequestHandler):
     def owner_headers(self, route: str, username: str) -> dict[str, str]:
         host, port, label = BACKENDS[route]; headers = {"Host": f"{host}:{port}", "X-Faryo-Owner-Label": label, "X-Owner-Token": self.config.owner_token(route), "X-Faryo-User": username}
         if username != self.config.mcp_user: headers["X-Faryo-History-Scope"] = "workspace"
-        if namespace := self.config.route_namespace(username, route): headers["X-Faryo-Session-Namespace"] = namespace
         if file_root := self.config.file_inbox_root(username, route): headers["X-Faryo-File-Inbox-Root"] = file_root
         if workspace_root := self.config.workspace_root(username, route): headers["X-Faryo-Workspace-Root"] = workspace_root
         return headers
@@ -1636,27 +1613,7 @@ class GatewayHandler(BaseHTTPRequestHandler):
         return result if isinstance(result, dict) else {"ok": False, "error": "invalid owner response"}
 
     def max_running_for(self, username: str, route: str) -> int:
-        return SESSION_POLICY[route][1] if username == self.config.mcp_user else SUBACCOUNT_MAX_RUNNING
-
-    def cleanup_child_agents(self, username: str) -> None:
-        if username != self.config.mcp_user:
-            return
-        global SUBACCOUNT_CLEANUP_LAST_TS
-        now = time.monotonic()
-        if now - SUBACCOUNT_CLEANUP_LAST_TS < SUBACCOUNT_CLEANUP_MIN_INTERVAL_SECONDS:
-            return
-        SUBACCOUNT_CLEANUP_LAST_TS = now
-        protected = {self.config.route_namespace(username, route) for route in self.config.user_routes(username)}
-        namespaces: dict[str, set[str]] = {}
-        for child in self.config.users:
-            if child == username:
-                continue
-            for route in self.config.user_routes(child):
-                namespace = self.config.route_namespace(child, route)
-                if namespace and namespace not in protected:
-                    namespaces.setdefault(route, set()).add(namespace)
-        for route, values in namespaces.items():
-            self.owner_json_request(route, "/api/agent/cleanup-idle", {"idle_seconds": SUBACCOUNT_AGENT_IDLE_SECONDS, "namespaces": sorted(values)}, username, timeout=1.5)
+        return SESSION_POLICY[route][1]
 
     def owner_agent_sessions(self, route: str, username: str, history_mode: str = "less") -> dict[str, Any]:
         history_mode = history_mode if history_mode in HISTORY_SESSION_LIMITS else "less"
@@ -1679,7 +1636,6 @@ class GatewayHandler(BaseHTTPRequestHandler):
 
     def workbench_payload(self, username: str, history_mode: str = "less") -> dict[str, Any]:
         history_mode = history_mode if history_mode in HISTORY_SESSION_LIMITS else "less"
-        self.cleanup_child_agents(username)
         routes = self.config.user_routes(username)
         route_payloads = {route: self.owner_agent_sessions(route, username, history_mode) for route in routes}
         sessions = [item for route in routes for item in route_payloads[route]["sessions"]]
@@ -1729,16 +1685,13 @@ class GatewayHandler(BaseHTTPRequestHandler):
             upstream_path += "?" + parsed.query
         length = int(self.headers.get("Content-Length", "0") or "0")
         body = self.rfile.read(length) if length else None
-        blocked_headers = {"host", "content-length", "x-owner-token", "x-faryo-owner-label", "x-faryo-user", "x-faryo-history-scope", "x-faryo-session-namespace", "x-faryo-file-inbox-root", "x-faryo-workspace-root"}
+        blocked_headers = {"host", "content-length", "x-owner-token", "x-faryo-owner-label", "x-faryo-user", "x-faryo-history-scope", "x-faryo-file-inbox-root", "x-faryo-workspace-root"}
         headers = {key: value for key, value in self.headers.items() if key.lower() not in HOP_BY_HOP_HEADERS and key.lower() not in blocked_headers}
         headers["Host"] = f"{host}:{port}"
         headers["X-Faryo-Owner-Label"] = label
         headers["X-Owner-Token"] = self.config.owner_token(route_name)
         headers["X-Faryo-User"] = username
         if username != self.config.mcp_user: headers["X-Faryo-History-Scope"] = "workspace"
-        namespace = self.config.route_namespace(username, route_name)
-        if namespace:
-            headers["X-Faryo-Session-Namespace"] = namespace
         file_root = self.config.file_inbox_root(username, route_name)
         if file_root:
             headers["X-Faryo-File-Inbox-Root"] = file_root
