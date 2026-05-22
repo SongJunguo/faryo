@@ -912,6 +912,8 @@ class GatewayHandler(BaseHTTPRequestHandler):
                 "applied": applied_count if ack_ok and isinstance(applied_count, int) else 0,
                 "updated_at": now_ts(),
             }
+            if ack_ok:
+                package["notice"] = {"ok": True, "updated_at": now_ts()}
             self.write_project_downlink_package(package)
             self.write_json({"ok": True, "package": {"id": package["id"], "status": package["status"]}}, HTTPStatus.OK)
         except ValueError as exc:

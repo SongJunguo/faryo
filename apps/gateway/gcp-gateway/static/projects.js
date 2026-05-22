@@ -347,12 +347,22 @@ async function submitChanges() {
     } else {
       setDirty(true);
     }
-    setSync(status === 'applied' ? 'Applied' : (status === 'skipped' ? 'Saved' : (status === 'failed' ? 'Failed' : 'Pending HP')));
+    setSync(downlinkStatusText(data.downlink));
     render();
   } catch (error) {
     setSync('Submit failed');
     updateSubmit();
   }
+}
+
+function downlinkStatusText(downlink) {
+  const status = downlink?.status || '';
+  if (status === 'applied') return 'Applied';
+  if (status === 'skipped') return 'Saved';
+  const targets = [...new Set((downlink?.packages || []).map(item => String(item.target || '').trim().toUpperCase()).filter(Boolean))];
+  const suffix = targets.length ? ` ${targets.join('/')}` : '';
+  if (status === 'failed') return `Failed${suffix}`;
+  return `Pending${suffix}`;
 }
 
 function openImport() {

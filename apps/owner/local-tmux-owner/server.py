@@ -1622,7 +1622,7 @@ def project_workbench_root(project: dict[str, Any]) -> Path:
 
 
 def project_workbench_allowed_roots() -> list[Path]:
-    default = os.pathsep.join([str(Path.home() / "brain" / "projects"), str(Path.home() / "brain" / "tools")])
+    default = os.pathsep.join([str(Path.home() / "brain" / "projects"), str(Path.home() / "brain" / "tools"), str(Path.home() / ".faryo" / "projects")])
     raw_roots = env_value("FARYO_PROJECT_WORKBENCH_ALLOWED_ROOTS").strip() or default
     roots = []
     for chunk in raw_roots.split(os.pathsep):
