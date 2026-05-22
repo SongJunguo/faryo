@@ -1679,6 +1679,47 @@ def write_project_workbench_file(path: Path, project: dict[str, Any]) -> Path:
     return path
 
 
+def project_definition_path(project_root: Path) -> Path:
+    return project_root / "00-system" / "project.md"
+
+
+def project_definition_text(project_root: Path, project: dict[str, Any]) -> str:
+    name = compact_text(project.get("name")) or project_root.name
+    brief = compact_text(project.get("brief")) or "Not defined."
+    current_goal = compact_text(project.get("current_d")) or "Not set."
+    owner = owner_label()
+    return "\n".join([
+        f"# {name}",
+        "",
+        "## Purpose",
+        brief,
+        "",
+        "## Control",
+        f"- Owner: {owner}",
+        f"- Project root: {project_root}",
+        "- Current state file: `00-system/workbench.json`",
+        "",
+        "## Current Goal",
+        current_goal,
+        "",
+        "## Worker Contract",
+        "- Keep `00-system/workbench.json` current during project work.",
+        "- Update decision, action, and watch items before closing a managed work session.",
+        "- Do not treat this file as the live task board; it is the stable project definition.",
+        "",
+    ]) + "\n"
+
+
+def ensure_project_definition_file(project_root: Path, project: dict[str, Any]) -> Path:
+    path = project_definition_path(project_root)
+    if not path.exists():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_name(f".{path.name}.tmp")
+        tmp.write_text(project_definition_text(project_root, project), encoding="utf-8")
+        os.replace(tmp, path)
+    return path
+
+
 def project_workbench_hash(project: dict[str, Any]) -> str:
     body = json.dumps(project, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
     return hashlib.sha256(body).hexdigest()
@@ -1705,6 +1746,7 @@ def import_project_workbench(payload: dict[str, Any]) -> dict[str, Any]:
             "items": [],
         })
         write_project_workbench_file(path, project)
+    ensure_project_definition_file(project_root, project)
     row = dict(project)
     row["path"] = str(path)
     row["workbench_path"] = str(path)
