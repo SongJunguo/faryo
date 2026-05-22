@@ -44,7 +44,6 @@ def main() -> None:
     routes = configured_routes(values)
     if not routes:
         raise ValueError("FARYO_GATEWAY_ROUTES has no valid route")
-    namespace = values.get("FARYO_DEFAULT_NAMESPACE") or username
     workspace = path_value(values.get("FARYO_DEFAULT_WORKSPACE") or str(Path.home() / ".faryo" / "workspaces" / "default"))
     file_inbox = path_value(values.get("FARYO_DEFAULT_FILE_INBOX") or str(Path.home() / ".faryo" / "owner" / "data" / "inbox"))
     payload = {
@@ -54,7 +53,6 @@ def main() -> None:
                 "auth_epoch": 0,
                 "routes": routes,
                 "default_route": "gcp" if "gcp" in routes else routes[0],
-                "route_namespaces": {route: route_value(values, route, "NAMESPACE", namespace) for route in routes},
                 "workspace_roots": {route: path_value(route_value(values, route, "WORKSPACE", workspace)) for route in routes},
                 "file_inbox_roots": {route: path_value(route_value(values, route, "FILE_INBOX", file_inbox)) for route in routes},
             }

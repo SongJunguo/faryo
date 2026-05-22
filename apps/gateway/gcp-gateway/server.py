@@ -1399,12 +1399,11 @@ class GatewayHandler(BaseHTTPRequestHandler):
             add(path[: -len(marker)])
         if path.startswith("/"):
             add(path)
-        if workbench:
+        if workbench.startswith("/"):
             add(str(Path(workbench).parent.parent))
-        if not candidates:
-            root = self.config.owner_project_roots.get(self.compact_text(row.get("owner_route")), "")
-            for segment in self.project_dir_segments(row):
-                add(str(Path(root) / segment))
+        root = self.config.owner_project_roots.get(self.compact_text(row.get("owner_route")), "")
+        for segment in self.project_dir_segments(row):
+            add(str(Path(root) / segment))
         return candidates
 
     def project_dir_segments(self, row: dict[str, Any]) -> list[str]:
@@ -1460,12 +1459,16 @@ class GatewayHandler(BaseHTTPRequestHandler):
         started = False
         if sessions:
             session = sessions[0]
-            self.mark_faryo_session(session, username)
         elif self.tmux_session_exists(session):
-            self.mark_faryo_session(session, username)
+            if not self.kill_tmux_session(session):
+                return {"ok": False, "error": "failed to reset stale Faryo session", "session": session}
+            self.start_faryo_session(session, username, self.latest_faryo_thread_id(), prompt)
+            started = True
         else:
             self.start_faryo_session(session, username, self.latest_faryo_thread_id(), prompt)
             started = True
+        if not self.faryo_controller_ready(username, session):
+            return {"ok": False, "error": "Faryo controller did not become ready", "session": session}
         if prompt and not started:
             sent = self.owner_json_request("gcp", "/api/send", {"session": session, "text": prompt}, username, timeout=6)
             if not sent.get("ok"):
@@ -1483,29 +1486,39 @@ class GatewayHandler(BaseHTTPRequestHandler):
         return "faryo-main"
 
     def latest_faryo_thread_id(self) -> str:
-        path = self.config.faryo_codex_state
-        if not path.is_file():
-            return ""
-        cwd = str(self.config.faryo_work_root)
+        if not self.config.faryo_codex_state.is_file(): return ""
+        sql = "SELECT id, rollout_path FROM threads WHERE source = 'cli' AND thread_source = 'user' AND COALESCE(archived, 0) = 0 AND cwd = ? ORDER BY updated_at DESC LIMIT 20"
         try:
-            conn = sqlite3.connect(f"file:{path.as_posix()}?mode=ro", uri=True, timeout=1)
-            try:
-                row = conn.execute(
-                    "SELECT id FROM threads WHERE source = 'cli' AND thread_source = 'user' AND COALESCE(archived, 0) = 0 AND cwd = ? ORDER BY updated_at DESC LIMIT 1",
-                    (cwd,),
-                ).fetchone()
-            finally:
-                conn.close()
+            conn = sqlite3.connect(f"file:{self.config.faryo_codex_state.as_posix()}?mode=ro", uri=True, timeout=1); rows = conn.execute(sql, (str(self.config.faryo_work_root),)).fetchall(); conn.close()
         except sqlite3.Error:
             return ""
-        thread_id = clean_agent_session_id(str(row[0] if row else ""))
-        return thread_id or ""
+        return next((clean_agent_session_id(str(thread_id)) or "" for thread_id, rollout_path in rows if self.faryo_profile_rollout(rollout_path)), "")
+
+    def faryo_profile_rollout(self, rollout_path: Any) -> bool:
+        try:
+            first_line = next(line for line in Path(str(rollout_path or "")).expanduser().read_text(encoding="utf-8").splitlines() if line.strip())
+            instructions = (((json.loads(first_line).get("payload") or {}).get("base_instructions") or {}).get("text") or "").strip()
+            profile_source = FARYO_PROFILE_SOURCE.read_text(encoding="utf-8").strip()
+        except (OSError, StopIteration, json.JSONDecodeError):
+            return False
+        return bool(profile_source and instructions.startswith(profile_source[: min(240, len(profile_source))]))
 
     def tmux_session_exists(self, session: str) -> bool:
-        try:
-            return subprocess.run(["tmux", "has-session", "-t", session], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8", timeout=2, check=False).returncode == 0
-        except subprocess.TimeoutExpired:
-            return False
+        try: return subprocess.run(["tmux", "has-session", "-t", session], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8", timeout=2, check=False).returncode == 0
+        except subprocess.TimeoutExpired: return False
+
+    def kill_tmux_session(self, session: str) -> bool:
+        try: result = subprocess.run(["tmux", "kill-session", "-t", session], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8", timeout=3, check=False)
+        except subprocess.TimeoutExpired: return False
+        return result.returncode == 0 or not self.tmux_session_exists(session)
+
+    def faryo_controller_ready(self, username: str, session: str, timeout: float = 15) -> bool:
+        deadline = time.monotonic() + timeout; path = "/api/status?" + urlencode({"session": session})
+        while time.monotonic() < deadline:
+            status = self.owner_json_request("gcp", path, None, username, method="GET", timeout=3)
+            if status.get("ok") and status.get("agentProfile") == "codex": return True
+            time.sleep(0.5)
+        return False
 
     def tmux_sessions(self) -> list[str]:
         try:

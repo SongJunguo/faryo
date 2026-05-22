@@ -1673,12 +1673,31 @@ def project_workbench_import_path(raw_path: str) -> tuple[Path, Path]:
     return project_root, workbench_path
 
 
+def project_workbench_text(project: dict[str, Any]) -> str:
+    return json.dumps(project, ensure_ascii=False, indent=2) + "\n"
+
+
 def write_project_workbench_file(path: Path, project: dict[str, Any]) -> Path:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(f".{path.name}.tmp")
-    tmp.write_text(json.dumps(project, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    tmp = stage_project_workbench_file(path, project)
     os.replace(tmp, path)
     return path
+
+
+def stage_project_workbench_file(path: Path, project: dict[str, Any]) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.exists() and not path.is_file():
+        raise OwnerError("project workbench path is not a file", HTTPStatus.BAD_REQUEST)
+    tmp = path.with_name(f".{path.name}.{secrets.token_hex(4)}.tmp")
+    tmp.write_text(project_workbench_text(project), encoding="utf-8")
+    return tmp
+
+
+def cleanup_staged_project_workbenches(staged: list[tuple[Path, Path]]) -> None:
+    for _path, tmp in staged:
+        try:
+            tmp.unlink()
+        except FileNotFoundError:
+            pass
 
 
 def project_definition_path(project_root: Path) -> Path:
@@ -1799,12 +1818,22 @@ def apply_project_workbench_downlink(config: Config, payload: dict[str, Any]) ->
     projects = package.get("projects") if isinstance(package.get("projects"), list) else []
     if not projects:
         raise OwnerError("downlink package has no projects")
-    clean_projects = [clean_project_workbench(project) for project in projects if isinstance(project, dict)]
-    expected_hashes = {project_slug(project.get("id") or project.get("name")): compact_text(project.get("hash")) for project in projects if isinstance(project, dict)}
-    targets = [(project_workbench_path(raw_project), clean_project_workbench(raw_project)) for raw_project in projects if isinstance(raw_project, dict)]
-    written = [write_project_workbench_file(path, project) for path, project in targets]
+    raw_projects = [project for project in projects if isinstance(project, dict)]
+    targets = [(project_workbench_path(project), clean_project_workbench(project)) for project in raw_projects]
+    paths = [path for path, _project in targets]
+    if len({str(path) for path in paths}) != len(paths):
+        raise OwnerError("duplicate project workbench target", HTTPStatus.BAD_REQUEST)
+    expected_hashes = {project_slug(project.get("id") or project.get("name")): compact_text(project.get("hash")) for project in raw_projects}
+    staged: list[tuple[Path, Path]] = []
+    try:
+        staged = [(path, stage_project_workbench_file(path, project)) for path, project in targets]
+        for path, tmp in staged:
+            os.replace(tmp, path)
+    except OSError as exc:
+        cleanup_staged_project_workbenches(staged)
+        raise OwnerError("failed to write project workbench", HTTPStatus.INTERNAL_SERVER_ERROR) from exc
     hashes = {}
-    for path, project in zip(written, clean_projects):
+    for path, project in targets:
         payload = json.loads(path.read_text(encoding="utf-8"))
         actual = clean_project_workbench(payload if isinstance(payload, dict) else {})
         hashes[project["id"]] = project_workbench_hash(actual)
@@ -1814,13 +1843,13 @@ def apply_project_workbench_downlink(config: Config, payload: dict[str, Any]) ->
         "package_id": package_id,
         "ok": ok,
         "status": "applied" if ok else "failed",
-        "applied": len(written) if ok else 0,
+        "applied": len(targets) if ok else 0,
         "hashes": hashes,
         "message": ("hash mismatch: " + ", ".join(mismatched)) if mismatched else "",
     })
     if not ok:
         raise OwnerError("downlink hash mismatch: " + ", ".join(mismatched), HTTPStatus.CONFLICT)
-    return {"ok": True, "status": "applied", "package_id": package_id, "applied": len(written), "ack_ok": bool(ack.get("ok")), "updatedAt": now_iso()}
+    return {"ok": True, "status": "applied", "package_id": package_id, "applied": len(targets), "ack_ok": bool(ack.get("ok")), "updatedAt": now_iso()}
 
 
 class MultipartFile:

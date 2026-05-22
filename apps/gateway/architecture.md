@@ -28,8 +28,8 @@ Gateway VM: the host that terminates public HTTPS and forwards to Faryo Gateway.
 - Caddy proxies the public domain to Gateway at `127.0.0.1:8780`.
 - Gateway provides form login, auth cookies, the unified workbench, account
   tools, and restricted path proxying.
-- Gateway private route config controls visible endpoints, tmux namespaces,
-  workspace roots, and attachment inbox roots.
+- Gateway private route config controls visible endpoints, workspace roots,
+  and attachment inbox roots.
 - Gateway probes each route through its real `/health` endpoint. Offline
   routes affect session resume and new-session selection only.
 - `/gcp/?session=...`, `/gcp/api/...`, and required owner static assets proxy
