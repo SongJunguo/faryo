@@ -11,5 +11,6 @@ apps/*/config/*.local
 apps/*/config/*.log
 apps/*/config/.token*
 
+/00-system/
 .faryo/
 dist/
