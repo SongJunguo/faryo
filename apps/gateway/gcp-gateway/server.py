@@ -102,7 +102,16 @@ GATEWAY_STATIC_FILES = {
 }
 PROJECT_ITEM_TYPES = {"decision", "action", "watch"}
 PROJECT_BUCKETS = {"S", "A", "B"}
-PROJECT_DONE_STATUSES = {"accepted", "paused", "done", "skipped", "seen"}
+PROJECT_DONE_STATUSES = {"accepted", "done", "skipped", "seen", "rejected", "completed", "closed"}
+PROJECT_ITEM_STAGES = {
+    "awaiting_owner",
+    "approved_for_workorder",
+    "workorder_created",
+    "in_progress",
+    "receipt_submitted",
+    "needs_fix",
+    "paused",
+}
 PROJECT_BUCKET_ORDER = {"S": 0, "A": 1, "B": 2}
 
 HOP_BY_HOP_HEADERS = {
@@ -675,7 +684,13 @@ class GatewayHandler(BaseHTTPRequestHandler):
             self.handle_project_workbench_downlink_ack()
             return
         controller_paths = {"/api/faryo/dispatch", "/api/faryo/start", "/api/faryo/workorder/verify"}
-        username = self.controller_token_username() if parsed.path in controller_paths else self.current_username()
+        flex_token_paths = {"/api/project-workbench/transition"}
+        if parsed.path in controller_paths:
+            username = self.controller_token_username()
+        elif parsed.path in flex_token_paths:
+            username = self.controller_token_username() or self.current_username()
+        else:
+            username = self.current_username()
         if not username:
             self.write_json({"ok": False, "error": "unauthorized"}, HTTPStatus.UNAUTHORIZED)
             return
@@ -696,6 +711,9 @@ class GatewayHandler(BaseHTTPRequestHandler):
             return
         if parsed.path == "/api/project-workbench/submit":
             self.handle_project_workbench_submit(username)
+            return
+        if parsed.path == "/api/project-workbench/transition":
+            self.handle_project_workbench_transition(username)
             return
         if parsed.path == "/api/project-workbench/import":
             self.handle_project_workbench_import(username)
@@ -851,7 +869,7 @@ class GatewayHandler(BaseHTTPRequestHandler):
             source = payload.get("projects")
             if not isinstance(source, list):
                 raise ValueError("projects must be a list")
-            rows = [self.clean_project_row(project, index) for index, project in enumerate(source, 1) if isinstance(project, dict)]
+            rows = self.project_projection_rows_from_ui(source)
             self.write_project_rows(rows)
             self.write_json({"ok": True, "workbench": {"projects": self.read_project_rows()}}, HTTPStatus.OK)
         except ValueError as exc:
@@ -863,7 +881,7 @@ class GatewayHandler(BaseHTTPRequestHandler):
             source = payload.get("projects")
             if not isinstance(source, list):
                 raise ValueError("projects must be a list")
-            rows = [self.clean_project_row(project, index) for index, project in enumerate(source, 1) if isinstance(project, dict)]
+            rows = self.project_projection_rows_from_ui(source)
             self.write_project_rows(rows)
             target_rows = self.project_downlink_target_rows(rows, payload)
             if not target_rows:
@@ -887,6 +905,23 @@ class GatewayHandler(BaseHTTPRequestHandler):
         except ValueError as exc:
             self.write_json({"ok": False, "error": str(exc)}, HTTPStatus.BAD_REQUEST)
 
+    def project_projection_rows_from_ui(self, source: list[Any]) -> list[dict[str, Any]]:
+        existing = {row["id"]: row for row in self.read_project_rows()}
+        rows: list[dict[str, Any]] = []
+        for index, project in enumerate(source, 1):
+            if not isinstance(project, dict):
+                continue
+            project_id = self.project_id(project)
+            previous = existing.get(project_id)
+            if not previous:
+                rows.append(self.clean_project_row(project, index))
+                continue
+            row = dict(previous)
+            row["bucket"] = self.clean_project_bucket(project.get("bucket") or previous.get("bucket"))
+            row["rank"] = self.clean_rank(project.get("rank") or index)
+            rows.append(self.clean_project_row(row, index))
+        return rows
+
     def project_submit_prompt(self, rows: list[dict[str, Any]], downlink: dict[str, Any]) -> str:
         projects = []
         for row in self.sorted_project_rows(rows):
@@ -903,10 +938,10 @@ class GatewayHandler(BaseHTTPRequestHandler):
         payload = {"event": "project_workbench_submit", "downlink": downlink, "projects": projects}
         return "\n".join([
             "项目工作台刚完成一次用户裁决提交，你现在接棒。",
-            "先读取 Gateway project-workbench 投影和相关项目真值；如果同步或回执异常，先指出阻塞。",
+            "先读取 Gateway project-workbench 投影和相关项目真值；如果状态迁移、投影或回执异常，先指出阻塞。",
             "只允许列出 0-3 条额外提醒，且必须是业务优先级、重大安全风险或会影响执行成败的事项；没有就不要提醒。",
-            "随后按用户已裁决内容调度可见 Codex 会话执行：一个受影响项目对应一个可见项目 worker，会话必须出现在 Gateway 历史会话里，不得使用 headless。",
-            "每个 worker 必须带项目 id、Owner route、workbench 路径、已裁决事项和收尾回执要求。",
+            "随后按已进入 `approved_for_workorder` 的事项规划 WO 并调度可见 Codex 会话执行；一个受影响项目对应一个可见项目 worker，会话必须出现在 Gateway 历史会话里，不得使用 headless。",
+            "每个 worker 必须带项目 id、Owner route、WO 路径、绑定 item 和收尾回执要求。",
             json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
         ])
 
@@ -1221,14 +1256,23 @@ class GatewayHandler(BaseHTTPRequestHandler):
             status = str(item.get("status") or "open").strip()
             if status in PROJECT_DONE_STATUSES:
                 continue
-            clean_items.append({
+            stage = self.compact_text(item.get("stage"))
+            if stage not in PROJECT_ITEM_STAGES:
+                stage = "awaiting_owner" if status == "pending" else "approved_for_workorder"
+            clean = {
                 "id": str(item.get("id") or f"item-{index}").strip(),
                 "type": item_type,
                 "title": title,
                 "body": self.compact_text(item.get("body")),
                 "recommendation": self.compact_text(item.get("recommendation")),
                 "status": status,
-            })
+                "stage": stage,
+            }
+            for key in ("workorder_id", "updated_at"):
+                value = self.compact_text(item.get(key))
+                if value:
+                    clean[key] = value
+            clean_items.append(clean)
         return clean_items
 
     def project_id(self, data: dict[str, Any]) -> str:
@@ -1372,10 +1416,44 @@ class GatewayHandler(BaseHTTPRequestHandler):
             if not workorder.get("ok"):
                 self.owner_json_request(route, "/api/session/close", {"session": session}, username, timeout=4)
                 self.write_json({"ok": False, "error": workorder.get("error") or "owner workorder create failed", "route": route, "session": session}, HTTPStatus.BAD_GATEWAY); return
+            item_ids = self.workorder_item_ids(project["row"])
+            if item_ids:
+                transitioned = self.owner_json_request(route, "/api/workbench/transition", {
+                    "project_root": selected_cwd,
+                    "event_type": "workorder_created",
+                    "item_ids": item_ids,
+                    "workorder_id": workorder_id,
+                    "actor": "faryo-controller",
+                    "source": "faryo-dispatch",
+                    "summary": f"Faryo created workorder {workorder_id}.",
+                }, username, timeout=10)
+                if not transitioned.get("ok"):
+                    self.owner_json_request(route, "/api/session/close", {"session": session}, username, timeout=4)
+                    self.write_json({"ok": False, "error": transitioned.get("error") or "owner transition failed", "route": route, "session": session}, HTTPStatus.BAD_GATEWAY); return
+                projected = self.update_projection_from_owner_project(project["id"], transitioned.get("project"))
+                if projected:
+                    project["row"] = projected
+                workorder["item_ids"] = item_ids
             sent = self.owner_json_request(route, "/api/send", {"session": session, "text": self.workorder_dispatch_prompt(project, workorder)}, username, timeout=10)
             if not sent.get("ok"):
                 self.owner_json_request(route, "/api/session/close", {"session": session}, username, timeout=4)
                 self.write_json({"ok": False, "error": sent.get("error") or "owner send failed", "route": route, "session": session}, HTTPStatus.BAD_GATEWAY); return
+            if item_ids:
+                started = self.owner_json_request(route, "/api/workbench/transition", {
+                    "project_root": selected_cwd,
+                    "event_type": "worker_started",
+                    "item_ids": item_ids,
+                    "workorder_id": workorder_id,
+                    "actor": "faryo-controller",
+                    "source": "faryo-dispatch",
+                    "summary": f"Worker session {session} started for workorder {workorder_id}.",
+                }, username, timeout=10)
+                if not started.get("ok"):
+                    self.owner_json_request(route, "/api/session/close", {"session": session}, username, timeout=4)
+                    self.write_json({"ok": False, "error": started.get("error") or "owner worker-start transition failed", "route": route, "session": session}, HTTPStatus.BAD_GATEWAY); return
+                projected = self.update_projection_from_owner_project(project["id"], started.get("project"))
+                if projected:
+                    project["row"] = projected
             self.write_json({"ok": True, "route": route, "session": session, "title": title, "cwd": selected_cwd, "workorder": workorder, "redirect": f"/{route}/?session={session}"}, HTTPStatus.OK)
         except ValueError as exc:
             self.write_json({"ok": False, "error": str(exc)}, HTTPStatus.BAD_REQUEST)
@@ -1392,6 +1470,9 @@ class GatewayHandler(BaseHTTPRequestHandler):
             for cwd in project["cwd_candidates"]:
                 result = self.owner_json_request(route, "/api/workorder/verify", {"project_root": cwd, "workorder_id": workorder_id}, username, timeout=10)
                 if result.get("ok"):
+                    projected = self.update_projection_from_owner_project(project["id"], result.get("project"))
+                    if projected:
+                        project["row"] = projected
                     projection_synced = self.project_workbench_hash(project["row"]) == self.compact_text(result.get("workbenchHash"))
                     result["projectionSynced"] = projection_synced
                     result["closed"] = bool(result.get("closed") and projection_synced)
@@ -1402,6 +1483,43 @@ class GatewayHandler(BaseHTTPRequestHandler):
             self.write_json({"ok": False, "error": last_error, "route": route}, HTTPStatus.BAD_GATEWAY)
         except ValueError as exc:
             self.write_json({"ok": False, "error": str(exc)}, HTTPStatus.BAD_REQUEST)
+
+    def handle_project_workbench_transition(self, username: str) -> None:
+        try:
+            payload = self.read_json_body(32 * 1024)
+            project = self.dispatch_project(payload)
+            route = project["owner_route"]
+            last_error = ""
+            for cwd in project["cwd_candidates"]:
+                result = self.owner_json_request(route, "/api/workbench/transition", {**payload, "project_root": cwd}, username, timeout=10)
+                if result.get("ok"):
+                    updated = self.update_projection_from_owner_project(project["id"], result.get("project"))
+                    self.write_json({"ok": True, "transition": result, "project": updated, "workbench": {"projects": self.read_project_rows()}}, HTTPStatus.OK)
+                    return
+                last_error = self.compact_text(result.get("error")) or "owner transition failed"
+            self.write_json({"ok": False, "error": last_error, "route": route}, HTTPStatus.BAD_GATEWAY)
+        except ValueError as exc:
+            self.write_json({"ok": False, "error": str(exc)}, HTTPStatus.BAD_REQUEST)
+
+    def update_projection_from_owner_project(self, project_id: str, owner_project: Any) -> dict[str, Any] | None:
+        if not isinstance(owner_project, dict):
+            return None
+        rows = self.read_project_rows()
+        changed = False
+        updated_row = None
+        for row in rows:
+            if row["id"] != project_id:
+                continue
+            for key in ("name", "brief", "current_d", "items"):
+                if key in owner_project:
+                    row[key] = owner_project[key]
+            updated_row = self.clean_project_row(row, int(row.get("rank") or 9999))
+            row.update(updated_row)
+            changed = True
+            break
+        if changed:
+            self.write_project_rows(rows)
+        return updated_row
 
     def dispatch_project(self, payload: dict[str, Any]) -> dict[str, Any]:
         project_id = self.project_id({"id": payload.get("project_id") or payload.get("projectId") or payload.get("id") or ""})
@@ -1423,14 +1541,33 @@ class GatewayHandler(BaseHTTPRequestHandler):
         path = self.compact_text(workorder.get("path"))
         relative_path = self.compact_text(workorder.get("relative_path"))
         workorder_id = self.compact_text(workorder.get("id"))
+        item_ids = workorder.get("item_ids") if isinstance(workorder.get("item_ids"), list) else []
+        item_line = "覆盖事项：" + ", ".join(f"`{self.compact_text(item_id)}`" for item_id in item_ids if self.compact_text(item_id)) + "。" if item_ids else "本工单未绑定具体 item（事项）。"
         return "\n".join([
             f"执行 Faryo 工单 `{workorder_id}`。",
             f"项目：`{project['id']}`；Owner route（归属端路由）：`{project['owner_route']}`。",
             f"工单路径：`{path}`" + (f"（相对路径：`{relative_path}`）" if relative_path else "") + "。",
+            item_line,
             "先读取工单，再按工单施工；完成前必须在工单 Receipt（回执）区写收尾结果。",
-            "同时维护 `00-system/workbench.json` 的当前活跃状态，并把已结算事项追加到独立自包含的 `00-system/workbench.history.jsonl`。",
-            "禁止只追加新 items 而不结算旧 items；未完成收尾不得声称完成。",
+            "不要直接手写 `workbench.json` 或 `workbench.history.jsonl`；状态和历史由 Faryo 状态机在主控验收时生成。",
+            "未写 Receipt 不得声称完成；若发现新事项，只在回执中提出，不要绕过状态机写入。",
         ])
+
+    def workorder_item_ids(self, row: dict[str, Any]) -> list[str]:
+        ids: list[str] = []
+        for item in row.get("items") if isinstance(row.get("items"), list) else []:
+            if not isinstance(item, dict):
+                continue
+            item_id = self.compact_text(item.get("id"))
+            item_type = self.compact_text(item.get("type"))
+            status = self.compact_text(item.get("status"))
+            stage = self.compact_text(item.get("stage"))
+            if item_id and (
+                stage == "approved_for_workorder"
+                or (item_type == "action" and status in {"open", "in_progress", "review"})
+            ):
+                ids.append(item_id)
+        return ids
 
     def new_workorder_id(self) -> str:
         return f"wo-{time.strftime('%Y%m%d-%H%M%S', time.gmtime())}-{secrets.token_hex(4)}"

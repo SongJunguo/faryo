@@ -39,6 +39,8 @@ from http import HTTPStatus
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Callable, NamedTuple
+
+import workbench_state as wb_state
 import urllib.error
 import urllib.request
 from urllib.parse import parse_qs, quote, urlencode, urlparse
@@ -113,8 +115,10 @@ ALLOWED_ATTACHMENT_SUFFIXES = {
     ".pdf", ".doc", ".docx", ".ppt", ".pptx", ".xls", ".xlsx",
     ".odt", ".odp", ".ods", ".md", ".txt", ".csv", ".json", ".rtf",
 }
-PROJECT_ITEM_TYPES = {"decision", "action", "watch"}
-PROJECT_DONE_STATUSES = {"accepted", "paused", "done", "skipped", "seen"}
+PROJECT_ITEM_TYPES = wb_state.ITEM_TYPES
+PROJECT_DONE_STATUSES = wb_state.DONE_STATUSES
+PROJECT_ITEM_STAGES = wb_state.ITEM_STAGES
+PROJECT_TERMINAL_STAGES = wb_state.TERMINAL_STAGES
 IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp", ".gif", ".heic", ".heif"}
 IMAGE_CONTENT_TYPES = {
     ".jpg": "image/jpeg",
@@ -1566,7 +1570,7 @@ def resolve_local_image_path(path_value: str | None, config: Config, workspace_r
 
 
 def compact_text(value: Any) -> str:
-    return " ".join(str(value or "").split())
+    return wb_state.compact_text(value)
 
 
 def clean_session_title(value: Any) -> str:
@@ -1574,40 +1578,27 @@ def clean_session_title(value: Any) -> str:
 
 
 def project_slug(value: Any) -> str:
-    slug = re.sub(r"[^a-z0-9]+", "-", str(value or "").strip().lower()).strip("-")
-    return slug or "project"
+    return wb_state.project_slug(value)
 
 
 def project_workbench_enabled() -> bool:
     return env_value("FARYO_PROJECT_WORKBENCH_ENABLE", default="1").strip().lower() not in {"0", "false", "no", "off"}
 
 
+def project_item_stage(item: dict[str, Any]) -> str:
+    return wb_state.item_stage(item)
+
+
+def project_item_status(stage: str) -> str:
+    return wb_state.item_status(stage)
+
+
+def clean_project_item(item: dict[str, Any], index: int) -> dict[str, str]:
+    return wb_state.clean_item(item, index)
+
+
 def clean_project_workbench(project: dict[str, Any]) -> dict[str, Any]:
-    project_id = project_slug(project.get("id") or project.get("name"))
-    items = []
-    for index, item in enumerate(project.get("items") if isinstance(project.get("items"), list) else [], 1):
-        if not isinstance(item, dict):
-            continue
-        item_type = str(item.get("type") or "").strip()
-        title = compact_text(item.get("title"))
-        status = str(item.get("status") or "open").strip()
-        if item_type not in PROJECT_ITEM_TYPES or not title or status in PROJECT_DONE_STATUSES:
-            continue
-        items.append({
-            "id": compact_text(item.get("id")) or f"item-{index}",
-            "type": item_type,
-            "title": title,
-            "body": compact_text(item.get("body")),
-            "recommendation": compact_text(item.get("recommendation")),
-            "status": status,
-        })
-    return {
-        "id": project_id,
-        "name": compact_text(project.get("name") or project_id),
-        "brief": compact_text(project.get("brief")),
-        "current_d": compact_text(project.get("current_d")),
-        "items": items,
-    }
+    return wb_state.clean_project(project)
 
 
 def project_workbench_root(project: dict[str, Any]) -> Path:
@@ -1724,8 +1715,8 @@ def project_definition_text(project_root: Path, project: dict[str, Any]) -> str:
         current_goal,
         "",
         "## Worker Contract",
-        "- Keep `00-system/workbench.json` current during project work.",
-        "- Update decision, action, and watch items before closing a managed work session.",
+        "- Treat `00-system/workbench.json` as a generated current-state projection.",
+        "- Submit state changes through the workbench transition flow before closing a managed work session.",
         "- Do not treat this file as the live task board; it is the stable project definition.",
         "",
     ]) + "\n"
@@ -1806,6 +1797,48 @@ def ensure_workorders_git_ignored(project_root: Path) -> bool:
         return False
 
 
+def workbench_file(project_root: Path, name: str) -> Path:
+    return project_root / "00-system" / name
+
+
+def read_project_workbench_file(project_root: Path) -> dict[str, Any]:
+    path = workbench_file(project_root, "workbench.json")
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise OwnerError("invalid or missing workbench.json", HTTPStatus.BAD_REQUEST) from exc
+    if not isinstance(payload, dict):
+        raise OwnerError("workbench must be a JSON object", HTTPStatus.BAD_REQUEST)
+    return clean_project_workbench(payload)
+
+
+def apply_workbench_transition(payload: dict[str, Any]) -> dict[str, Any]:
+    if not project_workbench_enabled():
+        raise OwnerError("project workbench is disabled", HTTPStatus.FORBIDDEN)
+    project_root = project_root_from_payload(payload)
+    project = read_project_workbench_file(project_root)
+    try:
+        project, events, history_rows, item_ids = wb_state.apply_transition(project, payload)
+        wb_state.write_project(workbench_file(project_root, "workbench.json"), project)
+        wb_state.append_jsonl(workbench_file(project_root, "workbench.events.jsonl"), events)
+        wb_state.append_jsonl(workbench_file(project_root, "workbench.history.jsonl"), history_rows)
+    except LookupError as exc:
+        raise OwnerError(str(exc), HTTPStatus.NOT_FOUND) from exc
+    except ValueError as exc:
+        status = HTTPStatus.CONFLICT if str(exc).startswith("invalid transition:") or str(exc) == "item already exists" else HTTPStatus.BAD_REQUEST
+        raise OwnerError(str(exc), status) from exc
+    except OSError as exc:
+        raise OwnerError("failed to write workbench transition", HTTPStatus.INTERNAL_SERVER_ERROR) from exc
+    return {
+        "ok": True,
+        "project": project,
+        "eventCount": len(events),
+        "historyRows": len(history_rows),
+        "itemIds": item_ids,
+        "workbenchHash": project_workbench_hash(project),
+        "updatedAt": now_iso(),
+    }
+
 def create_project_workorder(payload: dict[str, Any]) -> dict[str, Any]:
     if not project_workbench_enabled():
         raise OwnerError("project workbench is disabled", HTTPStatus.FORBIDDEN)
@@ -1847,7 +1880,7 @@ def verify_history_jsonl(path: Path, workorder_id: str) -> tuple[int, list[str]]
         return 0, []
     errors: list[str] = []
     count = 0
-    required = {"ts", "project_id", "type", "title", "final_status", "summary", "evidence", "actor"}
+    required = {"ts", "project_id", "item_id", "type", "title", "final_status", "summary", "evidence", "actor"}
     for line_no, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
         if not line.strip():
             continue
@@ -1881,16 +1914,51 @@ def verify_project_workorder(payload: dict[str, Any]) -> dict[str, Any]:
     except (OSError, json.JSONDecodeError):
         workbench = {}
         workbench_ok = False
+    transitioned = False
+    transition_error = ""
+    if receipt_ready and workbench_ok:
+        item_ids = [item["id"] for item in workbench.get("items", []) if compact_text(item.get("workorder_id")) == workorder_id]
+        if item_ids:
+            try:
+                receipt_ids = [item["id"] for item in workbench.get("items", []) if item["id"] in item_ids and wb_state.item_stage(item) != "receipt_submitted"]
+                if receipt_ids:
+                    apply_workbench_transition({
+                        "project_root": str(project_root),
+                        "event_type": "worker_receipt_submitted",
+                        "item_ids": receipt_ids,
+                        "workorder_id": workorder_id,
+                        "actor": compact_text(payload.get("worker_actor") or payload.get("actor")) or "project-worker",
+                        "source": "workorder-verify",
+                        "summary": "Workorder receipt submitted.",
+                    })
+                transition = apply_workbench_transition({
+                    "project_root": str(project_root),
+                    "event_type": "controller_verify_pass",
+                    "item_ids": item_ids,
+                    "workorder_id": workorder_id,
+                    "actor": compact_text(payload.get("actor")) or "faryo-controller",
+                    "source": "workorder-verify",
+                    "summary": compact_text(payload.get("summary")) or "Workorder receipt verified by Faryo controller.",
+                    "evidence": compact_text(payload.get("evidence")) or "Receipt present and workbench parsed.",
+                    "final_status": compact_text(payload.get("final_status")) or "completed",
+                })
+                workbench = transition.get("project") if isinstance(transition.get("project"), dict) else read_project_workbench_file(project_root)
+                transitioned = True
+            except OwnerError as exc:
+                transition_error = str(exc)
     history_count, history_errors = verify_history_jsonl(project_root / "00-system" / "workbench.history.jsonl", workorder_id)
-    ok = receipt_ready and workbench_ok and not history_errors
+    ok = receipt_ready and workbench_ok and not history_errors and not transition_error
     return {
         "ok": True,
         "closed": ok,
         "receiptReady": receipt_ready,
         "workbenchOk": workbench_ok,
         "workbenchHash": project_workbench_hash(workbench) if workbench_ok else "",
+        "project": workbench if workbench_ok else {},
         "historyRows": history_count,
         "historyErrors": history_errors,
+        "transitioned": transitioned,
+        "transitionError": transition_error,
         "updatedAt": now_iso(),
     }
 
@@ -2247,6 +2315,9 @@ class Handler(SimpleHTTPRequestHandler):
                 return
             if parsed.path == "/api/project-workbench/downlink/apply":
                 self.write_json(apply_project_workbench_downlink(self.config, payload))
+                return
+            if parsed.path == "/api/workbench/transition":
+                self.write_json(apply_workbench_transition(payload))
                 return
             if parsed.path == "/api/workorder/create":
                 self.write_json(create_project_workorder(payload))

@@ -17,14 +17,13 @@
 
 ## 验收口径
 - 只执行本工单批准的范围。
-- `workbench.json` 只保留当前活跃状态。
-- 已结算事项追加为自包含的 `workbench.history.jsonl` 行。
-- history（历史流水）不得退化成指向本工单的链接。
+- 不直接手写 `workbench.json`、`workbench.events.jsonl` 或 `workbench.history.jsonl`。
+- 状态变更和历史摘要由 Faryo 状态机在主控验收时生成。
+- 如发现新事项，在 Receipt（回执）里提出建议，不要绕过状态机写入项目真值。
 
 ## Receipt（回执）
 - Status: pending
 - Summary:
 - Verification:
-- Workbench update:
-- History rows appended:
+- State/event request:
 - Remaining blockers:

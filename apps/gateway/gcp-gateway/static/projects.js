@@ -7,16 +7,15 @@ const els = {
   prompt: $('faryoPrompt'), send: $('faryoSend'), open: $('faryoOpen')
 };
 const TYPES = {
-  decision: { label: 'Decision', done: ['accepted', 'paused'], actions: [['accept', 'Approve', 'primary'], ['edit', 'Edit', ''], ['pause', 'Pause', 'danger']], left: 'accept', right: 'pause' },
-  action: { label: 'Action', done: ['done', 'skipped'], actions: [['done', 'Confirm', 'primary'], ['edit', 'Edit', ''], ['to-decision', 'Escalate', 'danger']], left: 'done', right: 'to-decision' },
-  watch: { label: 'Watch', done: ['seen'], actions: [['seen', 'Seen', 'primary'], ['edit', 'Edit', ''], ['to-decision', 'Escalate', 'danger']], left: 'seen', right: 'to-decision' }
+  decision: { label: 'Decision', done: ['accepted', 'done', 'seen'], actions: [['accept', 'Approve', 'primary'], ['edit', 'Edit', ''], ['pause', 'Pause', 'danger']], left: 'accept', right: 'pause' },
+  action: { label: 'Action', done: ['accepted', 'done', 'seen'], actions: [['done', 'Confirm', 'primary'], ['edit', 'Edit', ''], ['to-decision', 'Escalate', 'danger']], left: 'done', right: 'to-decision' },
+  watch: { label: 'Watch', done: ['accepted', 'done', 'seen'], actions: [['seen', 'Seen', 'primary'], ['edit', 'Edit', ''], ['to-decision', 'Escalate', 'danger']], left: 'seen', right: 'to-decision' }
 };
 const ICONS = { decision: '⚖️', action: '🛠️', watch: '👁️' };
-const STATUS = { pending: 'Pending decision', ready: 'Ready', open: 'Open', accepted: 'Approved', paused: 'Paused', done: 'Confirmed', seen: 'Seen' };
-const UPDATES = { accept: { status: 'accepted' }, pause: { status: 'paused' }, done: { status: 'done' }, seen: { status: 'seen' }, 'to-decision': { type: 'decision', status: 'pending' } };
+const STATUS = { pending: 'Pending decision', ready: 'Ready', open: 'Open', paused: 'Paused', in_progress: 'In progress', review: 'Receipt review' };
+const TRANSITIONS = { accept: 'owner_approved', pause: 'owner_paused', done: 'owner_approved', seen: 'owner_seen', 'to-decision': 'item_escalated' };
 let state = null, deck = { projectId: '', type: 'decision', index: 0 }, dirty = false;
 let faryoSession = '', faryoAgentRunning = false, faryoStream = null;
-const downlinkProjectIds = new Set();
 const projects = () => state?.projects || [];
 const html = value => String(value || '').replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
 const empty = text => Object.assign(document.createElement('div'), { className: 'empty', textContent: text });
@@ -26,8 +25,7 @@ const deckProject = () => projects().find(project => project.id === deck.project
 const deckItems = () => { const project = deckProject(); return project ? activeItems(project, deck.type) : []; };
 function setDirty(value) { dirty = value; els.submit.disabled = !state || !dirty; els.submit.textContent = dirty ? 'Submit' : 'Submitted'; }
 function render() { const items = projects(); els.list.replaceChildren(...(items.length ? items.map(projectCard) : [empty('No projects')])); }
-function saveDraft(project = null, downlink = true) {
-  if (downlink && project?.id) downlinkProjectIds.add(project.id);
+function saveDraft() {
   setDirty(true);
   return persist();
 }
@@ -50,14 +48,20 @@ function cycleBucket(project) {
   const order = ['S', 'A', 'B'];
   project.bucket = order[(order.indexOf(project.bucket || 'B') + 1) % order.length];
   render();
-  saveDraft(null, false);
+  saveDraft();
 }
 function openGoal(project) {
   els.sheet.hidden = false; els.nav.hidden = true; els.goal.hidden = true; els.meta.textContent = project.bucket || ''; els.title.textContent = `${project.name} · Goal`;
   const form = document.createElement('form');
   form.className = 'goal-form';
   form.innerHTML = `<textarea name="goal" rows="5">${html(project.current_d)}</textarea><button class="goal-save" type="submit">Save Goal</button>`;
-  form.addEventListener('submit', event => { event.preventDefault(); const next = form.elements.goal.value.trim(); if (!next) return; project.current_d = next; closeDeck(); render(); saveDraft(project); });
+  form.addEventListener('submit', async event => {
+    event.preventDefault();
+    const next = form.elements.goal.value.trim();
+    if (!next) return;
+    await applyProjectUpdate(project, { current_d: next }, 'Goal updated');
+    closeDeck();
+  });
   els.stage.replaceChildren(form);
   form.elements.goal.focus();
 }
@@ -79,27 +83,60 @@ function deckCard(project, item) {
   attachSwipe(card, project, item);
   return card;
 }
-function applyItemAction(project, item, action) {
+async function applyItemAction(project, item, action) {
   if (action === 'edit') return openItemEditor(project, item);
-  Object.assign(item, UPDATES[action] || {});
-  render();
-  if (activeItems(project, deck.type).length) {
-    renderDeck();
-    saveDraft(project).then(() => { if (!els.sheet.hidden) renderDeck(); });
-  } else {
-    closeDeck();
-    saveDraft(project);
-  }
+  const eventType = TRANSITIONS[action];
+  if (!eventType) { setSync('Action needs event flow'); return; }
+  setSync('Applying');
+  try {
+    const data = await fetchJson('/api/project-workbench/transition', {
+      project_id: project.id,
+      item_id: item.id,
+      event_type: eventType,
+      actor: 'owner',
+      source: 'gateway-ui',
+      summary: `${action}: ${item.title || item.id}`
+    });
+    state = data.workbench;
+    setDirty(false);
+    setSync('Applied');
+    render();
+    const nextProject = deckProject();
+    if (nextProject && activeItems(nextProject, deck.type).length) renderDeck(); else closeDeck();
+  } catch (error) { setSync(error.message || 'Action failed'); }
 }
 function openItemEditor(project, item) {
   els.nav.hidden = true;
   const form = document.createElement('form');
   form.className = 'deck-card edit-card';
   form.innerHTML = `<span class="deck-kind ${item.type}">${TYPES[item.type].label}</span><label><span>Card Title</span><input name="title" value="${html(item.title)}"></label><label><span>Body</span><textarea name="body" rows="4">${html(item.body)}</textarea></label><label><span>Recommendation</span><textarea name="recommendation" rows="3">${html(item.recommendation)}</textarea></label><div class="deck-actions edit-actions"><button class="primary" type="submit">Save</button><button type="button" data-cancel>Cancel</button></div>`;
-  form.addEventListener('submit', event => { event.preventDefault(); const title = form.elements.title.value.trim(); if (!title) return; item.title = title; item.body = form.elements.body.value.trim(); item.recommendation = form.elements.recommendation.value.trim(); render(); renderDeck(); saveDraft(project).then(() => { if (!els.sheet.hidden) renderDeck(); }); });
+  form.addEventListener('submit', async event => {
+    event.preventDefault();
+    const title = form.elements.title.value.trim();
+    if (!title) return;
+    await applyItemUpdate(project, item, {
+      title,
+      body: form.elements.body.value.trim(),
+      recommendation: form.elements.recommendation.value.trim()
+    });
+  });
   form.querySelector('[data-cancel]').addEventListener('click', renderDeck);
   els.stage.replaceChildren(form);
   form.elements.title.focus();
+}
+async function applyProjectUpdate(project, fields, summary) {
+  setSync('Applying');
+  try {
+    const data = await fetchJson('/api/project-workbench/transition', { project_id: project.id, event_type: 'project_updated', actor: 'owner', source: 'gateway-ui', summary, ...fields });
+    state = data.workbench; setDirty(false); setSync('Applied'); render();
+  } catch (error) { setSync(error.message || 'Update failed'); }
+}
+async function applyItemUpdate(project, item, fields) {
+  setSync('Applying');
+  try {
+    const data = await fetchJson('/api/project-workbench/transition', { project_id: project.id, item_id: item.id, event_type: 'item_updated', actor: 'owner', source: 'gateway-ui', summary: `Edit: ${fields.title || item.title}`, item: fields });
+    state = data.workbench; setDirty(false); setSync('Applied'); render(); if (!els.sheet.hidden) renderDeck();
+  } catch (error) { setSync(error.message || 'Update failed'); }
 }
 function attachSwipe(card, project, item) {
   let startX = null, deltaX = 0;
@@ -125,9 +162,9 @@ async function submitChanges() {
   if (!state) return;
   els.submit.disabled = true; setSync('Submitting');
   try {
-    const data = await fetchJson('/api/project-workbench/submit', { ...state, downlink_project_ids: [...downlinkProjectIds] });
+    const data = await fetchJson('/api/project-workbench/submit', state);
     state = data.workbench;
-    if (['applied', 'skipped'].includes(data.downlink?.status || '')) { downlinkProjectIds.clear(); setDirty(false); } else setDirty(true);
+    if (['applied', 'skipped'].includes(data.downlink?.status || '')) setDirty(false); else setDirty(true);
     setSync(downlinkStatusText(data.downlink)); render();
   } catch (_error) { setSync('Submit failed'); setDirty(dirty); }
 }
