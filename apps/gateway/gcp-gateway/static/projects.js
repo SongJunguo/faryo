@@ -11,12 +11,29 @@ const TYPES = {
   action: { label: 'Action', done: ['done', 'skipped'], actions: [['done', 'Confirm', 'primary'], ['edit', 'Edit', ''], ['to-decision', 'Escalate', 'danger']], left: 'done', right: 'to-decision' },
   watch: { label: 'Watch', done: ['seen'], actions: [['seen', 'Seen', 'primary'], ['edit', 'Edit', ''], ['to-decision', 'Escalate', 'danger']], left: 'seen', right: 'to-decision' }
 };
-const ICONS = { decision: '⚖️', action: '🛠️', watch: '👁️' };
+const ICONS = { decision: '⚖', action: '⌁', watch: '◉' };
 const STATUS = { pending: 'Pending decision', ready: 'Ready', open: 'Open', accepted: 'Approved', paused: 'Paused', done: 'Confirmed', seen: 'Seen' };
 const UPDATES = { accept: { status: 'accepted' }, pause: { status: 'paused' }, done: { status: 'done' }, seen: { status: 'seen' }, 'to-decision': { type: 'decision', status: 'pending' } };
 let state = null, deck = { projectId: '', type: 'decision', index: 0 }, dirty = false;
 let faryoSession = '', faryoAgentRunning = false, faryoStream = null;
 const downlinkProjectIds = new Set();
+const APPEARANCE = { theme: ['faryoTheme', 'system', 'light', 'dark'], font: ['faryoFont', 'default', 'serif', 'rounded', 'mono'], size: ['faryoTextSize', 'normal', 'large', 'small'] };
+const THEME_COLORS = { light: '#F7F0E5', dark: '#17130F' }, themeMedia = window.matchMedia?.('(prefers-color-scheme: dark)');
+function appearanceValue(name) {
+  const [key, fallback, ...values] = APPEARANCE[name], value = localStorage.getItem(key);
+  return values.includes(value) ? value : fallback;
+}
+function applyAppearance() {
+  const root = document.documentElement, selectedTheme = appearanceValue('theme'), theme = selectedTheme === 'system' ? (themeMedia?.matches ? 'dark' : 'light') : selectedTheme;
+  root.setAttribute('data-theme', theme);
+  for (const name of ['font', 'size']) {
+    const value = appearanceValue(name);
+    if (value === APPEARANCE[name][1]) root.removeAttribute(`data-${name}`); else root.setAttribute(`data-${name}`, value);
+  }
+  document.querySelector('meta[name="theme-color"]')?.setAttribute('content', THEME_COLORS[theme]);
+}
+themeMedia?.addEventListener?.('change', applyAppearance);
+window.addEventListener('storage', event => { if (Object.values(APPEARANCE).some(([key]) => key === event.key)) applyAppearance(); });
 const projects = () => state?.projects || [];
 const html = value => String(value || '').replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
 const empty = text => Object.assign(document.createElement('div'), { className: 'empty', textContent: text });
@@ -31,20 +48,25 @@ function saveDraft(project = null, downlink = true) {
   setDirty(true);
   return persist();
 }
+function projectMeta(project) {
+  const path = String(project.path || project.workbench_path || '').split('/').filter(Boolean);
+  return [project.owner_route && String(project.owner_route).toUpperCase(), project.rank !== undefined && project.rank !== null && project.rank !== '' && `Rank ${project.rank}`, path.length && (path.slice(-3, -1).join('/') || path.at(-1))].filter(Boolean).join(' · ');
+}
 function projectCard(project) {
   const counts = Object.fromEntries(Object.keys(TYPES).map(type => [type, activeItems(project, type).length]));
   const card = document.createElement('article');
   card.className = 'project-card';
-  card.innerHTML = `<section class="project-face" role="button" tabindex="0" aria-label="Open project goal"><div><div class="project-title"><span class="project-name">${html(project.name || 'Untitled')}</span><span class="project-brief">${html(project.brief)}</span></div></div><div class="project-controls"><button class="bucket" type="button" aria-label="Change project bucket">${html(project.bucket || 'B')}</button><span class="chevron">›</span></div></section><section class="pile-row">${Object.keys(TYPES).map(type => pileButton(type, counts[type])).join('')}</section>`;
+  card.dataset.bucket = project.bucket || 'B';
+  card.innerHTML = `<section class="project-face" role="button" tabindex="0" aria-label="Open project goal"><div class="project-title-row"><h2 class="project-name">${html(project.name || 'Untitled')}</h2><span class="project-star" aria-hidden="true">☆</span></div><div class="project-meta-row"><button class="bucket" type="button" aria-label="Change project bucket">${html(project.bucket || 'B')}</button><span>${html(projectMeta(project))}</span></div><p class="project-brief">${html(project.current_d || project.brief)}</p></section><section class="pile-row">${Object.keys(TYPES).map(type => pileButton(type, counts[type])).join('')}</section>`;
   const open = () => openGoal(project);
   card.querySelector('.project-face').addEventListener('click', open);
-  card.querySelector('.project-face').addEventListener('keydown', event => { if (['Enter', ' '].includes(event.key)) { event.preventDefault(); open(); } });
+  card.querySelector('.project-face').addEventListener('keydown', event => { if (event.target.closest('.bucket')) return; if (['Enter', ' '].includes(event.key)) { event.preventDefault(); open(); } });
   card.querySelector('.bucket').addEventListener('click', event => { event.stopPropagation(); cycleBucket(project); });
   card.querySelectorAll('.pile').forEach(button => button.addEventListener('click', () => openDeck(project.id, button.dataset.type)));
   return card;
 }
 function pileButton(type, count) {
-  return `<button class="pile ${type}" type="button" data-type="${type}"><span class="pile-count"><span class="pile-icon">${ICONS[type]}</span><strong>${count}</strong></span><span class="pile-label">${TYPES[type].label}</span></button>`;
+  return `<button class="pile ${type}" type="button" data-type="${type}"><span class="pile-icon" aria-hidden="true">${ICONS[type]}</span><span class="pile-label">${TYPES[type].label}</span><strong>${count}</strong></button>`;
 }
 function cycleBucket(project) {
   const order = ['S', 'A', 'B'];
@@ -226,5 +248,6 @@ els.pet.addEventListener('click', tapFaryoPet);
 els.prompt.addEventListener('input', resizeFaryoPrompt);
 els.prompt.addEventListener('keydown', event => { if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) { event.preventDefault(); els.faryoForm.requestSubmit(); } });
 document.addEventListener('visibilitychange', () => { if (document.hidden) closeFaryoStream(); else loadFaryoStatus().catch(() => {}); });
+applyAppearance();
 load();
 loadFaryoStatus();
