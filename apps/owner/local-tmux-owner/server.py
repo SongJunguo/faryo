@@ -1750,6 +1750,17 @@ def project_root_from_payload(payload: dict[str, Any]) -> Path:
     return root
 
 
+def project_git_status(payload: dict[str, Any]) -> dict[str, Any]:
+    root = project_root_from_payload(payload)
+    top = run_cmd(["git", "-C", str(root), "rev-parse", "--show-toplevel"], timeout=2)
+    status = None
+    if top.returncode == 0 and top.stdout.strip():
+        git_root = Path(top.stdout.strip()).expanduser().resolve()
+        if git_root != Path.home().resolve() or root == git_root:
+            status = git_status(str(root))
+    return {"ok": True, "gitStatus": status, "updatedAt": now_iso()}
+
+
 def clean_workorder_id(value: Any) -> str:
     cleaned = re.sub(r"[^A-Za-z0-9._-]+", "-", str(value or "").strip()).strip("-")
     return cleaned[:80]
@@ -2318,6 +2329,9 @@ class Handler(SimpleHTTPRequestHandler):
                 return
             if parsed.path == "/api/workbench/transition":
                 self.write_json(apply_workbench_transition(payload))
+                return
+            if parsed.path == "/api/project-workbench/git-status":
+                self.write_json(project_git_status(payload))
                 return
             if parsed.path == "/api/workorder/create":
                 self.write_json(create_project_workorder(payload))

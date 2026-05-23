@@ -101,6 +101,7 @@ GATEWAY_STATIC_FILES = {
     "projects.js": "text/javascript; charset=utf-8",
 }
 PROJECT_ITEM_TYPES = {"decision", "action", "watch"}
+PROJECT_ITEM_TYPE_LIMIT = 10
 PROJECT_BUCKETS = {"S", "A", "B"}
 PROJECT_DONE_STATUSES = {"accepted", "done", "skipped", "seen", "rejected", "completed", "closed"}
 PROJECT_ITEM_STAGES = {
@@ -628,6 +629,9 @@ class GatewayHandler(BaseHTTPRequestHandler):
         if parsed.path == "/api/project-workbench":
             self.write_json(self.read_project_workbench(), HTTPStatus.OK)
             return
+        if parsed.path == "/api/project-workbench/git-status":
+            self.write_json({"ok": True, "statuses": self.project_git_statuses(username)}, HTTPStatus.OK)
+            return
         if parsed.path == "/api/faryo/status":
             self.handle_faryo_status(username)
             return
@@ -863,6 +867,20 @@ class GatewayHandler(BaseHTTPRequestHandler):
     def read_project_workbench(self) -> dict[str, Any]:
         return {"ok": True, "workbench": {"projects": self.read_project_rows()}}
 
+    def project_git_statuses(self, username: str) -> dict[str, dict[str, Any] | None]:
+        return {row["id"]: self.project_git_status(username, row) for row in self.read_project_rows()}
+
+    def project_git_status(self, username: str, row: dict[str, Any]) -> dict[str, Any] | None:
+        route = self.clean_owner_route(row.get("owner_route"))
+        if not route or not self.config.allowed_route(username, route):
+            return None
+        for cwd in self.project_worker_cwd_candidates(row)[:3]:
+            result = self.owner_json_request(route, "/api/project-workbench/git-status", {"project_root": cwd}, username, timeout=1.5)
+            if result.get("ok"):
+                status = result.get("gitStatus")
+                return status if isinstance(status, dict) else None
+        return None
+
     def handle_project_workbench_save(self) -> None:
         try:
             payload = self.read_json_body(128 * 1024)
@@ -884,13 +902,14 @@ class GatewayHandler(BaseHTTPRequestHandler):
             rows = self.project_projection_rows_from_ui(source)
             self.write_project_rows(rows)
             target_rows = self.project_downlink_target_rows(rows, payload)
+            active_rows = self.active_project_rows(rows)
             if not target_rows:
                 downlink = {"status": "skipped"}
                 self.write_json({
                     "ok": True,
                     "workbench": {"projects": self.read_project_rows()},
                     "downlink": downlink,
-                    "faryo": self.wake_faryo_after_project_submit(username, rows, downlink),
+                    "faryo": self.wake_faryo_after_project_submit(username, active_rows, downlink),
                 }, HTTPStatus.OK)
                 return
             packages = self.save_project_downlinks(target_rows, username)
@@ -919,12 +938,14 @@ class GatewayHandler(BaseHTTPRequestHandler):
             row = dict(previous)
             row["bucket"] = self.clean_project_bucket(project.get("bucket") or previous.get("bucket"))
             row["rank"] = self.clean_rank(project.get("rank") or index)
+            if "archived" in project:
+                row["archived"] = bool(project.get("archived"))
             rows.append(self.clean_project_row(row, index))
         return rows
 
     def project_submit_prompt(self, rows: list[dict[str, Any]], downlink: dict[str, Any]) -> str:
         projects = []
-        for row in self.sorted_project_rows(rows):
+        for row in self.sorted_project_rows(self.active_project_rows(rows)):
             projects.append({
                 "id": row["id"],
                 "name": row["name"],
@@ -1067,6 +1088,9 @@ class GatewayHandler(BaseHTTPRequestHandler):
                 row["owner_route"] = previous.get("owner_route") or owner_route
             if not row.get("workbench_path"):
                 row["workbench_path"] = previous.get("workbench_path") or row.get("path") or ""
+            if not row.get("code_root"):
+                row["code_root"] = previous.get("code_root") or ""
+            row.setdefault("archived", previous.get("archived"))
             rows.append(self.clean_project_row(row, index))
         return rows
 
@@ -1098,7 +1122,10 @@ class GatewayHandler(BaseHTTPRequestHandler):
         missing = sorted(ids - set(by_id))
         if missing:
             raise ValueError("unknown downlink project id: " + ", ".join(missing))
-        return [row for row in self.sorted_project_rows(rows) if row["id"] in ids]
+        return [row for row in self.sorted_project_rows(rows) if row["id"] in ids and not row.get("archived")]
+
+    def active_project_rows(self, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        return [row for row in rows if not row.get("archived")]
 
     def save_project_downlinks(self, rows: list[dict[str, Any]], username: str) -> list[dict[str, Any]]:
         packages = []
@@ -1235,6 +1262,8 @@ class GatewayHandler(BaseHTTPRequestHandler):
             "path": self.compact_text(source.get("path")),
             "owner_route": self.clean_owner_route(source.get("owner_route")),
             "workbench_path": self.compact_text(source.get("workbench_path") or source.get("path")),
+            "code_root": self.compact_text(source.get("code_root")),
+            "archived": bool(source.get("archived")),
             "bucket": self.clean_project_bucket(source.get("bucket")),
             "rank": self.clean_rank(source.get("rank") or rank),
             "name": self.compact_text(source.get("name") or project_id),
@@ -1246,6 +1275,7 @@ class GatewayHandler(BaseHTTPRequestHandler):
     def clean_project_items(self, items: Any) -> list[dict[str, str]]:
         source = items if isinstance(items, list) else []
         clean_items = []
+        counts = {item_type: 0 for item_type in PROJECT_ITEM_TYPES}
         for index, item in enumerate(source, 1):
             if not isinstance(item, dict):
                 continue
@@ -1259,6 +1289,9 @@ class GatewayHandler(BaseHTTPRequestHandler):
             stage = self.compact_text(item.get("stage"))
             if stage not in PROJECT_ITEM_STAGES:
                 stage = {"in_progress": "in_progress", "review": "receipt_submitted", "paused": "paused"}.get(status, "awaiting_owner")
+            if counts[item_type] >= PROJECT_ITEM_TYPE_LIMIT:
+                continue
+            counts[item_type] += 1
             clean = {
                 "id": str(item.get("id") or f"item-{index}").strip(),
                 "type": item_type,
@@ -1528,6 +1561,8 @@ class GatewayHandler(BaseHTTPRequestHandler):
         row = next((item for item in self.read_project_rows() if item["id"] == project_id), None)
         if not row:
             raise ValueError("project not found")
+        if row.get("archived"):
+            raise ValueError("project is archived")
         route = row.get("owner_route") or ""
         name = row.get("name") or row["id"]
         if route not in BACKENDS:
@@ -1600,6 +1635,7 @@ class GatewayHandler(BaseHTTPRequestHandler):
         marker = "/00-system/workbench.json"
         path = self.compact_text(row.get("path"))
         workbench = self.compact_text(row.get("workbench_path"))
+        code_root = self.compact_text(row.get("code_root"))
         candidates: list[str] = []
 
         def add(value: Any) -> None:
@@ -1607,6 +1643,8 @@ class GatewayHandler(BaseHTTPRequestHandler):
             if candidate and candidate not in candidates:
                 candidates.append(candidate)
 
+        if code_root.startswith("/"):
+            add(code_root)
         if workbench.endswith(marker):
             add(workbench[: -len(marker)])
         if path.endswith(marker):

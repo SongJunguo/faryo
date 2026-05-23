@@ -161,7 +161,7 @@
 
   function renderCaptureWhenSafe(capture, keepBottom) {
     noteOutputActivity(capture);
-    if (!keepBottom) {
+    if (!keepBottom || !isNearBottom()) {
       pendingDeferredCapture = capture;
       updateBottomButton();
       return;
