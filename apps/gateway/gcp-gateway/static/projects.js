@@ -1,3 +1,24 @@
+const APPEARANCE = {
+  theme: { key: 'faryoTheme', values: ['system', 'light', 'dark'] },
+  font: { key: 'faryoFont', values: ['default', 'serif', 'rounded', 'mono'] },
+  size: { key: 'faryoTextSize', values: ['normal', 'large', 'small'] }
+};
+function appearanceValue(name) {
+  const cfg = APPEARANCE[name], value = localStorage.getItem(cfg.key);
+  return cfg.values.includes(value) ? value : cfg.values[0];
+}
+function applyAppearance() {
+  const root = document.documentElement;
+  for (const name of Object.keys(APPEARANCE)) {
+    const cfg = APPEARANCE[name], value = appearanceValue(name);
+    if (value === cfg.values[0]) root.removeAttribute(`data-${name}`);
+    else root.setAttribute(`data-${name}`, value);
+  }
+}
+applyAppearance();
+window.addEventListener('storage', event => {
+  if (Object.values(APPEARANCE).some(cfg => cfg.key === event.key)) applyAppearance();
+});
 const $ = id => document.getElementById(id);
 const els = {
   list: $('projectList'), sync: $('syncStatus'), submit: $('submitChanges'), sheet: $('deckSheet'), stage: $('deckStage'),
@@ -11,7 +32,8 @@ const TYPES = {
   action: { label: 'Action', done: ['done', 'skipped'], actions: [['done', 'Confirm', 'primary'], ['edit', 'Edit', ''], ['to-decision', 'Escalate', 'danger']], left: 'done', right: 'to-decision' },
   watch: { label: 'Watch', done: ['seen'], actions: [['seen', 'Seen', 'primary'], ['edit', 'Edit', ''], ['to-decision', 'Escalate', 'danger']], left: 'seen', right: 'to-decision' }
 };
-const ICONS = { decision: '⚖️', action: '🛠️', watch: '👁️' };
+const METRIC_LABELS = { decision: 'Decision', action: 'Action', watch: 'Watch' };
+const METRIC_CLASSES = { decision: 'metric-decision', action: 'metric-action', watch: 'metric-watch' };
 const STATUS = { pending: 'Pending decision', ready: 'Ready', open: 'Open', accepted: 'Approved', paused: 'Paused', done: 'Confirmed', seen: 'Seen' };
 const UPDATES = { accept: { status: 'accepted' }, pause: { status: 'paused' }, done: { status: 'done' }, seen: { status: 'seen' }, 'to-decision': { type: 'decision', status: 'pending' } };
 let state = null, deck = { projectId: '', type: 'decision', index: 0 }, dirty = false;
@@ -20,11 +42,12 @@ const downlinkProjectIds = new Set();
 const projects = () => state?.projects || [];
 const html = value => String(value || '').replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
 const empty = text => Object.assign(document.createElement('div'), { className: 'empty', textContent: text });
-const setSync = text => { els.sync.textContent = text; };
+const setLabel = (el, text) => { const label = el?.querySelector?.('.label'); if (label) label.textContent = text; else if (el) el.textContent = text; };
+const setSync = text => setLabel(els.sync, text);
 const activeItems = (project, type) => (project.items || []).filter(item => item.type === type && !TYPES[type].done.includes(item.status || 'open'));
 const deckProject = () => projects().find(project => project.id === deck.projectId) || projects()[0];
 const deckItems = () => { const project = deckProject(); return project ? activeItems(project, deck.type) : []; };
-function setDirty(value) { dirty = value; els.submit.disabled = !state || !dirty; els.submit.textContent = dirty ? 'Submit' : 'Submitted'; }
+function setDirty(value) { dirty = value; els.submit.disabled = !state || !dirty; setLabel(els.submit, dirty ? 'Submit' : 'Submitted'); }
 function render() { const items = projects(); els.list.replaceChildren(...(items.length ? items.map(projectCard) : [empty('No projects')])); }
 function saveDraft(project = null, downlink = true) {
   if (downlink && project?.id) downlinkProjectIds.add(project.id);
@@ -33,18 +56,44 @@ function saveDraft(project = null, downlink = true) {
 }
 function projectCard(project) {
   const counts = Object.fromEntries(Object.keys(TYPES).map(type => [type, activeItems(project, type).length]));
+  const summary = project.brief || project.current_d || '';
+  const meta = projectMeta(project);
   const card = document.createElement('article');
-  card.className = 'project-card';
-  card.innerHTML = `<section class="project-face" role="button" tabindex="0" aria-label="Open project goal"><div><div class="project-title"><span class="project-name">${html(project.name || 'Untitled')}</span><span class="project-brief">${html(project.brief)}</span></div></div><div class="project-controls"><button class="bucket" type="button" aria-label="Change project bucket">${html(project.bucket || 'B')}</button><span class="chevron">›</span></div></section><section class="pile-row">${Object.keys(TYPES).map(type => pileButton(type, counts[type])).join('')}</section>`;
+  const depth = cardDepth(counts);
+  card.className = `project-card ${depth === 'deep' ? 'deep' : ''}`;
+  card.innerHTML = `${cardStack(depth)}<section class="card-face" role="button" tabindex="0" aria-label="Open project goal"><div class="title-row"><h2 class="project-title">${html(project.name || 'Untitled')}</h2><button class="favorite" type="button" aria-label="Favorite ${html(project.name || 'Untitled')}">&#9734;</button></div><div class="project-meta"><button class="tier-badge tier-${html((project.bucket || 'B').toLowerCase())} bucket" type="button" aria-label="Change project bucket">${html(project.bucket || 'B')}</button><span class="meta-text">${html(meta)}</span></div><p class="summary${summary ? '' : ' is-empty'}">${html(summary)}</p><section class="metrics" aria-label="Project status counts">${Object.keys(TYPES).map(type => metricButton(type, counts[type])).join('')}</section></section>`;
   const open = () => openGoal(project);
-  card.querySelector('.project-face').addEventListener('click', open);
-  card.querySelector('.project-face').addEventListener('keydown', event => { if (['Enter', ' '].includes(event.key)) { event.preventDefault(); open(); } });
+  card.querySelector('.card-face').addEventListener('click', open);
+  card.querySelector('.card-face').addEventListener('keydown', event => { if (['Enter', ' '].includes(event.key)) { event.preventDefault(); open(); } });
+  card.querySelector('.favorite').addEventListener('click', event => event.stopPropagation());
   card.querySelector('.bucket').addEventListener('click', event => { event.stopPropagation(); cycleBucket(project); });
-  card.querySelectorAll('.pile').forEach(button => button.addEventListener('click', () => openDeck(project.id, button.dataset.type)));
+  card.querySelectorAll('.metric').forEach(button => button.addEventListener('click', event => { event.stopPropagation(); openDeck(project.id, button.dataset.type); }));
   return card;
 }
-function pileButton(type, count) {
-  return `<button class="pile ${type}" type="button" data-type="${type}"><span class="pile-count"><span class="pile-icon">${ICONS[type]}</span><strong>${count}</strong></span><span class="pile-label">${TYPES[type].label}</span></button>`;
+function metricButton(type, count) {
+  return `<button class="metric" type="button" data-type="${type}"><span class="metric-icon ${METRIC_CLASSES[type]}" aria-hidden="true"></span><span class="metric-label">${METRIC_LABELS[type]}</span><span class="metric-value">${count}</span></button>`;
+}
+function cardDepth(counts) {
+  const total = Object.values(counts).reduce((sum, count) => sum + count, 0);
+  if (total <= 1) return 'single';
+  if (total <= 5) return 'stack';
+  return 'deep';
+}
+function cardStack(depth) {
+  const sheets = depth === 'single' ? 2 : 3;
+  return Array.from({ length: sheets }, (_, index) => `<span class="paper-sheet sheet-${['one', 'two', 'three'][index]}"></span>`).join('');
+}
+function projectMeta(project) {
+  const version = project.version || project.release || '';
+  const pr = project.pr ?? project.prs ?? project.pull_requests;
+  const issues = project.issues ?? project.issue_count;
+  const art = project.art ?? project.design;
+  return [
+    version ? String(version) : '',
+    pr === undefined || pr === null || pr === '' ? '' : `PR ${pr}`,
+    issues === undefined || issues === null || issues === '' ? '' : `Issues ${issues}`,
+    art ? `Art ${art}` : ''
+  ].filter(Boolean).join(' · ');
 }
 function cycleBucket(project) {
   const order = ['S', 'A', 'B'];
