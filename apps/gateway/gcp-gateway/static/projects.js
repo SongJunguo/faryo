@@ -24,6 +24,7 @@ const els = {
   list: $('projectList'), sync: $('syncStatus'), submit: $('submitChanges'), sheet: $('deckSheet'), stage: $('deckStage'),
   title: $('deckTitle'), meta: $('deckMeta'), goal: $('deckGoal'), goalText: $('deckGoalText'), prev: $('prevCard'), next: $('nextCard'),
   nav: document.querySelector('.deck-nav'), importBtn: $('openImport'), importSheet: $('importSheet'), importForm: $('importForm'), importStatus: $('importStatus'),
+  menu: $('projectMenu'), menuButton: $('projectMenuButton'), menuPanel: $('projectMenuPanel'), archiveFilter: $('archiveFilter'), archiveFilterLabel: $('archiveFilterLabel'),
   dock: $('faryoController'), pet: $('faryoPet'), bubble: $('faryoBubble'), activity: $('faryoActivity'), faryoForm: $('faryoForm'),
   prompt: $('faryoPrompt'), send: $('faryoSend'), open: $('faryoOpen')
 };
@@ -36,6 +37,8 @@ const METRIC_LABELS = { decision: 'Decision', action: 'Action', watch: 'Watch' }
 const METRIC_CLASSES = { decision: 'metric-decision', action: 'metric-action', watch: 'metric-watch' };
 const STATUS = { pending: 'Pending decision', ready: 'Ready', open: 'Open', accepted: 'Approved', paused: 'Paused', done: 'Confirmed', seen: 'Seen' };
 const UPDATES = { accept: { status: 'accepted' }, pause: { status: 'paused' }, done: { status: 'done' }, seen: { status: 'seen' }, 'to-decision': { type: 'decision', status: 'pending' } };
+const PROJECT_GIT_REFRESH_MS = 30000;
+const PROJECT_FILTER = { key: 'faryoProjectFilter', values: ['active', 'all', 'archived'], labels: { active: 'Active', all: 'All', archived: 'Archived' } };
 let state = null, deck = { projectId: '', type: 'decision', index: 0 }, dirty = false;
 let faryoSession = '', faryoAgentRunning = false, faryoStream = null;
 const downlinkProjectIds = new Set();
@@ -47,25 +50,38 @@ const setSync = text => setLabel(els.sync, text);
 const activeItems = (project, type) => (project.items || []).filter(item => item.type === type && !TYPES[type].done.includes(item.status || 'open'));
 const deckProject = () => projects().find(project => project.id === deck.projectId) || projects()[0];
 const deckItems = () => { const project = deckProject(); return project ? activeItems(project, deck.type) : []; };
+function projectFilter() {
+  const value = localStorage.getItem(PROJECT_FILTER.key);
+  return PROJECT_FILTER.values.includes(value) ? value : PROJECT_FILTER.values[0];
+}
 function setDirty(value) { dirty = value; els.submit.disabled = !state || !dirty; setLabel(els.submit, dirty ? 'Submit' : 'Submitted'); }
-function render() { const items = projects(); els.list.replaceChildren(...(items.length ? items.map(projectCard) : [empty('No projects')])); }
+function render() {
+  const mode = projectFilter(), items = projects().filter(project => mode === 'all' || Boolean(project.archived) === (mode === 'archived'));
+  if (els.archiveFilterLabel) els.archiveFilterLabel.textContent = PROJECT_FILTER.labels[mode];
+  els.list.replaceChildren(...(items.length ? items.map(projectCard) : [empty(mode === 'archived' ? 'No archived projects' : 'No projects')]));
+}
 function saveDraft(project = null, downlink = true) {
   if (downlink && project?.id) downlinkProjectIds.add(project.id);
   setDirty(true);
   return persist();
 }
+function toggleArchive(project) {
+  project.archived = !project.archived;
+  render();
+  persist().then(() => refreshProjectGitStatus().catch(() => {}));
+}
 function projectCard(project) {
   const counts = Object.fromEntries(Object.keys(TYPES).map(type => [type, activeItems(project, type).length]));
   const summary = project.brief || project.current_d || '';
-  const meta = projectMeta(project);
+  const git = projectGitMeta(project.gitStatus), meta = projectMeta(project);
   const card = document.createElement('article');
   const rank = stackRank(counts);
-  card.className = `project-card stack-rank-${rank}`;
-  card.innerHTML = `${cardStack(rank)}<section class="card-face" role="button" tabindex="0" aria-label="Open project goal"><div class="title-row"><h2 class="project-title">${html(project.name || 'Untitled')}</h2><button class="favorite" type="button" aria-label="Favorite ${html(project.name || 'Untitled')}">&#9734;</button></div><div class="project-meta"><button class="tier-badge tier-${html((project.bucket || 'B').toLowerCase())} bucket" type="button" aria-label="Change project bucket">${html(project.bucket || 'B')}</button><span class="meta-text">${html(meta)}</span></div><p class="summary${summary ? '' : ' is-empty'}"><span class="summary-text">${html(summary)}</span></p><section class="metrics" aria-label="Project status counts">${Object.keys(TYPES).map(type => metricButton(type, counts[type])).join('')}</section></section>`;
+  card.className = `project-card stack-rank-${rank}${project.archived ? ' is-archived' : ''}`;
+  card.innerHTML = `${cardStack(rank)}<section class="card-face" role="button" tabindex="0" aria-label="Open project goal"><div class="title-row"><h2 class="project-title">${html(project.name || 'Untitled')}</h2><button class="favorite${project.archived ? ' is-archived' : ''}" type="button" aria-label="${project.archived ? 'Unarchive' : 'Archive'} ${html(project.name || 'Untitled')}">${project.archived ? '&#9733;' : '&#9734;'}</button></div><div class="project-meta"><button class="tier-badge tier-${html((project.bucket || 'B').toLowerCase())} bucket" type="button" aria-label="Change project bucket">${html(project.bucket || 'B')}</button><span class="meta-text">${git}${meta ? html(meta) : ''}</span></div><p class="summary${summary ? '' : ' is-empty'}"><span class="summary-text">${html(summary)}</span></p><section class="metrics" aria-label="Project status counts">${Object.keys(TYPES).map(type => metricButton(type, counts[type])).join('')}</section></section>`;
   const open = () => openGoal(project);
   card.querySelector('.card-face').addEventListener('click', open);
   card.querySelector('.card-face').addEventListener('keydown', event => { if (['Enter', ' '].includes(event.key)) { event.preventDefault(); open(); } });
-  card.querySelector('.favorite').addEventListener('click', event => event.stopPropagation());
+  card.querySelector('.favorite').addEventListener('click', event => { event.stopPropagation(); toggleArchive(project); });
   card.querySelector('.bucket').addEventListener('click', event => { event.stopPropagation(); cycleBucket(project); });
   card.querySelectorAll('.metric').forEach(button => button.addEventListener('click', event => { event.stopPropagation(); openDeck(project.id, button.dataset.type); }));
   return card;
@@ -96,6 +112,19 @@ function projectMeta(project) {
     issues === undefined || issues === null || issues === '' ? '' : `Issues ${issues}`,
     art ? `Art ${art}` : ''
   ].filter(Boolean).join(' · ');
+}
+function projectGitMeta(git) {
+  if (!git?.label) return '';
+  return `<span class="project-git ${html(git.state || 'muted')}" title="${html(git.title || '')}">${html(compactGitLabel(git))}</span>`;
+}
+function compactGitLabel(git) {
+  const clean = git.state === 'clean', icon = clean ? '🌿' : '✏️';
+  const raw = String(git.label || '').replace(/^(?:🌿|✏️|✏)\s*/u, '').trim();
+  if (git.state === 'error') return raw ? `⚠️ ${raw.replace(/^(?:⚠️|⚠)\s*/u, '')}` : '⚠️ git';
+  const markRe = /^(?:[+-]\d+|±\d+|\?\d+|[↑↓]\d+|m[+-]\d+)$/;
+  const parts = raw.split(/\s+/).filter(Boolean), marks = parts.filter(part => markRe.test(part)).join(' ');
+  const branch = parts.filter(part => !markRe.test(part)).join(' ') || 'git';
+  return `${icon}${marks ? ` ${marks}` : ''} ${branch.length > 14 ? `${branch.slice(0, 13)}…` : branch}`;
 }
 function cycleBucket(project) {
   const order = ['S', 'A', 'B'];
@@ -164,7 +193,14 @@ async function load() {
   try {
     const data = await fetchJson('/api/project-workbench');
     state = data.workbench; setDirty(false); setSync('Loaded'); render();
+    refreshProjectGitStatus().catch(() => {});
   } catch (error) { setSync('Failed'); els.list.replaceChildren(empty(error.message || 'Load failed')); }
+}
+async function refreshProjectGitStatus() {
+  if (!state) return;
+  const data = await fetchJson('/api/project-workbench/git-status');
+  projects().forEach(project => { project.gitStatus = (data.statuses || {})[project.id] || null; });
+  render();
 }
 async function persist() {
   if (!state) return;
@@ -276,6 +312,24 @@ els.bubble.addEventListener('click', () => setFaryoExpanded(!els.dock.classList.
 els.pet.addEventListener('click', tapFaryoPet);
 els.prompt.addEventListener('input', resizeFaryoPrompt);
 els.prompt.addEventListener('keydown', event => { if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) { event.preventDefault(); els.faryoForm.requestSubmit(); } });
-document.addEventListener('visibilitychange', () => { if (document.hidden) closeFaryoStream(); else loadFaryoStatus().catch(() => {}); });
+els.menuButton?.addEventListener('click', event => {
+  event.stopPropagation();
+  const open = Boolean(els.menuPanel?.hidden);
+  if (els.menuPanel) els.menuPanel.hidden = !open;
+  els.menuButton.setAttribute('aria-expanded', open ? 'true' : 'false');
+});
+els.archiveFilter?.addEventListener('click', event => {
+  event.stopPropagation();
+  const values = PROJECT_FILTER.values;
+  localStorage.setItem(PROJECT_FILTER.key, values[(values.indexOf(projectFilter()) + 1) % values.length]);
+  render();
+});
+document.addEventListener('click', event => {
+  if (event.target.closest?.('#projectMenu') || !els.menuPanel) return;
+  els.menuPanel.hidden = true;
+  els.menuButton?.setAttribute('aria-expanded', 'false');
+});
+document.addEventListener('visibilitychange', () => { if (document.hidden) closeFaryoStream(); else { loadFaryoStatus().catch(() => {}); refreshProjectGitStatus().catch(() => {}); } });
+setInterval(() => { if (!document.hidden) refreshProjectGitStatus().catch(() => {}); }, PROJECT_GIT_REFRESH_MS);
 load();
 loadFaryoStatus();

@@ -620,6 +620,9 @@ class GatewayHandler(BaseHTTPRequestHandler):
         if parsed.path == "/api/project-workbench":
             self.write_json(self.read_project_workbench(), HTTPStatus.OK)
             return
+        if parsed.path == "/api/project-workbench/git-status":
+            self.write_json({"ok": True, "statuses": self.project_git_statuses(username)}, HTTPStatus.OK)
+            return
         if parsed.path == "/api/faryo/status":
             self.handle_faryo_status(username)
             return
@@ -846,6 +849,20 @@ class GatewayHandler(BaseHTTPRequestHandler):
     def read_project_workbench(self) -> dict[str, Any]:
         return {"ok": True, "workbench": {"projects": self.read_project_rows()}}
 
+    def project_git_statuses(self, username: str) -> dict[str, dict[str, Any] | None]:
+        return {row["id"]: self.project_git_status(username, row) for row in self.read_project_rows()}
+
+    def project_git_status(self, username: str, row: dict[str, Any]) -> dict[str, Any] | None:
+        route = self.clean_owner_route(row.get("owner_route"))
+        if not route or not self.config.allowed_route(username, route):
+            return None
+        for cwd in self.project_worker_cwd_candidates(row)[:3]:
+            result = self.owner_json_request(route, "/api/project-workbench/git-status", {"project_root": cwd}, username, timeout=1.5)
+            if result.get("ok"):
+                status = result.get("gitStatus")
+                return status if isinstance(status, dict) else None
+        return None
+
     def handle_project_workbench_save(self) -> None:
         try:
             payload = self.read_json_body(128 * 1024)
@@ -1033,6 +1050,9 @@ class GatewayHandler(BaseHTTPRequestHandler):
                 row["owner_route"] = previous.get("owner_route") or owner_route
             if not row.get("workbench_path"):
                 row["workbench_path"] = previous.get("workbench_path") or row.get("path") or ""
+            if not row.get("code_root"):
+                row["code_root"] = previous.get("code_root") or ""
+            row.setdefault("archived", previous.get("archived"))
             rows.append(self.clean_project_row(row, index))
         return rows
 
@@ -1201,6 +1221,8 @@ class GatewayHandler(BaseHTTPRequestHandler):
             "path": self.compact_text(source.get("path")),
             "owner_route": self.clean_owner_route(source.get("owner_route")),
             "workbench_path": self.compact_text(source.get("workbench_path") or source.get("path")),
+            "code_root": self.compact_text(source.get("code_root")),
+            "archived": bool(source.get("archived")),
             "bucket": self.clean_project_bucket(source.get("bucket")),
             "rank": self.clean_rank(source.get("rank") or rank),
             "name": self.compact_text(source.get("name") or project_id),
@@ -1473,6 +1495,7 @@ class GatewayHandler(BaseHTTPRequestHandler):
         marker = "/00-system/workbench.json"
         path = self.compact_text(row.get("path"))
         workbench = self.compact_text(row.get("workbench_path"))
+        code_root = self.compact_text(row.get("code_root"))
         candidates: list[str] = []
 
         def add(value: Any) -> None:
@@ -1480,6 +1503,8 @@ class GatewayHandler(BaseHTTPRequestHandler):
             if candidate and candidate not in candidates:
                 candidates.append(candidate)
 
+        if code_root.startswith("/"):
+            add(code_root)
         if workbench.endswith(marker):
             add(workbench[: -len(marker)])
         if path.endswith(marker):
