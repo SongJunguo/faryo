@@ -1,7 +1,8 @@
 (() => {
   'use strict';
 
-  const userPromptRe = /^\s*›\s+/;
+  const codexHintRe = /^\s*›\s+Use\s+\/skills\s+to\s+list\s+available\s+skills\s*$/i;
+  const userPromptRe = /^(?!\s*›\s+Use\s+\/skills\s+to\s+list\s+available\s+skills\s*$)\s*›\s+/i;
 
   function leadingText(text, maxChars) {
     const chars = Array.from(String(text || ''));
@@ -21,7 +22,8 @@
 
   function isProcessLine(line) {
     const value = line.trim();
-    return processLineRe.test(value)
+    return codexHintRe.test(value)
+      || processLineRe.test(value)
       || /^(?:[│|└├↳])/.test(value)
       || /^(?:[-*•]\s*)?(?:\.{3}|…|⋯)\s*[+-]\d+\s+lines\b/i.test(value)
       || /^(?:\d+\s+)?[-+]?(?:<<<<<<<|=======|\|\|\|\|\|\|\||>>>>>>>)\b/.test(value)
@@ -34,12 +36,16 @@
       || /^\d+ files? changed(?:,|$)/i.test(value);
   }
 
+  function planLineText(line) {
+    return line.trim().replace(/^[-*•]\s*/, '').replace(/^(?:[│|└├↳]\s*)+/, '').trim();
+  }
+
   function isPlanStart(line) {
-    return /^(?:Updated Plan|Plan updated)$/i.test(line.trim());
+    return /^(?:Updated Plan|Plan updated)$/i.test(planLineText(line));
   }
 
   function isPlanDetailLine(line) {
-    return /^(?:[│|└├↳]\s*)?(?:[✔✓☑□☐-]\s+|\d+\.\s+)/.test(line.trim());
+    return /^(?:[✔✓☑□☐-]\s+|\[(?:x|X| |✓|✔)\]\s+|\d+\.\s+)/.test(planLineText(line));
   }
 
   function isReportStart(line) { return /^•\s+\S/.test(line.trim()) && !isProcessLine(line); }
