@@ -59,9 +59,9 @@ function projectCard(project) {
   const summary = project.brief || project.current_d || '';
   const meta = projectMeta(project);
   const card = document.createElement('article');
-  const depth = cardDepth(counts);
-  card.className = `project-card ${depth === 'deep' ? 'deep' : ''}`;
-  card.innerHTML = `${cardStack(depth)}<section class="card-face" role="button" tabindex="0" aria-label="Open project goal"><div class="title-row"><h2 class="project-title">${html(project.name || 'Untitled')}</h2><button class="favorite" type="button" aria-label="Favorite ${html(project.name || 'Untitled')}">&#9734;</button></div><div class="project-meta"><button class="tier-badge tier-${html((project.bucket || 'B').toLowerCase())} bucket" type="button" aria-label="Change project bucket">${html(project.bucket || 'B')}</button><span class="meta-text">${html(meta)}</span></div><p class="summary${summary ? '' : ' is-empty'}"><span class="summary-text">${html(summary)}</span></p><section class="metrics" aria-label="Project status counts">${Object.keys(TYPES).map(type => metricButton(type, counts[type])).join('')}</section></section>`;
+  const rank = stackRank(counts);
+  card.className = `project-card stack-rank-${rank}`;
+  card.innerHTML = `${cardStack(rank)}<section class="card-face" role="button" tabindex="0" aria-label="Open project goal"><div class="title-row"><h2 class="project-title">${html(project.name || 'Untitled')}</h2><button class="favorite" type="button" aria-label="Favorite ${html(project.name || 'Untitled')}">&#9734;</button></div><div class="project-meta"><button class="tier-badge tier-${html((project.bucket || 'B').toLowerCase())} bucket" type="button" aria-label="Change project bucket">${html(project.bucket || 'B')}</button><span class="meta-text">${html(meta)}</span></div><p class="summary${summary ? '' : ' is-empty'}"><span class="summary-text">${html(summary)}</span></p><section class="metrics" aria-label="Project status counts">${Object.keys(TYPES).map(type => metricButton(type, counts[type])).join('')}</section></section>`;
   const open = () => openGoal(project);
   card.querySelector('.card-face').addEventListener('click', open);
   card.querySelector('.card-face').addEventListener('keydown', event => { if (['Enter', ' '].includes(event.key)) { event.preventDefault(); open(); } });
@@ -73,15 +73,17 @@ function projectCard(project) {
 function metricButton(type, count) {
   return `<button class="metric" type="button" data-type="${type}"><span class="metric-icon ${METRIC_CLASSES[type]}" aria-hidden="true"></span><span class="metric-label">${METRIC_LABELS[type]}</span><span class="metric-value">${count}</span></button>`;
 }
-function cardDepth(counts) {
+function stackRank(counts) {
   const total = Object.values(counts).reduce((sum, count) => sum + count, 0);
-  if (total <= 1) return 'single';
-  if (total <= 5) return 'stack';
-  return 'deep';
+  if (total <= 5) return 1;
+  if (total <= 10) return 2;
+  if (total <= 15) return 3;
+  if (total <= 20) return 4;
+  return 5;
 }
-function cardStack(depth) {
-  const sheets = depth === 'single' ? 2 : 3;
-  return Array.from({ length: sheets }, (_, index) => `<span class="paper-sheet sheet-${['one', 'two', 'three'][index]}"></span>`).join('');
+function cardStack(rank) {
+  const sheets = Math.max(1, Math.min(5, rank));
+  return Array.from({ length: sheets }, (_, index) => `<span class="paper-sheet sheet-${index + 1}"></span>`).join('');
 }
 function projectMeta(project) {
   const version = project.version || project.release || '';

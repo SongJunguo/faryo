@@ -114,6 +114,7 @@ ALLOWED_ATTACHMENT_SUFFIXES = {
     ".odt", ".odp", ".ods", ".md", ".txt", ".csv", ".json", ".rtf",
 }
 PROJECT_ITEM_TYPES = {"decision", "action", "watch"}
+PROJECT_ITEM_TYPE_LIMIT = 10
 PROJECT_DONE_STATUSES = {"accepted", "paused", "done", "skipped", "seen"}
 IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp", ".gif", ".heic", ".heif"}
 IMAGE_CONTENT_TYPES = {
@@ -1585,6 +1586,7 @@ def project_workbench_enabled() -> bool:
 def clean_project_workbench(project: dict[str, Any]) -> dict[str, Any]:
     project_id = project_slug(project.get("id") or project.get("name"))
     items = []
+    counts = {item_type: 0 for item_type in PROJECT_ITEM_TYPES}
     for index, item in enumerate(project.get("items") if isinstance(project.get("items"), list) else [], 1):
         if not isinstance(item, dict):
             continue
@@ -1593,6 +1595,9 @@ def clean_project_workbench(project: dict[str, Any]) -> dict[str, Any]:
         status = str(item.get("status") or "open").strip()
         if item_type not in PROJECT_ITEM_TYPES or not title or status in PROJECT_DONE_STATUSES:
             continue
+        if counts[item_type] >= PROJECT_ITEM_TYPE_LIMIT:
+            continue
+        counts[item_type] += 1
         items.append({
             "id": compact_text(item.get("id")) or f"item-{index}",
             "type": item_type,

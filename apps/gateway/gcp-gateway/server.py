@@ -101,6 +101,7 @@ GATEWAY_STATIC_FILES = {
     "projects.js": "text/javascript; charset=utf-8",
 }
 PROJECT_ITEM_TYPES = {"decision", "action", "watch"}
+PROJECT_ITEM_TYPE_LIMIT = 10
 PROJECT_BUCKETS = {"S", "A", "B"}
 PROJECT_DONE_STATUSES = {"accepted", "paused", "done", "skipped", "seen"}
 PROJECT_BUCKET_ORDER = {"S": 0, "A": 1, "B": 2}
@@ -1211,6 +1212,7 @@ class GatewayHandler(BaseHTTPRequestHandler):
     def clean_project_items(self, items: Any) -> list[dict[str, str]]:
         source = items if isinstance(items, list) else []
         clean_items = []
+        counts = {item_type: 0 for item_type in PROJECT_ITEM_TYPES}
         for index, item in enumerate(source, 1):
             if not isinstance(item, dict):
                 continue
@@ -1221,6 +1223,9 @@ class GatewayHandler(BaseHTTPRequestHandler):
             status = str(item.get("status") or "open").strip()
             if status in PROJECT_DONE_STATUSES:
                 continue
+            if counts[item_type] >= PROJECT_ITEM_TYPE_LIMIT:
+                continue
+            counts[item_type] += 1
             clean_items.append({
                 "id": str(item.get("id") or f"item-{index}").strip(),
                 "type": item_type,

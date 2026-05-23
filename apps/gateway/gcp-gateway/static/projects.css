@@ -48,14 +48,19 @@ button { -webkit-tap-highlight-color: transparent; }
 .controller-form button { min-height: 34px; padding: 0 10px; border: 1px solid color-mix(in srgb, var(--accent) 38%, var(--line)); border-radius: 8px; background: var(--panel); color: var(--accent); font-weight: 850; }
 .controller-form button:disabled { opacity: .55; }
 @keyframes pet-running { 0%, 100% { transform: translateY(0) rotate(-1deg) scale(1); } 50% { transform: translateY(-3px) rotate(1deg) scale(1.03); } }
-.project-card { --turn: -.7deg; --sheet-y: 4px; position: relative; min-width: 0; min-height: 283px; filter: drop-shadow(0 13px 13px var(--soft-shadow)); }
+.project-card { --turn: -.7deg; --sheet-y: 3px; --sheet-x: 3px; position: relative; min-width: 0; min-height: 283px; filter: drop-shadow(0 13px 13px var(--soft-shadow)); }
 .project-card:nth-child(2n) { --turn: .8deg; }
-.project-card:nth-child(3), .project-card:nth-child(4) { --sheet-y: 5px; }
-.project-card.deep { --sheet-y: 7px; }
+.project-card.stack-rank-1 { --sheet-y: 2px; --sheet-x: 2px; }
+.project-card.stack-rank-2 { --sheet-y: 3px; --sheet-x: 3px; }
+.project-card.stack-rank-3 { --sheet-y: 4px; --sheet-x: 4px; }
+.project-card.stack-rank-4 { --sheet-y: 5px; --sheet-x: 3px; }
+.project-card.stack-rank-5 { --sheet-y: 6px; --sheet-x: 3px; }
 .paper-sheet { position: absolute; inset: 0; border: 1px solid color-mix(in srgb, var(--line) 78%, transparent); border-radius: 8px; background: linear-gradient(180deg, color-mix(in srgb, var(--panel) 96%, transparent), color-mix(in srgb, var(--panel2) 92%, transparent)); box-shadow: 0 4px 4px rgba(75, 48, 23, .1); transform-origin: 50% 100%; pointer-events: none; }
-.sheet-one { z-index: 0; transform: translate(4px, var(--sheet-y)) rotate(calc(var(--turn) * -1)); }
-.sheet-two { z-index: 0; transform: translate(7px, calc(var(--sheet-y) * 1.75)) rotate(var(--turn)); }
-.sheet-three { z-index: 0; opacity: .72; transform: translate(9px, calc(var(--sheet-y) * 2.45)) rotate(calc(var(--turn) * .6)); }
+.sheet-1 { z-index: 0; opacity: .96; transform: translate(var(--sheet-x), var(--sheet-y)) rotate(calc(var(--turn) * -1)); }
+.sheet-2 { z-index: 0; opacity: .86; transform: translate(calc(var(--sheet-x) * 1.6), calc(var(--sheet-y) * 1.7)) rotate(var(--turn)); }
+.sheet-3 { z-index: 0; opacity: .74; transform: translate(calc(var(--sheet-x) * 2.1), calc(var(--sheet-y) * 2.4)) rotate(calc(var(--turn) * .6)); }
+.sheet-4 { z-index: 0; opacity: .62; transform: translate(calc(var(--sheet-x) * 2.6), calc(var(--sheet-y) * 3.1)) rotate(calc(var(--turn) * -.45)); }
+.sheet-5 { z-index: 0; opacity: .5; transform: translate(calc(var(--sheet-x) * 3.1), calc(var(--sheet-y) * 3.8)) rotate(calc(var(--turn) * .35)); }
 .card-face { position: relative; z-index: 2; min-height: 283px; display: grid; grid-template-rows: auto auto 1fr auto; padding: 19px 15px 0; overflow: hidden; border: 1px solid color-mix(in srgb, var(--line) 84%, transparent); border-radius: 8px; background: linear-gradient(180deg, color-mix(in srgb, var(--panel) 98%, transparent), color-mix(in srgb, var(--panel) 72%, var(--panel2)) 62%, color-mix(in srgb, var(--panel2) 84%, var(--panel))), var(--panel); color: var(--text); text-align: left; cursor: pointer; box-shadow: inset 0 1px 0 rgba(255, 255, 255, .28), inset 0 -1px 0 rgba(170, 121, 62, .17), 0 11px 18px var(--paper-shadow); }
 .card-face::before { content: ""; position: absolute; inset: 0; background: linear-gradient(90deg, color-mix(in srgb, var(--line) 16%, transparent) 0 1px, transparent 1px 100%), linear-gradient(180deg, color-mix(in srgb, var(--line) 16%, transparent) 0 1px, transparent 1px 100%); background-size: 15px 15px; opacity: .32; pointer-events: none; }
 .card-face > * { position: relative; z-index: 1; }
@@ -70,13 +75,14 @@ button { -webkit-tap-highlight-color: transparent; }
 .tier-b { background: linear-gradient(180deg, #7886ab, var(--watch)); }
 .meta-text { min-width: 0; min-height: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .summary { margin: 14px 0 0; padding-top: 15px; border-top: 1px solid color-mix(in srgb, var(--line) 60%, transparent); color: var(--text); font-size: calc(12px + var(--font-step)); font-weight: 520; line-height: 1.48; }
-.summary-text { display: -webkit-box; overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 3; }
-.summary::after { content: ""; display: block; margin-top: 15px; border-top: 1px dashed color-mix(in srgb, var(--line) 58%, transparent); }
+.summary-text { display: -webkit-box; height: 4.44em; overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 3; }
+.summary::after { content: ""; display: block; margin-top: 27px; border-top: 1px dashed color-mix(in srgb, var(--line) 58%, transparent); }
 .summary.is-empty { min-height: 89px; }
-.metrics { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); margin: 15px -15px 0; min-height: 72px; border-top: 1px solid color-mix(in srgb, var(--line) 68%, transparent); background: linear-gradient(180deg, color-mix(in srgb, var(--panel) 34%, transparent), color-mix(in srgb, var(--panel2) 24%, transparent)); }
-.metric { display: grid; grid-template-rows: 18px 16px 27px; justify-items: center; align-content: center; gap: 1px; min-width: 0; border: 0; border-left: 1px solid color-mix(in srgb, var(--line) 68%, transparent); border-radius: 0; background: transparent; color: var(--text); text-align: center; }
-.metric:first-child { border-left: 0; }
+.metrics { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); margin: 8px 0 10px; min-height: 56px; }
+.metric { position: relative; display: grid; grid-template-rows: 17px 14px 24px; justify-items: center; align-content: center; gap: 0; min-width: 0; border: 0; border-radius: 0; background: transparent; color: var(--text); text-align: center; }
+.metric + .metric::before { content: ""; position: absolute; left: 0; top: -5px; bottom: 7px; border-left: 1px solid color-mix(in srgb, var(--line) 50%, transparent); }
 .metric:active { background: color-mix(in srgb, var(--panel2) 26%, transparent); }
+.metric-icon, .metric-label, .metric-value { transform: translateY(-6px); }
 .metric-icon { position: relative; width: 17px; height: 17px; }
 .metric-icon::before, .metric-icon::after { content: ""; position: absolute; }
 .metric-decision::before { left: 3px; top: 8px; width: 12px; height: 2px; border-radius: 2px; background: var(--action); transform: rotate(-38deg); }
