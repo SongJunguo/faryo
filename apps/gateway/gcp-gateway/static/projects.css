@@ -95,14 +95,7 @@ button { -webkit-tap-highlight-color: transparent; }
 .metric + .metric::before { content: ""; position: absolute; left: 0; top: -5px; bottom: 7px; border-left: 1px solid color-mix(in srgb, var(--line) 50%, transparent); }
 .metric:active { background: color-mix(in srgb, var(--panel2) 26%, transparent); }
 .metric-icon, .metric-label, .metric-value { transform: translateY(-6px); }
-.metric-icon { position: relative; width: 17px; height: 17px; }
-.metric-icon::before, .metric-icon::after { content: ""; position: absolute; }
-.metric-decision::before { left: 3px; top: 8px; width: 12px; height: 2px; border-radius: 2px; background: var(--action); transform: rotate(-38deg); }
-.metric-decision::after { left: 7px; top: 3px; width: 2px; height: 12px; border-radius: 2px; background: var(--action); transform: rotate(42deg); }
-.metric-action::before { inset: 3px; border: 2px solid var(--watch); border-radius: 3px; }
-.metric-action::after { left: 6px; top: 5px; width: 8px; height: 4px; border-left: 2px solid var(--watch); border-bottom: 2px solid var(--watch); transform: rotate(-45deg); }
-.metric-watch::before { left: 1px; top: 5px; width: 15px; height: 8px; border: 2px solid var(--accent); border-radius: 50%; }
-.metric-watch::after { left: 7px; top: 8px; width: 3px; height: 3px; border-radius: 50%; background: var(--accent); }
+.metric-icon { width: 17px; height: 17px; display: grid; place-items: center; font-size: 16px; line-height: 1; }
 .metric-label { color: var(--muted); font-size: calc(8px + var(--font-step)); font-weight: 650; line-height: 1; }
 .metric-value { font-size: calc(24px + var(--font-step)); font-weight: 520; line-height: 1.05; }
 .deck-actions button, .deck-nav button, .goal-save { min-height: 42px; padding: 0 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); color: var(--text); }

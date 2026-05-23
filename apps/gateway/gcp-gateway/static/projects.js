@@ -34,7 +34,7 @@ const TYPES = {
   watch: { label: 'Watch', done: ['seen'], actions: [['seen', 'Seen', 'primary'], ['edit', 'Edit', ''], ['to-decision', 'Escalate', 'danger']], left: 'seen', right: 'to-decision' }
 };
 const METRIC_LABELS = { decision: 'Decision', action: 'Action', watch: 'Watch' };
-const METRIC_CLASSES = { decision: 'metric-decision', action: 'metric-action', watch: 'metric-watch' };
+const METRIC_ICONS = { decision: '⚖️', action: '🛠️', watch: '👁️' };
 const STATUS = { pending: 'Pending decision', ready: 'Ready', open: 'Open', accepted: 'Approved', paused: 'Paused', done: 'Confirmed', seen: 'Seen' };
 const UPDATES = { accept: { status: 'accepted' }, pause: { status: 'paused' }, done: { status: 'done' }, seen: { status: 'seen' }, 'to-decision': { type: 'decision', status: 'pending' } };
 const PROJECT_GIT_REFRESH_MS = 30000;
@@ -87,7 +87,7 @@ function projectCard(project) {
   return card;
 }
 function metricButton(type, count) {
-  return `<button class="metric" type="button" data-type="${type}"><span class="metric-icon ${METRIC_CLASSES[type]}" aria-hidden="true"></span><span class="metric-label">${METRIC_LABELS[type]}</span><span class="metric-value">${count}</span></button>`;
+  return `<button class="metric" type="button" data-type="${type}"><span class="metric-icon" aria-hidden="true">${METRIC_ICONS[type]}</span><span class="metric-label">${METRIC_LABELS[type]}</span><span class="metric-value">${count}</span></button>`;
 }
 function stackRank(counts) {
   const total = Object.values(counts).reduce((sum, count) => sum + count, 0);

@@ -884,13 +884,14 @@ class GatewayHandler(BaseHTTPRequestHandler):
             rows = [self.clean_project_row(project, index) for index, project in enumerate(source, 1) if isinstance(project, dict)]
             self.write_project_rows(rows)
             target_rows = self.project_downlink_target_rows(rows, payload)
+            active_rows = self.active_project_rows(rows)
             if not target_rows:
                 downlink = {"status": "skipped"}
                 self.write_json({
                     "ok": True,
                     "workbench": {"projects": self.read_project_rows()},
                     "downlink": downlink,
-                    "faryo": self.wake_faryo_after_project_submit(username, rows, downlink),
+                    "faryo": self.wake_faryo_after_project_submit(username, active_rows, downlink),
                 }, HTTPStatus.OK)
                 return
             packages = self.save_project_downlinks(target_rows, username)
@@ -907,7 +908,7 @@ class GatewayHandler(BaseHTTPRequestHandler):
 
     def project_submit_prompt(self, rows: list[dict[str, Any]], downlink: dict[str, Any]) -> str:
         projects = []
-        for row in self.sorted_project_rows(rows):
+        for row in self.sorted_project_rows(self.active_project_rows(rows)):
             projects.append({
                 "id": row["id"],
                 "name": row["name"],
@@ -1084,7 +1085,10 @@ class GatewayHandler(BaseHTTPRequestHandler):
         missing = sorted(ids - set(by_id))
         if missing:
             raise ValueError("unknown downlink project id: " + ", ".join(missing))
-        return [row for row in self.sorted_project_rows(rows) if row["id"] in ids]
+        return [row for row in self.sorted_project_rows(rows) if row["id"] in ids and not row.get("archived")]
+
+    def active_project_rows(self, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        return [row for row in rows if not row.get("archived")]
 
     def save_project_downlinks(self, rows: list[dict[str, Any]], username: str) -> list[dict[str, Any]]:
         packages = []
@@ -1437,6 +1441,8 @@ class GatewayHandler(BaseHTTPRequestHandler):
         row = next((item for item in self.read_project_rows() if item["id"] == project_id), None)
         if not row:
             raise ValueError("project not found")
+        if row.get("archived"):
+            raise ValueError("project is archived")
         route = row.get("owner_route") or ""
         name = row.get("name") or row["id"]
         if route not in BACKENDS:
