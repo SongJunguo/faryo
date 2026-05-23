@@ -70,6 +70,7 @@ button { -webkit-tap-highlight-color: transparent; }
 .tier-b { background: linear-gradient(180deg, #7886ab, var(--watch)); }
 .meta-text { min-width: 0; min-height: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .summary { margin: 14px 0 0; padding-top: 15px; border-top: 1px solid color-mix(in srgb, var(--line) 60%, transparent); color: var(--text); font-size: calc(12px + var(--font-step)); font-weight: 520; line-height: 1.48; }
+.summary-text { display: -webkit-box; overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 3; }
 .summary::after { content: ""; display: block; margin-top: 15px; border-top: 1px dashed color-mix(in srgb, var(--line) 58%, transparent); }
 .summary.is-empty { min-height: 89px; }
 .metrics { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); margin: 15px -15px 0; min-height: 72px; border-top: 1px solid color-mix(in srgb, var(--line) 68%, transparent); background: linear-gradient(180deg, color-mix(in srgb, var(--panel) 34%, transparent), color-mix(in srgb, var(--panel2) 24%, transparent)); }
