@@ -1,7 +1,7 @@
 (() => {
   'use strict';
 
-  const userPromptRe = /^\s*›\s+/;
+  const userPromptRe = /^(?!\s*›\s+Use\s+\/skills\s+to\s+list\s+available\s+skills\s*$)\s*›\s+/i;
 
   function leadingText(text, maxChars) {
     const chars = Array.from(String(text || ''));

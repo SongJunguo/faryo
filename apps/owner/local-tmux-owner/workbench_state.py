@@ -34,7 +34,7 @@ def item_stage(item: dict[str, Any]) -> str:
     if stage in ITEM_STAGES:
         return stage
     status = compact_text(item.get("status")).lower()
-    return {"pending": "awaiting_owner", "in_progress": "in_progress", "review": "receipt_submitted", "paused": "paused"}.get(status, "approved_for_workorder")
+    return {"in_progress": "in_progress", "review": "receipt_submitted", "paused": "paused"}.get(status, "awaiting_owner")
 
 
 def item_status(stage: str) -> str:

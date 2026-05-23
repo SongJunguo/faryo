@@ -1258,7 +1258,7 @@ class GatewayHandler(BaseHTTPRequestHandler):
                 continue
             stage = self.compact_text(item.get("stage"))
             if stage not in PROJECT_ITEM_STAGES:
-                stage = "awaiting_owner" if status == "pending" else "approved_for_workorder"
+                stage = {"in_progress": "in_progress", "review": "receipt_submitted", "paused": "paused"}.get(status, "awaiting_owner")
             clean = {
                 "id": str(item.get("id") or f"item-{index}").strip(),
                 "type": item_type,
@@ -1559,13 +1559,8 @@ class GatewayHandler(BaseHTTPRequestHandler):
             if not isinstance(item, dict):
                 continue
             item_id = self.compact_text(item.get("id"))
-            item_type = self.compact_text(item.get("type"))
-            status = self.compact_text(item.get("status"))
             stage = self.compact_text(item.get("stage"))
-            if item_id and (
-                stage == "approved_for_workorder"
-                or (item_type == "action" and status in {"open", "in_progress", "review"})
-            ):
+            if item_id and stage == "approved_for_workorder":
                 ids.append(item_id)
         return ids
 

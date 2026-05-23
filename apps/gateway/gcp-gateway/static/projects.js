@@ -20,7 +20,9 @@ const projects = () => state?.projects || [];
 const html = value => String(value || '').replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
 const empty = text => Object.assign(document.createElement('div'), { className: 'empty', textContent: text });
 const setSync = text => { els.sync.textContent = text; };
-const activeItems = (project, type) => (project.items || []).filter(item => item.type === type && !TYPES[type].done.includes(item.status || 'open'));
+const ownerQueueItem = item => !item.stage || ['awaiting_owner', 'paused', 'needs_fix'].includes(item.stage);
+const hasApprovedWork = () => projects().some(project => (project.items || []).some(item => item.stage === 'approved_for_workorder'));
+const activeItems = (project, type) => (project.items || []).filter(item => item.type === type && ownerQueueItem(item) && !TYPES[type].done.includes(item.status || 'open'));
 const deckProject = () => projects().find(project => project.id === deck.projectId) || projects()[0];
 const deckItems = () => { const project = deckProject(); return project ? activeItems(project, deck.type) : []; };
 function setDirty(value) { dirty = value; els.submit.disabled = !state || !dirty; els.submit.textContent = dirty ? 'Submit' : 'Submitted'; }
@@ -98,7 +100,7 @@ async function applyItemAction(project, item, action) {
       summary: `${action}: ${item.title || item.id}`
     });
     state = data.workbench;
-    setDirty(false);
+    setDirty(hasApprovedWork());
     setSync('Applied');
     render();
     const nextProject = deckProject();
