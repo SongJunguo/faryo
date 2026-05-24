@@ -2268,8 +2268,9 @@ class Handler(SimpleHTTPRequestHandler):
             if parsed.path == "/health":
                 self.write_json({"ok": True, "updatedAt": now_iso()})
                 return
-            if parsed.path == "/":
-                self.path = "/index.html" + (("?" + parsed.query) if parsed.query else "")
+            if parsed.path in {"/", "/index.html"}:
+                self.write_index()
+                return
             return super().do_GET()
         except OwnerError as exc:
             self.write_json({"ok": False, "error": str(exc), "updatedAt": now_iso()}, status=exc.status)
@@ -2549,6 +2550,23 @@ class Handler(SimpleHTTPRequestHandler):
                 shutil.copyfileobj(fh, self.wfile)
             except (BrokenPipeError, ConnectionResetError):
                 return
+
+    def write_index(self) -> None:
+        try:
+            html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
+        except OSError as exc:
+            raise OwnerError("file not found", HTTPStatus.NOT_FOUND) from exc
+        version = _html.escape(release_version() or "unknown", quote=True)
+        body = html.replace("__FARYO_RELEASE_VERSION__", version).replace("__FARYO_RELEASE_NUMBER__", version.removeprefix("v")).encode("utf-8")
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        try:
+            self.wfile.write(body)
+        except (BrokenPipeError, ConnectionResetError):
+            return
 
     def write_local_file_view(self, raw: str, target: Config, token: str | None = None, session: str | None = None) -> None:
         path = resolve_local_path(raw, target, LOCAL_FILE_SUFFIXES, self.workspace_root())
