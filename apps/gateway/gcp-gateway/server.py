@@ -18,6 +18,7 @@ import shlex
 import socket
 import sqlite3
 import subprocess
+import sys
 import time
 import urllib.request
 from http import HTTPStatus
@@ -28,6 +29,11 @@ from typing import Any
 from urllib.parse import parse_qs, urlencode, urlparse
 
 import bcrypt
+
+SHARED_DIR = Path(__file__).resolve().parents[2] / "shared"
+if str(SHARED_DIR) not in sys.path:
+    sys.path.insert(0, str(SHARED_DIR))
+import pd_state
 
 COOKIE_NAME = "faryo_auth"
 COOKIE_MAX_AGE = 30 * 24 * 60 * 60
@@ -114,7 +120,6 @@ PROJECT_ITEM_STAGES = {
     "paused",
 }
 PROJECT_BUCKET_ORDER = {"S": 0, "A": 1, "B": 2}
-PROJECT_STAGE_STATES = {"stage_to_define", "define_to_execute", "execute_to_close", "closed"}
 
 HOP_BY_HOP_HEADERS = {
     "connection",
@@ -628,7 +633,7 @@ class GatewayHandler(BaseHTTPRequestHandler):
             self.write_json(self.workbench_payload(username, history_mode), HTTPStatus.OK)
             return
         if parsed.path == "/api/project-workbench":
-            self.write_json(self.read_project_workbench(), HTTPStatus.OK)
+            self.write_json(self.read_project_workbench(username), HTTPStatus.OK)
             return
         if parsed.path == "/api/project-workbench/git-status":
             self.write_json({"ok": True, "statuses": self.project_git_statuses(username)}, HTTPStatus.OK)
@@ -871,20 +876,25 @@ class GatewayHandler(BaseHTTPRequestHandler):
         try: return json.loads(self.rfile.read(length).decode("utf-8"))
         except json.JSONDecodeError as exc: raise ValueError("invalid JSON body") from exc
 
-    def read_project_workbench(self) -> dict[str, Any]:
-        return {"ok": True, "workbench": self.project_workbench_payload()}
+    def read_project_workbench(self, username: str) -> dict[str, Any]:
+        return {"ok": True, "workbench": self.project_workbench_payload(username)}
 
-    def project_workbench_payload(self) -> dict[str, Any]:
-        return {"projects": [self.attach_project_definition(row) for row in self.read_project_rows()]}
+    def project_workbench_payload(self, username: str | None = None) -> dict[str, Any]:
+        return {"projects": [self.attach_project_definition(row, username) for row in self.read_project_rows()]}
 
-    def attach_project_definition(self, row: dict[str, Any]) -> dict[str, Any]:
+    def attach_project_definition(self, row: dict[str, Any], username: str | None = None) -> dict[str, Any]:
         enriched = dict(row)
-        definition = self.project_definition(row)
+        definition = self.project_definition(row, username)
         if definition:
             enriched["definition"] = definition
         return enriched
 
-    def project_definition(self, row: dict[str, Any]) -> dict[str, Any]:
+    def project_definition(self, row: dict[str, Any], username: str | None = None) -> dict[str, Any]:
+        route = self.clean_owner_route(row.get("owner_route"))
+        if route and route != "gcp" and username and self.config.allowed_route(username, route):
+            result = self.owner_json_request(route, "/api/project-workbench/definition", self.owner_project_definition_payload(row, {}), username, timeout=2)
+            definition = result.get("definition") if result.get("ok") else None
+            return definition if isinstance(definition, dict) else {}
         path = self.project_definition_path(row)
         if not path:
             return {}
@@ -892,7 +902,7 @@ class GatewayHandler(BaseHTTPRequestHandler):
             text = path.read_text(encoding="utf-8")
         except OSError:
             return {}
-        return self.parse_project_definition(text)
+        return pd_state.parse_project_definition(text)
 
     def project_definition_path(self, row: dict[str, Any]) -> Path | None:
         marker = "/00-system/workbench.json"
@@ -902,61 +912,6 @@ class GatewayHandler(BaseHTTPRequestHandler):
         if workbench.startswith("/"):
             return Path(workbench).parent / "project.md"
         return None
-
-    def parse_project_definition(self, text: str) -> dict[str, Any]:
-        data: dict[str, Any] = {"completed_stages": []}
-        section = ""
-        for raw in text.splitlines():
-            line = raw.strip()
-            if not line:
-                continue
-            if line.startswith(("current_stage:", "current_phase:")):
-                data["current_phase"] = line.split(":", 1)[1].strip().strip('"')
-            if line.startswith("### "):
-                section = line.lstrip("#").strip()
-                continue
-            if line.startswith("#### "):
-                heading = line.lstrip("#").strip()
-                if section == "当前阶段":
-                    phase_id, phase_title = self.split_phase_heading(heading)
-                    data.update({"current_stage_id": phase_id, "current_stage_title": phase_title})
-                elif section == "已完成阶段":
-                    data["completed_stages"].append(heading)
-                continue
-            if section == "当前阶段" and line.startswith("-"):
-                key, _, value = line[1:].strip().partition("：")
-                if not value:
-                    key, _, value = line[1:].strip().partition(":")
-                key = key.strip().replace(" ", "").lower()
-                value = value.strip()
-                mapping = {"阶段定位": "stage_position", "阶段目标": "stage_goal", "阶段dod": "stage_dod", "阶段状态": "stage_state", "阶段进度": "stage_state", "阶段dod已完成": "stage_dod_done", "当前不做": "stage_out_of_scope"}
-                target = mapping.get(key)
-                if target == "stage_state":
-                    data[target] = self.clean_stage_state(value)
-                elif target == "stage_dod_done":
-                    data[target] = self.clean_stage_dod_done(value)
-                elif target and value:
-                    data[target] = value
-        return {key: value for key, value in data.items() if value}
-
-    def clean_stage_state(self, value: Any) -> str:
-        text = str(value or "").strip().lower()
-        if text in PROJECT_STAGE_STATES:
-            return text
-        return {"1": "stage_to_define", "2": "define_to_execute", "3": "execute_to_close", "4": "closed"}.get(text[:1], "stage_to_define")
-
-    def clean_stage_dod_done(self, value: Any) -> list[str]:
-        text = str(value or "").strip()
-        if not text or text == "0":
-            return []
-        return [self.compact_text(item) for item in re.split(r"[；;、,，]", text) if self.compact_text(item)]
-
-    def split_phase_heading(self, heading: str) -> tuple[str, str]:
-        for sep in ("：", ":"):
-            if sep in heading:
-                left, right = heading.split(sep, 1)
-                return self.compact_text(left), self.compact_text(right)
-        return "", self.compact_text(heading)
 
     def project_git_statuses(self, username: str) -> dict[str, dict[str, Any] | None]:
         return {row["id"]: self.project_git_status(username, row) for row in self.read_project_rows()}
@@ -1064,71 +1019,52 @@ class GatewayHandler(BaseHTTPRequestHandler):
     def handle_project_stage_state(self, username: str) -> None:
         try:
             payload = self.read_json_body(8 * 1024)
-            path = self.local_project_definition_path(username, payload, "stage state update")
-            self.write_current_stage_line(path, r"-\s*阶段(?:状态|进度)[:：]", f"- 阶段状态：{self.clean_stage_state(payload.get('stage_state'))}")
-            self.write_json({"ok": True, "workbench": self.project_workbench_payload()}, HTTPStatus.OK)
+            row, route = self.project_definition_update_target(username, payload)
+            if route == "gcp":
+                pd_state.write_stage_state(self.local_project_definition_path(row), payload.get("stage_state"))
+            else:
+                self.forward_project_definition_update(route, "/api/project-workbench/stage-state", row, payload, username)
+            self.write_json({"ok": True, "workbench": self.project_workbench_payload(username)}, HTTPStatus.OK)
         except ValueError as exc:
             self.write_json({"ok": False, "error": str(exc)}, HTTPStatus.BAD_REQUEST)
 
     def handle_project_stage_dod(self, username: str) -> None:
         try:
             payload = self.read_json_body(16 * 1024)
-            item = self.compact_text(payload.get("item"))
-            if not item:
+            if not self.compact_text(payload.get("item")):
                 raise ValueError("DoD item is required")
-            path = self.local_project_definition_path(username, payload, "DoD update")
-            self.write_project_stage_dod_done(path, item, bool(payload.get("done")))
-            self.write_json({"ok": True, "workbench": self.project_workbench_payload()}, HTTPStatus.OK)
+            row, route = self.project_definition_update_target(username, payload)
+            if route == "gcp":
+                pd_state.write_stage_dod_done(self.local_project_definition_path(row), payload.get("item"), bool(payload.get("done")))
+            else:
+                self.forward_project_definition_update(route, "/api/project-workbench/stage-dod", row, payload, username)
+            self.write_json({"ok": True, "workbench": self.project_workbench_payload(username)}, HTTPStatus.OK)
         except ValueError as exc:
             self.write_json({"ok": False, "error": str(exc)}, HTTPStatus.BAD_REQUEST)
 
-    def local_project_definition_path(self, username: str, payload: dict[str, Any], action: str) -> Path:
+    def project_definition_update_target(self, username: str, payload: dict[str, Any]) -> tuple[dict[str, Any], str]:
         project_id = self.project_id({"id": payload.get("project_id")})
         row = next((item for item in self.read_project_rows() if item["id"] == project_id), None)
         if not row:
             raise ValueError("project not found")
         route = self.clean_owner_route(row.get("owner_route"))
-        if route != "gcp" or not self.config.allowed_route(username, route):
-            raise ValueError(f"{action} is only available on local GCP project truth")
+        if not route or not self.config.allowed_route(username, route):
+            raise ValueError("project route is not allowed")
+        return row, route
+
+    def local_project_definition_path(self, row: dict[str, Any]) -> Path:
         path = self.project_definition_path(row)
         if not path or not path.exists():
             raise ValueError("project.md not found")
         return path
 
-    def write_project_stage_dod_done(self, path: Path, item: str, done: bool) -> None:
-        text = path.read_text(encoding="utf-8")
-        values = [self.compact_text(value) for value in self.parse_project_definition(text).get("stage_dod_done", [])]
-        values = [value for value in values if value and value != item]
-        if done:
-            values.append(item)
-        replacement = f"- 阶段 DoD 已完成：{'；'.join(values)}" if values else None
-        self.write_current_stage_line(path, r"-\s*阶段\s*DoD\s*已完成[:：]", replacement, r"-\s*阶段\s*DoD[:：]")
+    def owner_project_definition_payload(self, row: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
+        return {**payload, "project_id": row["id"], "project_root": row.get("code_root") or "", "workbench_path": row.get("workbench_path") or row.get("path") or ""}
 
-    def write_current_stage_line(self, path: Path, field_pattern: str, replacement: str | None, insert_after_pattern: str | None = None) -> None:
-        output, inserted, in_current = [], False, False
-        field_re = re.compile(field_pattern, re.IGNORECASE)
-        after_re = re.compile(insert_after_pattern, re.IGNORECASE) if insert_after_pattern else None
-        for line in path.read_text(encoding="utf-8").splitlines():
-            stripped = line.strip()
-            if stripped == "### 当前阶段":
-                in_current = True
-            elif stripped.startswith("### "):
-                if in_current and not inserted and replacement:
-                    output.append(replacement)
-                    inserted = True
-                in_current = False
-            if in_current and field_re.match(stripped):
-                if replacement:
-                    output.append(replacement)
-                inserted = True
-                continue
-            output.append(line)
-            if in_current and after_re and not inserted and replacement and after_re.match(stripped):
-                output.append(replacement)
-                inserted = True
-        if in_current and not inserted and replacement:
-            output.append(replacement)
-        self.write_atomic_text(path, "\n".join(output) + "\n")
+    def forward_project_definition_update(self, route: str, path: str, row: dict[str, Any], payload: dict[str, Any], username: str) -> None:
+        result = self.owner_json_request(route, path, self.owner_project_definition_payload(row, payload), username, timeout=10)
+        if not result.get("ok"):
+            raise ValueError(self.compact_text(result.get("error")) or "owner project definition update failed")
 
     def handle_project_workbench_import(self, username: str) -> None:
         try:

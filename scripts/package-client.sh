@@ -47,6 +47,7 @@ release_checks() {
     "$ROOT"/apps/owner/scripts/*.sh \
     "$ROOT"/apps/gateway/scripts/*.sh
   python3 -m py_compile \
+    "$ROOT/apps/shared/pd_state.py" \
     "$ROOT/apps/owner/local-tmux-owner/server.py" \
     "$ROOT/apps/gateway/gcp-gateway/server.py" \
     "$ROOT/apps/gateway/cloud-run/faryo-vm-guard/main.py" \
@@ -90,6 +91,7 @@ PY
 stage_client_payload() {
   local dest="$1"
   install -d "$dest/opt/faryo/apps"
+  rsync -a --exclude='__pycache__/' --exclude='*.pyc' "$ROOT/apps/shared/" "$dest/opt/faryo/apps/shared/"
   install -m 0644 "$ROOT/LICENSE" "$dest/opt/faryo/LICENSE"
   rsync -a \
     --exclude='__pycache__/' \
@@ -154,6 +156,7 @@ build_macos_tar() {
   local payload="${PACKAGE}_${VERSION}_macos"
   local pkg_root="$WORK_DIR/$payload"
   install -d "$pkg_root/apps" "$pkg_root/scripts" "$pkg_root/deploy/launchd" "$OUT_DIR"
+  rsync -a --exclude='__pycache__/' --exclude='*.pyc' "$ROOT/apps/shared/" "$pkg_root/apps/shared/"
   rsync -a \
     --exclude='__pycache__/' \
     --exclude='*.pyc' \

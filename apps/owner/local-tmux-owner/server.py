@@ -40,6 +40,10 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Callable, NamedTuple
 
+SHARED_DIR = Path(__file__).resolve().parents[2] / "shared"
+if str(SHARED_DIR) not in sys.path:
+    sys.path.insert(0, str(SHARED_DIR))
+import pd_state
 import workbench_state as wb_state
 import urllib.error
 import urllib.request
@@ -1731,6 +1735,44 @@ def ensure_project_definition_file(project_root: Path, project: dict[str, Any]) 
         os.replace(tmp, path)
     return path
 
+def project_definition_root_from_payload(payload: dict[str, Any]) -> Path:
+    raw_root = compact_text(payload.get("project_root") or payload.get("cwd"))
+    if raw_root:
+        return project_root_from_payload(payload)
+    project_root, _workbench_path = project_workbench_import_path(compact_text(payload.get("workbench_path") or payload.get("path")))
+    return project_root
+
+
+def project_definition_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    path = project_definition_path(project_definition_root_from_payload(payload))
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise OwnerError("project.md not found", HTTPStatus.NOT_FOUND) from exc
+    return {"ok": True, "definition": pd_state.parse_project_definition(text), "updatedAt": now_iso()}
+
+
+def update_project_stage_state(payload: dict[str, Any]) -> dict[str, Any]:
+    if not project_workbench_enabled():
+        raise OwnerError("project workbench is disabled", HTTPStatus.FORBIDDEN)
+    path = project_definition_path(project_definition_root_from_payload(payload))
+    if not path.exists():
+        raise OwnerError("project.md not found", HTTPStatus.NOT_FOUND)
+    pd_state.write_stage_state(path, payload.get("stage_state"))
+    return project_definition_payload(payload)
+
+
+def update_project_stage_dod(payload: dict[str, Any]) -> dict[str, Any]:
+    if not project_workbench_enabled():
+        raise OwnerError("project workbench is disabled", HTTPStatus.FORBIDDEN)
+    if not compact_text(payload.get("item")):
+        raise OwnerError("DoD item is required", HTTPStatus.BAD_REQUEST)
+    path = project_definition_path(project_definition_root_from_payload(payload))
+    if not path.exists():
+        raise OwnerError("project.md not found", HTTPStatus.NOT_FOUND)
+    pd_state.write_stage_dod_done(path, payload.get("item"), bool(payload.get("done")))
+    return project_definition_payload(payload)
+
 
 def project_workbench_hash(project: dict[str, Any]) -> str:
     body = json.dumps(project, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
@@ -2326,6 +2368,15 @@ class Handler(SimpleHTTPRequestHandler):
                 return
             if parsed.path == "/api/project-workbench/downlink/apply":
                 self.write_json(apply_project_workbench_downlink(self.config, payload))
+                return
+            if parsed.path == "/api/project-workbench/definition":
+                self.write_json(project_definition_payload(payload))
+                return
+            if parsed.path == "/api/project-workbench/stage-state":
+                self.write_json(update_project_stage_state(payload))
+                return
+            if parsed.path == "/api/project-workbench/stage-dod":
+                self.write_json(update_project_stage_dod(payload))
                 return
             if parsed.path == "/api/workbench/transition":
                 self.write_json(apply_workbench_transition(payload))
