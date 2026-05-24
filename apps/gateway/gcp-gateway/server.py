@@ -114,6 +114,7 @@ PROJECT_ITEM_STAGES = {
     "paused",
 }
 PROJECT_BUCKET_ORDER = {"S": 0, "A": 1, "B": 2}
+PROJECT_STAGE_STATES = {"stage_to_define", "define_to_execute", "execute_to_close", "closed"}
 
 HOP_BY_HOP_HEADERS = {
     "connection",
@@ -719,6 +720,12 @@ class GatewayHandler(BaseHTTPRequestHandler):
         if parsed.path == "/api/project-workbench/transition":
             self.handle_project_workbench_transition(username)
             return
+        if parsed.path == "/api/project-workbench/stage-state":
+            self.handle_project_stage_state(username)
+            return
+        if parsed.path == "/api/project-workbench/stage-dod":
+            self.handle_project_stage_dod(username)
+            return
         if parsed.path == "/api/project-workbench/import":
             self.handle_project_workbench_import(username)
             return
@@ -903,7 +910,7 @@ class GatewayHandler(BaseHTTPRequestHandler):
             line = raw.strip()
             if not line:
                 continue
-            if line.startswith("current_phase:"):
+            if line.startswith(("current_stage:", "current_phase:")):
                 data["current_phase"] = line.split(":", 1)[1].strip().strip('"')
             if line.startswith("### "):
                 section = line.lstrip("#").strip()
@@ -922,11 +929,27 @@ class GatewayHandler(BaseHTTPRequestHandler):
                     key, _, value = line[1:].strip().partition(":")
                 key = key.strip().replace(" ", "").lower()
                 value = value.strip()
-                mapping = {"阶段定位": "stage_position", "阶段目标": "stage_goal", "阶段dod": "stage_dod", "当前不做": "stage_out_of_scope"}
+                mapping = {"阶段定位": "stage_position", "阶段目标": "stage_goal", "阶段dod": "stage_dod", "阶段状态": "stage_state", "阶段进度": "stage_state", "阶段dod已完成": "stage_dod_done", "当前不做": "stage_out_of_scope"}
                 target = mapping.get(key)
-                if target and value:
+                if target == "stage_state":
+                    data[target] = self.clean_stage_state(value)
+                elif target == "stage_dod_done":
+                    data[target] = self.clean_stage_dod_done(value)
+                elif target and value:
                     data[target] = value
         return {key: value for key, value in data.items() if value}
+
+    def clean_stage_state(self, value: Any) -> str:
+        text = str(value or "").strip().lower()
+        if text in PROJECT_STAGE_STATES:
+            return text
+        return {"1": "stage_to_define", "2": "define_to_execute", "3": "execute_to_close", "4": "closed"}.get(text[:1], "stage_to_define")
+
+    def clean_stage_dod_done(self, value: Any) -> list[str]:
+        text = str(value or "").strip()
+        if not text or text == "0":
+            return []
+        return [self.compact_text(item) for item in re.split(r"[；;、,，]", text) if self.compact_text(item)]
 
     def split_phase_heading(self, heading: str) -> tuple[str, str]:
         for sep in ("：", ":"):
@@ -1037,6 +1060,75 @@ class GatewayHandler(BaseHTTPRequestHandler):
     def wake_faryo_after_project_submit(self, username: str, rows: list[dict[str, Any]], downlink: dict[str, Any]) -> dict[str, Any]:
         result = self.ensure_faryo_controller(username, self.project_submit_prompt(rows, downlink))
         return {"ok": bool(result.get("ok")), "session": result.get("session") or "", "error": result.get("error") or ""}
+
+    def handle_project_stage_state(self, username: str) -> None:
+        try:
+            payload = self.read_json_body(8 * 1024)
+            path = self.local_project_definition_path(username, payload, "stage state update")
+            self.write_current_stage_line(path, r"-\s*阶段(?:状态|进度)[:：]", f"- 阶段状态：{self.clean_stage_state(payload.get('stage_state'))}")
+            self.write_json({"ok": True, "workbench": self.project_workbench_payload()}, HTTPStatus.OK)
+        except ValueError as exc:
+            self.write_json({"ok": False, "error": str(exc)}, HTTPStatus.BAD_REQUEST)
+
+    def handle_project_stage_dod(self, username: str) -> None:
+        try:
+            payload = self.read_json_body(16 * 1024)
+            item = self.compact_text(payload.get("item"))
+            if not item:
+                raise ValueError("DoD item is required")
+            path = self.local_project_definition_path(username, payload, "DoD update")
+            self.write_project_stage_dod_done(path, item, bool(payload.get("done")))
+            self.write_json({"ok": True, "workbench": self.project_workbench_payload()}, HTTPStatus.OK)
+        except ValueError as exc:
+            self.write_json({"ok": False, "error": str(exc)}, HTTPStatus.BAD_REQUEST)
+
+    def local_project_definition_path(self, username: str, payload: dict[str, Any], action: str) -> Path:
+        project_id = self.project_id({"id": payload.get("project_id")})
+        row = next((item for item in self.read_project_rows() if item["id"] == project_id), None)
+        if not row:
+            raise ValueError("project not found")
+        route = self.clean_owner_route(row.get("owner_route"))
+        if route != "gcp" or not self.config.allowed_route(username, route):
+            raise ValueError(f"{action} is only available on local GCP project truth")
+        path = self.project_definition_path(row)
+        if not path or not path.exists():
+            raise ValueError("project.md not found")
+        return path
+
+    def write_project_stage_dod_done(self, path: Path, item: str, done: bool) -> None:
+        text = path.read_text(encoding="utf-8")
+        values = [self.compact_text(value) for value in self.parse_project_definition(text).get("stage_dod_done", [])]
+        values = [value for value in values if value and value != item]
+        if done:
+            values.append(item)
+        replacement = f"- 阶段 DoD 已完成：{'；'.join(values)}" if values else None
+        self.write_current_stage_line(path, r"-\s*阶段\s*DoD\s*已完成[:：]", replacement, r"-\s*阶段\s*DoD[:：]")
+
+    def write_current_stage_line(self, path: Path, field_pattern: str, replacement: str | None, insert_after_pattern: str | None = None) -> None:
+        output, inserted, in_current = [], False, False
+        field_re = re.compile(field_pattern, re.IGNORECASE)
+        after_re = re.compile(insert_after_pattern, re.IGNORECASE) if insert_after_pattern else None
+        for line in path.read_text(encoding="utf-8").splitlines():
+            stripped = line.strip()
+            if stripped == "### 当前阶段":
+                in_current = True
+            elif stripped.startswith("### "):
+                if in_current and not inserted and replacement:
+                    output.append(replacement)
+                    inserted = True
+                in_current = False
+            if in_current and field_re.match(stripped):
+                if replacement:
+                    output.append(replacement)
+                inserted = True
+                continue
+            output.append(line)
+            if in_current and after_re and not inserted and replacement and after_re.match(stripped):
+                output.append(replacement)
+                inserted = True
+        if in_current and not inserted and replacement:
+            output.append(replacement)
+        self.write_atomic_text(path, "\n".join(output) + "\n")
 
     def handle_project_workbench_import(self, username: str) -> None:
         try:

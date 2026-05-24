@@ -39,6 +39,12 @@ const STATUS = { pending: 'Pending decision', ready: 'Ready', open: 'Open', acce
 const TRANSITIONS = { accept: 'owner_approved', pause: 'owner_paused', done: 'owner_approved', seen: 'owner_seen', 'to-decision': 'item_escalated' };
 const PROJECT_GIT_REFRESH_MS = 30000;
 const PROJECT_FILTER = { key: 'faryoProjectFilter', values: ['active', 'all', 'archived'], labels: { active: 'Active', all: 'All', archived: 'Archived' } };
+const STAGE_FLOW = [
+  { state: 'stage_to_define', label: 'Stage' },
+  { state: 'define_to_execute', label: 'Define' },
+  { state: 'execute_to_close', label: 'Execute' },
+  { state: 'closed', label: 'Close' }
+];
 let state = null, deck = { projectId: '', type: 'decision', index: 0 }, dirty = false;
 let faryoSession = '', faryoAgentRunning = false, faryoStream = null;
 const sheetTimers = new WeakMap();
@@ -163,22 +169,75 @@ function openGoal(project) {
 }
 function openProjectOverview(project) {
   const counts = Object.fromEntries(Object.keys(TYPES).map(type => [type, activeItems(project, type).length]));
-  const def = project.definition || {}, dod = definitionDodItems(def.stage_dod);
+  const def = project.definition || {}, dod = definitionDodItems(def.stage_dod), done = new Set((Array.isArray(def.stage_dod_done) ? def.stage_dod_done : []).map(String));
   const stageTitle = [def.current_stage_id, def.current_stage_title].filter(Boolean).join(' · ') || def.current_phase || '阶段未设定';
+  const stageState = STAGE_FLOW.some(item => item.state === def.stage_state) ? def.stage_state : 'stage_to_define';
   const goal = def.stage_goal || project.current_d || '阶段目标未设定。';
   showSheet(els.sheet); els.sheet.classList.add('project-overview-sheet'); els.nav.hidden = true; els.goal.hidden = true;
   setDeckMeta(tierBadge(project.bucket)); els.title.textContent = `${project.name || 'Project'} · Overview`;
   const card = document.createElement('article');
   card.className = `project-overview-card overview-bucket-${html(String(project.bucket || 'B').toLowerCase())}`;
-  card.innerHTML = `<section class="overview-stage"><p class="overview-eyebrow">Current Stage</p><div class="overview-stage-title"><strong>${html(stageTitle)}</strong><span>IN PROGRESS</span></div><div class="overview-rail" aria-hidden="true"><i class="done">✓</i><i class="current"></i><i></i><i></i></div><div class="overview-rail-labels"><span>Define</span><span>Decide</span><span>Execute</span><span>Close</span></div></section><section class="overview-panel overview-goal"><h4>⚐ Stage Goal</h4><p>${html(goal)}</p></section><section class="overview-panel overview-dod"><h4>Definition of Done</h4>${overviewDod(dod, def.stage_dod)}</section>${overviewCompleted(def.completed_stages)}${overviewBoundary(def.stage_out_of_scope)}<section class="metrics overview-metrics" aria-label="Project status counts">${Object.keys(TYPES).map(type => metricButton(type, counts[type])).join('')}</section>`;
-  card.addEventListener('click', closeDeck);
+  card.innerHTML = `${overviewHero(project, stageState)}<p class="overview-summary">${html(project.brief || '项目一句话定义未设定。')}</p><section class="overview-stage"><div class="overview-stage-head"><p>Current Stage</p><strong>${html(stageTitle)}</strong></div>${overviewStageFlow(stageState)}</section><section class="overview-panel overview-goal"><h4>⚐ Stage Goal</h4><p>${html(goal)}</p></section><section class="overview-panel overview-dod"><h4>Definition of Done</h4>${overviewDod(dod, def.stage_dod, done)}</section>${overviewCompleted(def.completed_stages)}${overviewBoundary(def.stage_out_of_scope)}<section class="metrics overview-metrics" aria-label="Project status counts">${Object.keys(TYPES).map(type => metricButton(type, counts[type])).join('')}</section>`;
+  card.addEventListener('click', event => { if (event.target === card) closeDeck(); });
+  card.querySelector('.overview-star')?.addEventListener('click', event => { event.stopPropagation(); toggleArchive(project); });
+  attachStageFlow(card, project);
+  attachDod(card, project);
   card.querySelectorAll('.metric').forEach(button => button.addEventListener('click', event => { event.stopPropagation(); openDeck(project.id, button.dataset.type); }));
   els.stage.replaceChildren(card);
 }
+function overviewHero(project, stageState) {
+  const stateLabel = STAGE_FLOW.find(item => item.state === stageState)?.label || 'Stage';
+  const meta = [projectGitMeta(project.gitStatus), projectMeta(project) ? html(projectMeta(project)) : ''].filter(Boolean).join('<span class="overview-dot"> · </span>');
+  return `<section class="overview-hero"><span class="tier-badge tier-${html((project.bucket || 'B').toLowerCase())} overview-tier">${html(project.bucket || 'B')}</span><div><h3>${html(project.name || 'Untitled')}</h3><p>${meta || html(project.owner_route || 'project')}</p></div><span class="overview-state">${html(stateLabel)}</span><button class="overview-star" type="button" aria-label="${project.archived ? 'Unarchive' : 'Archive'} ${html(project.name || 'Untitled')}">${project.archived ? '&#9733;' : '&#9734;'}</button></section>`;
+}
+function overviewStageFlow(stageState) {
+  const index = Math.max(0, STAGE_FLOW.findIndex(item => item.state === stageState));
+  const nodes = STAGE_FLOW.map((item, idx) => `<button class="overview-node${idx === index ? ' is-current' : ''}${idx < index || stageState === 'closed' ? ' is-done' : ''}" type="button" data-state="${item.state}"${item.state === 'closed' ? ' data-confirm-close="true"' : ''}><span>${item.label}</span></button>`).join('');
+  return `<div class="overview-flow flow-${index}" aria-label="Stage state"><span class="overview-line" aria-hidden="true"></span>${nodes}</div>`;
+}
+function attachStageFlow(card, project) {
+  card.querySelectorAll('.overview-node').forEach(button => button.addEventListener('click', event => {
+    event.stopPropagation();
+    if (button.dataset.confirmClose) return showCloseConfirm(card, project);
+    saveStageState(project, button.dataset.state);
+  }));
+}
+function showCloseConfirm(card, project) {
+  card.querySelector('.overview-confirm')?.remove();
+  const box = document.createElement('div');
+  box.className = 'overview-confirm';
+  box.innerHTML = '<span>确认关闭当前阶段？</span><button class="primary" type="button">Close</button><button type="button" data-cancel>Cancel</button>';
+  box.addEventListener('click', event => event.stopPropagation());
+  box.querySelector('.primary').addEventListener('click', () => saveStageState(project, 'closed'));
+  box.querySelector('[data-cancel]').addEventListener('click', () => box.remove());
+  card.querySelector('.overview-flow').appendChild(box);
+}
+function saveStageState(project, stageState) {
+  return saveProjectDefinition(project, '/api/project-workbench/stage-state', { stage_state: stageState }, stageState === 'closed' ? 'Closed' : 'Applied');
+}
 function definitionDodItems(text) { return String(text || '').split(/[；;、，,]/).map(item => item.trim()).filter(Boolean).slice(0, 6); }
-function overviewDod(items, raw) {
+function overviewDod(items, raw, doneSet) {
   if (!items.length) return `<p class="overview-empty">${html(raw || '阶段 DoD 未设定。')}</p>`;
-  return `<div class="overview-dod-grid"><ul>${items.map(item => `<li>${html(item)}</li>`).join('')}</ul><div class="overview-donut"><b>${items.length}</b><small>项</small><em>target</em></div></div>`;
+  const doneCount = items.filter(item => doneSet.has(item)).length, pct = Math.round((doneCount / items.length) * 100);
+  const list = items.map(item => {
+    const done = doneSet.has(item);
+    return `<li><button class="overview-dod-item${done ? ' is-done' : ''}" type="button" data-dod-item="${html(item)}" data-done="${done ? '1' : '0'}"><span aria-hidden="true"></span>${html(item)}</button></li>`;
+  }).join('');
+  return `<div class="overview-dod-grid"><ul>${list}</ul><div class="overview-donut" style="--dod-pct:${pct}%"><b>${doneCount}</b><small>/ ${items.length}</small><em>${doneCount === items.length ? 'done' : 'pending'}</em></div></div>`;
+}
+function attachDod(card, project) {
+  card.querySelectorAll('.overview-dod-item').forEach(button => button.addEventListener('click', event => {
+    event.stopPropagation();
+    saveStageDod(project, button.dataset.dodItem, button.dataset.done !== '1');
+  }));
+}
+function saveStageDod(project, item, done) {
+  return saveProjectDefinition(project, '/api/project-workbench/stage-dod', { item, done }, 'Applied');
+}
+async function saveProjectDefinition(project, url, payload, success) {
+  setSync('Applying');
+  try { const data = await fetchJson(url, { project_id: project.id, ...payload }); state = data.workbench; setDirty(false); setSync(success); const next = projects().find(row => row.id === project.id); if (next) openProjectOverview(next); else render(); }
+  catch (error) { setSync(error.message || 'Update failed'); }
 }
 function overviewCompleted(stages) {
   const items = Array.isArray(stages) ? stages.slice(0, 3) : [];
