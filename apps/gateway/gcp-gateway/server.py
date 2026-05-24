@@ -865,7 +865,75 @@ class GatewayHandler(BaseHTTPRequestHandler):
         except json.JSONDecodeError as exc: raise ValueError("invalid JSON body") from exc
 
     def read_project_workbench(self) -> dict[str, Any]:
-        return {"ok": True, "workbench": {"projects": self.read_project_rows()}}
+        return {"ok": True, "workbench": self.project_workbench_payload()}
+
+    def project_workbench_payload(self) -> dict[str, Any]:
+        return {"projects": [self.attach_project_definition(row) for row in self.read_project_rows()]}
+
+    def attach_project_definition(self, row: dict[str, Any]) -> dict[str, Any]:
+        enriched = dict(row)
+        definition = self.project_definition(row)
+        if definition:
+            enriched["definition"] = definition
+        return enriched
+
+    def project_definition(self, row: dict[str, Any]) -> dict[str, Any]:
+        path = self.project_definition_path(row)
+        if not path:
+            return {}
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError:
+            return {}
+        return self.parse_project_definition(text)
+
+    def project_definition_path(self, row: dict[str, Any]) -> Path | None:
+        marker = "/00-system/workbench.json"
+        workbench = self.compact_text(row.get("workbench_path") or row.get("path"))
+        if workbench.endswith(marker):
+            return Path(workbench[: -len(marker)]) / "00-system" / "project.md"
+        if workbench.startswith("/"):
+            return Path(workbench).parent / "project.md"
+        return None
+
+    def parse_project_definition(self, text: str) -> dict[str, Any]:
+        data: dict[str, Any] = {"completed_stages": []}
+        section = ""
+        for raw in text.splitlines():
+            line = raw.strip()
+            if not line:
+                continue
+            if line.startswith("current_phase:"):
+                data["current_phase"] = line.split(":", 1)[1].strip().strip('"')
+            if line.startswith("### "):
+                section = line.lstrip("#").strip()
+                continue
+            if line.startswith("#### "):
+                heading = line.lstrip("#").strip()
+                if section == "当前阶段":
+                    phase_id, phase_title = self.split_phase_heading(heading)
+                    data.update({"current_stage_id": phase_id, "current_stage_title": phase_title})
+                elif section == "已完成阶段":
+                    data["completed_stages"].append(heading)
+                continue
+            if section == "当前阶段" and line.startswith("-"):
+                key, _, value = line[1:].strip().partition("：")
+                if not value:
+                    key, _, value = line[1:].strip().partition(":")
+                key = key.strip().replace(" ", "").lower()
+                value = value.strip()
+                mapping = {"阶段定位": "stage_position", "阶段目标": "stage_goal", "阶段dod": "stage_dod", "当前不做": "stage_out_of_scope"}
+                target = mapping.get(key)
+                if target and value:
+                    data[target] = value
+        return {key: value for key, value in data.items() if value}
+
+    def split_phase_heading(self, heading: str) -> tuple[str, str]:
+        for sep in ("：", ":"):
+            if sep in heading:
+                left, right = heading.split(sep, 1)
+                return self.compact_text(left), self.compact_text(right)
+        return "", self.compact_text(heading)
 
     def project_git_statuses(self, username: str) -> dict[str, dict[str, Any] | None]:
         return {row["id"]: self.project_git_status(username, row) for row in self.read_project_rows()}
@@ -889,7 +957,7 @@ class GatewayHandler(BaseHTTPRequestHandler):
                 raise ValueError("projects must be a list")
             rows = self.project_projection_rows_from_ui(source)
             self.write_project_rows(rows)
-            self.write_json({"ok": True, "workbench": {"projects": self.read_project_rows()}}, HTTPStatus.OK)
+            self.write_json({"ok": True, "workbench": self.project_workbench_payload()}, HTTPStatus.OK)
         except ValueError as exc:
             self.write_json({"ok": False, "error": str(exc)}, HTTPStatus.BAD_REQUEST)
 
@@ -907,7 +975,7 @@ class GatewayHandler(BaseHTTPRequestHandler):
                 downlink = {"status": "skipped"}
                 self.write_json({
                     "ok": True,
-                    "workbench": {"projects": self.read_project_rows()},
+                    "workbench": self.project_workbench_payload(),
                     "downlink": downlink,
                     "faryo": self.wake_faryo_after_project_submit(username, active_rows, downlink),
                 }, HTTPStatus.OK)
@@ -917,7 +985,7 @@ class GatewayHandler(BaseHTTPRequestHandler):
             downlink = self.project_downlink_response(packages, notices)
             self.write_json({
                 "ok": True,
-                "workbench": {"projects": self.read_project_rows()},
+                "workbench": self.project_workbench_payload(),
                 "downlink": downlink,
                 "faryo": self.wake_faryo_after_project_submit(username, target_rows, downlink),
             }, HTTPStatus.OK)
@@ -986,7 +1054,7 @@ class GatewayHandler(BaseHTTPRequestHandler):
             if not isinstance(project, dict):
                 raise ValueError("owner returned no project")
             row = self.merge_project_import(project, owner_route)
-            self.write_json({"ok": True, "project": row, "workbench": {"projects": self.read_project_rows()}}, HTTPStatus.OK)
+            self.write_json({"ok": True, "project": row, "workbench": self.project_workbench_payload()}, HTTPStatus.OK)
         except ValueError as exc:
             self.write_json({"ok": False, "error": str(exc)}, HTTPStatus.BAD_REQUEST)
 
@@ -1000,7 +1068,7 @@ class GatewayHandler(BaseHTTPRequestHandler):
                 raise ValueError("projects must be a list")
             rows = self.project_sync_rows([project for project in source if isinstance(project, dict)], self.project_sync_owner_route())
             self.write_project_rows(rows)
-            self.write_json({"ok": True, "workbench": {"projects": self.read_project_rows()}}, HTTPStatus.OK)
+            self.write_json({"ok": True, "workbench": self.project_workbench_payload()}, HTTPStatus.OK)
         except ValueError as exc:
             self.write_json({"ok": False, "error": str(exc)}, HTTPStatus.BAD_REQUEST)
 
@@ -1527,7 +1595,7 @@ class GatewayHandler(BaseHTTPRequestHandler):
                 result = self.owner_json_request(route, "/api/workbench/transition", {**payload, "project_root": cwd}, username, timeout=10)
                 if result.get("ok"):
                     updated = self.update_projection_from_owner_project(project["id"], result.get("project"))
-                    self.write_json({"ok": True, "transition": result, "project": updated, "workbench": {"projects": self.read_project_rows()}}, HTTPStatus.OK)
+                    self.write_json({"ok": True, "transition": result, "project": updated, "workbench": self.project_workbench_payload()}, HTTPStatus.OK)
                     return
                 last_error = self.compact_text(result.get("error")) or "owner transition failed"
             self.write_json({"ok": False, "error": last_error, "route": route}, HTTPStatus.BAD_GATEWAY)

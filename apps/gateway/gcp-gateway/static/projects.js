@@ -50,6 +50,7 @@ const setSync = text => setLabel(els.sync, text);
 const tierBadge = bucket => `<span class="tier-badge tier-${html(String(bucket || 'B').toLowerCase())} sheet-tier">${html(bucket || 'B')}</span>`;
 const typeBadge = type => `<span class="sheet-type-badge ${html(type)}" aria-label="${html(TYPES[type]?.label || type)}">${METRIC_ICONS[type] || '•'}</span>`;
 function setDeckMeta(markup) { els.meta.innerHTML = markup; }
+function resetSheetMode() { els.sheet.classList.remove('project-overview-sheet'); }
 function showSheet(el) { clearTimeout(sheetTimers.get(el)); el.classList.remove('is-closing'); el.hidden = false; }
 function hideSheet(el) {
   clearTimeout(sheetTimers.get(el));
@@ -87,10 +88,13 @@ function projectCard(project) {
   const card = document.createElement('article');
   const rank = stackRank(counts);
   card.className = `project-card stack-rank-${rank}${project.archived ? ' is-archived' : ''}`;
-  card.innerHTML = `${cardStack(rank)}<section class="card-face" role="button" tabindex="0" aria-label="Open project goal"><div class="title-row"><h2 class="project-title">${html(project.name || 'Untitled')}</h2><button class="favorite${project.archived ? ' is-archived' : ''}" type="button" aria-label="${project.archived ? 'Unarchive' : 'Archive'} ${html(project.name || 'Untitled')}">${project.archived ? '&#9733;' : '&#9734;'}</button></div><div class="project-meta"><button class="tier-badge tier-${html((project.bucket || 'B').toLowerCase())} bucket" type="button" aria-label="Change project bucket">${html(project.bucket || 'B')}</button><span class="meta-text">${git}${meta ? html(meta) : ''}</span></div><p class="summary${summary ? '' : ' is-empty'}"><span class="summary-text">${html(summary)}</span></p><section class="metrics" aria-label="Project status counts">${Object.keys(TYPES).map(type => metricButton(type, counts[type])).join('')}</section></section>`;
+  card.innerHTML = `${cardStack(rank)}<section class="card-face" role="button" tabindex="0" aria-label="Open project goal"><div class="title-row"><h2 class="project-title">${html(project.name || 'Untitled')}</h2><button class="favorite${project.archived ? ' is-archived' : ''}" type="button" aria-label="${project.archived ? 'Unarchive' : 'Archive'} ${html(project.name || 'Untitled')}">${project.archived ? '&#9733;' : '&#9734;'}</button></div><div class="project-meta"><button class="tier-badge tier-${html((project.bucket || 'B').toLowerCase())} bucket" type="button" aria-label="Change project bucket">${html(project.bucket || 'B')}</button><span class="meta-text">${git}${meta ? html(meta) : ''}</span></div><p class="summary${summary ? '' : ' is-empty'}" role="button" tabindex="0" aria-label="Open project overview"><span class="summary-text">${html(summary)}</span></p><section class="metrics" aria-label="Project status counts">${Object.keys(TYPES).map(type => metricButton(type, counts[type])).join('')}</section></section>`;
   const open = () => openGoal(project);
   card.querySelector('.card-face').addEventListener('click', open);
   card.querySelector('.card-face').addEventListener('keydown', event => { if (['Enter', ' '].includes(event.key)) { event.preventDefault(); open(); } });
+  const summaryEl = card.querySelector('.summary');
+  summaryEl.addEventListener('click', event => { event.stopPropagation(); openProjectOverview(project); });
+  summaryEl.addEventListener('keydown', event => { if (['Enter', ' '].includes(event.key)) { event.preventDefault(); event.stopPropagation(); openProjectOverview(project); } });
   card.querySelector('.favorite').addEventListener('click', event => { event.stopPropagation(); toggleArchive(project); });
   card.querySelector('.bucket').addEventListener('click', event => { event.stopPropagation(); cycleBucket(project); });
   card.querySelectorAll('.metric').forEach(button => button.addEventListener('click', event => { event.stopPropagation(); openDeck(project.id, button.dataset.type); }));
@@ -143,7 +147,7 @@ function cycleBucket(project) {
   saveDraft();
 }
 function openGoal(project) {
-  showSheet(els.sheet); els.nav.hidden = true; els.goal.hidden = true; setDeckMeta(tierBadge(project.bucket)); els.title.textContent = `${project.name} · Goal`;
+  resetSheetMode(); showSheet(els.sheet); els.nav.hidden = true; els.goal.hidden = true; setDeckMeta(tierBadge(project.bucket)); els.title.textContent = `${project.name} · Goal`;
   const form = document.createElement('form');
   form.className = 'goal-form';
   form.innerHTML = `<label class="goal-editor"><span>Stage Goal</span><textarea name="goal" rows="5">${html(project.current_d)}</textarea></label><button class="goal-save" type="submit">Save Goal</button>`;
@@ -157,7 +161,34 @@ function openGoal(project) {
   els.stage.replaceChildren(form);
   form.elements.goal.focus();
 }
-function openDeck(projectId, type) { deck = { projectId, type, index: 0 }; showSheet(els.sheet); renderDeck(); }
+function openProjectOverview(project) {
+  const counts = Object.fromEntries(Object.keys(TYPES).map(type => [type, activeItems(project, type).length]));
+  const def = project.definition || {}, dod = definitionDodItems(def.stage_dod);
+  const stageTitle = [def.current_stage_id, def.current_stage_title].filter(Boolean).join(' · ') || def.current_phase || '阶段未设定';
+  const goal = def.stage_goal || project.current_d || '阶段目标未设定。';
+  showSheet(els.sheet); els.sheet.classList.add('project-overview-sheet'); els.nav.hidden = true; els.goal.hidden = true;
+  setDeckMeta(tierBadge(project.bucket)); els.title.textContent = `${project.name || 'Project'} · Overview`;
+  const card = document.createElement('article');
+  card.className = `project-overview-card overview-bucket-${html(String(project.bucket || 'B').toLowerCase())}`;
+  card.innerHTML = `<section class="overview-stage"><p class="overview-eyebrow">Current Stage</p><div class="overview-stage-title"><strong>${html(stageTitle)}</strong><span>IN PROGRESS</span></div><div class="overview-rail" aria-hidden="true"><i class="done">✓</i><i class="current"></i><i></i><i></i></div><div class="overview-rail-labels"><span>Define</span><span>Decide</span><span>Execute</span><span>Close</span></div></section><section class="overview-panel overview-goal"><h4>⚐ Stage Goal</h4><p>${html(goal)}</p></section><section class="overview-panel overview-dod"><h4>Definition of Done</h4>${overviewDod(dod, def.stage_dod)}</section>${overviewCompleted(def.completed_stages)}${overviewBoundary(def.stage_out_of_scope)}<section class="metrics overview-metrics" aria-label="Project status counts">${Object.keys(TYPES).map(type => metricButton(type, counts[type])).join('')}</section>`;
+  card.addEventListener('click', closeDeck);
+  card.querySelectorAll('.metric').forEach(button => button.addEventListener('click', event => { event.stopPropagation(); openDeck(project.id, button.dataset.type); }));
+  els.stage.replaceChildren(card);
+}
+function definitionDodItems(text) { return String(text || '').split(/[；;、，,]/).map(item => item.trim()).filter(Boolean).slice(0, 6); }
+function overviewDod(items, raw) {
+  if (!items.length) return `<p class="overview-empty">${html(raw || '阶段 DoD 未设定。')}</p>`;
+  return `<div class="overview-dod-grid"><ul>${items.map(item => `<li>${html(item)}</li>`).join('')}</ul><div class="overview-donut"><b>${items.length}</b><small>项</small><em>target</em></div></div>`;
+}
+function overviewCompleted(stages) {
+  const items = Array.isArray(stages) ? stages.slice(0, 3) : [];
+  if (!items.length) return '';
+  return `<section class="overview-completed"><header><b>Completed Stages</b><span>${items.length}</span></header>${items.map(stage => `<p>${html(stage)}</p>`).join('')}</section>`;
+}
+function overviewBoundary(text) {
+  return text ? `<section class="overview-boundary"><h4>Current Boundary</h4><p>${html(text)}</p></section>` : '';
+}
+function openDeck(projectId, type) { resetSheetMode(); deck = { projectId, type, index: 0 }; showSheet(els.sheet); renderDeck(); }
 function closeDeck() { hideSheet(els.sheet); }
 function renderDeck() {
   const project = deckProject(), items = deckItems(), cfg = TYPES[deck.type];
