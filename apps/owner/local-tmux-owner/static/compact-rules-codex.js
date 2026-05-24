@@ -35,7 +35,7 @@
   }
 
   function isPlanStart(line) {
-    return /^(?:Updated Plan|Plan updated)$/i.test(line.trim());
+    return /^(?:[-*•]\s*)?(?:Updated Plan|Plan updated)$/i.test(line.trim());
   }
 
   function isPlanDetailLine(line) {
@@ -86,11 +86,21 @@
       if (!lines[index].trim()) { index += 1; continue; }
       if (isPlanStart(lines[index])) {
         const start = index++;
+        let hasItem = false;
         while (index < end) {
           const line = lines[index];
           if (!line.trim()) { index += 1; continue; }
-          if (userPromptRe.test(line) || isStatusLine(line) || isPlanStart(line) || !isPlanDetailLine(line)) break;
-          index += 1;
+          if (userPromptRe.test(line) || isStatusLine(line) || isPlanStart(line)) break;
+          if (isPlanDetailLine(line)) {
+            hasItem = true;
+            index += 1;
+            continue;
+          }
+          if (hasItem && /^\s{2,}\S/.test(line)) {
+            index += 1;
+            continue;
+          }
+          break;
         }
         pushBlock(blocks, 'plan', lines.slice(start, index));
         continue;

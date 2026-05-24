@@ -577,16 +577,20 @@
   }
 
   function renderPlanBlock(text) {
-    const items = text.split('\n').map((line) => line.trim()
-      .replace(/^[-*•]\s*/, '')
-      .replace(/^[│|└├↳]\s*/, '')
-      .trim())
-      .filter((line) => line && !/^(?:Updated Plan|Plan updated)\b/i.test(line))
-      .map((line) => line
+    const titleRe = /^(?:[-*•]\s*)?(?:Updated Plan|Plan updated)\b/i;
+    const itemRe = /^(?:\[(?:x|X|✓|✔)\]|\[\s?\]|[✔✓☑□☐-]|\d+\.)\s*/;
+    const items = [];
+    for (const raw of text.split('\n')) {
+      const line = raw.trim().replace(/^[│|└├↳]\s*/, '').trim();
+      if (!line || titleRe.test(line)) continue;
+      const item = line
         .replace(/^\[(?:x|X|✓|✔)\]\s*/, '✓ ')
         .replace(/^\[\s?\]\s*/, '□ ')
         .replace(/^[✔✓☑]\s*/, '✓ ')
-        .replace(/^[□☐]\s*/, '□ '));
+        .replace(/^[□☐]\s*/, '□ ');
+      if (itemRe.test(line) || !items.length) items.push(item);
+      else items[items.length - 1] = `${items[items.length - 1]} ${item}`;
+    }
     if (!items.length) return '<section class="compact-process-line">📝 Plan updated</section>';
     return `<section class="compact-block plan"><div class="compact-plan-title">Plan updated</div>${items.length ? `<div class="compact-plan-list">${items.map((item) => `<div class="compact-plan-item">${escapeHtml(item)}</div>`).join('')}</div>` : ''}</section>`;
   }
