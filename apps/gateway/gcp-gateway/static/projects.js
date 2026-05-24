@@ -41,11 +41,21 @@ const PROJECT_GIT_REFRESH_MS = 30000;
 const PROJECT_FILTER = { key: 'faryoProjectFilter', values: ['active', 'all', 'archived'], labels: { active: 'Active', all: 'All', archived: 'Archived' } };
 let state = null, deck = { projectId: '', type: 'decision', index: 0 }, dirty = false;
 let faryoSession = '', faryoAgentRunning = false, faryoStream = null;
+const sheetTimers = new WeakMap();
 const projects = () => state?.projects || [];
 const html = value => String(value || '').replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
 const empty = text => Object.assign(document.createElement('div'), { className: 'empty', textContent: text });
 const setLabel = (el, text) => { const label = el?.querySelector?.('.label'); if (label) label.textContent = text; else if (el) el.textContent = text; };
 const setSync = text => setLabel(els.sync, text);
+const tierBadge = bucket => `<span class="tier-badge tier-${html(String(bucket || 'B').toLowerCase())} sheet-tier">${html(bucket || 'B')}</span>`;
+const typeBadge = type => `<span class="sheet-type-badge ${html(type)}" aria-label="${html(TYPES[type]?.label || type)}">${METRIC_ICONS[type] || '•'}</span>`;
+function setDeckMeta(markup) { els.meta.innerHTML = markup; }
+function showSheet(el) { clearTimeout(sheetTimers.get(el)); el.classList.remove('is-closing'); el.hidden = false; }
+function hideSheet(el) {
+  clearTimeout(sheetTimers.get(el));
+  el.classList.add('is-closing');
+  sheetTimers.set(el, setTimeout(() => { el.hidden = true; el.classList.remove('is-closing'); }, 150));
+}
 const ownerQueueItem = item => !item.stage || ['awaiting_owner', 'paused', 'needs_fix'].includes(item.stage);
 const hasApprovedWork = () => projects().some(project => !project.archived && (project.items || []).some(item => item.stage === 'approved_for_workorder'));
 const activeItems = (project, type) => (project.items || []).filter(item => item.type === type && ownerQueueItem(item) && !TYPES[type].done.includes(item.status || 'open'));
@@ -133,7 +143,7 @@ function cycleBucket(project) {
   saveDraft();
 }
 function openGoal(project) {
-  els.sheet.hidden = false; els.nav.hidden = true; els.goal.hidden = true; els.meta.textContent = project.bucket || ''; els.title.textContent = `${project.name} · Goal`;
+  showSheet(els.sheet); els.nav.hidden = true; els.goal.hidden = true; setDeckMeta(tierBadge(project.bucket)); els.title.textContent = `${project.name} · Goal`;
   const form = document.createElement('form');
   form.className = 'goal-form';
   form.innerHTML = `<textarea name="goal" rows="5">${html(project.current_d)}</textarea><button class="goal-save" type="submit">Save Goal</button>`;
@@ -147,14 +157,14 @@ function openGoal(project) {
   els.stage.replaceChildren(form);
   form.elements.goal.focus();
 }
-function openDeck(projectId, type) { deck = { projectId, type, index: 0 }; els.sheet.hidden = false; renderDeck(); }
-function closeDeck() { els.sheet.hidden = true; }
+function openDeck(projectId, type) { deck = { projectId, type, index: 0 }; showSheet(els.sheet); renderDeck(); }
+function closeDeck() { hideSheet(els.sheet); }
 function renderDeck() {
   const project = deckProject(), items = deckItems(), cfg = TYPES[deck.type];
   els.nav.hidden = false; els.goal.hidden = !project; els.goalText.textContent = project?.current_d || ''; els.title.textContent = project ? `${project.name} · ${cfg.label}` : cfg.label;
-  if (!items.length) { els.meta.textContent = '0 / 0'; els.stage.replaceChildren(empty(`${cfg.label} deck is clear`)); els.prev.disabled = els.next.disabled = true; return; }
+  if (!items.length) { setDeckMeta(typeBadge(deck.type)); els.stage.replaceChildren(empty(`${cfg.label} deck is clear`)); els.prev.disabled = els.next.disabled = true; return; }
   deck.index = Math.max(0, Math.min(deck.index, items.length - 1));
-  els.meta.textContent = `${deck.index + 1} / ${items.length}`; els.prev.disabled = deck.index === 0; els.next.disabled = deck.index >= items.length - 1;
+  setDeckMeta(typeBadge(deck.type)); els.prev.disabled = deck.index === 0; els.next.disabled = deck.index >= items.length - 1;
   els.stage.replaceChildren(deckCard(project, items[deck.index]));
 }
 function deckCard(project, item) {
@@ -269,8 +279,8 @@ async function fetchJson(url, body = null) {
   if (!data.ok) throw new Error(data.error || 'Request failed');
   return data;
 }
-function openImport() { els.importSheet.hidden = false; els.importStatus.textContent = dirty ? 'Submit current draft before importing.' : ''; els.importForm.elements.project_root.focus(); }
-function closeImport() { els.importSheet.hidden = true; }
+function openImport() { showSheet(els.importSheet); els.importStatus.textContent = dirty ? 'Submit current draft before importing.' : ''; els.importForm.elements.project_root.focus(); }
+function closeImport() { hideSheet(els.importSheet); }
 async function importProject(event) {
   event.preventDefault();
   if (dirty) { els.importStatus.textContent = 'Submit current draft before importing.'; return; }
