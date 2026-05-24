@@ -146,7 +146,7 @@ function openGoal(project) {
   showSheet(els.sheet); els.nav.hidden = true; els.goal.hidden = true; setDeckMeta(tierBadge(project.bucket)); els.title.textContent = `${project.name} · Goal`;
   const form = document.createElement('form');
   form.className = 'goal-form';
-  form.innerHTML = `<textarea name="goal" rows="5">${html(project.current_d)}</textarea><button class="goal-save" type="submit">Save Goal</button>`;
+  form.innerHTML = `<label class="goal-editor"><span>Stage Goal</span><textarea name="goal" rows="5">${html(project.current_d)}</textarea></label><button class="goal-save" type="submit">Save Goal</button>`;
   form.addEventListener('submit', async event => {
     event.preventDefault();
     const next = form.elements.goal.value.trim();
