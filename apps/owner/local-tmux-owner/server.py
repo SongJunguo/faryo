@@ -178,6 +178,7 @@ FAST_CONFIG_KEYS = {
     "codex-auto-fast",
 }
 SESSION_GIT_PREFIXES = ("🌿", "✏️", "✏", "⚠️")
+SESSION_GIT_ROOT_OPTION = "@faryo_git_root"
 SESSION_TITLE_NOISE_RE = re.compile(r"^(?:📁 |Ctx |(?:gpt|o\d|claude)[\w.\- ]+\s+(?:low|medium|high|xhigh)$)", re.I)
 class AgentProfile(NamedTuple):
     key: str
@@ -222,6 +223,15 @@ def short_path(path: str | None) -> str | None:
 def git_status(cwd: str | None) -> dict[str, Any] | None:
     if not cwd:
         return None
+    top = run_cmd(["git", "-C", cwd, "rev-parse", "--show-toplevel"], timeout=2)
+    if top.returncode != 0 or not top.stdout.strip():
+        return None
+    try:
+        git_root = Path(top.stdout.strip()).expanduser().resolve()
+    except OSError:
+        return None
+    if git_root == Path.home().resolve():
+        return None
     res = run_cmd(["git", "-C", cwd, "status", "--short", "--branch"], timeout=2)
     if res.returncode != 0:
         return None
@@ -265,12 +275,16 @@ def session_index_title(value: Any) -> str:
     return " ".join(str(value or "").replace("\r", "\n").split())
 
 
-def session_git_label(cwd: str | None, cache: dict[str, str]) -> str:
-    if not cwd:
+def session_git_label(cwd: str | None, cache: dict[str, str], active: bool = True) -> str:
+    if not cwd or not active:
         return ""
     if cwd not in cache:
         cache[cwd] = str((git_status(cwd) or {}).get("label") or "")
     return cache[cwd]
+
+
+def session_git_cwd(config: Config, session: str | None, cwd: str | None) -> str | None:
+    return (tmux_session_option(config, session, SESSION_GIT_ROOT_OPTION) or cwd) if session else cwd
 
 
 def env_value(*names: str, default: str = "") -> str:
@@ -477,7 +491,7 @@ def claude_history_items(history_root: str | None = None) -> list[dict[str, Any]
             continue
         if history_root is not None and not path_under_root(cwd, history_root): continue
         updated_at = _dt.datetime.fromtimestamp(stat.st_mtime, _dt.timezone.utc).astimezone().isoformat(timespec="seconds")
-        items.append({"id": session_id, "title": session_title_topic(title or last_prompt, short_path(cwd) or session_id or "Untitled session"), "gitLabel": session_git_label(cwd, git_labels), "cwd": short_path(cwd), "createdAt": "", "updatedAt": updated_at, "updatedTs": stat.st_mtime, "historyPath": path.as_posix(), "rolloutPath": "", "model": "", "reasoningEffort": "", "source": "claude-code", "tmuxSession": "", "active": False})
+        items.append({"id": session_id, "title": session_title_topic(title or last_prompt, short_path(cwd) or session_id or "Untitled session"), "gitLabel": session_git_label(cwd, git_labels, False), "cwd": short_path(cwd), "createdAt": "", "updatedAt": updated_at, "updatedTs": stat.st_mtime, "historyPath": path.as_posix(), "rolloutPath": "", "model": "", "reasoningEffort": "", "source": "claude-code", "tmuxSession": "", "active": False})
     return items
 
 def codex_history_items(config: Config, history_root: str | None = None) -> list[dict[str, Any]]:
@@ -492,7 +506,7 @@ def codex_history_items(config: Config, history_root: str | None = None) -> list
         title = codex_thread_title(item, fallback, index_titles)
         if tmux_session:
             title = tmux_session_option(config, tmux_session, "@faryo_session_title") or title
-        items.append({"id": thread_id, "title": title, "gitLabel": session_git_label(cwd, git_labels), "cwd": short_path(cwd), "createdAt": item.get("created_at") or "", "updatedAt": item.get("updated_at") or "", "updatedTs": updated_ts, "rolloutPath": item.get("rollout_path") or "", "model": item.get("model") or "", "reasoningEffort": item.get("reasoning_effort") or "", "source": "codex-cli", "tmuxSession": tmux_session, "active": bool(tmux_session)})
+        items.append({"id": thread_id, "title": title, "gitLabel": session_git_label(session_git_cwd(config, tmux_session, cwd), git_labels, bool(tmux_session)), "cwd": short_path(cwd), "createdAt": item.get("created_at") or "", "updatedAt": item.get("updated_at") or "", "updatedTs": updated_ts, "rolloutPath": item.get("rollout_path") or "", "model": item.get("model") or "", "reasoningEffort": item.get("reasoning_effort") or "", "source": "codex-cli", "tmuxSession": tmux_session, "active": bool(tmux_session)})
     return items
 
 
@@ -511,7 +525,7 @@ def agent_session_items(config: Config, history_root: str | None = None) -> list
         cwd = get_pane_cwd(target); thread = active_agent_thread(target, cwd) or {}; thread_id = str(thread.get("id") or name)
         updated_ts = session_created_ts(target); updated_at = iso_from_ts(updated_ts) if updated_ts else ""
         title = tmux_session_option(config, name, "@faryo_session_title") or (codex_thread_title(thread, short_path(cwd) or name) if thread else short_path(cwd) or name)
-        items.append({"id": thread_id, "title": title, "gitLabel": session_git_label(cwd, git_labels), "cwd": short_path(cwd), "createdAt": "", "updatedAt": updated_at, "updatedTs": updated_ts, "rolloutPath": "", "model": "", "reasoningEffort": "", "source": tmux_session_option(config, name, "@faryo_agent_source") or "runtime", "tmuxSession": name, "active": True})
+        items.append({"id": thread_id, "title": title, "gitLabel": session_git_label(session_git_cwd(config, name, cwd), git_labels), "cwd": short_path(cwd), "createdAt": "", "updatedAt": updated_at, "updatedTs": updated_ts, "rolloutPath": "", "model": "", "reasoningEffort": "", "source": tmux_session_option(config, name, "@faryo_agent_source") or "runtime", "tmuxSession": name, "active": True})
     return sorted(items, key=lambda item: float(item.get("updatedTs") or 0), reverse=True)
 
 
@@ -1464,7 +1478,7 @@ def status_payload(config: Config) -> dict[str, Any]:
         "model": model,
         "reasoningEffort": reasoning_effort,
         "fastStatus": fast_status,
-        "gitStatus": git_status(cwd),
+        "gitStatus": git_status(session_git_cwd(config, config.session, cwd)),
         "sessionTitle": session_title,
         "sessionId": (thread.get("id") if thread else None) or (claude_item.get("id") if claude_item else None),
         "contextUsage": context_usage,
@@ -1794,13 +1808,7 @@ def project_root_from_payload(payload: dict[str, Any]) -> Path:
 
 def project_git_status(payload: dict[str, Any]) -> dict[str, Any]:
     root = project_root_from_payload(payload)
-    top = run_cmd(["git", "-C", str(root), "rev-parse", "--show-toplevel"], timeout=2)
-    status = None
-    if top.returncode == 0 and top.stdout.strip():
-        git_root = Path(top.stdout.strip()).expanduser().resolve()
-        if git_root != Path.home().resolve() or root == git_root:
-            status = git_status(str(root))
-    return {"ok": True, "gitStatus": status, "updatedAt": now_iso()}
+    return {"ok": True, "gitStatus": git_status(str(root)), "updatedAt": now_iso()}
 
 
 def clean_workorder_id(value: Any) -> str:

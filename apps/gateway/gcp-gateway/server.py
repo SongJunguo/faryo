@@ -356,6 +356,7 @@ class GatewayConfig:
         self.faryo_session_title = clean_session_title(env.get("FARYO_CONTROLLER_SESSION_TITLE") or "Faryo")
         self.faryo_work_root = Path(env.get("FARYO_CONTROLLER_WORK_ROOT", str(Path.home()))).expanduser()
         self.faryo_project_root = Path(env.get("FARYO_CONTROLLER_PROJECT_ROOT", str(Path.home() / ".faryo" / "projects" / "faryo"))).expanduser()
+        self.faryo_code_root = Path(env.get("FARYO_CONTROLLER_CODE_ROOT", str(Path(__file__).resolve().parents[3]))).expanduser()
         self.owner_project_roots = self.load_owner_project_roots(env)
         self.faryo_codex_home = Path(env.get("CODEX_HOME") or os.environ.get("CODEX_HOME") or str(Path.home() / ".codex")).expanduser()
         self.faryo_codex_config = self.faryo_codex_home / f"{self.faryo_profile_name}.config.toml"
@@ -375,6 +376,7 @@ class GatewayConfig:
             "",
             f"- Faryo controller work root: `{self.faryo_work_root}`",
             f"- Faryo project truth root: `{self.faryo_project_root}`",
+            f"- Faryo code root: `{self.faryo_code_root}`",
             f"- Gateway workbench projection: `{self.project_workbench_index}`",
             f"- Gateway downlink packages: `{self.project_downlink_root}`",
             "",
@@ -1891,6 +1893,8 @@ class GatewayHandler(BaseHTTPRequestHandler):
         self.tmux_session_option(session, "@faryo_agent_source", "codex-cli")
         self.tmux_session_option(session, "@faryo_session_title", self.config.faryo_session_title)
         self.tmux_session_option(session, "@faryo_controller_profile", self.config.faryo_profile_name)
+        if self.config.faryo_code_root.is_dir():
+            self.tmux_session_option(session, "@faryo_git_root", str(self.config.faryo_code_root))
         if thread_id:
             self.tmux_session_option(session, "@faryo_agent_session_id", thread_id)
 
