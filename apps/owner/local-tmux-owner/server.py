@@ -1766,27 +1766,37 @@ def project_definition_payload(payload: dict[str, Any]) -> dict[str, Any]:
     return {"ok": True, "definition": pd_state.parse_project_definition(text), "updatedAt": now_iso()}
 
 
-def update_project_stage_state(payload: dict[str, Any]) -> dict[str, Any]:
-    if not project_workbench_enabled():
-        raise OwnerError("project workbench is disabled", HTTPStatus.FORBIDDEN)
-    path = project_definition_path(project_definition_root_from_payload(payload))
-    if not path.exists():
-        raise OwnerError("project.md not found", HTTPStatus.NOT_FOUND)
-    pd_state.write_stage_state(path, payload.get("stage_state"))
-    return project_definition_payload(payload)
+def project_root_from_workbench_file(path: Path) -> Path:
+    return path.parent.parent if path.parent.name == "00-system" else path.parent
 
 
-def update_project_stage_dod(payload: dict[str, Any]) -> dict[str, Any]:
+def apply_project_definition_downlink(path: Path, project: dict[str, Any], definition: dict[str, Any]) -> dict[str, Any]:
+    return sync_project_definition({**project, "project_root": str(project_root_from_workbench_file(path)), "definition": definition})["definition"]
+
+
+def project_downlink_truth(project: dict[str, Any], definition: dict[str, Any] | None = None) -> dict[str, Any]:
+    truth = clean_project_workbench(project)
+    if isinstance(definition, dict):
+        clean_definition = pd_state.project_definition_hash_payload(definition)
+        if clean_definition:
+            truth["definition"] = clean_definition
+    return truth
+
+
+def project_downlink_hash(project: dict[str, Any], definition: dict[str, Any] | None = None) -> str:
+    return project_workbench_hash(project_downlink_truth(project, definition))
+
+
+def sync_project_definition(payload: dict[str, Any]) -> dict[str, Any]:
     if not project_workbench_enabled():
         raise OwnerError("project workbench is disabled", HTTPStatus.FORBIDDEN)
-    path = project_definition_path(project_definition_root_from_payload(payload))
-    if not path.exists():
-        raise OwnerError("project.md not found", HTTPStatus.NOT_FOUND)
-    try:
-        pd_state.write_stage_dod_update(path, payload)
-    except ValueError as exc:
-        raise OwnerError(str(exc), HTTPStatus.BAD_REQUEST) from exc
-    return project_definition_payload(payload)
+    definition = pd_state.clean_project_definition(payload.get("definition"))
+    if not definition:
+        raise OwnerError("missing project definition")
+    project_root = project_definition_root_from_payload(payload)
+    path = ensure_project_definition_file(project_root, clean_project_workbench(payload))
+    pd_state.write_project_definition(path, definition)
+    return {"ok": True, "definition": pd_state.parse_project_definition(path.read_text(encoding="utf-8")), "updatedAt": now_iso()}
 
 
 def project_workbench_hash(project: dict[str, Any]) -> str:
@@ -2050,6 +2060,7 @@ def import_project_workbench(payload: dict[str, Any]) -> dict[str, Any]:
     row = dict(project)
     row["path"] = str(path)
     row["workbench_path"] = str(path)
+    row["definition"] = project_definition_payload({"project_root": str(project_root)})["definition"]
     return {"ok": True, "project": row, "updatedAt": now_iso()}
 
 
@@ -2098,24 +2109,28 @@ def apply_project_workbench_downlink(config: Config, payload: dict[str, Any]) ->
     if not projects:
         raise OwnerError("downlink package has no projects")
     raw_projects = [project for project in projects if isinstance(project, dict)]
-    targets = [(project_workbench_path(project), clean_project_workbench(project)) for project in raw_projects]
-    paths = [path for path, _project in targets]
+    targets = [(project_workbench_path(project), clean_project_workbench(project), project.get("definition") if isinstance(project.get("definition"), dict) else None) for project in raw_projects]
+    paths = [path for path, _project, _definition in targets]
     if len({str(path) for path in paths}) != len(paths):
         raise OwnerError("duplicate project workbench target", HTTPStatus.BAD_REQUEST)
     expected_hashes = {project_slug(project.get("id") or project.get("name")): compact_text(project.get("hash")) for project in raw_projects}
     staged: list[tuple[Path, Path]] = []
     try:
-        staged = [(path, stage_project_workbench_file(path, project)) for path, project in targets]
+        staged = [(path, stage_project_workbench_file(path, project)) for path, project, _definition in targets]
         for path, tmp in staged:
             os.replace(tmp, path)
     except OSError as exc:
         cleanup_staged_project_workbenches(staged)
         raise OwnerError("failed to write project workbench", HTTPStatus.INTERNAL_SERVER_ERROR) from exc
     hashes = {}
-    for path, project in targets:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-        actual = clean_project_workbench(payload if isinstance(payload, dict) else {})
-        hashes[project["id"]] = project_workbench_hash(actual)
+    for path, project, definition in targets:
+        if isinstance(definition, dict):
+            actual_definition = apply_project_definition_downlink(path, project, definition)
+        else:
+            actual_definition = None
+        stored = json.loads(path.read_text(encoding="utf-8"))
+        actual = clean_project_workbench(stored if isinstance(stored, dict) else {})
+        hashes[project["id"]] = project_downlink_hash(actual, actual_definition)
     mismatched = [project_id for project_id, digest in expected_hashes.items() if digest and hashes.get(project_id) != digest]
     ok = not mismatched
     ack = gateway_json_request(config, gateway_url, "/api/project-workbench/downlink/ack", {
@@ -2382,11 +2397,8 @@ class Handler(SimpleHTTPRequestHandler):
             if parsed.path == "/api/project-workbench/definition":
                 self.write_json(project_definition_payload(payload))
                 return
-            if parsed.path == "/api/project-workbench/stage-state":
-                self.write_json(update_project_stage_state(payload))
-                return
-            if parsed.path == "/api/project-workbench/stage-dod":
-                self.write_json(update_project_stage_dod(payload))
+            if parsed.path == "/api/project-workbench/definition-sync":
+                self.write_json(sync_project_definition(payload))
                 return
             if parsed.path == "/api/workbench/transition":
                 self.write_json(apply_workbench_transition(payload))

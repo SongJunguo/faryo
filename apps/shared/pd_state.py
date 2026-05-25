@@ -22,19 +22,153 @@ def clean_stage_state(value: Any) -> str:
     return {"1": "stage_to_define", "2": "define_to_execute", "3": "execute_to_close", "4": "closed"}.get(text[:1], "stage_to_define")
 
 
-def clean_stage_dod_done(value: Any) -> list[str]:
-    text = str(value or "").strip()
-    if not text or text == "0":
-        return []
-    return [item for item in (compact_text(part) for part in re.split(r"[；;、,，]", text)) if item]
-
-
-def clean_stage_dod_items(value: Any) -> list[str]:
+def unique_compact_items(parts: Any) -> list[str]:
     items = []
-    for item in (compact_text(part) for part in re.split(r"[\r\n；;、,，]+", str(value or ""))):
+    for item in (compact_text(part) for part in parts):
         if item and item not in items:
             items.append(item)
     return items
+
+
+def clean_stage_dod_done(value: Any) -> list[str]:
+    if isinstance(value, list):
+        return unique_compact_items(value)
+    text = str(value or "").strip()
+    return [] if not text or text == "0" else unique_compact_items(re.split(r"[；;、,，]", text))
+
+
+def clean_completed_stages(value: Any) -> list[str]:
+    source = value if isinstance(value, list) else str(value or "").splitlines()
+    return unique_compact_items(source)
+
+
+def clean_project_definition(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        return {}
+    clean: dict[str, Any] = {}
+    for key in ("current_phase", "current_stage_id", "current_stage_title", "stage_position", "stage_goal", "stage_out_of_scope"):
+        text = compact_text(value.get(key))
+        if text:
+            clean[key] = text
+    if "stage_state" in value:
+        clean["stage_state"] = clean_stage_state(value.get("stage_state"))
+    if "stage_dod" in value:
+        clean["stage_dod"] = "；".join(clean_stage_dod_items(value.get("stage_dod")))
+    if "stage_dod_done" in value:
+        done = clean_stage_dod_done(value.get("stage_dod_done"))
+        if "stage_dod" in clean:
+            dod = clean_stage_dod_items(clean.get("stage_dod"))
+            clean["stage_dod_done"] = [item for item in done if item in dod]
+        else:
+            clean["stage_dod_done"] = done
+    completed = clean_completed_stages(value.get("completed_stages"))
+    if completed:
+        clean["completed_stages"] = completed
+    return clean
+
+
+def project_definition_hash_payload(value: Any) -> dict[str, Any]:
+    return {key: item for key, item in clean_project_definition(value).items() if item not in ("", [])}
+
+
+def current_stage_heading(definition: dict[str, Any]) -> str:
+    stage_id = compact_text(definition.get("current_stage_id") or definition.get("current_phase"))
+    title = compact_text(definition.get("current_stage_title")) or "当前阶段"
+    return f"#### {stage_id}：{title}" if stage_id else f"#### {title}"
+
+
+def current_stage_lines(definition: dict[str, Any]) -> list[str]:
+    lines = ["", "### 当前阶段", current_stage_heading(definition)]
+    fields = [
+        ("stage_position", "阶段定位"),
+        ("stage_goal", "阶段目标"),
+        ("stage_dod", "阶段 DoD"),
+        ("stage_state", "阶段状态"),
+        ("stage_dod_done", "阶段 DoD 已完成"),
+        ("stage_out_of_scope", "当前不做"),
+    ]
+    for key, label in fields:
+        if key not in definition:
+            continue
+        value = definition[key]
+        text = "；".join(value) if isinstance(value, list) else str(value)
+        lines.append(f"- {label}：{text}")
+    return lines
+
+
+def ensure_current_stage_section(path: Path, definition: dict[str, Any]) -> None:
+    text = path.read_text(encoding="utf-8")
+    if "### 当前阶段" in text or not definition:
+        return
+    tmp = path.with_name(f".{path.name}.{secrets.token_hex(4)}.tmp")
+    tmp.write_text(text.rstrip() + "\n" + "\n".join(current_stage_lines(definition)) + "\n", encoding="utf-8")
+    os.replace(tmp, path)
+
+
+def write_current_phase_line(path: Path, current_phase: Any) -> None:
+    phase = compact_text(current_phase)
+    if not phase:
+        return
+    lines, replaced = [], False
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if line.startswith(("current_stage:", "current_phase:")):
+            if not replaced:
+                lines.append(f'current_stage: "{phase}"')
+                replaced = True
+            continue
+        lines.append(line)
+    if not replaced:
+        insert_at = 1 if lines and lines[0].startswith("#") else 0
+        lines.insert(insert_at, f'current_stage: "{phase}"')
+    tmp = path.with_name(f".{path.name}.{secrets.token_hex(4)}.tmp")
+    tmp.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    os.replace(tmp, path)
+
+
+def definition_with_stage_state(definition: Any, stage_state: Any) -> dict[str, Any]:
+    updated = clean_project_definition(definition)
+    updated["stage_state"] = clean_stage_state(stage_state)
+    return clean_project_definition(updated)
+
+
+def definition_with_stage_dod_update(definition: Any, payload: dict[str, Any]) -> dict[str, Any]:
+    updated = clean_project_definition(definition)
+    if "stage_dod" in payload:
+        items = clean_stage_dod_items(payload.get("stage_dod"))
+        updated["stage_dod"] = "；".join(items)
+        updated["stage_dod_done"] = [item for item in clean_stage_dod_done(updated.get("stage_dod_done")) if item in items]
+        return clean_project_definition(updated)
+    item_text = compact_text(payload.get("item"))
+    if not item_text:
+        raise ValueError("DoD item is required")
+    values = [value for value in clean_stage_dod_done(updated.get("stage_dod_done")) if value != item_text]
+    if bool(payload.get("done")):
+        values.append(item_text)
+    updated["stage_dod_done"] = values
+    return clean_project_definition(updated)
+
+
+def write_project_definition(path: Path, definition: Any) -> None:
+    clean = clean_project_definition(definition)
+    if "current_phase" in clean:
+        write_current_phase_line(path, clean.get("current_phase"))
+    ensure_current_stage_section(path, clean)
+    if "stage_state" in clean:
+        write_stage_state(path, clean.get("stage_state"))
+    if "stage_dod" in clean:
+        write_stage_dod(path, clean.get("stage_dod"))
+    if "stage_dod_done" in clean:
+        if "stage_dod" in clean:
+            current_dod = clean_stage_dod_items(clean.get("stage_dod"))
+            values = [item for item in clean_stage_dod_done(clean.get("stage_dod_done")) if item in current_dod]
+        else:
+            current_dod = clean_stage_dod_items(parse_project_definition(path.read_text(encoding="utf-8")).get("stage_dod"))
+            values = [item for item in clean_stage_dod_done(clean.get("stage_dod_done")) if not current_dod or item in current_dod]
+        write_stage_dod_done_values(path, values)
+
+
+def clean_stage_dod_items(value: Any) -> list[str]:
+    return unique_compact_items(re.split(r"[\r\n；;、,，]+", str(value or "")))
 
 
 def split_stage_heading(heading: str) -> tuple[str, str]:
@@ -84,7 +218,7 @@ def parse_project_definition(text: str) -> dict[str, Any]:
                 data[target] = clean_stage_dod_done(value)
             elif target and value.strip():
                 data[target] = value.strip()
-    return {key: value for key, value in data.items() if value}
+    return clean_project_definition(data)
 
 
 def write_current_stage_line(path: Path, field_pattern: str, replacement: str | None, insert_after_pattern: str | None = None) -> None:
@@ -131,20 +265,3 @@ def write_stage_dod(path: Path, stage_dod: Any) -> None:
     replacement = f"- 阶段 DoD：{'；'.join(items)}" if items else None
     write_current_stage_line(path, r"-\s*阶段\s*DoD\s*[:：]", replacement, r"-\s*阶段目标[:：]")
     write_stage_dod_done_values(path, [item for item in current_done if item in items])
-
-
-def write_stage_dod_update(path: Path, payload: dict[str, Any]) -> None:
-    if "stage_dod" in payload:
-        write_stage_dod(path, payload.get("stage_dod"))
-        return
-    if not compact_text(payload.get("item")):
-        raise ValueError("DoD item is required")
-    write_stage_dod_done(path, payload.get("item"), bool(payload.get("done")))
-
-
-def write_stage_dod_done(path: Path, item: Any, done: bool) -> None:
-    item_text = compact_text(item)
-    values = [value for value in parse_project_definition(path.read_text(encoding="utf-8")).get("stage_dod_done", []) if compact_text(value) and compact_text(value) != item_text]
-    if done and item_text:
-        values.append(item_text)
-    write_stage_dod_done_values(path, values)

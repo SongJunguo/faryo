@@ -25,7 +25,7 @@ from http import HTTPStatus
 from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 from urllib.parse import parse_qs, urlencode, urlparse
 
 import bcrypt
@@ -882,29 +882,7 @@ class GatewayHandler(BaseHTTPRequestHandler):
         return {"ok": True, "workbench": self.project_workbench_payload(username)}
 
     def project_workbench_payload(self, username: str | None = None) -> dict[str, Any]:
-        return {"projects": [self.attach_project_definition(row, username) for row in self.read_project_rows()]}
-
-    def attach_project_definition(self, row: dict[str, Any], username: str | None = None) -> dict[str, Any]:
-        enriched = dict(row)
-        definition = self.project_definition(row, username)
-        if definition:
-            enriched["definition"] = definition
-        return enriched
-
-    def project_definition(self, row: dict[str, Any], username: str | None = None) -> dict[str, Any]:
-        route = self.clean_owner_route(row.get("owner_route"))
-        if route and route != "gcp" and username and self.config.allowed_route(username, route):
-            result = self.owner_json_request(route, "/api/project-workbench/definition", self.owner_project_definition_payload(row, {}), username, timeout=2)
-            definition = result.get("definition") if result.get("ok") else None
-            return definition if isinstance(definition, dict) else {}
-        path = self.project_definition_path(row)
-        if not path:
-            return {}
-        try:
-            text = path.read_text(encoding="utf-8")
-        except OSError:
-            return {}
-        return pd_state.parse_project_definition(text)
+        return {"projects": self.read_project_rows()}
 
     def project_definition_path(self, row: dict[str, Any]) -> Path | None:
         marker = "/00-system/workbench.json"
@@ -988,6 +966,8 @@ class GatewayHandler(BaseHTTPRequestHandler):
             row["rank"] = self.clean_rank(project.get("rank") or index)
             if "archived" in project:
                 row["archived"] = bool(project.get("archived"))
+            if isinstance(project.get("definition"), dict):
+                row["definition"] = project["definition"]
             rows.append(self.clean_project_row(row, index))
         return rows
 
@@ -1021,11 +1001,8 @@ class GatewayHandler(BaseHTTPRequestHandler):
     def handle_project_stage_state(self, username: str) -> None:
         try:
             payload = self.read_json_body(8 * 1024)
-            row, route = self.project_definition_update_target(username, payload)
-            if route == "gcp":
-                pd_state.write_stage_state(self.local_project_definition_path(row), payload.get("stage_state"))
-            else:
-                self.forward_project_definition_update(route, "/api/project-workbench/stage-state", row, payload, username)
+            row, route = self.update_project_definition_row(username, payload, lambda definition: pd_state.definition_with_stage_state(definition, payload.get("stage_state")))
+            self.sync_project_definition(route, row, username)
             self.write_json({"ok": True, "workbench": self.project_workbench_payload(username)}, HTTPStatus.OK)
         except ValueError as exc:
             self.write_json({"ok": False, "error": str(exc)}, HTTPStatus.BAD_REQUEST)
@@ -1033,24 +1010,27 @@ class GatewayHandler(BaseHTTPRequestHandler):
     def handle_project_stage_dod(self, username: str) -> None:
         try:
             payload = self.read_json_body(16 * 1024)
-            row, route = self.project_definition_update_target(username, payload)
-            if route == "gcp":
-                pd_state.write_stage_dod_update(self.local_project_definition_path(row), payload)
-            else:
-                self.forward_project_definition_update(route, "/api/project-workbench/stage-dod", row, payload, username)
+            row, route = self.update_project_definition_row(username, payload, lambda definition: pd_state.definition_with_stage_dod_update(definition, payload))
+            self.sync_project_definition(route, row, username)
             self.write_json({"ok": True, "workbench": self.project_workbench_payload(username)}, HTTPStatus.OK)
         except ValueError as exc:
             self.write_json({"ok": False, "error": str(exc)}, HTTPStatus.BAD_REQUEST)
 
-    def project_definition_update_target(self, username: str, payload: dict[str, Any]) -> tuple[dict[str, Any], str]:
+    def update_project_definition_row(self, username: str, payload: dict[str, Any], update: Callable[[dict[str, Any]], dict[str, Any]]) -> tuple[dict[str, Any], str]:
         project_id = self.project_id({"id": payload.get("project_id")})
-        row = next((item for item in self.read_project_rows() if item["id"] == project_id), None)
-        if not row:
-            raise ValueError("project not found")
-        route = self.clean_owner_route(row.get("owner_route"))
-        if not route or not self.config.allowed_route(username, route):
-            raise ValueError("project route is not allowed")
-        return row, route
+        rows = self.read_project_rows()
+        for index, row in enumerate(rows):
+            if row["id"] != project_id:
+                continue
+            route = self.clean_owner_route(row.get("owner_route"))
+            if not route or not self.config.allowed_route(username, route):
+                raise ValueError("project route is not allowed")
+            updated = dict(row)
+            updated["definition"] = update(pd_state.clean_project_definition(row.get("definition")))
+            rows[index] = self.clean_project_row(updated, int(row.get("rank") or index + 1))
+            self.write_project_rows(rows)
+            return rows[index], route
+        raise ValueError("project not found")
 
     def local_project_definition_path(self, row: dict[str, Any]) -> Path:
         path = self.project_definition_path(row)
@@ -1061,10 +1041,14 @@ class GatewayHandler(BaseHTTPRequestHandler):
     def owner_project_definition_payload(self, row: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
         return {**payload, "project_id": row["id"], "project_root": row.get("code_root") or "", "workbench_path": row.get("workbench_path") or row.get("path") or ""}
 
-    def forward_project_definition_update(self, route: str, path: str, row: dict[str, Any], payload: dict[str, Any], username: str) -> None:
-        result = self.owner_json_request(route, path, self.owner_project_definition_payload(row, payload), username, timeout=10)
+    def sync_project_definition(self, route: str, row: dict[str, Any], username: str) -> None:
+        if route == "gcp":
+            pd_state.write_project_definition(self.local_project_definition_path(row), row.get("definition"))
+            return
+        payload = self.owner_project_definition_payload(row, {**self.project_workbench_truth_row(row), "definition": row.get("definition") or {}})
+        result = self.owner_json_request(route, "/api/project-workbench/definition-sync", payload, username, timeout=10)
         if not result.get("ok"):
-            raise ValueError(self.compact_text(result.get("error")) or "owner project definition update failed")
+            raise ValueError(self.compact_text(result.get("error")) or "owner project definition sync failed")
 
     def handle_project_workbench_import(self, username: str) -> None:
         try:
@@ -1186,6 +1170,8 @@ class GatewayHandler(BaseHTTPRequestHandler):
                 row["workbench_path"] = previous.get("workbench_path") or row.get("path") or ""
             if not row.get("code_root"):
                 row["code_root"] = previous.get("code_root") or ""
+            if "definition" not in row and isinstance(previous.get("definition"), dict):
+                row["definition"] = previous["definition"]
             row.setdefault("archived", previous.get("archived"))
             rows.append(self.clean_project_row(row, index))
         return rows
@@ -1305,7 +1291,7 @@ class GatewayHandler(BaseHTTPRequestHandler):
         path = self.config.project_downlink_root / package_id / "package.json"
         self.write_atomic_text(path, json.dumps(package, ensure_ascii=False, indent=2) + "\n")
 
-    def project_truth_row(self, row: dict[str, Any]) -> dict[str, Any]:
+    def project_workbench_truth_row(self, row: dict[str, Any]) -> dict[str, Any]:
         return {
             "id": row["id"],
             "name": row["name"],
@@ -1314,14 +1300,33 @@ class GatewayHandler(BaseHTTPRequestHandler):
             "items": row["items"],
         }
 
+    def project_truth_row(self, row: dict[str, Any]) -> dict[str, Any]:
+        truth = self.project_workbench_truth_row(row)
+        if isinstance(row.get("definition"), dict):
+            definition = pd_state.clean_project_definition(row.get("definition"))
+            if definition:
+                truth["definition"] = definition
+        return truth
+
     def project_downlink_project(self, row: dict[str, Any]) -> dict[str, Any]:
         project = self.project_truth_row(row)
         project["workbench_path"] = row.get("workbench_path") or row.get("path") or ""
-        project["hash"] = self.project_workbench_hash(project)
+        project["hash"] = self.project_downlink_hash(project)
         return project
 
     def project_workbench_hash(self, project: dict[str, Any]) -> str:
+        truth = self.project_workbench_truth_row(project)
+        body = json.dumps(truth, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        return hashlib.sha256(body).hexdigest()
+
+    def project_downlink_hash(self, project: dict[str, Any]) -> str:
         truth = self.project_truth_row(project)
+        if isinstance(truth.get("definition"), dict):
+            definition = pd_state.project_definition_hash_payload(truth.get("definition"))
+            if definition:
+                truth["definition"] = definition
+            else:
+                truth.pop("definition", None)
         body = json.dumps(truth, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
         return hashlib.sha256(body).hexdigest()
 
@@ -1353,7 +1358,7 @@ class GatewayHandler(BaseHTTPRequestHandler):
 
     def clean_project_row(self, source: dict[str, Any], rank: int) -> dict[str, Any]:
         project_id = self.project_id(source)
-        return {
+        row = {
             "id": project_id,
             "path": self.compact_text(source.get("path")),
             "owner_route": self.clean_owner_route(source.get("owner_route")),
@@ -1367,6 +1372,11 @@ class GatewayHandler(BaseHTTPRequestHandler):
             "current_d": self.compact_text(source.get("current_d")),
             "items": self.clean_project_items(source.get("items")),
         }
+        if isinstance(source.get("definition"), dict):
+            definition = pd_state.clean_project_definition(source.get("definition"))
+            if definition:
+                row["definition"] = definition
+        return row
 
     def clean_project_items(self, items: Any) -> list[dict[str, str]]:
         source = items if isinstance(items, list) else []
