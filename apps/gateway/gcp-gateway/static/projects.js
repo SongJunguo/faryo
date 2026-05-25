@@ -177,7 +177,7 @@ function openProjectOverview(project) {
   setDeckMeta(tierBadge(project.bucket)); els.title.textContent = `${project.name || 'Project'} · Overview`;
   const card = document.createElement('article');
   card.className = `project-overview-card overview-bucket-${html(String(project.bucket || 'B').toLowerCase())}`;
-  card.innerHTML = `${overviewHero(project, stageState)}<p class="overview-summary">${html(project.brief || '项目一句话定义未设定。')}</p><section class="overview-stage"><div class="overview-stage-head"><p>Current Stage</p><strong>${html(stageTitle)}</strong></div>${overviewStageFlow(stageState)}</section><section class="overview-panel overview-goal"><h4>⚐ Stage Goal</h4><p>${html(goal)}</p></section><section class="overview-panel overview-dod"><h4>Definition of Done</h4>${overviewDod(dod, def.stage_dod, done)}</section>${overviewCompleted(def.completed_stages)}${overviewBoundary(def.stage_out_of_scope)}<section class="metrics overview-metrics" aria-label="Project status counts">${Object.keys(TYPES).map(type => metricButton(type, counts[type])).join('')}</section>`;
+  card.innerHTML = `${overviewHero(project, stageState)}<p class="overview-summary">${html(project.brief || '项目一句话定义未设定。')}</p><section class="overview-stage"><div class="overview-stage-head"><p>Current Stage</p><strong>${html(stageTitle)}</strong></div>${overviewStageFlow(stageState)}</section><section class="overview-panel overview-goal"><h4>⚐ Stage Goal</h4><p>${html(goal)}</p></section><section class="overview-panel overview-dod"><div class="overview-panel-head"><h4>Definition of Done</h4><div class="overview-dod-tools"><span class="overview-dod-count">${html(overviewDodCount(dod, done))}</span><button class="overview-dod-add" type="button" aria-label="Add DoD">+</button></div></div>${overviewDod(dod, done)}</section>${overviewCompleted(def.completed_stages)}${overviewBoundary(def.stage_out_of_scope)}<section class="metrics overview-metrics" aria-label="Project status counts">${Object.keys(TYPES).map(type => metricButton(type, counts[type])).join('')}</section>`;
   card.addEventListener('click', event => { if (event.target === card) closeDeck(); });
   card.querySelector('.overview-star')?.addEventListener('click', event => { event.stopPropagation(); toggleArchive(project); });
   attachStageFlow(card, project);
@@ -215,24 +215,70 @@ function showCloseConfirm(card, project) {
 function saveStageState(project, stageState) {
   return saveProjectDefinition(project, '/api/project-workbench/stage-state', { stage_state: stageState }, stageState === 'closed' ? 'Closed' : 'Applied');
 }
-function definitionDodItems(text) { return String(text || '').split(/[；;、，,]/).map(item => item.trim()).filter(Boolean).slice(0, 6); }
-function overviewDod(items, raw, doneSet) {
-  if (!items.length) return `<p class="overview-empty">${html(raw || '阶段 DoD 未设定。')}</p>`;
-  const doneCount = items.filter(item => doneSet.has(item)).length, pct = Math.round((doneCount / items.length) * 100);
-  const list = items.map(item => {
+function definitionDodItems(text) { return String(text || '').split(/[\r\n；;、，,]/).map(item => item.trim()).filter(Boolean); }
+function projectDodItems(project) { return definitionDodItems((project.definition || {}).stage_dod); }
+function overviewDodCount(items, doneSet) { return `${items.filter(item => doneSet.has(item)).length}/${items.length}`; }
+function overviewDod(items, doneSet) {
+  const doneCount = items.filter(item => doneSet.has(item)).length, pct = items.length ? Math.round((doneCount / items.length) * 100) : 0;
+  const list = items.map((item, index) => {
     const done = doneSet.has(item);
-    return `<li><button class="overview-dod-item${done ? ' is-done' : ''}" type="button" data-dod-item="${html(item)}" data-done="${done ? '1' : '0'}"><span aria-hidden="true"></span>${html(item)}</button></li>`;
+    return `<li class="overview-dod-row" data-dod-index="${index}"><button class="overview-dod-check${done ? ' is-done' : ''}" type="button" aria-label="${done ? 'Mark incomplete' : 'Mark done'}"><span aria-hidden="true"></span></button><button class="overview-dod-text${done ? ' is-done' : ''}" type="button">${html(item)}</button><button class="overview-dod-edit" type="button" aria-label="Edit DoD">Edit</button><button class="overview-dod-delete" type="button" aria-label="Delete DoD">×</button></li>`;
   }).join('');
-  return `<div class="overview-dod-grid"><ul>${list}</ul><div class="overview-donut" style="--dod-pct:${pct}%"><b>${doneCount}</b><small>/ ${items.length}</small><em>${doneCount === items.length ? 'done' : 'pending'}</em></div></div>`;
+  return `<div class="overview-dod-progress" aria-hidden="true"><span style="--dod-pct:${items.length ? pct : 0}%"></span></div>${items.length ? `<ul class="overview-dod-list">${list}</ul>` : '<p class="overview-empty">阶段 DoD 未设定。</p>'}`;
 }
 function attachDod(card, project) {
-  card.querySelectorAll('.overview-dod-item').forEach(button => button.addEventListener('click', event => {
+  const items = projectDodItems(project), done = new Set((Array.isArray(project.definition?.stage_dod_done) ? project.definition.stage_dod_done : []).map(String));
+  card.querySelector('.overview-dod')?.addEventListener('click', event => {
+    const add = event.target.closest('.overview-dod-add'), row = event.target.closest('.overview-dod-row');
+    if (!add && !row) return;
     event.stopPropagation();
-    saveStageDod(project, button.dataset.dodItem, button.dataset.done !== '1');
-  }));
+    if (add) return openStageDodItemEditor(card, project, items.length);
+    const index = Number(row.dataset.dodIndex), item = items[index], remove = event.target.closest('.overview-dod-delete');
+    if (event.target.closest('.overview-dod-check')) return item && saveStageDod(project, item, !done.has(item));
+    if (event.target.closest('.overview-dod-text, .overview-dod-edit')) return openStageDodItemEditor(card, project, index);
+    if (!remove) return;
+    if (remove.dataset.confirm !== '1') {
+      remove.dataset.confirm = '1';
+      remove.textContent = 'Sure';
+      remove.classList.add('is-confirm');
+      return;
+    }
+    saveStageDodItems(project, items.filter((_item, itemIndex) => itemIndex !== index));
+  });
 }
 function saveStageDod(project, item, done) {
   return saveProjectDefinition(project, '/api/project-workbench/stage-dod', { item, done }, 'Applied');
+}
+function openStageDodItemEditor(card, project, index) {
+  const panel = card.querySelector('.overview-dod'), items = projectDodItems(project), value = items[index] || '';
+  if (!panel) return;
+  let list = panel.querySelector('.overview-dod-list');
+  if (!list) {
+    panel.querySelector('.overview-empty')?.remove();
+    list = document.createElement('ul');
+    list.className = 'overview-dod-list';
+    panel.appendChild(list);
+  }
+  const editor = document.createElement('li');
+  editor.className = 'overview-dod-row overview-dod-editor';
+  editor.innerHTML = `<form class="overview-dod-inline-form"><textarea name="stage_dod_item" rows="2">${html(value)}</textarea><div class="overview-edit-actions"><button class="primary" type="submit">Save</button><button type="button" data-cancel>Cancel</button></div></form>`;
+  const current = list.querySelector(`[data-dod-index="${index}"]`);
+  if (current) current.replaceWith(editor); else list.appendChild(editor);
+  const form = editor.querySelector('form');
+  form.addEventListener('click', event => event.stopPropagation());
+  form.addEventListener('submit', event => {
+    event.preventDefault();
+    const next = form.elements.stage_dod_item.value.trim();
+    if (!next) return;
+    const nextItems = projectDodItems(project);
+    nextItems[index < nextItems.length ? index : nextItems.length] = next;
+    saveStageDodItems(project, nextItems);
+  });
+  form.querySelector('[data-cancel]').addEventListener('click', () => openProjectOverview(project));
+  form.elements.stage_dod_item.focus();
+}
+function saveStageDodItems(project, items) {
+  return saveProjectDefinition(project, '/api/project-workbench/stage-dod', { stage_dod: items.join('\n') }, 'Applied');
 }
 async function saveProjectDefinition(project, url, payload, success) {
   setSync('Applying');

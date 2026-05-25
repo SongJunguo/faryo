@@ -29,6 +29,14 @@ def clean_stage_dod_done(value: Any) -> list[str]:
     return [item for item in (compact_text(part) for part in re.split(r"[；;、,，]", text)) if item]
 
 
+def clean_stage_dod_items(value: Any) -> list[str]:
+    items = []
+    for item in (compact_text(part) for part in re.split(r"[\r\n；;、,，]+", str(value or ""))):
+        if item and item not in items:
+            items.append(item)
+    return items
+
+
 def split_stage_heading(heading: str) -> tuple[str, str]:
     for sep in ("：", ":"):
         if sep in heading:
@@ -112,10 +120,31 @@ def write_stage_state(path: Path, stage_state: Any) -> None:
     write_current_stage_line(path, r"-\s*阶段(?:状态|进度)[:：]", f"- 阶段状态：{clean_stage_state(stage_state)}")
 
 
+def write_stage_dod_done_values(path: Path, values: list[str]) -> None:
+    replacement = f"- 阶段 DoD 已完成：{'；'.join(values)}" if values else None
+    write_current_stage_line(path, r"-\s*阶段\s*DoD\s*已完成[:：]", replacement, r"-\s*阶段\s*DoD[:：]")
+
+
+def write_stage_dod(path: Path, stage_dod: Any) -> None:
+    items = clean_stage_dod_items(stage_dod)
+    current_done = parse_project_definition(path.read_text(encoding="utf-8")).get("stage_dod_done", [])
+    replacement = f"- 阶段 DoD：{'；'.join(items)}" if items else None
+    write_current_stage_line(path, r"-\s*阶段\s*DoD\s*[:：]", replacement, r"-\s*阶段目标[:：]")
+    write_stage_dod_done_values(path, [item for item in current_done if item in items])
+
+
+def write_stage_dod_update(path: Path, payload: dict[str, Any]) -> None:
+    if "stage_dod" in payload:
+        write_stage_dod(path, payload.get("stage_dod"))
+        return
+    if not compact_text(payload.get("item")):
+        raise ValueError("DoD item is required")
+    write_stage_dod_done(path, payload.get("item"), bool(payload.get("done")))
+
+
 def write_stage_dod_done(path: Path, item: Any, done: bool) -> None:
     item_text = compact_text(item)
     values = [value for value in parse_project_definition(path.read_text(encoding="utf-8")).get("stage_dod_done", []) if compact_text(value) and compact_text(value) != item_text]
     if done and item_text:
         values.append(item_text)
-    replacement = f"- 阶段 DoD 已完成：{'；'.join(values)}" if values else None
-    write_current_stage_line(path, r"-\s*阶段\s*DoD\s*已完成[:：]", replacement, r"-\s*阶段\s*DoD[:：]")
+    write_stage_dod_done_values(path, values)

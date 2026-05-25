@@ -1033,11 +1033,9 @@ class GatewayHandler(BaseHTTPRequestHandler):
     def handle_project_stage_dod(self, username: str) -> None:
         try:
             payload = self.read_json_body(16 * 1024)
-            if not self.compact_text(payload.get("item")):
-                raise ValueError("DoD item is required")
             row, route = self.project_definition_update_target(username, payload)
             if route == "gcp":
-                pd_state.write_stage_dod_done(self.local_project_definition_path(row), payload.get("item"), bool(payload.get("done")))
+                pd_state.write_stage_dod_update(self.local_project_definition_path(row), payload)
             else:
                 self.forward_project_definition_update(route, "/api/project-workbench/stage-dod", row, payload, username)
             self.write_json({"ok": True, "workbench": self.project_workbench_payload(username)}, HTTPStatus.OK)

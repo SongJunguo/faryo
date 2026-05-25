@@ -1779,12 +1779,13 @@ def update_project_stage_state(payload: dict[str, Any]) -> dict[str, Any]:
 def update_project_stage_dod(payload: dict[str, Any]) -> dict[str, Any]:
     if not project_workbench_enabled():
         raise OwnerError("project workbench is disabled", HTTPStatus.FORBIDDEN)
-    if not compact_text(payload.get("item")):
-        raise OwnerError("DoD item is required", HTTPStatus.BAD_REQUEST)
     path = project_definition_path(project_definition_root_from_payload(payload))
     if not path.exists():
         raise OwnerError("project.md not found", HTTPStatus.NOT_FOUND)
-    pd_state.write_stage_dod_done(path, payload.get("item"), bool(payload.get("done")))
+    try:
+        pd_state.write_stage_dod_update(path, payload)
+    except ValueError as exc:
+        raise OwnerError(str(exc), HTTPStatus.BAD_REQUEST) from exc
     return project_definition_payload(payload)
 
 
