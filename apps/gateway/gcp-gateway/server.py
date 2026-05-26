@@ -896,15 +896,6 @@ class GatewayHandler(BaseHTTPRequestHandler):
     def project_workbench_payload(self, username: str | None = None) -> dict[str, Any]:
         return {"projects": self.read_project_rows()}
 
-    def project_definition_path(self, row: dict[str, Any]) -> Path | None:
-        marker = "/00-system/workbench.json"
-        workbench = self.compact_text(row.get("workbench_path") or row.get("path"))
-        if workbench.endswith(marker):
-            return Path(workbench[: -len(marker)]) / "00-system" / "project.md"
-        if workbench.startswith("/"):
-            return Path(workbench).parent / "project.md"
-        return None
-
     def project_git_statuses(self, username: str) -> dict[str, dict[str, Any] | None]:
         return {row["id"]: self.project_git_status(username, row) for row in self.read_project_rows()}
 
@@ -939,10 +930,11 @@ class GatewayHandler(BaseHTTPRequestHandler):
                 raise ValueError("projects must be a list")
             rows = self.project_projection_rows_from_ui(source)
             self.write_project_rows(rows)
+            scope = "project" if payload.get("submit_scope") == "project" else "global"
             target_rows = self.project_downlink_target_rows(rows, payload)
             active_rows = self.active_project_rows(rows)
             if not target_rows:
-                downlink = {"status": "skipped"}
+                downlink = {"status": "skipped", "scope": scope}
                 self.write_json({
                     "ok": True,
                     "workbench": self.project_workbench_payload(),
@@ -953,6 +945,7 @@ class GatewayHandler(BaseHTTPRequestHandler):
             packages = self.save_project_downlinks(target_rows, username)
             notices = [self.notify_project_downlink(package, username) for package in packages]
             downlink = self.project_downlink_response(packages, notices)
+            downlink["scope"] = scope
             self.write_json({
                 "ok": True,
                 "workbench": self.project_workbench_payload(),
@@ -974,6 +967,9 @@ class GatewayHandler(BaseHTTPRequestHandler):
                 rows.append(self.clean_project_row(project, index))
                 continue
             row = dict(previous)
+            for key in ("name", "brief", "current_d"):
+                if key in project:
+                    row[key] = self.compact_text(project.get(key))
             row["bucket"] = self.clean_project_bucket(project.get("bucket") or previous.get("bucket"))
             row["rank"] = self.clean_rank(project.get("rank") or index)
             if "archived" in project:
@@ -984,6 +980,7 @@ class GatewayHandler(BaseHTTPRequestHandler):
         return rows
 
     def project_submit_prompt(self, rows: list[dict[str, Any]], downlink: dict[str, Any]) -> str:
+        scope = "project" if downlink.get("scope") == "project" else "global"
         projects = []
         for row in self.sorted_project_rows(self.active_project_rows(rows)):
             projects.append({
@@ -996,10 +993,13 @@ class GatewayHandler(BaseHTTPRequestHandler):
                 "current_d": row.get("current_d") or "",
                 "items": row.get("items") or [],
             })
-        payload = {"event": "project_workbench_submit", "downlink": downlink, "projects": projects}
+        payload = {"event": "project_workbench_submit", "scope": scope, "downlink": downlink, "projects": projects}
+        lead = "项目工作台刚完成一次项目级提交，你现在接棒。" if scope == "project" else "项目工作台刚完成一次全局提交，你现在接棒。"
+        scope_rule = "本次只处理 payload.projects 中列出的项目；先确认总账到项目端真值层的下发结果，再继续该项目下一步。" if scope == "project" else "本次按 payload.projects 覆盖项目工作台当前活跃项目；先确认总账到各项目端真值层的下发结果，再按优先级推进。"
         return "\n".join([
-            "项目工作台刚完成一次用户裁决提交，你现在接棒。",
+            lead,
             "先读取 Gateway project-workbench 投影和相关项目真值；如果状态迁移、投影或回执异常，先指出阻塞。",
+            scope_rule,
             "只允许列出 0-3 条额外提醒，且必须是业务优先级、重大安全风险或会影响执行成败的事项；没有就不要提醒。",
             "随后按已进入 `approved_for_workorder` 的事项规划 WO 并调度可见 Codex 会话执行；一个受影响项目对应一个可见项目 worker，会话必须出现在 Gateway 历史会话里，不得使用 headless。",
             "每个 worker 必须带项目 id、Owner route、WO 路径、绑定 item 和收尾回执要求。",
@@ -1013,8 +1013,7 @@ class GatewayHandler(BaseHTTPRequestHandler):
     def handle_project_stage_state(self, username: str) -> None:
         try:
             payload = self.read_json_body(8 * 1024)
-            row, route = self.update_project_definition_row(username, payload, lambda definition: pd_state.definition_with_stage_state(definition, payload.get("stage_state")))
-            self.sync_project_definition(route, row, username)
+            self.update_project_definition_row(username, payload, lambda definition: pd_state.definition_with_stage_state(definition, payload.get("stage_state")))
             self.write_json({"ok": True, "workbench": self.project_workbench_payload(username)}, HTTPStatus.OK)
         except ValueError as exc:
             self.write_json({"ok": False, "error": str(exc)}, HTTPStatus.BAD_REQUEST)
@@ -1022,8 +1021,7 @@ class GatewayHandler(BaseHTTPRequestHandler):
     def handle_project_stage_dod(self, username: str) -> None:
         try:
             payload = self.read_json_body(16 * 1024)
-            row, route = self.update_project_definition_row(username, payload, lambda definition: pd_state.definition_with_stage_dod_update(definition, payload))
-            self.sync_project_definition(route, row, username)
+            self.update_project_definition_row(username, payload, lambda definition: pd_state.definition_with_stage_dod_update(definition, payload))
             self.write_json({"ok": True, "workbench": self.project_workbench_payload(username)}, HTTPStatus.OK)
         except ValueError as exc:
             self.write_json({"ok": False, "error": str(exc)}, HTTPStatus.BAD_REQUEST)
@@ -1052,8 +1050,6 @@ class GatewayHandler(BaseHTTPRequestHandler):
                     updated["definition"] = definition
                 rows[index] = self.clean_project_row(updated, int(row.get("rank") or index + 1))
                 self.write_project_rows(rows)
-                if "stage_goal" in payload:
-                    self.sync_project_definition(route, rows[index], username)
                 self.write_json({"ok": True, "workbench": self.project_workbench_payload(username)}, HTTPStatus.OK)
                 return
             raise ValueError("project not found")
@@ -1075,24 +1071,6 @@ class GatewayHandler(BaseHTTPRequestHandler):
             self.write_project_rows(rows)
             return rows[index], route
         raise ValueError("project not found")
-
-    def local_project_definition_path(self, row: dict[str, Any]) -> Path:
-        path = self.project_definition_path(row)
-        if not path or not path.exists():
-            raise ValueError("project.md not found")
-        return path
-
-    def owner_project_definition_payload(self, row: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
-        return {**payload, "project_id": row["id"], "project_root": row.get("code_root") or "", "workbench_path": row.get("workbench_path") or row.get("path") or ""}
-
-    def sync_project_definition(self, route: str, row: dict[str, Any], username: str) -> None:
-        if route == "gcp":
-            pd_state.write_project_definition(self.local_project_definition_path(row), row.get("definition"))
-            return
-        payload = self.owner_project_definition_payload(row, {**self.project_workbench_truth_row(row), "definition": row.get("definition") or {}})
-        result = self.owner_json_request(route, "/api/project-workbench/definition-sync", payload, username, timeout=10)
-        if not result.get("ok"):
-            raise ValueError(self.compact_text(result.get("error")) or "owner project definition sync failed")
 
     def handle_project_workbench_import(self, username: str) -> None:
         try:

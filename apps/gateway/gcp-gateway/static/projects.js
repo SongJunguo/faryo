@@ -31,7 +31,6 @@ const projects = () => state?.projects || [];
 const html = value => String(value || '').replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
 const empty = text => Object.assign(document.createElement('div'), { className: 'empty', textContent: text });
 const setLabel = (el, text) => { const label = el?.querySelector?.('.label'); if (label) label.textContent = text; else if (el) el.textContent = text; };
-const setSync = text => setLabel(els.sync, text);
 const tierBadge = bucket => `<span class="tier-badge tier-${html(String(bucket || 'B').toLowerCase())} sheet-tier">${html(bucket || 'B')}</span>`;
 const typeBadge = type => `<span class="sheet-type-badge ${html(type)}" aria-label="${html(TYPES[type]?.label || type)}">${METRIC_ICONS[type] || '•'}</span>`;
 function setDeckMeta(markup) { els.meta.innerHTML = markup; }
@@ -43,7 +42,6 @@ function hideSheet(el) {
   sheetTimers.set(el, setTimeout(() => { el.hidden = true; el.classList.remove('is-closing'); }, 150));
 }
 const ownerQueueItem = item => !item.stage || ['awaiting_owner', 'paused', 'needs_fix'].includes(item.stage);
-const hasApprovedWork = () => projects().some(project => !project.archived && (project.items || []).some(item => item.stage === 'approved_for_workorder'));
 const activeItems = (project, type) => (project.items || []).filter(item => item.type === type && ownerQueueItem(item) && !TYPES[type].done.includes(item.status || 'open'));
 const deckProject = () => projects().find(project => project.id === deck.projectId) || projects()[0];
 const deckItems = () => { const project = deckProject(); return project ? activeItems(project, deck.type) : []; };
@@ -51,22 +49,42 @@ function projectFilter() {
   const value = localStorage.getItem(PROJECT_FILTER.key);
   return PROJECT_FILTER.values.includes(value) ? value : PROJECT_FILTER.values[0];
 }
-function setDirty(value) { dirty = value; els.submit.disabled = !state || !dirty; setLabel(els.submit, dirty ? 'Submit' : 'Submitted'); }
+function activeProjectIds() { return projects().filter(project => !project.archived).map(project => project.id).filter(Boolean); }
+function setSaveState(label, disabled) {
+  setLabel(els.sync, label);
+  els.sync.disabled = disabled;
+}
+function setDirty(value) {
+  dirty = Boolean(value);
+  setSaveState(dirty ? 'Save' : 'Saved', !state || !dirty);
+  els.submit.disabled = !state || dirty;
+  setLabel(els.submit, 'Submit');
+}
+function setGlobalBusy(label) {
+  setSaveState(label, true);
+  els.submit.disabled = true;
+}
 function render() {
   const mode = projectFilter(), items = projects().filter(project => mode === 'all' || Boolean(project.archived) === (mode === 'archived'));
   if (els.archiveFilterLabel) els.archiveFilterLabel.textContent = PROJECT_FILTER.labels[mode];
   els.list.replaceChildren(...(items.length ? items.map(projectCard) : [empty(mode === 'archived' ? 'No archived projects' : 'No projects')]));
 }
-async function saveProjection(status = 'Saved') {
-  if (!state) return;
-  setSync('Saving');
-  try { const data = await fetchJson('/api/project-workbench', state); state = data.workbench; setDirty(hasApprovedWork()); setSync(status); render(); }
-  catch (error) { setSync(error.message || 'Save failed'); }
+async function saveProjection() {
+  if (!state || !dirty) return;
+  setGlobalBusy('Saving');
+  try {
+    const data = await fetchJson('/api/project-workbench', state);
+    state = data.workbench;
+    setDirty(false);
+    render();
+  } catch (_error) {
+    setDirty(true);
+  }
 }
 function toggleArchive(project) {
   project.archived = !project.archived;
   render();
-  saveProjection();
+  setDirty(true);
 }
 function projectCard(project) {
   const counts = Object.fromEntries(Object.keys(TYPES).map(type => [type, activeItems(project, type).length]));
@@ -131,23 +149,37 @@ function cycleBucket(project) {
   const order = ['S', 'A', 'B'];
   project.bucket = order[(order.indexOf(project.bucket || 'B') + 1) % order.length];
   render();
-  saveProjection();
+  setDirty(true);
 }
 function openDirectionEditor(project) {
   const def = project.definition || {}, goal = def.stage_goal || project.current_d || '';
   resetSheetMode(); showSheet(els.sheet); els.sheet.classList.add('project-direction-sheet'); els.nav.hidden = true; els.goal.hidden = true;
   const card = document.createElement('article');
   card.className = `project-direction-card overview-bucket-${html(String(project.bucket || 'B').toLowerCase())}`;
-  card.innerHTML = `<form class="direction-form"><section class="direction-hero"><span class="tier-badge tier-${html((project.bucket || 'B').toLowerCase())} direction-tier">${html(project.bucket || 'B')}</span><h3>${html(project.name || 'Untitled')}</h3><button class="direction-save" type="submit">✓ Save</button></section><label class="direction-field"><span>One-line intro</span><textarea name="brief" rows="3">${html(project.brief || '')}</textarea><button type="button" data-focus="brief" aria-label="Edit intro">✎</button></label><label class="direction-field"><span>Current stage goal</span><textarea name="stage_goal" rows="5">${html(goal)}</textarea><button type="button" data-focus="stage_goal" aria-label="Edit stage goal">✎</button></label></form>`;
+  card.innerHTML = `<form class="direction-form"><section class="direction-hero"><div class="direction-title"><h3>${html(project.name || 'Untitled')}</h3><p>${html(project.owner_route || 'project')}</p></div><div class="direction-actions"><button class="direction-save" type="submit" disabled>Saved</button><button class="direction-submit" type="button">Submit</button></div></section><label class="direction-field"><span>One-line intro</span><textarea name="brief" rows="3">${html(project.brief || '')}</textarea><button type="button" data-focus="brief" aria-label="Edit intro">✎</button></label><label class="direction-field"><span>Current stage goal</span><textarea name="stage_goal" rows="5">${html(goal)}</textarea><button type="button" data-focus="stage_goal" aria-label="Edit stage goal">✎</button></label></form>`;
   const form = card.querySelector('form');
+  const save = form.querySelector('.direction-save'), submit = form.querySelector('.direction-submit');
+  const setFormDraft = value => {
+    save.disabled = !value;
+    setLabel(save, value ? 'Save' : 'Saved');
+    submit.disabled = value || dirty;
+  };
   card.querySelectorAll('[data-focus]').forEach(button => button.addEventListener('click', () => form.elements[button.dataset.focus]?.focus()));
-  form.addEventListener('submit', event => {
+  form.addEventListener('input', () => setFormDraft(true));
+  form.addEventListener('submit', async event => {
     event.preventDefault();
-    saveProjectDirection(project, {
+    if (save.disabled) return;
+    setLabel(save, 'Saving');
+    save.disabled = true;
+    submit.disabled = true;
+    const ok = await saveProjectDirection(project, {
       brief: form.elements.brief.value.trim(),
       stage_goal: form.elements.stage_goal.value.trim()
     });
+    if (!ok) setFormDraft(true);
   });
+  setFormDraft(false);
+  submit.addEventListener('click', () => submitProject(project.id, submit));
   els.stage.replaceChildren(card);
 }
 function overviewDraft(project) {
@@ -173,7 +205,7 @@ function overviewDraftChanged(project, draft) {
 function overviewProject(project, draft) {
   return { ...project, definition: { ...(project.definition || {}), stage_state: draft.stage_state, stage_dod: draft.stage_dod.join('；'), stage_dod_done: draft.stage_dod_done } };
 }
-function openProjectOverview(project, draft = overviewDraft(project), status = '') {
+function openProjectOverview(project, draft = overviewDraft(project)) {
   cleanOverviewDraft(draft);
   const view = overviewProject(project, draft);
   const counts = Object.fromEntries(Object.keys(TYPES).map(type => [type, activeItems(project, type).length]));
@@ -188,18 +220,17 @@ function openProjectOverview(project, draft = overviewDraft(project), status = '
   card.addEventListener('click', event => {
     if (!event.target.closest('button, input, textarea, select, form')) closeDeck();
   });
-  card.querySelector('.overview-star')?.addEventListener('click', event => { event.stopPropagation(); toggleArchive(project); });
   card.querySelector('.overview-save')?.addEventListener('click', event => { event.stopPropagation(); saveOverviewDraft(project, draft); });
+  card.querySelector('.overview-submit')?.addEventListener('click', event => { event.stopPropagation(); submitProject(project.id, event.currentTarget); });
   attachStageFlow(card, project, draft);
   attachDod(card, project, draft);
   card.querySelectorAll('.metric').forEach(button => button.addEventListener('click', event => { event.stopPropagation(); openDeck(project.id, button.dataset.type); }));
   els.stage.replaceChildren(card);
-  if (status) setSync(status);
 }
 function overviewHero(project, stageState, canSave) {
   const stateLabel = STAGE_FLOW.find(item => item.state === stageState)?.label || 'Stage';
   const meta = [projectGitMeta(project.gitStatus), projectMeta(project) ? html(projectMeta(project)) : ''].filter(Boolean).join('<span class="overview-dot"> · </span>');
-  return `<section class="overview-hero"><span class="tier-badge tier-${html((project.bucket || 'B').toLowerCase())} overview-tier">${html(project.bucket || 'B')}</span><div><h3>${html(project.name || 'Untitled')}</h3><p>${meta || html(project.owner_route || 'project')}</p></div><span class="overview-state">${html(stateLabel)}</span><button class="overview-save" type="button"${canSave ? '' : ' disabled'}>Save</button><button class="overview-star" type="button" aria-label="${project.archived ? 'Unarchive' : 'Archive'} ${html(project.name || 'Untitled')}">${project.archived ? '&#9733;' : '&#9734;'}</button></section>`;
+  return `<section class="overview-hero"><div class="overview-title"><h3>${html(project.name || 'Untitled')}</h3><p>${meta || html(project.owner_route || 'project')}<span class="overview-state">Stage · ${html(stateLabel)}</span></p></div><div class="overview-actions"><button class="overview-save" type="button"${canSave ? '' : ' disabled'}>${canSave ? 'Save' : 'Saved'}</button><button class="overview-submit" type="button"${canSave || dirty ? ' disabled' : ''}>Submit</button></div></section>`;
 }
 function overviewStageFlow(stageState) {
   const index = Math.max(0, STAGE_FLOW.findIndex(item => item.state === stageState));
@@ -211,7 +242,7 @@ function attachStageFlow(card, project, draft) {
     event.stopPropagation();
     if (button.dataset.confirmClose) return showCloseConfirm(card, project, draft);
     draft.stage_state = button.dataset.state;
-    openProjectOverview(project, draft, 'Unsaved');
+    openProjectOverview(project, draft);
   }));
 }
 function showCloseConfirm(card, project, draft) {
@@ -220,7 +251,7 @@ function showCloseConfirm(card, project, draft) {
   box.className = 'overview-confirm';
   box.innerHTML = '<span>确认关闭当前阶段？</span><button class="primary" type="button">Close</button><button type="button" data-cancel>Cancel</button>';
   box.addEventListener('click', event => event.stopPropagation());
-  box.querySelector('.primary').addEventListener('click', () => { draft.stage_state = 'closed'; openProjectOverview(project, draft, 'Unsaved'); });
+  box.querySelector('.primary').addEventListener('click', () => { draft.stage_state = 'closed'; openProjectOverview(project, draft); });
   box.querySelector('[data-cancel]').addEventListener('click', () => box.remove());
   card.querySelector('.overview-flow').appendChild(box);
 }
@@ -245,7 +276,7 @@ function attachDod(card, project, draft) {
     if (event.target.closest('.overview-dod-check')) {
       if (!item) return;
       draft.stage_dod_done = done.has(item) ? draft.stage_dod_done.filter(value => value !== item) : [...draft.stage_dod_done, item];
-      return openProjectOverview(project, draft, 'Unsaved');
+      return openProjectOverview(project, draft);
     }
     if (event.target.closest('.overview-dod-text, .overview-dod-edit')) return openStageDodItemEditor(card, project, draft, index);
     if (!remove) return;
@@ -257,7 +288,7 @@ function attachDod(card, project, draft) {
     }
     draft.stage_dod = items.filter((_item, itemIndex) => itemIndex !== index);
     draft.stage_dod_done = draft.stage_dod_done.filter(value => draft.stage_dod.includes(value));
-    openProjectOverview(project, draft, 'Unsaved');
+    openProjectOverview(project, draft);
   });
 }
 function openStageDodItemEditor(card, project, draft, index) {
@@ -285,32 +316,36 @@ function openStageDodItemEditor(card, project, draft, index) {
     nextItems[index < nextItems.length ? index : nextItems.length] = next;
     draft.stage_dod = nextItems;
     draft.stage_dod_done = draft.stage_dod_done.filter(item => nextItems.includes(item));
-    openProjectOverview(project, draft, 'Unsaved');
+    openProjectOverview(project, draft);
   });
   form.querySelector('[data-cancel]').addEventListener('click', () => openProjectOverview(project, draft));
   form.elements.stage_dod_item.focus();
 }
 async function saveOverviewDraft(project, draft) {
   cleanOverviewDraft(draft);
-  if (!overviewDraftChanged(project, draft)) { setSync('No changes'); return; }
-  setSync('Saving');
+  if (!overviewDraftChanged(project, draft)) return true;
+  const button = els.stage.querySelector('.overview-save');
+  if (button) { setLabel(button, 'Saving'); button.disabled = true; }
   try {
     const data = await fetchJson('/api/project-workbench/stage-dod', { project_id: project.id, stage_state: draft.stage_state, stage_dod: draft.stage_dod.join('\n'), stage_dod_done: draft.stage_dod_done });
-    state = data.workbench; setDirty(hasApprovedWork()); setSync('Saved'); render();
+    state = data.workbench; setDirty(false); render();
     const next = projects().find(row => row.id === project.id);
     if (next && !els.sheet.hidden) openProjectOverview(next);
+    return true;
+  } catch (_error) {
+    if (button) { setLabel(button, 'Save'); button.disabled = false; }
+    return false;
   }
-  catch (error) { setSync(error.message || 'Update failed'); }
 }
 async function saveProjectDirection(project, payload) {
-  if (!payload.stage_goal) { setSync('Stage goal required'); return; }
-  setSync('Saving');
+  if (!payload.stage_goal) return false;
   try {
     const data = await fetchJson('/api/project-workbench/direction', { project_id: project.id, ...payload });
-    state = data.workbench; setDirty(hasApprovedWork()); setSync('Saved'); render();
+    state = data.workbench; setDirty(false); render();
     const next = projects().find(row => row.id === project.id);
     if (next && !els.sheet.hidden) openDirectionEditor(next);
-  } catch (error) { setSync(error.message || 'Update failed'); }
+    return true;
+  } catch (_error) { return false; }
 }
 function overviewCompleted(stages) {
   const items = Array.isArray(stages) ? stages.slice(0, 3) : [];
@@ -341,8 +376,8 @@ function deckCard(project, item) {
 async function applyItemAction(project, item, action) {
   if (action === 'edit') return openItemEditor(project, item);
   const eventType = TRANSITIONS[action];
-  if (!eventType) { setSync('Action needs event flow'); return; }
-  setSync('Applying');
+  if (!eventType) return;
+  setGlobalBusy('Saving');
   try {
     const data = await fetchJson('/api/project-workbench/transition', {
       project_id: project.id,
@@ -353,12 +388,11 @@ async function applyItemAction(project, item, action) {
       summary: `${action}: ${item.title || item.id}`
     });
     state = data.workbench;
-    setDirty(hasApprovedWork());
-    setSync('Applied');
+    setDirty(false);
     render();
     const nextProject = deckProject();
     if (nextProject && activeItems(nextProject, deck.type).length) renderDeck(); else closeDeck();
-  } catch (error) { setSync(error.message || 'Action failed'); }
+  } catch (_error) { setDirty(dirty); }
 }
 function openItemEditor(project, item) {
   els.nav.hidden = true;
@@ -379,19 +413,12 @@ function openItemEditor(project, item) {
   els.stage.replaceChildren(form);
   form.elements.title.focus();
 }
-async function applyProjectUpdate(project, fields, summary) {
-  setSync('Applying');
-  try {
-    const data = await fetchJson('/api/project-workbench/transition', { project_id: project.id, event_type: 'project_updated', actor: 'owner', source: 'gateway-ui', summary, ...fields });
-    state = data.workbench; setDirty(false); setSync('Applied'); render();
-  } catch (error) { setSync(error.message || 'Update failed'); }
-}
 async function applyItemUpdate(project, item, fields) {
-  setSync('Applying');
+  setGlobalBusy('Saving');
   try {
     const data = await fetchJson('/api/project-workbench/transition', { project_id: project.id, item_id: item.id, event_type: 'item_updated', actor: 'owner', source: 'gateway-ui', summary: `Edit: ${fields.title || item.title}`, item: fields });
-    state = data.workbench; setDirty(false); setSync('Applied'); render(); if (!els.sheet.hidden) renderDeck();
-  } catch (error) { setSync(error.message || 'Update failed'); }
+    state = data.workbench; setDirty(false); render(); if (!els.sheet.hidden) renderDeck();
+  } catch (_error) { setDirty(dirty); }
 }
 function attachSwipe(card, project, item) {
   let startX = null, deltaX = 0;
@@ -404,9 +431,9 @@ function attachSwipe(card, project, item) {
 async function load() {
   try {
     const data = await fetchJson('/api/project-workbench');
-    state = data.workbench; setDirty(false); setSync('Loaded'); render();
+    state = data.workbench; setDirty(false); render();
     refreshProjectGitStatus().catch(() => {});
-  } catch (error) { setSync('Failed'); els.list.replaceChildren(empty(error.message || 'Load failed')); }
+  } catch (error) { setSaveState('Failed', true); els.list.replaceChildren(empty(error.message || 'Load failed')); }
 }
 async function refreshProjectGitStatus() {
   if (!state) return;
@@ -414,39 +441,43 @@ async function refreshProjectGitStatus() {
   projects().forEach(project => { project.gitStatus = (data.statuses || {})[project.id] || null; });
   render();
 }
-async function submitChanges() {
-  if (!state) return;
-  els.submit.disabled = true; setSync('Submitting');
+async function submitChanges(projectId = '', button = els.submit) {
+  if (!state || dirty) return;
+  const targetIds = projectId ? [projectId] : activeProjectIds();
+  if (!targetIds.length) return;
+  const scope = projectId ? 'project' : 'global';
+  els.submit.disabled = true;
+  if (button) { setLabel(button, 'Submitting'); button.disabled = true; }
   try {
-    const data = await fetchJson('/api/project-workbench/submit', state);
+    const data = await fetchJson('/api/project-workbench/submit', { ...state, downlink_project_ids: targetIds, submit_scope: scope });
     state = data.workbench;
-    if (['applied', 'skipped'].includes(data.downlink?.status || '')) setDirty(false); else setDirty(true);
-    setSync(downlinkStatusText(data.downlink)); render();
-  } catch (_error) { setSync('Submit failed'); setDirty(dirty); }
+    setDirty(false);
+    render();
+  } catch (_error) {
+    setDirty(false);
+  } finally {
+    if (button && button !== els.submit) { setLabel(button, 'Submit'); button.disabled = false; }
+    setLabel(els.submit, 'Submit');
+  }
 }
-function downlinkStatusText(downlink) {
-  const status = downlink?.status || '', targets = [...new Set((downlink?.packages || []).map(item => String(item.target || '').trim().toUpperCase()).filter(Boolean))];
-  if (status === 'applied') return 'Applied';
-  if (status === 'skipped') return 'Saved';
-  return `${status === 'failed' ? 'Failed' : 'Pending'}${targets.length ? ` ${targets.join('/')}` : ''}`;
-}
+async function submitProject(projectId, button) { return submitChanges(projectId, button); }
 async function fetchJson(url, body = null) {
   const init = body ? { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) } : { cache: 'no-store' };
   const data = await (await fetch(url, init)).json();
   if (!data.ok) throw new Error(data.error || 'Request failed');
   return data;
 }
-function openImport() { showSheet(els.importSheet); els.importStatus.textContent = dirty ? 'Submit current draft before importing.' : ''; els.importForm.elements.project_root.focus(); }
+function openImport() { showSheet(els.importSheet); els.importStatus.textContent = dirty ? 'Save current draft before importing.' : ''; els.importForm.elements.project_root.focus(); }
 function closeImport() { hideSheet(els.importSheet); }
 async function importProject(event) {
   event.preventDefault();
-  if (dirty) { els.importStatus.textContent = 'Submit current draft before importing.'; return; }
+  if (dirty) { els.importStatus.textContent = 'Save current draft before importing.'; return; }
   const project_root = els.importForm.elements.project_root.value.trim(), owner_route = els.importForm.elements.owner_route.value;
   if (!project_root) { els.importStatus.textContent = 'Project Root is required.'; return; }
   const button = els.importForm.querySelector('button[type="submit"]');
-  button.disabled = true; els.importStatus.textContent = 'Importing'; setSync('Importing');
-  try { const data = await fetchJson('/api/project-workbench/import', { owner_route, project_root }); state = data.workbench; setDirty(false); setSync('Imported'); els.importForm.elements.project_root.value = ''; closeImport(); render(); }
-  catch (error) { els.importStatus.textContent = error.message || 'Import failed'; setSync('Import failed'); setDirty(dirty); }
+  button.disabled = true; els.importStatus.textContent = 'Importing'; setGlobalBusy('Saving');
+  try { const data = await fetchJson('/api/project-workbench/import', { owner_route, project_root }); state = data.workbench; setDirty(false); els.importForm.elements.project_root.value = ''; closeImport(); render(); }
+  catch (error) { els.importStatus.textContent = error.message || 'Import failed'; setDirty(dirty); }
   finally { button.disabled = false; }
 }
 const setFaryoBusy = value => { els.send.disabled = value; els.open.disabled = value; };
@@ -508,7 +539,8 @@ els.prev.addEventListener('click', () => { deck.index -= 1; renderDeck(); });
 els.next.addEventListener('click', () => { deck.index += 1; renderDeck(); });
 $('deckClose').addEventListener('click', closeDeck);
 els.sheet.addEventListener('click', event => { if (event.target.matches('[data-close]')) closeDeck(); });
-els.submit.addEventListener('click', submitChanges);
+els.submit.addEventListener('click', () => submitChanges());
+els.sync.addEventListener('click', saveProjection);
 els.importBtn.addEventListener('click', openImport);
 els.importForm.addEventListener('submit', importProject);
 els.importSheet.addEventListener('click', event => { if (event.target.matches('[data-import-close]')) closeImport(); });
