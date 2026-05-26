@@ -171,12 +171,14 @@ button { -webkit-tap-highlight-color: transparent; }
 .project-overview-card { --overview-accent: var(--action); display: grid; gap: 17px; padding: 26px 13px 0; color: var(--text); }
 .project-overview-card.overview-bucket-s { --overview-accent: var(--decision); }
 .project-overview-card.overview-bucket-b { --overview-accent: var(--watch); }
-.overview-hero { display: grid; grid-template-columns: 54px minmax(0, 1fr) auto 32px; gap: 13px; align-items: center; padding: 0 2px; }
+.overview-hero { display: grid; grid-template-columns: 54px minmax(0, 1fr) auto auto 32px; gap: 10px; align-items: center; padding: 0 2px; }
 .overview-tier { width: 48px; height: 48px; border-radius: 9px; font-size: calc(28px + var(--font-step)); }
 .overview-hero h3 { margin: 0 0 7px; overflow: hidden; color: var(--text); text-overflow: ellipsis; white-space: nowrap; font-size: calc(27px + var(--font-step)); font-weight: 780; line-height: 1.02; letter-spacing: -.03em; }
 .overview-hero p { margin: 0; display: flex; flex-wrap: wrap; gap: 4px; color: var(--muted); font-size: calc(11px + var(--font-step)); line-height: 1.25; }
 .overview-dot { color: color-mix(in srgb, var(--muted) 60%, transparent); }
 .overview-state { justify-self: end; padding: 6px 8px; border: 1px solid color-mix(in srgb, var(--overview-accent) 55%, var(--line)); border-radius: 7px; color: var(--overview-accent); font-size: 10px; font-weight: 850; text-transform: uppercase; }
+.overview-save { min-height: 30px; padding: 0 10px; border: 1px solid color-mix(in srgb, var(--overview-accent) 68%, var(--line)); border-radius: 7px; background: var(--overview-accent); color: var(--on-accent); font-size: 12px; font-weight: 820; }
+.overview-save:disabled { opacity: .42; }
 .overview-star { width: 30px; height: 30px; border: 0; background: transparent; color: color-mix(in srgb, var(--accent) 74%, var(--muted)); font-size: 32px; line-height: 1; }
 .overview-summary { margin: 0; padding: 15px 2px 17px; border-top: 1px solid color-mix(in srgb, var(--line) 52%, transparent); border-bottom: 1px solid color-mix(in srgb, var(--line) 44%, transparent); color: var(--text); font-size: calc(13px + var(--font-step)); line-height: 1.55; }
 .overview-stage { display: grid; gap: 13px; padding: 2px 2px 0; }

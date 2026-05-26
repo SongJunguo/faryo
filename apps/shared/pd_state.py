@@ -133,18 +133,23 @@ def definition_with_stage_state(definition: Any, stage_state: Any) -> dict[str, 
 
 def definition_with_stage_dod_update(definition: Any, payload: dict[str, Any]) -> dict[str, Any]:
     updated = clean_project_definition(definition)
+    if "stage_state" in payload:
+        updated["stage_state"] = clean_stage_state(payload.get("stage_state"))
     if "stage_dod" in payload:
         items = clean_stage_dod_items(payload.get("stage_dod"))
         updated["stage_dod"] = "；".join(items)
         updated["stage_dod_done"] = [item for item in clean_stage_dod_done(updated.get("stage_dod_done")) if item in items]
-        return clean_project_definition(updated)
+    if "stage_dod_done" in payload:
+        items = clean_stage_dod_items(updated.get("stage_dod"))
+        updated["stage_dod_done"] = [item for item in clean_stage_dod_done(payload.get("stage_dod_done")) if item in items]
     item_text = compact_text(payload.get("item"))
-    if not item_text:
+    if item_text:
+        values = [value for value in clean_stage_dod_done(updated.get("stage_dod_done")) if value != item_text]
+        if bool(payload.get("done")):
+            values.append(item_text)
+        updated["stage_dod_done"] = values
+    elif not any(key in payload for key in ("stage_state", "stage_dod", "stage_dod_done")):
         raise ValueError("DoD item is required")
-    values = [value for value in clean_stage_dod_done(updated.get("stage_dod_done")) if value != item_text]
-    if bool(payload.get("done")):
-        values.append(item_text)
-    updated["stage_dod_done"] = values
     return clean_project_definition(updated)
 
 
