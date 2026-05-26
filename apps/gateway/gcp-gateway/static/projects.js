@@ -1,33 +1,3 @@
-const APPEARANCE = {
-  theme: { key: 'faryoTheme', values: ['system', 'light', 'dark'] },
-  font: { key: 'faryoFont', values: ['default', 'serif', 'rounded', 'mono'] },
-  size: { key: 'faryoTextSize', values: ['normal', 'large', 'small'] }
-};
-const themeMedia = window.matchMedia?.('(prefers-color-scheme: dark)');
-function appearanceValue(name) {
-  const cfg = APPEARANCE[name], value = localStorage.getItem(cfg.key);
-  return cfg.values.includes(value) ? value : cfg.values[0];
-}
-function updateThemeColor(theme) {
-  const color = theme === 'dark' || (theme === 'system' && themeMedia?.matches) ? '#17130F' : '#F4EAD9';
-  document.querySelectorAll('meta[name="theme-color"]').forEach(meta => { meta.content = color; });
-}
-function applyAppearance() {
-  const root = document.documentElement;
-  for (const name of Object.keys(APPEARANCE)) {
-    const cfg = APPEARANCE[name], value = appearanceValue(name);
-    if (value === cfg.values[0]) root.removeAttribute(`data-${name}`);
-    else root.setAttribute(`data-${name}`, value);
-  }
-  updateThemeColor(appearanceValue('theme'));
-}
-applyAppearance();
-themeMedia?.addEventListener?.('change', () => {
-  if (appearanceValue('theme') === 'system') updateThemeColor('system');
-});
-window.addEventListener('storage', event => {
-  if (Object.values(APPEARANCE).some(cfg => cfg.key === event.key)) applyAppearance();
-});
 const $ = id => document.getElementById(id);
 const els = {
   list: $('projectList'), sync: $('syncStatus'), submit: $('submitChanges'), sheet: $('deckSheet'), stage: $('deckStage'),

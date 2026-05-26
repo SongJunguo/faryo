@@ -56,29 +56,6 @@
   let pendingAttachments = [];
   const routeMatch = location.pathname.match(/^\/(hp|pc|gcp)(?:\/|$)/);
   const routeBase = routeMatch ? `/${routeMatch[1]}` : '';
-  const APPEARANCE = {
-    theme: { key: 'faryoTheme', values: ['system', 'light', 'dark'] },
-    font: { key: 'faryoFont', values: ['default', 'serif', 'rounded', 'mono'] },
-    size: { key: 'faryoTextSize', values: ['normal', 'large', 'small'] },
-  };
-
-  function appearanceValue(name) {
-    const cfg = APPEARANCE[name], value = localStorage.getItem(cfg.key);
-    return cfg.values.includes(value) ? value : cfg.values[0];
-  }
-  function applyAppearance() {
-    const root = document.documentElement;
-    Object.keys(APPEARANCE).forEach((name) => {
-      const value = appearanceValue(name);
-      if (value === APPEARANCE[name].values[0]) root.removeAttribute(`data-${name}`);
-      else root.setAttribute(`data-${name}`, value);
-    });
-  }
-  applyAppearance();
-  window.addEventListener('storage', (event) => {
-    if (!event.key || Object.values(APPEARANCE).some((cfg) => cfg.key === event.key)) applyAppearance();
-  });
-
   const params = new URLSearchParams(location.search);
   const ownerToken = params.get('token') || '';
   let selectedSession = params.get('session') || '';

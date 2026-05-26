@@ -55,6 +55,7 @@ release_checks() {
   for js_file in \
     "$ROOT/apps/owner/local-tmux-owner/static/compact-rules-codex.js" \
     "$ROOT/apps/owner/local-tmux-owner/static/compact-rules-claude.js" \
+    "$ROOT/apps/shared/static/appearance.js" \
     "$ROOT/apps/owner/local-tmux-owner/static/app.js" \
     "$ROOT/apps/gateway/gcp-gateway/static/projects.js"
   do

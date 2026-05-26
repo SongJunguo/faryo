@@ -58,12 +58,17 @@ except ImportError:  # pragma: no cover - runtime fallback for minimal environme
 
 APP_DIR = Path(__file__).resolve().parent
 STATIC_DIR = APP_DIR / "static"
+SHARED_STATIC_DIR = SHARED_DIR / "static"
 RELEASE_FILE = APP_DIR.parent / "RELEASE"
 AGENT_STATE_DB = Path.home() / ".codex" / "state_5.sqlite"
 CODEX_SESSION_INDEX = Path.home() / ".codex" / "session_index.jsonl"
 CLAUDE_PROJECTS_ROOT = Path(os.environ.get("CLAUDE_CONFIG_DIR", str(Path.home() / ".claude"))).expanduser() / "projects"
 DEFAULT_SESSION = "__faryo_no_default__"
 DEFAULT_PORT = 8765
+SHARED_STATIC_FILES = {
+    "appearance.css": "text/css; charset=utf-8",
+    "appearance.js": "text/javascript; charset=utf-8",
+}
 DEFAULT_PANE_WIDTH = 500
 FALLBACK_OWNER_LABEL = "TMUX"
 MAX_SEND_CHARS = 120_000
@@ -2294,6 +2299,10 @@ class Handler(SimpleHTTPRequestHandler):
                 return
             if parsed.path in {"/", "/index.html"}:
                 self.write_index()
+                return
+            if parsed.path.lstrip("/") in SHARED_STATIC_FILES:
+                filename = parsed.path.lstrip("/")
+                self.write_file(SHARED_STATIC_DIR / filename, SHARED_STATIC_FILES[filename])
                 return
             return super().do_GET()
         except OwnerError as exc:
