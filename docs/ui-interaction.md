@@ -14,6 +14,10 @@ content are replaced with representative labels.
   <img src="assets/screenshots/faryo-owner-session-redacted.png" alt="Faryo Owner session view showing compact output, agent metadata, approval controls, and composer" width="280">
 </p>
 
+## UI Target Images
+
+项目页 UI target（UI 目标图）统一放在 `docs/assets/ui-targets/`，包括项目总览大卡片和方向编辑面板的浅色/深色目标。
+
 ## Surfaces
 
 ### Gateway Workbench

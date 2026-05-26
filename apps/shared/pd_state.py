@@ -153,6 +153,8 @@ def write_project_definition(path: Path, definition: Any) -> None:
     if "current_phase" in clean:
         write_current_phase_line(path, clean.get("current_phase"))
     ensure_current_stage_section(path, clean)
+    if "stage_goal" in clean:
+        write_stage_text(path, r"-\s*阶段目标[:：]", "阶段目标", clean.get("stage_goal"), r"-\s*阶段定位[:：]")
     if "stage_state" in clean:
         write_stage_state(path, clean.get("stage_state"))
     if "stage_dod" in clean:
@@ -252,6 +254,11 @@ def write_current_stage_line(path: Path, field_pattern: str, replacement: str | 
 
 def write_stage_state(path: Path, stage_state: Any) -> None:
     write_current_stage_line(path, r"-\s*阶段(?:状态|进度)[:：]", f"- 阶段状态：{clean_stage_state(stage_state)}")
+
+
+def write_stage_text(path: Path, field_pattern: str, label: str, value: Any, insert_after_pattern: str | None = None) -> None:
+    text = compact_text(value)
+    write_current_stage_line(path, field_pattern, f"- {label}：{text}" if text else None, insert_after_pattern)
 
 
 def write_stage_dod_done_values(path: Path, values: list[str]) -> None:

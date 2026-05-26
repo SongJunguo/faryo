@@ -100,8 +100,7 @@ button { -webkit-tap-highlight-color: transparent; }
 .metric-icon { width: 17px; height: 17px; display: grid; place-items: center; font-size: 16px; line-height: 1; }
 .metric-label { color: var(--muted); font-size: calc(8px + var(--font-step)); font-weight: 650; line-height: 1; }
 .metric-value { font-size: calc(24px + var(--font-step)); font-weight: 520; line-height: 1.05; }
-.deck-actions button, .deck-nav button, .goal-save { min-height: 42px; padding: 0 12px; border: 1px solid color-mix(in srgb, var(--line) 74%, transparent); border-radius: 8px; background: linear-gradient(180deg, color-mix(in srgb, var(--panel) 96%, transparent), color-mix(in srgb, var(--panel2) 84%, transparent)); color: var(--text); box-shadow: inset 0 1px 0 rgba(255, 255, 255, .18); }
-.goal-save { border-color: color-mix(in srgb, var(--accent) 44%, var(--line)); background: color-mix(in srgb, var(--accent) 12%, var(--panel)); color: var(--accent); font-weight: 800; }
+.deck-actions button, .deck-nav button { min-height: 42px; padding: 0 12px; border: 1px solid color-mix(in srgb, var(--line) 74%, transparent); border-radius: 8px; background: linear-gradient(180deg, color-mix(in srgb, var(--panel) 96%, transparent), color-mix(in srgb, var(--panel2) 84%, transparent)); color: var(--text); box-shadow: inset 0 1px 0 rgba(255, 255, 255, .18); }
 .deck-sheet[hidden] { display: none; }
 .deck-sheet { position: fixed; inset: 0; z-index: 30; display: grid; place-items: center; padding: calc(env(safe-area-inset-top) + 18px) 13px calc(env(safe-area-inset-bottom) + 18px); }
 .deck-sheet.is-closing { opacity: 0; transition: opacity .15s ease; }
@@ -145,23 +144,37 @@ button { -webkit-tap-highlight-color: transparent; }
 .deck-nav[hidden] { display: none; }
 .deck-nav button:disabled { opacity: .45; }
 @keyframes sheet-pop { from { opacity: .4; transform: translateY(8px) scale(.98); } to { opacity: 1; transform: translateY(0) scale(1); } }
-.goal-form { display: grid; gap: 9px; align-content: start; }
-.goal-editor { display: grid; gap: 7px; padding: 12px; border: 1px solid color-mix(in srgb, var(--accent) 32%, var(--line)); border-left-width: 3px; border-radius: 12px; background: linear-gradient(135deg, color-mix(in srgb, var(--accent) 9%, transparent), color-mix(in srgb, var(--panel2) 70%, transparent)); }
-.goal-editor span, .import-form label span, .edit-card label span { color: var(--accent); font-size: 11px; font-weight: 850; text-transform: uppercase; }
-.goal-form textarea { width: 100%; min-height: 150px; resize: vertical; padding: 11px; border: 1px solid color-mix(in srgb, var(--line) 72%, transparent); border-radius: 8px; background: color-mix(in srgb, var(--panel) 82%, transparent); color: var(--text); font: inherit; line-height: 1.45; }
+.import-form label span, .edit-card label span { color: var(--accent); font-size: 11px; font-weight: 850; text-transform: uppercase; }
 .import-form { display: grid; gap: 11px; }
 .import-form label { display: grid; gap: 6px; color: var(--muted); font-size: 12px; font-weight: 780; }
 .import-form input, .import-form select { width: 100%; min-height: 42px; padding: 0 10px; border: 1px solid color-mix(in srgb, var(--line) 72%, transparent); border-radius: 8px; background: color-mix(in srgb, var(--panel) 82%, transparent); color: var(--text); }
 .edit-card input, .edit-card textarea { border-color: color-mix(in srgb, var(--line) 72%, transparent); background: color-mix(in srgb, var(--panel) 82%, transparent); }
-.goal-form textarea:focus, .import-form input:focus, .import-form select:focus, .edit-card input:focus, .edit-card textarea:focus { outline: 2px solid color-mix(in srgb, var(--accent) 28%, transparent); border-color: color-mix(in srgb, var(--accent) 58%, var(--line)); }
+.import-form input:focus, .import-form select:focus, .edit-card input:focus, .edit-card textarea:focus { outline: 2px solid color-mix(in srgb, var(--accent) 28%, transparent); border-color: color-mix(in srgb, var(--accent) 58%, var(--line)); }
 .import-submit { min-height: 42px; border: 1px solid color-mix(in srgb, var(--accent) 44%, var(--line)); border-radius: 8px; background: var(--accent); color: var(--on-accent); font-weight: 850; }
 .import-submit:disabled { opacity: .55; }
 .import-status { min-height: 18px; margin: 0; color: var(--muted); font-size: 12px; }
 .empty { padding: 18px; border: 1px dashed var(--line); border-radius: 8px; background: var(--panel2); color: var(--muted); text-align: center; }
 
-.project-overview-sheet { place-items: start center; padding: calc(env(safe-area-inset-top) + 12px) 11px calc(env(safe-area-inset-bottom) + 12px); }
+.project-direction-sheet, .project-overview-sheet { place-items: start center; padding: calc(env(safe-area-inset-top) + 12px) 11px calc(env(safe-area-inset-bottom) + 12px); }
+.project-direction-sheet .sheet-panel { width: min(100%, 432px); max-height: min(94vh, 860px); padding: 12px; border-radius: 16px; grid-template-rows: auto; }
+.project-direction-sheet .sheet-head, .project-direction-sheet .deck-nav, .project-overview-sheet .sheet-head, .project-overview-sheet .deck-nav { display: none; }
+.project-direction-sheet .deck-stage { display: block; min-height: 0; }
+.project-direction-card { --overview-accent: var(--action); padding: 20px 10px; color: var(--text); }
+.project-direction-card.overview-bucket-s { --overview-accent: var(--decision); }
+.project-direction-card.overview-bucket-b { --overview-accent: var(--watch); }
+.direction-hero { display: grid; grid-template-columns: 48px minmax(0, 1fr) auto; gap: 13px; align-items: center; padding: 4px 1px 22px; }
+.direction-tier { width: 42px; height: 42px; border-radius: 8px; font-size: calc(25px + var(--font-step)); }
+.direction-hero h3 { margin: 0; min-width: 0; overflow: hidden; color: var(--text); text-overflow: ellipsis; white-space: nowrap; font-size: calc(29px + var(--font-step)); font-weight: 780; line-height: 1.06; }
+.direction-form { display: grid; gap: 20px; min-height: 0; }
+.direction-field { position: relative; display: grid; gap: 8px; color: var(--text); }
+.direction-field span { color: var(--text); font-size: calc(13px + var(--font-step)); font-weight: 650; }
+.direction-field textarea { width: 100%; min-height: 74px; resize: vertical; padding: 15px 42px 15px 15px; border: 1px solid color-mix(in srgb, var(--line) 68%, transparent); border-radius: 9px; background: color-mix(in srgb, var(--panel) 78%, transparent); color: var(--text); box-shadow: inset 0 1px 0 rgba(255, 255, 255, .13), 0 7px 15px var(--soft-shadow); font: inherit; line-height: 1.48; }
+.direction-field textarea[name="stage_goal"] { min-height: 116px; }
+.direction-field textarea:focus { outline: 2px solid color-mix(in srgb, var(--overview-accent) 28%, transparent); border-color: color-mix(in srgb, var(--overview-accent) 55%, var(--line)); }
+.direction-field button { position: absolute; right: 11px; bottom: 13px; width: 28px; height: 28px; display: grid; place-items: center; border: 0; background: transparent; color: color-mix(in srgb, var(--overview-accent) 74%, var(--text)); font-size: 22px; line-height: 1; }
+.direction-save { min-width: 90px; min-height: 42px; padding: 0 14px; border: 1px solid color-mix(in srgb, var(--overview-accent) 68%, var(--line)); border-radius: 9px; background: var(--overview-accent); color: var(--on-accent); box-shadow: 0 8px 16px var(--soft-shadow), inset 0 1px 0 rgba(255, 255, 255, .18); font-weight: 790; }
+
 .project-overview-sheet .sheet-panel { width: min(100%, 432px); max-height: min(94vh, 860px); padding: 14px 14px 0; border-radius: 16px; grid-template-rows: minmax(0, 1fr); }
-.project-overview-sheet .sheet-head, .project-overview-sheet .deck-nav { display: none; }
 .project-overview-sheet .deck-stage { min-height: 0; align-items: start; }
 .project-overview-card { --overview-accent: var(--action); display: grid; gap: 17px; padding: 26px 13px 0; color: var(--text); }
 .project-overview-card.overview-bucket-s { --overview-accent: var(--decision); }

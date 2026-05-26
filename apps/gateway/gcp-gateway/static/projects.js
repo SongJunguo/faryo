@@ -3,9 +3,14 @@ const APPEARANCE = {
   font: { key: 'faryoFont', values: ['default', 'serif', 'rounded', 'mono'] },
   size: { key: 'faryoTextSize', values: ['normal', 'large', 'small'] }
 };
+const themeMedia = window.matchMedia?.('(prefers-color-scheme: dark)');
 function appearanceValue(name) {
   const cfg = APPEARANCE[name], value = localStorage.getItem(cfg.key);
   return cfg.values.includes(value) ? value : cfg.values[0];
+}
+function updateThemeColor(theme) {
+  const color = theme === 'dark' || (theme === 'system' && themeMedia?.matches) ? '#17130F' : '#F4EAD9';
+  document.querySelectorAll('meta[name="theme-color"]').forEach(meta => { meta.content = color; });
 }
 function applyAppearance() {
   const root = document.documentElement;
@@ -14,8 +19,12 @@ function applyAppearance() {
     if (value === cfg.values[0]) root.removeAttribute(`data-${name}`);
     else root.setAttribute(`data-${name}`, value);
   }
+  updateThemeColor(appearanceValue('theme'));
 }
 applyAppearance();
+themeMedia?.addEventListener?.('change', () => {
+  if (appearanceValue('theme') === 'system') updateThemeColor('system');
+});
 window.addEventListener('storage', event => {
   if (Object.values(APPEARANCE).some(cfg => cfg.key === event.key)) applyAppearance();
 });
@@ -56,7 +65,7 @@ const setSync = text => setLabel(els.sync, text);
 const tierBadge = bucket => `<span class="tier-badge tier-${html(String(bucket || 'B').toLowerCase())} sheet-tier">${html(bucket || 'B')}</span>`;
 const typeBadge = type => `<span class="sheet-type-badge ${html(type)}" aria-label="${html(TYPES[type]?.label || type)}">${METRIC_ICONS[type] || '•'}</span>`;
 function setDeckMeta(markup) { els.meta.innerHTML = markup; }
-function resetSheetMode() { els.sheet.classList.remove('project-overview-sheet'); }
+function resetSheetMode() { els.sheet.classList.remove('project-overview-sheet', 'project-direction-sheet'); }
 function showSheet(el) { clearTimeout(sheetTimers.get(el)); el.classList.remove('is-closing'); el.hidden = false; }
 function hideSheet(el) {
   clearTimeout(sheetTimers.get(el));
@@ -94,8 +103,8 @@ function projectCard(project) {
   const card = document.createElement('article');
   const rank = stackRank(counts);
   card.className = `project-card stack-rank-${rank}${project.archived ? ' is-archived' : ''}`;
-  card.innerHTML = `${cardStack(rank)}<section class="card-face" role="button" tabindex="0" aria-label="Open project goal"><div class="title-row"><h2 class="project-title">${html(project.name || 'Untitled')}</h2><button class="favorite${project.archived ? ' is-archived' : ''}" type="button" aria-label="${project.archived ? 'Unarchive' : 'Archive'} ${html(project.name || 'Untitled')}">${project.archived ? '&#9733;' : '&#9734;'}</button></div><div class="project-meta"><button class="tier-badge tier-${html((project.bucket || 'B').toLowerCase())} bucket" type="button" aria-label="Change project bucket">${html(project.bucket || 'B')}</button><span class="meta-text">${git}${meta ? html(meta) : ''}</span></div><p class="summary${summary ? '' : ' is-empty'}" role="button" tabindex="0" aria-label="Open project overview"><span class="summary-text">${html(summary)}</span></p><section class="metrics" aria-label="Project status counts">${Object.keys(TYPES).map(type => metricButton(type, counts[type])).join('')}</section></section>`;
-  const open = () => openGoal(project);
+  card.innerHTML = `${cardStack(rank)}<section class="card-face" role="button" tabindex="0" aria-label="Open project direction"><div class="title-row"><h2 class="project-title">${html(project.name || 'Untitled')}</h2><button class="favorite${project.archived ? ' is-archived' : ''}" type="button" aria-label="${project.archived ? 'Unarchive' : 'Archive'} ${html(project.name || 'Untitled')}">${project.archived ? '&#9733;' : '&#9734;'}</button></div><div class="project-meta"><button class="tier-badge tier-${html((project.bucket || 'B').toLowerCase())} bucket" type="button" aria-label="Change project bucket">${html(project.bucket || 'B')}</button><span class="meta-text">${git}${meta ? html(meta) : ''}</span></div><p class="summary${summary ? '' : ' is-empty'}" role="button" tabindex="0" aria-label="Open project overview"><span class="summary-text">${html(summary)}</span></p><section class="metrics" aria-label="Project status counts">${Object.keys(TYPES).map(type => metricButton(type, counts[type])).join('')}</section></section>`;
+  const open = () => openDirectionEditor(project);
   card.querySelector('.card-face').addEventListener('click', open);
   card.querySelector('.card-face').addEventListener('keydown', event => { if (['Enter', ' '].includes(event.key)) { event.preventDefault(); open(); } });
   const summaryEl = card.querySelector('.summary');
@@ -152,20 +161,22 @@ function cycleBucket(project) {
   render();
   saveDraft();
 }
-function openGoal(project) {
-  resetSheetMode(); showSheet(els.sheet); els.nav.hidden = true; els.goal.hidden = true; setDeckMeta(tierBadge(project.bucket)); els.title.textContent = `${project.name} · Goal`;
-  const form = document.createElement('form');
-  form.className = 'goal-form';
-  form.innerHTML = `<label class="goal-editor"><span>Stage Goal</span><textarea name="goal" rows="5">${html(project.current_d)}</textarea></label><button class="goal-save" type="submit">Save Goal</button>`;
-  form.addEventListener('submit', async event => {
+function openDirectionEditor(project) {
+  const def = project.definition || {}, goal = def.stage_goal || project.current_d || '';
+  resetSheetMode(); showSheet(els.sheet); els.sheet.classList.add('project-direction-sheet'); els.nav.hidden = true; els.goal.hidden = true;
+  const card = document.createElement('article');
+  card.className = `project-direction-card overview-bucket-${html(String(project.bucket || 'B').toLowerCase())}`;
+  card.innerHTML = `<form class="direction-form"><section class="direction-hero"><span class="tier-badge tier-${html((project.bucket || 'B').toLowerCase())} direction-tier">${html(project.bucket || 'B')}</span><h3>${html(project.name || 'Untitled')}</h3><button class="direction-save" type="submit">✓ Save</button></section><label class="direction-field"><span>One-line intro</span><textarea name="brief" rows="3">${html(project.brief || '')}</textarea><button type="button" data-focus="brief" aria-label="Edit intro">✎</button></label><label class="direction-field"><span>Current stage goal</span><textarea name="stage_goal" rows="5">${html(goal)}</textarea><button type="button" data-focus="stage_goal" aria-label="Edit stage goal">✎</button></label></form>`;
+  const form = card.querySelector('form');
+  card.querySelectorAll('[data-focus]').forEach(button => button.addEventListener('click', () => form.elements[button.dataset.focus]?.focus()));
+  form.addEventListener('submit', event => {
     event.preventDefault();
-    const next = form.elements.goal.value.trim();
-    if (!next) return;
-    await applyProjectUpdate(project, { current_d: next }, 'Goal updated');
-    closeDeck();
+    saveProjectDirection(project, {
+      brief: form.elements.brief.value.trim(),
+      stage_goal: form.elements.stage_goal.value.trim()
+    });
   });
-  els.stage.replaceChildren(form);
-  form.elements.goal.focus();
+  els.stage.replaceChildren(card);
 }
 function openProjectOverview(project) {
   const counts = Object.fromEntries(Object.keys(TYPES).map(type => [type, activeItems(project, type).length]));
@@ -178,7 +189,9 @@ function openProjectOverview(project) {
   const card = document.createElement('article');
   card.className = `project-overview-card overview-bucket-${html(String(project.bucket || 'B').toLowerCase())}`;
   card.innerHTML = `${overviewHero(project, stageState)}<p class="overview-summary">${html(project.brief || '项目一句话定义未设定。')}</p><section class="overview-stage"><div class="overview-stage-head"><p>Current Stage</p><strong>${html(stageTitle)}</strong></div>${overviewStageFlow(stageState)}</section><section class="overview-panel overview-goal"><h4>⚐ Stage Goal</h4><p>${html(goal)}</p></section><section class="overview-panel overview-dod"><div class="overview-panel-head"><h4>Definition of Done</h4><div class="overview-dod-tools"><span class="overview-dod-count">${html(overviewDodCount(dod, done))}</span><button class="overview-dod-add" type="button" aria-label="Add DoD">+</button></div></div>${overviewDod(dod, done)}</section>${overviewCompleted(def.completed_stages)}${overviewBoundary(def.stage_out_of_scope)}<section class="metrics overview-metrics" aria-label="Project status counts">${Object.keys(TYPES).map(type => metricButton(type, counts[type])).join('')}</section>`;
-  card.addEventListener('click', event => { if (event.target === card) closeDeck(); });
+  card.addEventListener('click', event => {
+    if (!event.target.closest('button, input, textarea, select, form')) closeDeck();
+  });
   card.querySelector('.overview-star')?.addEventListener('click', event => { event.stopPropagation(); toggleArchive(project); });
   attachStageFlow(card, project);
   attachDod(card, project);
@@ -284,6 +297,16 @@ async function saveProjectDefinition(project, url, payload, success) {
   setSync('Applying');
   try { const data = await fetchJson(url, { project_id: project.id, ...payload }); state = data.workbench; setDirty(false); setSync(success); const next = projects().find(row => row.id === project.id); if (next) openProjectOverview(next); else render(); }
   catch (error) { setSync(error.message || 'Update failed'); }
+}
+async function saveProjectDirection(project, payload) {
+  if (!payload.stage_goal) { setSync('Stage goal required'); return; }
+  setSync('Saving');
+  try {
+    const data = await fetchJson('/api/project-workbench/direction', { project_id: project.id, ...payload });
+    state = data.workbench; setDirty(false); setSync('Saved'); render();
+    const next = projects().find(row => row.id === project.id);
+    if (next && !els.sheet.hidden) openDirectionEditor(next);
+  } catch (error) { setSync(error.message || 'Update failed'); }
 }
 function overviewCompleted(stages) {
   const items = Array.isArray(stages) ? stages.slice(0, 3) : [];
