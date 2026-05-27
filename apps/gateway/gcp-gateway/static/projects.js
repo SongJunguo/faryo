@@ -25,6 +25,7 @@ const STAGE_FLOW = [
   { state: 'closed', label: 'Close' }
 ];
 let state = null, deck = { projectId: '', type: 'decision', index: 0 }, dirty = false;
+const projectRuntime = new Map();
 let faryoSession = '', faryoAgentRunning = false, faryoStream = null;
 const sheetTimers = new WeakMap();
 const projects = () => state?.projects || [];
@@ -43,7 +44,7 @@ function hideSheet(el) {
 }
 const ownerQueueItem = item => !item.stage || ['awaiting_owner', 'paused', 'needs_fix'].includes(item.stage);
 const activeItems = (project, type) => (project.items || []).filter(item => item.type === type && ownerQueueItem(item) && !TYPES[type].done.includes(item.status || 'open'));
-const dispatchableProject = () => projects().find(project => !project.archived && (project.items || []).some(item => item.stage === 'approved_for_workorder'));
+const dispatchableProject = () => projects().find(projectReadyForDispatch);
 const deckProject = () => projects().find(project => project.id === deck.projectId) || projects()[0];
 const deckItems = () => { const project = deckProject(); return project ? activeItems(project, deck.type) : []; };
 function projectFilter() {
@@ -54,13 +55,46 @@ function setSaveState(label, disabled) {
   setLabel(els.sync, label);
   els.sync.disabled = disabled;
 }
+function projectState(projectId) {
+  return projectRuntime.get(projectId) || { sync: 'saved' };
+}
+function projectSyncLabel(projectId) {
+  const runtime = projectState(projectId);
+  return runtime.syncLabel || ({ saved: 'Saved', syncing: 'Syncing', sync_failed: 'Sync Failed' }[runtime.sync || 'saved']);
+}
+function setProjectState(projectId, patch) {
+  const next = { ...projectState(projectId), ...patch };
+  if ((next.sync || 'saved') === 'saved' && !next.submitting && !next.submitError && !next.syncLabel) projectRuntime.delete(projectId);
+  else projectRuntime.set(projectId, next);
+  syncTopActions();
+}
+function projectBlocked(project) {
+  const runtime = projectState(project.id);
+  return runtime.submitting || ['syncing', 'sync_failed'].includes(runtime.sync);
+}
+function projectReadyForDispatch(project) {
+  return !project.archived && !projectBlocked(project) && (project.items || []).some(item => item.stage === 'approved_for_workorder');
+}
+function topSyncState() {
+  const runtimes = projects().map(project => projectState(project.id));
+  const busy = runtimes.find(runtime => runtime.submitting || runtime.sync === 'syncing');
+  if (busy) return { label: busy.syncLabel || (busy.submitting ? 'Submitting' : 'Syncing'), disabled: true };
+  const failed = runtimes.find(runtime => runtime.sync === 'sync_failed' || runtime.submitError);
+  if (failed) return { label: failed.syncLabel || failed.submitError || 'Sync Failed', disabled: true };
+  if (dirty) return { label: 'Save', disabled: !state };
+  return { label: 'Saved', disabled: true };
+}
 function syncSubmitState() {
-  els.submit.disabled = !state || dirty || !dispatchableProject();
+  els.submit.disabled = !state || dirty || projects().some(projectBlocked) || !dispatchableProject();
+}
+function syncTopActions() {
+  const sync = topSyncState();
+  setSaveState(sync.label, sync.disabled);
+  syncSubmitState();
 }
 function setDirty(value) {
   dirty = Boolean(value);
-  setSaveState(dirty ? 'Save' : 'Saved', !state || !dirty);
-  syncSubmitState();
+  syncTopActions();
 }
 function setGlobalBusy(label) {
   setSaveState(label, true);
@@ -178,6 +212,9 @@ function overviewDraftChanged(project, draft) {
 function overviewProject(project, draft) {
   return { ...project, brief: draft.brief, current_d: draft.stage_goal, definition: { ...(project.definition || {}), stage_goal: draft.stage_goal, stage_state: draft.stage_state, stage_dod: draft.stage_dod.join('；'), stage_dod_done: draft.stage_dod_done } };
 }
+function stateWithProject(nextProject) {
+  return { ...state, projects: projects().map(project => project.id === nextProject.id ? nextProject : project) };
+}
 function openProjectOverview(project, draft = overviewDraft(project)) {
   cleanOverviewDraft(draft);
   const view = overviewProject(project, draft);
@@ -203,8 +240,15 @@ function openProjectOverview(project, draft = overviewDraft(project)) {
 }
 function syncOverviewActions(card, project, draft) {
   const changed = overviewDraftChanged(project, draft), save = card.querySelector('.overview-save'), submit = card.querySelector('.overview-submit');
-  if (save) { save.disabled = !changed; setLabel(save, changed ? 'Save' : 'Saved'); }
-  if (submit) submit.disabled = changed || dirty;
+  const runtime = projectState(project.id), busy = runtime.sync === 'syncing' || runtime.submitting;
+  if (save) {
+    setLabel(save, busy ? projectSyncLabel(project.id) : (changed ? 'Save' : projectSyncLabel(project.id)));
+    save.disabled = busy || !changed;
+  }
+  if (submit) {
+    setLabel(submit, runtime.submitting ? 'Submitting' : (runtime.submitError ? 'Retry' : 'Submit'));
+    submit.disabled = changed || dirty || busy || (runtime.sync || 'saved') !== 'saved';
+  }
 }
 function attachOverviewDirection(card, project, draft) {
   card.querySelector('.overview-direction')?.addEventListener('input', event => {
@@ -216,9 +260,13 @@ function attachOverviewDirection(card, project, draft) {
   });
 }
 function overviewHero(project, stageState, canSave) {
+  const runtime = projectState(project.id), busy = runtime.sync === 'syncing' || runtime.submitting;
   const stateLabel = STAGE_FLOW.find(item => item.state === stageState)?.label || 'Stage';
   const meta = [projectGitMeta(project.gitStatus), projectMeta(project) ? html(projectMeta(project)) : ''].filter(Boolean).join('<span class="overview-dot"> · </span>');
-  return `<section class="overview-hero"><div class="overview-title"><h3>${html(project.name || 'Untitled')}</h3><p>${meta || html(project.owner_route || 'project')}<span class="overview-state">Stage · ${html(stateLabel)}</span></p></div><div class="overview-actions"><button class="overview-save" type="button"${canSave ? '' : ' disabled'}>${canSave ? 'Save' : 'Saved'}</button><button class="overview-submit" type="button"${canSave || dirty ? ' disabled' : ''}>Submit</button></div></section>`;
+  const saveLabel = busy ? projectSyncLabel(project.id) : (canSave ? 'Save' : projectSyncLabel(project.id));
+  const submitLabel = runtime.submitting ? 'Submitting' : (runtime.submitError ? 'Retry' : 'Submit');
+  const submitDisabled = canSave || dirty || busy || (runtime.sync || 'saved') !== 'saved';
+  return `<section class="overview-hero"><div class="overview-title"><h3>${html(project.name || 'Untitled')}</h3><p>${meta || html(project.owner_route || 'project')}<span class="overview-state">Stage · ${html(stateLabel)}</span></p></div><div class="overview-actions"><button class="overview-save" type="button"${busy || !canSave ? ' disabled' : ''}>${html(saveLabel)}</button><button class="overview-submit" type="button"${submitDisabled ? ' disabled' : ''}>${html(submitLabel)}</button></div></section>`;
 }
 function overviewStageFlow(stageState) {
   const index = Math.max(0, STAGE_FLOW.findIndex(item => item.state === stageState));
@@ -316,19 +364,31 @@ async function saveOverviewDraft(project, draft) {
   const stageChanged = base.stage_state !== draft.stage_state || !sameList(base.stage_dod, draft.stage_dod) || !sameList(base.stage_dod_done, draft.stage_dod_done);
   if (!directionChanged && !stageChanged) return true;
   const button = els.stage.querySelector('.overview-save');
-  if (button) { setLabel(button, 'Saving'); button.disabled = true; }
+  setProjectState(project.id, { sync: 'syncing', syncLabel: 'Syncing', submitError: '' });
+  if (button) { setLabel(button, 'Syncing'); button.disabled = true; }
   try {
-    let data;
-    if (directionChanged) data = await fetchJson('/api/project-workbench/direction', { project_id: project.id, brief: draft.brief, stage_goal: draft.stage_goal });
-    if (stageChanged) data = await fetchJson('/api/project-workbench/stage-dod', { project_id: project.id, stage_state: draft.stage_state, stage_dod: draft.stage_dod.join('\n'), stage_dod_done: draft.stage_dod_done });
+    const data = await syncProjectState(project.id, stateWithProject(overviewProject(project, draft)));
     state = data.workbench; setDirty(false); render();
+    setProjectState(project.id, { sync: 'saved', syncLabel: '', submitError: '' });
     const next = projects().find(row => row.id === project.id);
     if (next && !els.sheet.hidden) openProjectOverview(next);
     return true;
-  } catch (_error) {
-    if (button) { setLabel(button, 'Save'); button.disabled = false; }
+  } catch (error) {
+    const label = error.projectSync ? 'Sync Failed' : 'Gateway Failed';
+    setProjectState(project.id, { sync: 'sync_failed', syncLabel: label });
+    const card = els.stage.querySelector('.project-overview-card');
+    if (card) syncOverviewActions(card, project, draft);
     return false;
   }
+}
+async function syncProjectState(projectId, nextState) {
+  const data = await fetchJson('/api/project-workbench/sync-project', { ...nextState, downlink_project_ids: [projectId] });
+  if (data.downlink?.status !== 'applied') {
+    const error = new Error(data.downlink?.status === 'failed' ? 'Project sync failed' : 'Project sync pending');
+    error.projectSync = true;
+    throw error;
+  }
+  return data;
 }
 function overviewCompleted(stages) {
   const items = Array.isArray(stages) ? stages.slice(0, 3) : [];
@@ -351,16 +411,19 @@ function renderDeck() {
 function deckCard(project, item) {
   const card = document.createElement('article');
   card.className = 'deck-card';
-  card.innerHTML = `<span class="deck-kind ${item.type}">${TYPES[item.type].label}</span><h3>${html(item.title)}</h3><p class="item-body">${html(item.body)}</p>${item.recommendation ? `<p class="recommendation">${html(item.recommendation)}</p>` : ''}<div class="deck-status">${STATUS[item.status] || item.status || 'open'}</div><div class="deck-actions">${TYPES[item.type].actions.map(([action, label, cls]) => `<button class="${cls}" data-action="${action}" type="button">${label}</button>`).join('')}</div>`;
-  card.querySelectorAll('[data-action]').forEach(button => button.addEventListener('click', () => applyItemAction(project, item, button.dataset.action)));
+  const runtime = projectState(project.id);
+  const cardStatus = runtime.sync && runtime.sync !== 'saved' ? projectSyncLabel(project.id) : (STATUS[item.status] || item.status || 'open');
+  card.innerHTML = `<span class="deck-kind ${item.type}">${TYPES[item.type].label}</span><h3>${html(item.title)}</h3><p class="item-body">${html(item.body)}</p>${item.recommendation ? `<p class="recommendation">${html(item.recommendation)}</p>` : ''}<div class="deck-status">${html(cardStatus)}</div><div class="deck-actions">${TYPES[item.type].actions.map(([action, label, cls]) => `<button class="${cls}" data-action="${action}" type="button">${label}</button>`).join('')}</div>`;
+  card.querySelectorAll('[data-action]').forEach(button => button.addEventListener('click', () => applyItemAction(project, item, button.dataset.action, button)));
   attachSwipe(card, project, item);
   return card;
 }
-async function applyItemAction(project, item, action) {
+async function applyItemAction(project, item, action, button = null) {
   if (action === 'edit') return openItemEditor(project, item);
   const eventType = TRANSITIONS[action];
   if (!eventType) return;
-  setGlobalBusy('Saving');
+  setProjectState(project.id, { sync: 'syncing', syncLabel: 'Deciding', submitError: '' });
+  if (button) { button.closest('.deck-actions')?.querySelectorAll('button').forEach(item => { item.disabled = true; }); setLabel(button, 'Deciding'); }
   try {
     const data = await fetchJson('/api/project-workbench/transition', {
       project_id: project.id,
@@ -371,11 +434,14 @@ async function applyItemAction(project, item, action) {
       summary: `${action}: ${item.title || item.id}`
     });
     state = data.workbench;
-    setDirty(false);
+    setProjectState(project.id, { sync: 'saved', syncLabel: '' });
     render();
     const nextProject = deckProject();
     if (nextProject && activeItems(nextProject, deck.type).length) renderDeck(); else closeDeck();
-  } catch (_error) { setDirty(dirty); }
+  } catch (_error) {
+    setProjectState(project.id, { sync: 'sync_failed', syncLabel: 'Decision Failed' });
+    renderDeck();
+  }
 }
 function openItemEditor(project, item) {
   els.nav.hidden = true;
@@ -397,11 +463,14 @@ function openItemEditor(project, item) {
   form.elements.title.focus();
 }
 async function applyItemUpdate(project, item, fields) {
-  setGlobalBusy('Saving');
+  setProjectState(project.id, { sync: 'syncing', syncLabel: 'Syncing', submitError: '' });
   try {
     const data = await fetchJson('/api/project-workbench/transition', { project_id: project.id, item_id: item.id, event_type: 'item_updated', actor: 'owner', source: 'gateway-ui', summary: `Edit: ${fields.title || item.title}`, item: fields });
-    state = data.workbench; setDirty(false); render(); if (!els.sheet.hidden) renderDeck();
-  } catch (_error) { setDirty(dirty); }
+    state = data.workbench; setProjectState(project.id, { sync: 'saved', syncLabel: '' }); render(); if (!els.sheet.hidden) renderDeck();
+  } catch (_error) {
+    setProjectState(project.id, { sync: 'sync_failed', syncLabel: 'Sync Failed' });
+    if (!els.sheet.hidden) renderDeck();
+  }
 }
 function attachSwipe(card, project, item) {
   let startX = null, deltaX = 0;
@@ -414,7 +483,7 @@ function attachSwipe(card, project, item) {
 async function load() {
   try {
     const data = await fetchJson('/api/project-workbench');
-    state = data.workbench; setDirty(false); render();
+    projectRuntime.clear(); state = data.workbench; setDirty(false); render();
     refreshProjectGitStatus().catch(() => {});
   } catch (error) { setSaveState('Failed', true); els.list.replaceChildren(empty(error.message || 'Load failed')); }
 }
@@ -427,29 +496,37 @@ async function refreshProjectGitStatus() {
 async function submitProject(projectId, button) {
   if (!state || dirty) return;
   if (!projectId) return;
+  const runtime = projectState(projectId);
+  if ((runtime.sync || 'saved') !== 'saved' || runtime.submitting) return;
+  setProjectState(projectId, { submitting: true, submitError: '', syncLabel: 'Submitting' });
   if (button) { setLabel(button, 'Submitting'); button.disabled = true; }
   try {
-    const data = await fetchJson('/api/project-workbench/submit-stage', { ...state, downlink_project_ids: [projectId], submit_scope: 'project' });
+    const data = await fetchJson('/api/project-workbench/submit-stage', { ...state, notify_project_ids: [projectId], submit_scope: 'project' });
     state = data.workbench;
     setDirty(false);
+    setProjectState(projectId, { submitting: false, sync: 'saved', syncLabel: '', submitError: '' });
     render();
-  } catch (_error) {
-    setDirty(false);
+  } catch (error) {
+    setProjectState(projectId, { submitting: false, sync: 'saved', syncLabel: '', submitError: 'Submit Failed' });
+    if (button) { setLabel(button, 'Retry'); button.disabled = false; }
   } finally {
-    if (button) { setLabel(button, 'Submit'); button.disabled = false; }
+    const nextProject = projects().find(project => project.id === projectId);
+    if (nextProject && !els.sheet.hidden) openProjectOverview(nextProject);
   }
 }
 async function submitApprovedWork() {
   const project = !dirty && dispatchableProject();
   if (!project) return;
-  setLabel(els.submit, 'Submitting');
+  setProjectState(project.id, { submitting: true, submitError: '', syncLabel: 'Submitting' });
+  setLabel(els.submit, 'Running');
   els.submit.disabled = true;
   try {
     const data = await fetchJson('/api/faryo/dispatch', { project_id: project.id, title: `P:${project.name || project.id}`, prompt: '按项目工作台已批准事项创建并执行本轮工单。' });
-    if (data.redirect) location.href = data.redirect; else await load();
+    setProjectState(project.id, { submitting: false, sync: 'saved', syncLabel: '', submitError: '' });
+    if (data.redirect) location.href = data.redirect; else { await load(); setLabel(els.submit, 'Run'); }
   } catch (_error) {
-    setLabel(els.submit, 'Submit');
-    syncSubmitState();
+    setProjectState(project.id, { submitting: false, sync: 'saved', syncLabel: '', submitError: 'Submit Failed' });
+    setLabel(els.submit, 'Run');
   }
 }
 async function fetchJson(url, body = null) {
@@ -467,7 +544,7 @@ async function importProject(event) {
   if (!project_root) { els.importStatus.textContent = 'Project Root is required.'; return; }
   const button = els.importForm.querySelector('button[type="submit"]');
   button.disabled = true; els.importStatus.textContent = 'Importing'; setGlobalBusy('Saving');
-  try { const data = await fetchJson('/api/project-workbench/import', { owner_route, project_root }); state = data.workbench; setDirty(false); els.importForm.elements.project_root.value = ''; closeImport(); render(); }
+  try { const data = await fetchJson('/api/project-workbench/import', { owner_route, project_root }); projectRuntime.clear(); state = data.workbench; setDirty(false); els.importForm.elements.project_root.value = ''; closeImport(); render(); }
   catch (error) { els.importStatus.textContent = error.message || 'Import failed'; setDirty(dirty); }
   finally { button.disabled = false; }
 }

@@ -733,6 +733,9 @@ class GatewayHandler(BaseHTTPRequestHandler):
         if parsed.path == "/api/project-workbench/submit-stage":
             self.handle_project_workbench_submit(username)
             return
+        if parsed.path == "/api/project-workbench/sync-project":
+            self.handle_project_workbench_sync_project(username)
+            return
         if parsed.path == "/api/project-workbench/transition":
             self.handle_project_workbench_transition(username)
             return
@@ -913,47 +916,52 @@ class GatewayHandler(BaseHTTPRequestHandler):
     def handle_project_workbench_save(self) -> None:
         try:
             payload = self.read_json_body(128 * 1024)
-            source = payload.get("projects")
-            if not isinstance(source, list):
-                raise ValueError("projects must be a list")
-            rows = self.project_projection_rows_from_ui(source)
-            self.write_project_rows(rows)
+            self.project_rows_from_payload(payload)
             self.write_json({"ok": True, "workbench": self.project_workbench_payload()}, HTTPStatus.OK)
+        except ValueError as exc:
+            self.write_json({"ok": False, "error": str(exc)}, HTTPStatus.BAD_REQUEST)
+
+    def handle_project_workbench_sync_project(self, username: str) -> None:
+        try:
+            payload = self.read_json_body(512 * 1024)
+            rows = self.project_rows_from_payload(payload, write=False)
+            target_rows, downlink = self.sync_project_downlinks(username, rows, payload)
+            if downlink.get("status") == "applied":
+                self.write_project_rows(rows)
+            self.write_json({
+                "ok": True,
+                "workbench": self.project_workbench_payload(),
+                "downlink": downlink,
+            }, HTTPStatus.OK)
         except ValueError as exc:
             self.write_json({"ok": False, "error": str(exc)}, HTTPStatus.BAD_REQUEST)
 
     def handle_project_workbench_submit(self, username: str) -> None:
         try:
             payload = self.read_json_body(512 * 1024)
-            source = payload.get("projects")
-            if not isinstance(source, list):
-                raise ValueError("projects must be a list")
-            rows = self.project_projection_rows_from_ui(source)
-            self.write_project_rows(rows)
+            rows = self.project_rows_from_payload(payload)
             scope = "project" if payload.get("submit_scope") == "project" else "global"
-            target_rows = self.project_downlink_target_rows(rows, payload)
+            target_rows, downlink = self.sync_project_downlinks(username, rows, payload)
             active_rows = self.active_project_rows(rows)
-            if not target_rows:
-                downlink = {"status": "skipped", "scope": scope}
-                self.write_json({
-                    "ok": True,
-                    "workbench": self.project_workbench_payload(),
-                    "downlink": downlink,
-                    "faryo": self.wake_faryo_after_project_submit(username, active_rows, downlink),
-                }, HTTPStatus.OK)
-                return
-            packages = self.save_project_downlinks(target_rows, username)
-            notices = [self.notify_project_downlink(package, username) for package in packages]
-            downlink = self.project_downlink_response(packages, notices)
+            prompt_rows = self.project_submit_target_rows(rows, payload) or target_rows or active_rows
             downlink["scope"] = scope
             self.write_json({
                 "ok": True,
                 "workbench": self.project_workbench_payload(),
                 "downlink": downlink,
-                "faryo": self.wake_faryo_after_project_submit(username, target_rows, downlink),
+                "faryo": self.wake_faryo_after_project_submit(username, prompt_rows, downlink),
             }, HTTPStatus.OK)
         except ValueError as exc:
             self.write_json({"ok": False, "error": str(exc)}, HTTPStatus.BAD_REQUEST)
+
+    def project_rows_from_payload(self, payload: dict[str, Any], write: bool = True) -> list[dict[str, Any]]:
+        source = payload.get("projects")
+        if not isinstance(source, list):
+            raise ValueError("projects must be a list")
+        rows = self.project_projection_rows_from_ui(source)
+        if write:
+            self.write_project_rows(rows)
+        return rows
 
     def project_projection_rows_from_ui(self, source: list[Any]) -> list[dict[str, Any]]:
         existing = {row["id"]: row for row in self.read_project_rows()}
@@ -1207,19 +1215,36 @@ class GatewayHandler(BaseHTTPRequestHandler):
         raw_ids = payload.get("downlink_project_ids")
         if raw_ids is None:
             return []
+        return self.project_rows_by_ids(rows, raw_ids, "downlink_project_ids")
+
+    def project_submit_target_rows(self, rows: list[dict[str, Any]], payload: dict[str, Any]) -> list[dict[str, Any]]:
+        raw_ids = payload.get("notify_project_ids")
+        if raw_ids is None:
+            return []
+        return self.project_rows_by_ids(rows, raw_ids, "notify_project_ids")
+
+    def project_rows_by_ids(self, rows: list[dict[str, Any]], raw_ids: Any, field: str) -> list[dict[str, Any]]:
         if not isinstance(raw_ids, list):
-            raise ValueError("downlink_project_ids must be a list")
+            raise ValueError(f"{field} must be a list")
         ids = {self.project_id({"id": item}) for item in raw_ids if str(item or "").strip()}
         if not ids:
             return []
         by_id = {row["id"]: row for row in rows}
         missing = sorted(ids - set(by_id))
         if missing:
-            raise ValueError("unknown downlink project id: " + ", ".join(missing))
+            raise ValueError(f"unknown {field}: " + ", ".join(missing))
         return [row for row in self.sorted_project_rows(rows) if row["id"] in ids and not row.get("archived")]
 
     def active_project_rows(self, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         return [row for row in rows if not row.get("archived")]
+
+    def sync_project_downlinks(self, username: str, rows: list[dict[str, Any]], payload: dict[str, Any]) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+        target_rows = self.project_downlink_target_rows(rows, payload)
+        if not target_rows:
+            return [], {"status": "skipped"}
+        packages = self.save_project_downlinks(target_rows, username)
+        notices = [self.notify_project_downlink(package, username) for package in packages]
+        return target_rows, self.project_downlink_response(packages, notices)
 
     def save_project_downlinks(self, rows: list[dict[str, Any]], username: str) -> list[dict[str, Any]]:
         packages = []
@@ -1254,6 +1279,7 @@ class GatewayHandler(BaseHTTPRequestHandler):
             current["status"] = str(notice.get("status") or "applied")
             current["notice"] = {"ok": True, "updated_at": now_ts()}
         else:
+            current["status"] = "failed"
             current["notice"] = {"ok": False, "error": self.compact_text(notice.get("error")), "updated_at": now_ts()}
         self.write_project_downlink_package(current)
         return {"ok": bool(notice.get("ok")), "status": current.get("status") or "failed", "error": notice.get("error")}
