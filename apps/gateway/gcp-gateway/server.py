@@ -730,7 +730,7 @@ class GatewayHandler(BaseHTTPRequestHandler):
         if parsed.path == "/api/project-workbench":
             self.handle_project_workbench_save()
             return
-        if parsed.path == "/api/project-workbench/submit":
+        if parsed.path == "/api/project-workbench/submit-stage":
             self.handle_project_workbench_submit(username)
             return
         if parsed.path == "/api/project-workbench/transition":
@@ -983,26 +983,16 @@ class GatewayHandler(BaseHTTPRequestHandler):
         scope = "project" if downlink.get("scope") == "project" else "global"
         projects = []
         for row in self.sorted_project_rows(self.active_project_rows(rows)):
-            projects.append({
-                "id": row["id"],
-                "name": row["name"],
-                "bucket": row["bucket"],
-                "rank": row["rank"],
-                "owner_route": row.get("owner_route") or "",
-                "workbench_path": row.get("workbench_path") or "",
-                "current_d": row.get("current_d") or "",
-                "items": row.get("items") or [],
-            })
-        payload = {"event": "project_workbench_submit", "scope": scope, "downlink": downlink, "projects": projects}
-        lead = "项目工作台刚完成一次项目级提交，你现在接棒。" if scope == "project" else "项目工作台刚完成一次全局提交，你现在接棒。"
-        scope_rule = "本次只处理 payload.projects 中列出的项目；先确认总账到项目端真值层的下发结果，再继续该项目下一步。" if scope == "project" else "本次按 payload.projects 覆盖项目工作台当前活跃项目；先确认总账到各项目端真值层的下发结果，再按优先级推进。"
+            definition = row.get("definition") if isinstance(row.get("definition"), dict) else {}
+            project = {"id": row["id"], "name": row["name"], "owner_route": row.get("owner_route") or "", "workbench_path": row.get("workbench_path") or ""}
+            project.update({"brief": row.get("brief") or ""})
+            project.update({key: value for key in ("current_stage_id", "current_stage_title", "stage_goal", "stage_state", "stage_dod", "stage_dod_done", "stage_out_of_scope") if (value := definition.get(key)) not in ("", [], None)})
+            projects.append(project)
+        payload = {"event": "project_stage_submit", "scope": scope, "downlink": downlink, "projects": projects}
         return "\n".join([
-            lead,
-            "先读取 Gateway project-workbench 投影和相关项目真值；如果状态迁移、投影或回执异常，先指出阻塞。",
-            scope_rule,
-            "只允许列出 0-3 条额外提醒，且必须是业务优先级、重大安全风险或会影响执行成败的事项；没有就不要提醒。",
-            "随后按已进入 `approved_for_workorder` 的事项规划 WO 并调度可见 Codex 会话执行；一个受影响项目对应一个可见项目 worker，会话必须出现在 Gateway 历史会话里，不得使用 headless。",
-            "每个 worker 必须带项目 id、Owner route、WO 路径、绑定 item 和收尾回执要求。",
+            "项目阶段执行定义刚完成提交，你现在接棒。",
+            "先确认本次下发包已应用到 payload.projects 的项目真值层；异常只报阻塞。",
+            "本次只处理 payload.projects 内的项目说明、阶段目标和 DoD（完成定义）；拟定待裁决 item（事项），用 item_created（事项创建）写入 awaiting_owner（待裁决），不要创建 WO（工单）或 worker（施工会话）。",
             json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
         ])
 

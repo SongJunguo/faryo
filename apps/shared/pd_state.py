@@ -242,7 +242,7 @@ def write_current_stage_line(path: Path, field_pattern: str, replacement: str | 
                 inserted = True
             in_current = False
         if in_current and field_re.match(stripped):
-            if replacement:
+            if replacement and not inserted:
                 output.append(replacement)
             inserted = True
             continue
