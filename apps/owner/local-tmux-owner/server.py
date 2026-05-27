@@ -1754,6 +1754,16 @@ def ensure_project_definition_file(project_root: Path, project: dict[str, Any]) 
         os.replace(tmp, path)
     return path
 
+
+def initial_project_definition(project: dict[str, Any]) -> dict[str, Any]:
+    return pd_state.clean_project_definition({
+        "current_stage_id": "stage-1",
+        "current_stage_title": "项目定义",
+        "stage_goal": compact_text(project.get("current_d") or project.get("brief")) or "完成项目定义。",
+        "stage_state": "stage_to_define",
+    })
+
+
 def project_definition_root_from_payload(payload: dict[str, Any]) -> Path:
     raw_root = compact_text(payload.get("project_root") or payload.get("cwd"))
     if raw_root:
@@ -2061,11 +2071,15 @@ def import_project_workbench(payload: dict[str, Any]) -> dict[str, Any]:
             "items": [],
         })
         write_project_workbench_file(path, project)
-    ensure_project_definition_file(project_root, project)
+    definition_path = ensure_project_definition_file(project_root, project)
+    definition = pd_state.parse_project_definition(definition_path.read_text(encoding="utf-8"))
+    if not definition:
+        pd_state.write_project_definition(definition_path, initial_project_definition(project))
+        definition = pd_state.parse_project_definition(definition_path.read_text(encoding="utf-8"))
     row = dict(project)
     row["path"] = str(path)
     row["workbench_path"] = str(path)
-    row["definition"] = project_definition_payload({"project_root": str(project_root)})["definition"]
+    row["definition"] = definition
     return {"ok": True, "project": row, "updatedAt": now_iso()}
 
 
