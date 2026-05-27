@@ -21,10 +21,10 @@ button { -webkit-tap-highlight-color: transparent; }
 .menu-row:active { background: color-mix(in srgb, var(--panel2) 42%, transparent); }
 .menu-row strong, .menu-row small { display: block; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .menu-row small, .menu-row em { color: var(--muted); font-size: calc(11px + var(--font-step)); font-style: normal; }
-.top-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 11px; }
+.top-actions { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 11px; }
 .action-btn { min-width: 0; min-height: 41px; display: flex; align-items: center; justify-content: center; gap: 7px; padding: 0 8px; border: 1px solid color-mix(in srgb, var(--line) 72%, transparent); border-radius: 8px; background: linear-gradient(180deg, color-mix(in srgb, var(--panel) 96%, transparent), color-mix(in srgb, var(--panel2) 86%, transparent)); color: var(--accent); box-shadow: inset 0 1px 0 rgba(255, 255, 255, .28), 0 7px 15px var(--soft-shadow); font-weight: 720; white-space: nowrap; }
 .action-btn svg { width: 18px; height: 18px; flex: 0 0 18px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
-.sync:not(:disabled) { background: var(--accent); color: var(--on-accent); }
+.submit-btn:not(:disabled), .sync:not(:disabled) { background: var(--accent); color: var(--on-accent); }
 .action-btn:disabled { color: var(--muted); }
 .sync { overflow: hidden; text-overflow: ellipsis; }
 .project-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 29px 15px; align-items: start; }

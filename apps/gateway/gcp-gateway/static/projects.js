@@ -1,6 +1,6 @@
 const $ = id => document.getElementById(id);
 const els = {
-  list: $('projectList'), sync: $('syncStatus'), sheet: $('deckSheet'), stage: $('deckStage'),
+  list: $('projectList'), sync: $('syncStatus'), submit: $('submitChanges'), sheet: $('deckSheet'), stage: $('deckStage'),
   title: $('deckTitle'), meta: $('deckMeta'), goal: $('deckGoal'), goalText: $('deckGoalText'), prev: $('prevCard'), next: $('nextCard'),
   nav: document.querySelector('.deck-nav'), importBtn: $('openImport'), importSheet: $('importSheet'), importForm: $('importForm'), importStatus: $('importStatus'),
   menu: $('projectMenu'), menuButton: $('projectMenuButton'), menuPanel: $('projectMenuPanel'), archiveFilter: $('archiveFilter'), archiveFilterLabel: $('archiveFilterLabel'),
@@ -43,6 +43,7 @@ function hideSheet(el) {
 }
 const ownerQueueItem = item => !item.stage || ['awaiting_owner', 'paused', 'needs_fix'].includes(item.stage);
 const activeItems = (project, type) => (project.items || []).filter(item => item.type === type && ownerQueueItem(item) && !TYPES[type].done.includes(item.status || 'open'));
+const dispatchableProject = () => projects().find(project => !project.archived && (project.items || []).some(item => item.stage === 'approved_for_workorder'));
 const deckProject = () => projects().find(project => project.id === deck.projectId) || projects()[0];
 const deckItems = () => { const project = deckProject(); return project ? activeItems(project, deck.type) : []; };
 function projectFilter() {
@@ -53,12 +54,17 @@ function setSaveState(label, disabled) {
   setLabel(els.sync, label);
   els.sync.disabled = disabled;
 }
+function syncSubmitState() {
+  els.submit.disabled = !state || dirty || !dispatchableProject();
+}
 function setDirty(value) {
   dirty = Boolean(value);
   setSaveState(dirty ? 'Save' : 'Saved', !state || !dirty);
+  syncSubmitState();
 }
 function setGlobalBusy(label) {
   setSaveState(label, true);
+  els.submit.disabled = true;
 }
 function render() {
   const mode = projectFilter(), items = projects().filter(project => mode === 'all' || Boolean(project.archived) === (mode === 'archived'));
@@ -433,6 +439,19 @@ async function submitProject(projectId, button) {
     if (button) { setLabel(button, 'Submit'); button.disabled = false; }
   }
 }
+async function submitApprovedWork() {
+  const project = !dirty && dispatchableProject();
+  if (!project) return;
+  setLabel(els.submit, 'Submitting');
+  els.submit.disabled = true;
+  try {
+    const data = await fetchJson('/api/faryo/dispatch', { project_id: project.id, title: `P:${project.name || project.id}`, prompt: '按项目工作台已批准事项创建并执行本轮工单。' });
+    if (data.redirect) location.href = data.redirect; else await load();
+  } catch (_error) {
+    setLabel(els.submit, 'Submit');
+    syncSubmitState();
+  }
+}
 async function fetchJson(url, body = null) {
   const init = body ? { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) } : { cache: 'no-store' };
   const data = await (await fetch(url, init)).json();
@@ -511,6 +530,7 @@ els.prev.addEventListener('click', () => { deck.index -= 1; renderDeck(); });
 els.next.addEventListener('click', () => { deck.index += 1; renderDeck(); });
 $('deckClose').addEventListener('click', closeDeck);
 els.sheet.addEventListener('click', event => { if (event.target.matches('[data-close]')) closeDeck(); });
+els.submit.addEventListener('click', submitApprovedWork);
 els.sync.addEventListener('click', saveProjection);
 els.importBtn.addEventListener('click', openImport);
 els.importForm.addEventListener('submit', importProject);
