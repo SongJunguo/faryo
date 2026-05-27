@@ -30,6 +30,71 @@ def unique_compact_items(parts: Any) -> list[str]:
     return items
 
 
+def clean_item_decision_option(option: Any) -> dict[str, str]:
+    if not isinstance(option, dict):
+        return {}
+    option_id = compact_text(option.get("id"))
+    label = compact_text(option.get("label"))
+    return {"id": option_id, "label": label} if option_id and label else {}
+
+
+def clean_item_decision_prompt(value: Any, item_type: Any) -> dict[str, Any]:
+    if compact_text(item_type) != "decision" or not isinstance(value, dict):
+        return {}
+    mode = compact_text(value.get("mode"))
+    if mode not in {"choice", "binary", "checklist", "short_note"}:
+        return {}
+    clean: dict[str, Any] = {"mode": mode}
+    label = compact_text(value.get("label"))
+    if label:
+        clean["label"] = label
+    if mode in {"choice", "binary"}:
+        options = [clean for option in value.get("options", []) if (clean := clean_item_decision_option(option))]
+        if len(options) < 2:
+            return {}
+        clean["options"] = options[: 2 if mode == "binary" else 5]
+    elif mode == "checklist":
+        items = unique_compact_items(value.get("items") if isinstance(value.get("items"), list) else [])
+        if not items:
+            return {}
+        clean["items"] = items[:5]
+    else:
+        placeholder = compact_text(value.get("placeholder"))
+        if placeholder:
+            clean["placeholder"] = placeholder
+    if bool(value.get("required")):
+        clean["required"] = True
+    return clean
+
+
+def clean_owner_decision(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        return {}
+    clean: dict[str, Any] = {}
+    selected = compact_text(value.get("selected"))
+    if selected:
+        clean["selected"] = selected
+    checked = unique_compact_items(value.get("checked") if isinstance(value.get("checked"), list) else [])
+    if checked:
+        clean["checked"] = checked[:5]
+    note = compact_text(value.get("note"))
+    if note:
+        clean["note"] = note
+    return clean
+
+
+def owner_decision_text(value: Any) -> str:
+    decision = clean_owner_decision(value)
+    parts = []
+    if decision.get("selected"):
+        parts.append(str(decision["selected"]))
+    if decision.get("checked"):
+        parts.append("、".join(decision["checked"]))
+    if decision.get("note"):
+        parts.append(str(decision["note"]))
+    return "；".join(parts)
+
+
 def clean_stage_dod_done(value: Any) -> list[str]:
     if isinstance(value, list):
         return unique_compact_items(value)

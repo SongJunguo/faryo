@@ -8,9 +8,9 @@ const els = {
   prompt: $('faryoPrompt'), send: $('faryoSend'), open: $('faryoOpen')
 };
 const TYPES = {
-  decision: { label: 'Decision', done: ['accepted', 'done', 'seen'], actions: [['accept', 'Approve', 'primary'], ['edit', 'Edit', ''], ['pause', 'Pause', 'danger']], left: 'accept', right: 'pause' },
-  action: { label: 'Action', done: ['accepted', 'done', 'seen'], actions: [['done', 'Confirm', 'primary'], ['edit', 'Edit', ''], ['to-decision', 'Escalate', 'danger']], left: 'done', right: 'to-decision' },
-  watch: { label: 'Watch', done: ['accepted', 'done', 'seen'], actions: [['seen', 'Seen', 'primary'], ['edit', 'Edit', ''], ['to-decision', 'Escalate', 'danger']], left: 'seen', right: 'to-decision' }
+  decision: { label: 'Decision', done: ['accepted', 'done', 'seen'], actions: [['accept', 'Approve', 'primary'], ['revise', 'Revise', ''], ['pause', 'Pause', 'danger']], left: 'accept', right: 'pause' },
+  action: { label: 'Action', done: ['accepted', 'done', 'seen'], actions: [['done', 'Confirm', 'primary'], ['revise', 'Revise', ''], ['to-decision', 'Escalate', 'danger']], left: 'done', right: 'to-decision' },
+  watch: { label: 'Watch', done: ['accepted', 'done', 'seen'], actions: [['seen', 'Seen', 'primary'], ['revise', 'Revise', ''], ['to-decision', 'Escalate', 'danger']], left: 'seen', right: 'to-decision' }
 };
 const METRIC_LABELS = { decision: 'Decision', action: 'Action', watch: 'Watch' };
 const METRIC_ICONS = { decision: '⚖️', action: '🛠️', watch: '👁️' };
@@ -26,6 +26,7 @@ const STAGE_FLOW = [
 ];
 let state = null, deck = { projectId: '', type: 'decision', index: 0 }, dirty = false;
 const projectRuntime = new Map();
+const pendingDecisions = new Map();
 let faryoSession = '', faryoAgentRunning = false, faryoStream = null;
 const sheetTimers = new WeakMap();
 const projects = () => state?.projects || [];
@@ -408,32 +409,131 @@ function renderDeck() {
   setDeckMeta(typeBadge(deck.type)); els.prev.disabled = deck.index === 0; els.next.disabled = deck.index >= items.length - 1;
   els.stage.replaceChildren(deckCard(project, items[deck.index]));
 }
+function decisionKey(project, item) { return `${project.id}:${item.id}`; }
+function decisionPrompt(item) {
+  const value = item?.decision_prompt;
+  if (item?.type !== 'decision' || !value || typeof value !== 'object') return null;
+  const mode = String(value.mode || '').trim();
+  if (!['choice', 'binary', 'checklist', 'short_note'].includes(mode)) return null;
+  const prompt = { mode, label: String(value.label || '').trim(), required: Boolean(value.required), placeholder: String(value.placeholder || '').trim() };
+  if (mode === 'choice' || mode === 'binary') {
+    const options = (Array.isArray(value.options) ? value.options : []).map(option => ({ id: String(option?.id || '').trim(), label: String(option?.label || '').trim() })).filter(option => option.id && option.label).slice(0, mode === 'binary' ? 2 : 5);
+    return options.length >= 2 ? { ...prompt, options } : null;
+  }
+  if (mode === 'checklist') {
+    const items = (Array.isArray(value.items) ? value.items : []).map(text => String(text || '').trim()).filter(Boolean).slice(0, 5);
+    return items.length ? { ...prompt, items } : null;
+  }
+  return prompt;
+}
+function ownerDecision(project, item) {
+  const saved = item?.owner_decision && typeof item.owner_decision === 'object' ? item.owner_decision : {};
+  const pending = pendingDecisions.get(decisionKey(project, item)) || {};
+  const value = { ...saved, ...pending };
+  return {
+    selected: String(value.selected || '').trim(),
+    checked: Array.isArray(value.checked) ? value.checked.map(text => String(text || '').trim()).filter(Boolean).slice(0, 5) : [],
+    note: String(value.note || '').trim()
+  };
+}
+function setOwnerDecision(project, item, patch) {
+  pendingDecisions.set(decisionKey(project, item), { ...ownerDecision(project, item), ...patch });
+}
+function ownerDecisionPayload(project, item) {
+  const decision = ownerDecision(project, item), payload = {};
+  if (decision.selected) payload.selected = decision.selected;
+  if (decision.checked.length) payload.checked = decision.checked;
+  if (decision.note) payload.note = decision.note;
+  return payload;
+}
+function decisionReady(project, item) {
+  const prompt = decisionPrompt(item), decision = ownerDecision(project, item);
+  if (!prompt) return true;
+  if (prompt.mode === 'choice' || prompt.mode === 'binary') return Boolean(decision.selected);
+  if (prompt.mode === 'checklist') return !prompt.required || decision.checked.length > 0;
+  return !prompt.required || Boolean(decision.note);
+}
+function decisionSummary(decision) {
+  return [decision.selected, Array.isArray(decision.checked) ? decision.checked.join('、') : '', decision.note].filter(Boolean).join('；');
+}
+function decisionControl(project, item) {
+  if (item.type !== 'decision') return '';
+  const prompt = decisionPrompt(item), decision = ownerDecision(project, item);
+  let control = '';
+  if (prompt?.mode === 'choice' || prompt?.mode === 'binary') {
+    control = `<div class="decision-options">${prompt.options.map(option => `<button class="decision-option${decision.selected === option.id ? ' is-selected' : ''}" type="button" data-decision-choice="${html(option.id)}"><b>${html(option.id)}</b><span>${html(option.label)}</span></button>`).join('')}</div>`;
+  } else if (prompt?.mode === 'checklist') {
+    control = `<div class="decision-checks">${prompt.items.map(text => `<button class="decision-check${decision.checked.includes(text) ? ' is-selected' : ''}" type="button" data-decision-check="${html(text)}"><span>${html(text)}</span></button>`).join('')}</div>`;
+  }
+  const noteLabel = prompt?.placeholder || 'Optional short decision note';
+  return `<section class="owner-decision"><div class="owner-decision-head"><span>Owner Decision</span>${prompt?.mode ? `<small>${html(prompt.mode.replace('_', ' '))}</small>` : ''}</div>${prompt?.label ? `<p>${html(prompt.label)}</p>` : ''}${control}<textarea class="decision-note" data-decision-note rows="2" placeholder="${html(noteLabel)}">${html(decision.note)}</textarea></section>`;
+}
+function deckActions(project, item) {
+  return TYPES[item.type].actions.map(([action, label, cls]) => {
+    const selected = action === 'accept' ? ownerDecision(project, item).selected : '';
+    const disabled = item.type === 'decision' && action === 'accept' && !decisionReady(project, item);
+    return `<button class="${cls}" data-action="${action}" type="button"${disabled ? ' disabled' : ''}>${html(selected ? `${label} ${selected}` : label)}</button>`;
+  }).join('');
+}
 function deckCard(project, item) {
   const card = document.createElement('article');
   card.className = 'deck-card';
   const runtime = projectState(project.id);
   const cardStatus = runtime.sync && runtime.sync !== 'saved' ? projectSyncLabel(project.id) : (STATUS[item.status] || item.status || 'open');
-  card.innerHTML = `<span class="deck-kind ${item.type}">${TYPES[item.type].label}</span><h3>${html(item.title)}</h3><p class="item-body">${html(item.body)}</p>${item.recommendation ? `<p class="recommendation">${html(item.recommendation)}</p>` : ''}<div class="deck-status">${html(cardStatus)}</div><div class="deck-actions">${TYPES[item.type].actions.map(([action, label, cls]) => `<button class="${cls}" data-action="${action}" type="button">${label}</button>`).join('')}</div>`;
+  card.innerHTML = `<span class="deck-kind ${item.type}">${TYPES[item.type].label}</span><h3>${html(item.title)}</h3><p class="item-body">${html(item.body)}</p>${item.recommendation ? `<p class="recommendation">${html(item.recommendation)}</p>` : ''}${decisionControl(project, item)}<div class="deck-status">${html(cardStatus)}</div><div class="deck-actions">${deckActions(project, item)}</div>`;
+  attachDecisionControl(card, project, item);
   card.querySelectorAll('[data-action]').forEach(button => button.addEventListener('click', () => applyItemAction(project, item, button.dataset.action, button)));
   attachSwipe(card, project, item);
   return card;
 }
+function attachDecisionControl(card, project, item) {
+  card.querySelectorAll('[data-decision-choice]').forEach(button => button.addEventListener('click', event => {
+    event.stopPropagation();
+    setOwnerDecision(project, item, { selected: button.dataset.decisionChoice });
+    renderDeck();
+  }));
+  card.querySelectorAll('[data-decision-check]').forEach(button => button.addEventListener('click', event => {
+    event.stopPropagation();
+    const current = ownerDecision(project, item).checked, value = button.dataset.decisionCheck;
+    setOwnerDecision(project, item, { checked: current.includes(value) ? current.filter(item => item !== value) : [...current, value] });
+    renderDeck();
+  }));
+  card.querySelector('[data-decision-note]')?.addEventListener('input', event => {
+    setOwnerDecision(project, item, { note: event.target.value });
+    const approve = card.querySelector('[data-action="accept"]');
+    if (approve) {
+      approve.disabled = !decisionReady(project, item);
+      const selected = ownerDecision(project, item).selected;
+      setLabel(approve, selected ? `Approve ${selected}` : 'Approve');
+    }
+  });
+}
 async function applyItemAction(project, item, action, button = null) {
-  if (action === 'edit') return openItemEditor(project, item);
+  if (action === 'revise') return openItemRevision(project, item);
   const eventType = TRANSITIONS[action];
   if (!eventType) return;
+  if (item.type === 'decision' && action === 'accept' && !decisionReady(project, item)) return;
+  const payload = {
+    project_id: project.id,
+    item_id: item.id,
+    event_type: eventType,
+    actor: 'owner',
+    source: 'gateway-ui',
+    summary: `${action}: ${item.title || item.id}`
+  };
+  if (item.type === 'decision' && action === 'accept') {
+    const decision = ownerDecisionPayload(project, item), summary = decisionSummary(decision);
+    if (Object.keys(decision).length) {
+      payload.owner_decision = decision;
+      payload.summary = `approve${summary ? ` ${summary}` : ''}: ${item.title || item.id}`;
+    }
+  }
   setProjectState(project.id, { sync: 'syncing', syncLabel: 'Deciding', submitError: '' });
   if (button) { button.closest('.deck-actions')?.querySelectorAll('button').forEach(item => { item.disabled = true; }); setLabel(button, 'Deciding'); }
   try {
-    const data = await fetchJson('/api/project-workbench/transition', {
-      project_id: project.id,
-      item_id: item.id,
-      event_type: eventType,
-      actor: 'owner',
-      source: 'gateway-ui',
-      summary: `${action}: ${item.title || item.id}`
-    });
+    const data = await fetchJson('/api/project-workbench/transition', payload);
     state = data.workbench;
+    pendingDecisions.delete(decisionKey(project, item));
     setProjectState(project.id, { sync: 'saved', syncLabel: '' });
     render();
     const nextProject = deckProject();
@@ -443,11 +543,11 @@ async function applyItemAction(project, item, action, button = null) {
     renderDeck();
   }
 }
-function openItemEditor(project, item) {
+function openItemRevision(project, item) {
   els.nav.hidden = true;
   const form = document.createElement('form');
-  form.className = 'deck-card edit-card';
-  form.innerHTML = `<span class="deck-kind ${item.type}">${TYPES[item.type].label}</span><label><span>Card Title</span><input name="title" value="${html(item.title)}"></label><label><span>Body</span><textarea name="body" rows="4">${html(item.body)}</textarea></label><label><span>Recommendation</span><textarea name="recommendation" rows="3">${html(item.recommendation)}</textarea></label><div class="deck-actions edit-actions"><button class="primary" type="submit">Save</button><button type="button" data-cancel>Cancel</button></div>`;
+  form.className = 'deck-card revise-card';
+  form.innerHTML = `<span class="deck-kind ${item.type}">${TYPES[item.type].label} Revision</span><label><span>Card Title</span><input name="title" value="${html(item.title)}"></label><label><span>Body</span><textarea name="body" rows="4">${html(item.body)}</textarea></label><label><span>Recommendation</span><textarea name="recommendation" rows="3">${html(item.recommendation)}</textarea></label><div class="deck-actions revise-actions"><button class="primary" type="submit">Save</button><button type="button" data-cancel>Cancel</button></div>`;
   form.addEventListener('submit', async event => {
     event.preventDefault();
     const title = form.elements.title.value.trim();
@@ -465,7 +565,7 @@ function openItemEditor(project, item) {
 async function applyItemUpdate(project, item, fields) {
   setProjectState(project.id, { sync: 'syncing', syncLabel: 'Syncing', submitError: '' });
   try {
-    const data = await fetchJson('/api/project-workbench/transition', { project_id: project.id, item_id: item.id, event_type: 'item_updated', actor: 'owner', source: 'gateway-ui', summary: `Edit: ${fields.title || item.title}`, item: fields });
+    const data = await fetchJson('/api/project-workbench/transition', { project_id: project.id, item_id: item.id, event_type: 'item_updated', actor: 'owner', source: 'gateway-ui', summary: `Revise: ${fields.title || item.title}`, item: fields });
     state = data.workbench; setProjectState(project.id, { sync: 'saved', syncLabel: '' }); render(); if (!els.sheet.hidden) renderDeck();
   } catch (_error) {
     setProjectState(project.id, { sync: 'sync_failed', syncLabel: 'Sync Failed' });
@@ -483,7 +583,7 @@ function attachSwipe(card, project, item) {
 async function load() {
   try {
     const data = await fetchJson('/api/project-workbench');
-    projectRuntime.clear(); state = data.workbench; setDirty(false); render();
+    projectRuntime.clear(); pendingDecisions.clear(); state = data.workbench; setDirty(false); render();
     refreshProjectGitStatus().catch(() => {});
   } catch (error) { setSaveState('Failed', true); els.list.replaceChildren(empty(error.message || 'Load failed')); }
 }
@@ -544,7 +644,7 @@ async function importProject(event) {
   if (!project_root) { els.importStatus.textContent = 'Project Root is required.'; return; }
   const button = els.importForm.querySelector('button[type="submit"]');
   button.disabled = true; els.importStatus.textContent = 'Importing'; setGlobalBusy('Saving');
-  try { const data = await fetchJson('/api/project-workbench/import', { owner_route, project_root }); projectRuntime.clear(); state = data.workbench; setDirty(false); els.importForm.elements.project_root.value = ''; closeImport(); render(); }
+  try { const data = await fetchJson('/api/project-workbench/import', { owner_route, project_root }); projectRuntime.clear(); pendingDecisions.clear(); state = data.workbench; setDirty(false); els.importForm.elements.project_root.value = ''; closeImport(); render(); }
   catch (error) { els.importStatus.textContent = error.message || 'Import failed'; setDirty(dirty); }
   finally { button.disabled = false; }
 }

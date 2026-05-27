@@ -122,26 +122,39 @@ button { -webkit-tap-highlight-color: transparent; }
 .deck-kind.action { color: var(--action); border: 1px solid color-mix(in srgb, var(--action) 45%, var(--line)); }
 .deck-kind.watch { color: var(--watch); border: 1px solid color-mix(in srgb, var(--watch) 45%, var(--line)); }
 .deck-card h3 { margin: 0; font-size: 21px; line-height: 1.2; }
-.edit-card label { display: grid; gap: 5px; color: var(--muted); font-size: 12px; font-weight: 780; }
-.edit-card input, .edit-card textarea { width: 100%; padding: 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); color: var(--text); font: inherit; line-height: 1.42; }
-.edit-card textarea { resize: vertical; }
+.revise-card label { display: grid; gap: 5px; color: var(--muted); font-size: 12px; font-weight: 780; }
+.revise-card input, .revise-card textarea { width: 100%; padding: 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); color: var(--text); font: inherit; line-height: 1.42; }
+.revise-card textarea { resize: vertical; }
 .item-body { margin: 0; font-size: 14px; line-height: 1.45; }
 .recommendation { margin: 0; padding: 10px; border-left: 3px solid var(--accent); border-radius: 8px; background: color-mix(in srgb, var(--panel) 66%, transparent); color: var(--text); line-height: 1.42; }
+.owner-decision { display: grid; gap: 8px; padding: 10px; border: 1px solid color-mix(in srgb, var(--decision) 38%, var(--line)); border-radius: 8px; background: color-mix(in srgb, var(--decision) 8%, var(--panel)); }
+.owner-decision-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; color: var(--decision); font-size: 11px; font-weight: 850; text-transform: uppercase; }
+.owner-decision-head small { color: var(--muted); font: inherit; text-transform: none; }
+.owner-decision p { margin: 0; color: var(--text); font-size: 13px; line-height: 1.35; }
+.decision-options, .decision-checks { display: grid; gap: 7px; }
+.decision-option, .decision-check { min-width: 0; min-height: 34px; border: 1px solid color-mix(in srgb, var(--line) 74%, transparent); border-radius: 8px; background: color-mix(in srgb, var(--panel) 74%, transparent); color: var(--text); text-align: left; }
+.decision-option { display: grid; grid-template-columns: 24px minmax(0, 1fr); gap: 8px; align-items: center; padding: 6px 9px; }
+.decision-option b { color: var(--decision); font-size: 12px; }
+.decision-option span, .decision-check span { min-width: 0; overflow-wrap: anywhere; font-size: 13px; line-height: 1.3; }
+.decision-check { padding: 7px 9px; }
+.decision-option.is-selected, .decision-check.is-selected { border-color: color-mix(in srgb, var(--decision) 68%, var(--line)); background: color-mix(in srgb, var(--decision) 16%, var(--panel)); box-shadow: inset 0 1px 0 rgba(255, 255, 255, .18); }
+.decision-note { width: 100%; min-height: 42px; max-height: 88px; resize: vertical; padding: 8px 9px; border: 1px solid color-mix(in srgb, var(--line) 72%, transparent); border-radius: 8px; background: color-mix(in srgb, var(--panel) 82%, transparent); color: var(--text); font: inherit; line-height: 1.35; }
 .deck-actions { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 7px; }
 .deck-actions button { min-width: 0; padding: 0 8px; font-size: 13px; box-shadow: inset 0 1px 0 rgba(255, 255, 255, .18); }
+.deck-actions button:disabled { opacity: .48; }
 .deck-actions .primary { border-color: color-mix(in srgb, var(--action) 48%, var(--line)); background: color-mix(in srgb, var(--action) 14%, var(--panel)); color: var(--action); font-weight: 850; }
 .deck-actions .danger { border-color: color-mix(in srgb, var(--decision) 52%, var(--line)); background: color-mix(in srgb, var(--decision) 10%, var(--panel)); color: var(--decision); }
-.edit-actions { grid-template-columns: 1fr 1fr; }
+.revise-actions { grid-template-columns: 1fr 1fr; }
 .deck-nav { position: sticky; bottom: -14px; z-index: 2; display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 10px -14px -14px; padding: 10px 14px calc(env(safe-area-inset-bottom) + 12px); border-top: 1px solid color-mix(in srgb, var(--line) 52%, transparent); background: linear-gradient(180deg, color-mix(in srgb, var(--panel) 86%, transparent), color-mix(in srgb, var(--panel) 98%, transparent)); backdrop-filter: blur(14px); }
 .deck-nav[hidden] { display: none; }
 .deck-nav button:disabled { opacity: .45; }
 @keyframes sheet-pop { from { opacity: .4; transform: translateY(8px) scale(.98); } to { opacity: 1; transform: translateY(0) scale(1); } }
-.import-form label span, .edit-card label span { color: var(--accent); font-size: 11px; font-weight: 850; text-transform: uppercase; }
+.import-form label span, .revise-card label span { color: var(--accent); font-size: 11px; font-weight: 850; text-transform: uppercase; }
 .import-form { display: grid; gap: 11px; }
 .import-form label { display: grid; gap: 6px; color: var(--muted); font-size: 12px; font-weight: 780; }
 .import-form input, .import-form select { width: 100%; min-height: 42px; padding: 0 10px; border: 1px solid color-mix(in srgb, var(--line) 72%, transparent); border-radius: 8px; background: color-mix(in srgb, var(--panel) 82%, transparent); color: var(--text); }
-.edit-card input, .edit-card textarea { border-color: color-mix(in srgb, var(--line) 72%, transparent); background: color-mix(in srgb, var(--panel) 82%, transparent); }
-.import-form input:focus, .import-form select:focus, .edit-card input:focus, .edit-card textarea:focus { outline: 2px solid color-mix(in srgb, var(--accent) 28%, transparent); border-color: color-mix(in srgb, var(--accent) 58%, var(--line)); }
+.revise-card input, .revise-card textarea { border-color: color-mix(in srgb, var(--line) 72%, transparent); background: color-mix(in srgb, var(--panel) 82%, transparent); }
+.import-form input:focus, .import-form select:focus, .revise-card input:focus, .revise-card textarea:focus { outline: 2px solid color-mix(in srgb, var(--accent) 28%, transparent); border-color: color-mix(in srgb, var(--accent) 58%, var(--line)); }
 .import-submit { min-height: 42px; border: 1px solid color-mix(in srgb, var(--accent) 44%, var(--line)); border-radius: 8px; background: var(--accent); color: var(--on-accent); font-weight: 850; }
 .import-submit:disabled { opacity: .55; }
 .import-status { min-height: 18px; margin: 0; color: var(--muted); font-size: 12px; }

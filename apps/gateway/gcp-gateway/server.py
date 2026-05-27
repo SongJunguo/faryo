@@ -1001,6 +1001,7 @@ class GatewayHandler(BaseHTTPRequestHandler):
             "项目阶段执行定义刚完成提交，你现在接棒。",
             "先确认本次下发包已应用到 payload.projects 的项目真值层；异常只报阻塞。",
             "本次只处理 payload.projects 内的项目说明、阶段目标和 DoD（完成定义）；拟定待裁决 item（事项），用 item_created（事项创建）写入 awaiting_owner（待裁决），不要创建 WO（工单）或 worker（施工会话）。",
+            "生成 decision（裁决项）如需选择，写 decision_prompt（裁决输入定义）；Owner 结果会回写 owner_decision（Owner 裁决结果），不要混进正文或 recommendation（建议）。",
             json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
         ])
 
@@ -1416,7 +1417,7 @@ class GatewayHandler(BaseHTTPRequestHandler):
                 row["definition"] = definition
         return row
 
-    def clean_project_items(self, items: Any) -> list[dict[str, str]]:
+    def clean_project_items(self, items: Any) -> list[dict[str, Any]]:
         source = items if isinstance(items, list) else []
         clean_items = []
         counts = {item_type: 0 for item_type in PROJECT_ITEM_TYPES}
@@ -1449,6 +1450,12 @@ class GatewayHandler(BaseHTTPRequestHandler):
                 value = self.compact_text(item.get(key))
                 if value:
                     clean[key] = value
+            prompt = pd_state.clean_item_decision_prompt(item.get("decision_prompt"), item_type)
+            if prompt:
+                clean["decision_prompt"] = prompt
+            decision = pd_state.clean_owner_decision(item.get("owner_decision"))
+            if decision:
+                clean["owner_decision"] = decision
             clean_items.append(clean)
         return clean_items
 
@@ -1755,9 +1762,11 @@ class GatewayHandler(BaseHTTPRequestHandler):
                 continue
             title = self.compact_text(item.get("title"))
             if title:
+                decision = pd_state.owner_decision_text(item.get("owner_decision"))
                 item_lines.append(
                     f"- `{self.compact_text(item.get('id'))}` "
-                    f"[{self.compact_text(item.get('type'))}/{self.compact_text(item.get('status'))}] {title}"
+                    f"[{self.compact_text(item.get('type'))}/{self.compact_text(item.get('status'))}] "
+                    f"{title}{'；裁决：' + decision if decision else ''}"
                 )
         values = {
             "workorder_id": workorder_id,
