@@ -49,7 +49,61 @@ def item_status(stage: str) -> str:
     }.get(stage, "open")
 
 
-def clean_item(item: dict[str, Any], index: int) -> dict[str, str]:
+def clean_decision_option(option: Any) -> dict[str, str]:
+    if not isinstance(option, dict):
+        return {}
+    option_id = compact_text(option.get("id"))
+    label = compact_text(option.get("label"))
+    return {"id": option_id, "label": label} if option_id and label else {}
+
+
+def clean_decision_prompt(value: Any, item_type: str) -> dict[str, Any]:
+    if item_type != "decision" or not isinstance(value, dict):
+        return {}
+    mode = compact_text(value.get("mode"))
+    if mode not in {"choice", "binary", "checklist", "short_note"}:
+        return {}
+    clean: dict[str, Any] = {"mode": mode}
+    label = compact_text(value.get("label"))
+    if label:
+        clean["label"] = label
+    if mode in {"choice", "binary"}:
+        options = [clean for option in value.get("options", []) if (clean := clean_decision_option(option))]
+        limit = 2 if mode == "binary" else 5
+        if len(options) < 2:
+            return {}
+        clean["options"] = options[:limit]
+    elif mode == "checklist":
+        items = unique_compact_items(value.get("items") if isinstance(value.get("items"), list) else [])
+        if not items:
+            return {}
+        clean["items"] = items[:5]
+    if mode == "short_note":
+        placeholder = compact_text(value.get("placeholder"))
+        if placeholder:
+            clean["placeholder"] = placeholder
+    if bool(value.get("required")):
+        clean["required"] = True
+    return clean
+
+
+def clean_owner_decision(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        return {}
+    clean: dict[str, Any] = {}
+    selected = compact_text(value.get("selected"))
+    if selected:
+        clean["selected"] = selected
+    checked = unique_compact_items(value.get("checked") if isinstance(value.get("checked"), list) else [])
+    if checked:
+        clean["checked"] = checked[:5]
+    note = compact_text(value.get("note"))
+    if note:
+        clean["note"] = note
+    return clean
+
+
+def clean_item(item: dict[str, Any], index: int) -> dict[str, Any]:
     item_type = compact_text(item.get("type"))
     title = compact_text(item.get("title"))
     stage = item_stage(item)
@@ -69,6 +123,12 @@ def clean_item(item: dict[str, Any], index: int) -> dict[str, str]:
         value = compact_text(item.get(key))
         if value:
             clean[key] = value
+    prompt = clean_decision_prompt(item.get("decision_prompt"), item_type)
+    if prompt:
+        clean["decision_prompt"] = prompt
+    decision = clean_owner_decision(item.get("owner_decision"))
+    if decision:
+        clean["owner_decision"] = decision
     return clean
 
 
@@ -223,15 +283,21 @@ def apply_transition(project: dict[str, Any], payload: dict[str, Any]) -> tuple[
                 events.append(base_event(project, event_type, payload, item["id"], prev, "awaiting_owner"))
                 continue
             changes = {}
-            for key in ("title", "body", "recommendation", "type"):
+            for key in ("title", "body", "recommendation", "type", "decision_prompt", "owner_decision"):
                 if key in raw:
-                    value = compact_text(raw.get(key))
-                    if key == "type" and value not in ITEM_TYPES:
+                    if key in {"decision_prompt", "owner_decision"}:
+                        value = clean_decision_prompt(raw.get(key), compact_text(item.get("type"))) if key == "decision_prompt" else clean_owner_decision(raw.get(key))
+                        if value:
+                            item[key] = value
+                            changes[key] = value
+                        continue
+                    text = compact_text(raw.get(key))
+                    if key == "type" and text not in ITEM_TYPES:
                         raise ValueError("invalid item type")
-                    if key == "title" and not value:
+                    if key == "title" and not text:
                         raise ValueError("item title is required")
-                    item[key] = value
-                    changes[key] = value
+                    item[key] = text
+                    changes[key] = text
             if not changes:
                 raise ValueError("missing item update fields")
             item["updated_at"] = now_iso()
@@ -251,6 +317,10 @@ def apply_transition(project: dict[str, Any], payload: dict[str, Any]) -> tuple[
         nxt = next_stage(event_type, prev)
         event = base_event(project, event_type, payload, item["id"], prev, nxt)
         event["workorder_id"] = event["workorder_id"] or compact_text(item.get("workorder_id"))
+        owner_decision = clean_owner_decision(payload.get("owner_decision"))
+        if owner_decision:
+            item["owner_decision"] = owner_decision
+            event["payload"]["owner_decision"] = owner_decision
         events.append(event)
         if nxt == "closed":
             history.append(history_record(project, item, event, payload))
