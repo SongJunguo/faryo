@@ -924,9 +924,13 @@ class GatewayHandler(BaseHTTPRequestHandler):
     def handle_project_workbench_sync_project(self, username: str) -> None:
         try:
             payload = self.read_json_body(512 * 1024)
+            scope = self.project_downlink_scope(payload)
             rows = self.project_rows_from_payload(payload, write=False, truth=True, overview=False)
-            target_rows, downlink = self.sync_project_downlinks(username, rows, payload)
-            if downlink.get("status") == "applied":
+            target_rows, downlink = self.sync_project_downlinks(username, rows, payload, scope)
+            if scope == "definition" and target_rows:
+                rows = self.rows_with_definition_sync(rows, target_rows, downlink)
+                self.write_project_rows(rows)
+            elif downlink.get("status") == "applied":
                 self.write_project_rows(rows)
             self.write_json({
                 "ok": True,
@@ -1202,6 +1206,8 @@ class GatewayHandler(BaseHTTPRequestHandler):
                 row["code_root"] = previous.get("code_root") or ""
             if "definition" not in row and isinstance(previous.get("definition"), dict):
                 row["definition"] = previous["definition"]
+            elif isinstance(project.get("definition"), dict):
+                row["definition_sync"] = self.project_definition_sync(row, "applied")
             row.setdefault("archived", previous.get("archived"))
             rows.append(self.clean_project_row(row, index))
         return rows
@@ -1217,6 +1223,8 @@ class GatewayHandler(BaseHTTPRequestHandler):
             merged["bucket"] = previous.get("bucket") or "B"
         if not merged.get("rank"):
             merged["rank"] = previous.get("rank") or len(rows) + 1
+        if isinstance(project.get("definition"), dict):
+            merged["definition_sync"] = self.project_definition_sync(merged, "applied")
         row = self.clean_project_row(merged, int(merged.get("rank") or len(rows) + 1))
         self.write_project_rows([item for item in rows if item.get("id") != row["id"]] + [row])
         return row
@@ -1248,11 +1256,11 @@ class GatewayHandler(BaseHTTPRequestHandler):
     def active_project_rows(self, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         return [row for row in rows if not row.get("archived")]
 
-    def sync_project_downlinks(self, username: str, rows: list[dict[str, Any]], payload: dict[str, Any]) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    def sync_project_downlinks(self, username: str, rows: list[dict[str, Any]], payload: dict[str, Any], scope: str) -> tuple[list[dict[str, Any]], dict[str, Any]]:
         target_rows = self.project_downlink_target_rows(rows, payload)
         if not target_rows:
             return [], {"status": "skipped"}
-        packages = self.save_project_downlinks(target_rows, username, self.project_downlink_scope(payload))
+        packages = self.save_project_downlinks(target_rows, username, scope)
         notices = [self.notify_project_downlink(package, username) for package in packages]
         return target_rows, self.project_downlink_response(packages, notices)
 
@@ -1313,6 +1321,18 @@ class GatewayHandler(BaseHTTPRequestHandler):
             "status": status,
             "packages": [{"package_id": package["id"], "target": package["target"], "status": notice.get("status") or package.get("status")} for package, notice in zip(packages, notices)],
         }
+
+    def rows_with_definition_sync(self, rows: list[dict[str, Any]], target_rows: list[dict[str, Any]], downlink: dict[str, Any]) -> list[dict[str, Any]]:
+        target_ids = {row["id"] for row in target_rows}
+        status = self.clean_definition_sync_status(downlink.get("status"))
+        updated_rows = []
+        for index, row in enumerate(rows, 1):
+            if row["id"] in target_ids:
+                updated = dict(row)
+                updated["definition_sync"] = self.project_definition_sync(row, status)
+                row = self.clean_project_row(updated, int(row.get("rank") or index))
+            updated_rows.append(row)
+        return updated_rows
 
     def project_downlink_hash_error(self, package: dict[str, Any], payload: dict[str, Any]) -> str:
         actual = payload.get("hashes")
@@ -1399,6 +1419,29 @@ class GatewayHandler(BaseHTTPRequestHandler):
         body = json.dumps(truth, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
         return hashlib.sha256(body).hexdigest()
 
+    def clean_definition_sync_status(self, status: Any) -> str:
+        value = self.compact_text(status)
+        return value if value in {"applied", "failed", "pending"} else "pending"
+
+    def project_definition_sync(self, row: dict[str, Any], status: Any) -> dict[str, Any]:
+        return {
+            "status": self.clean_definition_sync_status(status),
+            "hash": pd_state.project_definition_downlink_hash(self.project_id(row), row.get("definition")),
+            "updated_at": now_ts(),
+        }
+
+    def clean_project_definition_sync(self, source: dict[str, Any], project_id: str, definition: dict[str, Any]) -> dict[str, Any]:
+        sync = source.get("definition_sync")
+        if not isinstance(sync, dict):
+            return {}
+        expected_hash = pd_state.project_definition_downlink_hash(project_id, definition)
+        if self.compact_text(sync.get("hash")) != expected_hash:
+            return {"status": "pending", "hash": expected_hash}
+        clean = {"status": self.clean_definition_sync_status(sync.get("status")), "hash": expected_hash}
+        if isinstance(sync.get("updated_at"), int):
+            clean["updated_at"] = sync["updated_at"]
+        return clean
+
     def read_project_rows(self) -> list[dict[str, Any]]:
         rows = []
         try:
@@ -1445,6 +1488,9 @@ class GatewayHandler(BaseHTTPRequestHandler):
             definition = pd_state.clean_project_definition(source.get("definition"))
             if definition:
                 row["definition"] = definition
+                definition_sync = self.clean_project_definition_sync(source, project_id, definition)
+                if definition_sync:
+                    row["definition_sync"] = definition_sync
         return row
 
     def clean_project_items(self, items: Any) -> list[dict[str, Any]]:
