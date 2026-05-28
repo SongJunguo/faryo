@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 import re
 import secrets
@@ -138,6 +140,15 @@ def clean_project_definition(value: Any) -> dict[str, Any]:
 
 def project_definition_hash_payload(value: Any) -> dict[str, Any]:
     return {key: item for key, item in clean_project_definition(value).items() if item not in ("", [])}
+
+
+def project_definition_downlink_hash(project_id: Any, definition: Any) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "-", str(project_id or "").strip().lower()).strip("-") or "project"
+    body = json.dumps({
+        "id": slug,
+        "definition": project_definition_hash_payload(definition),
+    }, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(body).hexdigest()
 
 
 def current_stage_heading(definition: dict[str, Any]) -> str:

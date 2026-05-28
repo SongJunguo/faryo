@@ -228,6 +228,10 @@ function overviewDraftChanged(project, draft) {
 function overviewProject(project, draft) {
   return { ...project, brief: draft.brief, current_d: draft.stage_goal, definition: { ...(project.definition || {}), stage_goal: draft.stage_goal, stage_state: draft.stage_state, stage_dod: draft.stage_dod.join('；'), stage_dod_done: draft.stage_dod_done } };
 }
+function overviewDefinitionPatch(project, draft) {
+  const updated = overviewProject(project, draft);
+  return { id: project.id, brief: updated.brief, current_d: updated.current_d, definition: updated.definition };
+}
 function openProjectOverview(project, draft = overviewDraft(project)) {
   cleanOverviewDraft(draft);
   const view = overviewProject(project, draft);
@@ -380,7 +384,7 @@ async function saveOverviewDraft(project, draft) {
   setProjectState(project.id, { sync: 'syncing', syncLabel: 'Syncing', submitError: '' });
   if (button) { setLabel(button, 'Syncing'); button.disabled = true; }
   try {
-    const data = await syncProjectState(project.id, overviewProject(project, draft));
+    const data = await syncProjectState(project.id, overviewDefinitionPatch(project, draft));
     state = withLocalOverviewMeta(data.workbench); render();
     setProjectState(project.id, { sync: 'saved', syncLabel: '', submitError: '' });
     const next = projects().find(row => row.id === project.id);
@@ -395,7 +399,7 @@ async function saveOverviewDraft(project, draft) {
   }
 }
 async function syncProjectState(projectId, project) {
-  const data = await fetchJson('/api/project-workbench/sync-project', { projects: [project], downlink_project_ids: [projectId] });
+  const data = await fetchJson('/api/project-workbench/sync-project', { projects: [project], downlink_project_ids: [projectId], downlink_scope: 'definition' });
   if (data.downlink?.status !== 'applied') {
     const error = new Error(data.downlink?.status === 'failed' ? 'Project sync failed' : 'Project sync pending');
     error.projectSync = true;

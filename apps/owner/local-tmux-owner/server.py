@@ -2127,29 +2127,40 @@ def apply_project_workbench_downlink(config: Config, payload: dict[str, Any]) ->
     projects = package.get("projects") if isinstance(package.get("projects"), list) else []
     if not projects:
         raise OwnerError("downlink package has no projects")
+    scope = compact_text(package.get("scope")) or "project"
+    if scope not in {"project", "definition"}:
+        raise OwnerError("invalid downlink scope", HTTPStatus.BAD_REQUEST)
     raw_projects = [project for project in projects if isinstance(project, dict)]
+    if scope == "definition" and any(not isinstance(project.get("definition"), dict) for project in raw_projects):
+        raise OwnerError("missing project definition", HTTPStatus.BAD_REQUEST)
     targets = [(project_workbench_path(project), clean_project_workbench(project), project.get("definition") if isinstance(project.get("definition"), dict) else None) for project in raw_projects]
     paths = [path for path, _project, _definition in targets]
     if len({str(path) for path in paths}) != len(paths):
         raise OwnerError("duplicate project workbench target", HTTPStatus.BAD_REQUEST)
     expected_hashes = {project_slug(project.get("id") or project.get("name")): compact_text(project.get("hash")) for project in raw_projects}
     staged: list[tuple[Path, Path]] = []
-    try:
-        staged = [(path, stage_project_workbench_file(path, project)) for path, project, _definition in targets]
-        for path, tmp in staged:
-            os.replace(tmp, path)
-    except OSError as exc:
-        cleanup_staged_project_workbenches(staged)
-        raise OwnerError("failed to write project workbench", HTTPStatus.INTERNAL_SERVER_ERROR) from exc
+    if scope == "project":
+        try:
+            staged = [(path, stage_project_workbench_file(path, project)) for path, project, _definition in targets]
+            for path, tmp in staged:
+                os.replace(tmp, path)
+        except OSError as exc:
+            cleanup_staged_project_workbenches(staged)
+            raise OwnerError("failed to write project workbench", HTTPStatus.INTERNAL_SERVER_ERROR) from exc
     hashes = {}
     for path, project, definition in targets:
         if isinstance(definition, dict):
             actual_definition = apply_project_definition_downlink(path, project, definition)
         else:
             actual_definition = None
-        stored = json.loads(path.read_text(encoding="utf-8"))
-        actual = clean_project_workbench(stored if isinstance(stored, dict) else {})
-        hashes[project["id"]] = project_downlink_hash(actual, actual_definition)
+        if scope == "definition":
+            expected_definition = pd_state.project_definition_hash_payload(definition)
+            actual_definition = pd_state.project_definition_hash_payload(actual_definition)
+            hashes[project["id"]] = pd_state.project_definition_downlink_hash(project["id"], {key: actual_definition.get(key) for key in expected_definition})
+        else:
+            stored = json.loads(path.read_text(encoding="utf-8"))
+            actual = clean_project_workbench(stored if isinstance(stored, dict) else {})
+            hashes[project["id"]] = project_downlink_hash(actual, actual_definition)
     mismatched = [project_id for project_id, digest in expected_hashes.items() if digest and hashes.get(project_id) != digest]
     ok = not mismatched
     ack = gateway_json_request(config, gateway_url, "/api/project-workbench/downlink/ack", {

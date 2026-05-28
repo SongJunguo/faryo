@@ -1252,11 +1252,17 @@ class GatewayHandler(BaseHTTPRequestHandler):
         target_rows = self.project_downlink_target_rows(rows, payload)
         if not target_rows:
             return [], {"status": "skipped"}
-        packages = self.save_project_downlinks(target_rows, username)
+        packages = self.save_project_downlinks(target_rows, username, self.project_downlink_scope(payload))
         notices = [self.notify_project_downlink(package, username) for package in packages]
         return target_rows, self.project_downlink_response(packages, notices)
 
-    def save_project_downlinks(self, rows: list[dict[str, Any]], username: str) -> list[dict[str, Any]]:
+    def project_downlink_scope(self, payload: dict[str, Any]) -> str:
+        scope = self.compact_text(payload.get("downlink_scope")) or "project"
+        if scope not in {"project", "definition"}:
+            raise ValueError("invalid downlink_scope")
+        return scope
+
+    def save_project_downlinks(self, rows: list[dict[str, Any]], username: str, scope: str) -> list[dict[str, Any]]:
         packages = []
         grouped: dict[str, list[dict[str, Any]]] = {}
         for row in rows:
@@ -1265,18 +1271,19 @@ class GatewayHandler(BaseHTTPRequestHandler):
                 raise ValueError(f"project {row['id']} has no valid owner_route")
             grouped.setdefault(owner_route, []).append(row)
         for owner_route, owner_rows in sorted(grouped.items()):
-            packages.append(self.save_project_downlink(owner_route, owner_rows, username))
+            packages.append(self.save_project_downlink(owner_route, owner_rows, username, scope))
         return packages
 
-    def save_project_downlink(self, owner_route: str, rows: list[dict[str, Any]], username: str) -> dict[str, Any]:
+    def save_project_downlink(self, owner_route: str, rows: list[dict[str, Any]], username: str, scope: str) -> dict[str, Any]:
         package = {
             "id": f"pwb-{int(time.time())}-{secrets.token_hex(4)}",
             "type": "project-workbench",
+            "scope": scope,
             "target": owner_route,
             "status": "pending",
             "created_at": now_ts(),
             "created_by": username,
-            "projects": [self.project_downlink_project(row) for row in self.sorted_project_rows(rows)],
+            "projects": [self.project_downlink_project(row, scope) for row in self.sorted_project_rows(rows)],
         }
         self.write_project_downlink_package(package)
         return package
@@ -1356,7 +1363,21 @@ class GatewayHandler(BaseHTTPRequestHandler):
                 truth["definition"] = definition
         return truth
 
-    def project_downlink_project(self, row: dict[str, Any]) -> dict[str, Any]:
+    def project_downlink_project(self, row: dict[str, Any], scope: str = "project") -> dict[str, Any]:
+        if scope == "definition":
+            definition = pd_state.project_definition_hash_payload(row.get("definition"))
+            if not definition:
+                raise ValueError(f"project {row['id']} has no definition")
+            project = {
+                "id": row["id"],
+                "name": row["name"],
+                "brief": row["brief"],
+                "current_d": row["current_d"],
+                "definition": definition,
+                "workbench_path": row.get("workbench_path") or row.get("path") or "",
+            }
+            project["hash"] = pd_state.project_definition_downlink_hash(row["id"], definition)
+            return project
         project = self.project_truth_row(row)
         project["workbench_path"] = row.get("workbench_path") or row.get("path") or ""
         project["hash"] = self.project_downlink_hash(project)
