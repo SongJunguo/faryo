@@ -170,6 +170,44 @@ def ensure_current_stage_section(path: Path, definition: dict[str, Any]) -> None
     os.replace(tmp, path)
 
 
+def current_stage_block_lines(definition: dict[str, Any]) -> list[str]:
+    lines = current_stage_lines(definition)
+    return lines[1:] if lines[:1] == [""] else lines
+
+
+def canonicalize_current_stage_section(path: Path, updates: dict[str, Any]) -> None:
+    text = path.read_text(encoding="utf-8")
+    definition = clean_project_definition({**parse_project_definition(text), **clean_project_definition(updates)})
+    if not definition:
+        return
+    block = current_stage_block_lines(definition)
+    lines = text.splitlines()
+    output: list[str] = []
+    index = 0
+    replaced = False
+    while index < len(lines):
+        if lines[index].strip() == "### 当前阶段":
+            if output and output[-1].strip():
+                output.append("")
+            output.extend(block)
+            index += 1
+            while index < len(lines) and not lines[index].strip().startswith("### "):
+                index += 1
+            if index < len(lines) and lines[index].strip():
+                output.append("")
+            replaced = True
+            continue
+        output.append(lines[index])
+        index += 1
+    if not replaced:
+        if output and output[-1].strip():
+            output.append("")
+        output.extend(block)
+    tmp = path.with_name(f".{path.name}.{secrets.token_hex(4)}.tmp")
+    tmp.write_text("\n".join(output) + "\n", encoding="utf-8")
+    os.replace(tmp, path)
+
+
 def write_current_phase_line(path: Path, current_phase: Any) -> None:
     phase = compact_text(current_phase)
     if not phase:
@@ -223,12 +261,6 @@ def write_project_definition(path: Path, definition: Any) -> None:
     if "current_phase" in clean:
         write_current_phase_line(path, clean.get("current_phase"))
     ensure_current_stage_section(path, clean)
-    if "stage_goal" in clean:
-        write_stage_text(path, r"-\s*阶段目标[:：]", "阶段目标", clean.get("stage_goal"), r"-\s*阶段定位[:：]")
-    if "stage_state" in clean:
-        write_stage_state(path, clean.get("stage_state"))
-    if "stage_dod" in clean:
-        write_stage_dod(path, clean.get("stage_dod"))
     if "stage_dod_done" in clean:
         if "stage_dod" in clean:
             current_dod = clean_stage_dod_items(clean.get("stage_dod"))
@@ -236,7 +268,8 @@ def write_project_definition(path: Path, definition: Any) -> None:
         else:
             current_dod = clean_stage_dod_items(parse_project_definition(path.read_text(encoding="utf-8")).get("stage_dod"))
             values = [item for item in clean_stage_dod_done(clean.get("stage_dod_done")) if not current_dod or item in current_dod]
-        write_stage_dod_done_values(path, values)
+        clean["stage_dod_done"] = values
+    canonicalize_current_stage_section(path, clean)
 
 
 def clean_stage_dod_items(value: Any) -> list[str]:
@@ -291,54 +324,3 @@ def parse_project_definition(text: str) -> dict[str, Any]:
             elif target and value.strip():
                 data[target] = value.strip()
     return clean_project_definition(data)
-
-
-def write_current_stage_line(path: Path, field_pattern: str, replacement: str | None, insert_after_pattern: str | None = None) -> None:
-    output, inserted, in_current = [], False, False
-    field_re = re.compile(field_pattern, re.IGNORECASE)
-    after_re = re.compile(insert_after_pattern, re.IGNORECASE) if insert_after_pattern else None
-    for line in path.read_text(encoding="utf-8").splitlines():
-        stripped = line.strip()
-        if stripped == "### 当前阶段":
-            in_current = True
-        elif stripped.startswith("### "):
-            if in_current and not inserted and replacement:
-                output.append(replacement)
-                inserted = True
-            in_current = False
-        if in_current and field_re.match(stripped):
-            if replacement and not inserted:
-                output.append(replacement)
-            inserted = True
-            continue
-        output.append(line)
-        if in_current and after_re and not inserted and replacement and after_re.match(stripped):
-            output.append(replacement)
-            inserted = True
-    if in_current and not inserted and replacement:
-        output.append(replacement)
-    tmp = path.with_name(f".{path.name}.{secrets.token_hex(4)}.tmp")
-    tmp.write_text("\n".join(output) + "\n", encoding="utf-8")
-    os.replace(tmp, path)
-
-
-def write_stage_state(path: Path, stage_state: Any) -> None:
-    write_current_stage_line(path, r"-\s*阶段(?:状态|进度)[:：]", f"- 阶段状态：{clean_stage_state(stage_state)}")
-
-
-def write_stage_text(path: Path, field_pattern: str, label: str, value: Any, insert_after_pattern: str | None = None) -> None:
-    text = compact_text(value)
-    write_current_stage_line(path, field_pattern, f"- {label}：{text}" if text else None, insert_after_pattern)
-
-
-def write_stage_dod_done_values(path: Path, values: list[str]) -> None:
-    replacement = f"- 阶段 DoD 已完成：{'；'.join(values)}" if values else None
-    write_current_stage_line(path, r"-\s*阶段\s*DoD\s*已完成[:：]", replacement, r"-\s*阶段\s*DoD[:：]")
-
-
-def write_stage_dod(path: Path, stage_dod: Any) -> None:
-    items = clean_stage_dod_items(stage_dod)
-    current_done = parse_project_definition(path.read_text(encoding="utf-8")).get("stage_dod_done", [])
-    replacement = f"- 阶段 DoD：{'；'.join(items)}" if items else None
-    write_current_stage_line(path, r"-\s*阶段\s*DoD\s*[:：]", replacement, r"-\s*阶段目标[:：]")
-    write_stage_dod_done_values(path, [item for item in current_done if item in items])
