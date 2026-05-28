@@ -1099,7 +1099,8 @@ class GatewayHandler(BaseHTTPRequestHandler):
             source = payload.get("projects")
             if not isinstance(source, list):
                 raise ValueError("projects must be a list")
-            rows = self.project_sync_rows([project for project in source if isinstance(project, dict)], self.project_sync_owner_route())
+            mode = self.compact_text(payload.get("mode")) or "merge"
+            rows = self.project_sync_rows([project for project in source if isinstance(project, dict)], self.project_sync_owner_route(), mode)
             self.write_project_rows(rows)
             self.write_json({"ok": True, "workbench": self.project_workbench_payload()}, HTTPStatus.OK)
         except ValueError as exc:
@@ -1170,11 +1171,16 @@ class GatewayHandler(BaseHTTPRequestHandler):
         except ValueError as exc:
             self.write_json({"ok": False, "error": str(exc)}, HTTPStatus.BAD_REQUEST)
 
-    def project_sync_rows(self, source: list[dict[str, Any]], owner_route: str) -> list[dict[str, Any]]:
+    def project_sync_rows(self, source: list[dict[str, Any]], owner_route: str, mode: str = "merge") -> list[dict[str, Any]]:
+        if mode not in {"merge", "replace_owner"}:
+            raise ValueError("invalid project sync mode")
         existing_rows = self.read_project_rows()
         existing = {row.get("id"): row for row in existing_rows}
         incoming_ids = {self.project_id(project) for project in source}
-        rows = [row for row in existing_rows if row.get("id") not in incoming_ids]
+        if mode == "replace_owner":
+            rows = [row for row in existing_rows if row.get("owner_route") != owner_route]
+        else:
+            rows = [row for row in existing_rows if row.get("id") not in incoming_ids]
         for index, project in enumerate(source, 1):
             project_id = self.project_id(project)
             previous = existing.get(project_id) or {}

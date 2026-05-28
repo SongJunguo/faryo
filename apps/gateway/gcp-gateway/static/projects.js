@@ -29,6 +29,7 @@ const projectRuntime = new Map();
 const pendingDecisions = new Map();
 let faryoSession = '', faryoAgentRunning = false, faryoStream = null;
 const sheetTimers = new WeakMap();
+let projectionSaveTimer = null;
 const projects = () => state?.projects || [];
 const html = value => String(value || '').replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
 const empty = text => Object.assign(document.createElement('div'), { className: 'empty', textContent: text });
@@ -122,6 +123,7 @@ function toggleArchive(project) {
   project.archived = !project.archived;
   render();
   setDirty(true);
+  queueProjectionSave();
 }
 function projectCard(project) {
   const counts = Object.fromEntries(Object.keys(TYPES).map(type => [type, activeItems(project, type).length]));
@@ -187,6 +189,11 @@ function cycleBucket(project) {
   project.bucket = order[(order.indexOf(project.bucket || 'B') + 1) % order.length];
   render();
   setDirty(true);
+  queueProjectionSave();
+}
+function queueProjectionSave() {
+  clearTimeout(projectionSaveTimer);
+  projectionSaveTimer = setTimeout(() => saveProjection().catch(() => {}), 180);
 }
 function overviewDraft(project) {
   const def = project.definition || {}, stage_dod = definitionDodItems(def.stage_dod);
