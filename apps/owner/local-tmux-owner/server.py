@@ -1706,6 +1706,23 @@ def stage_project_workbench_file(path: Path, project: dict[str, Any]) -> Path:
     return tmp
 
 
+def update_project_workbench_summary(path: Path, project: dict[str, Any]) -> dict[str, Any]:
+    try:
+        source = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(source, dict):
+            source = {}
+    except (OSError, json.JSONDecodeError):
+        source = {}
+    updated = dict(source)
+    updated["id"] = compact_text(updated.get("id") or project.get("id"))
+    for key in ("name", "brief", "current_d"):
+        if key in project:
+            updated[key] = compact_text(project.get(key))
+    updated = clean_project_workbench(updated)
+    write_project_workbench_file(path, updated)
+    return updated
+
+
 def cleanup_staged_project_workbenches(staged: list[tuple[Path, Path]]) -> None:
     for _path, tmp in staged:
         try:
@@ -2147,6 +2164,12 @@ def apply_project_workbench_downlink(config: Config, payload: dict[str, Any]) ->
         except OSError as exc:
             cleanup_staged_project_workbenches(staged)
             raise OwnerError("failed to write project workbench", HTTPStatus.INTERNAL_SERVER_ERROR) from exc
+    else:
+        for path, project, _definition in targets:
+            try:
+                update_project_workbench_summary(path, project)
+            except OSError as exc:
+                raise OwnerError("failed to write project workbench summary", HTTPStatus.INTERNAL_SERVER_ERROR) from exc
     hashes = {}
     for path, project, definition in targets:
         if isinstance(definition, dict):

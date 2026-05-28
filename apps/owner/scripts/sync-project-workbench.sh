@@ -10,10 +10,16 @@ export FARYO_PROJECT_WORKBENCH_ROOTS="${FARYO_PROJECT_WORKBENCH_ROOTS:-}"
 export FARYO_PROJECT_WORKBENCH_SYNC_MODE="${FARYO_PROJECT_WORKBENCH_SYNC_MODE:-}"
 export FARYO_OWNER_TOKEN="${FARYO_OWNER_TOKEN:-}"
 export FARYO_OWNER_LABEL="${FARYO_OWNER_LABEL:-}"
+export FARYO_OWNER_ROOT
 
 python3 - "$@" <<'PY_SYNC'
 import json, os, sys, urllib.error, urllib.request
 from pathlib import Path
+
+shared_dir = Path(os.environ["FARYO_OWNER_ROOT"]).parent / "shared"
+if str(shared_dir) not in sys.path:
+    sys.path.insert(0, str(shared_dir))
+import pd_state
 
 def need(name):
     value = os.environ.get(name, '').strip()
@@ -63,6 +69,9 @@ def read_project(path):
     except json.JSONDecodeError as exc: raise SystemExit(f'invalid JSON: {file_path}: {exc}') from exc
     if not isinstance(payload, dict): raise SystemExit(f'workbench must be a JSON object: {file_path}')
     row = dict(payload); row.setdefault('path', compact(file_path)); row.setdefault('workbench_path', str(file_path.resolve()))
+    definition_path = file_path.parent / 'project.md'
+    if definition_path.is_file():
+        row['definition'] = pd_state.parse_project_definition(definition_path.read_text(encoding='utf-8'))
     return row
 
 def sync_mode(explicit):
