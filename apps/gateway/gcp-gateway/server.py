@@ -916,7 +916,7 @@ class GatewayHandler(BaseHTTPRequestHandler):
     def handle_project_workbench_save(self) -> None:
         try:
             payload = self.read_json_body(128 * 1024)
-            self.project_rows_from_payload(payload)
+            self.project_rows_from_payload(payload, truth=False, overview=True)
             self.write_json({"ok": True, "workbench": self.project_workbench_payload()}, HTTPStatus.OK)
         except ValueError as exc:
             self.write_json({"ok": False, "error": str(exc)}, HTTPStatus.BAD_REQUEST)
@@ -924,7 +924,7 @@ class GatewayHandler(BaseHTTPRequestHandler):
     def handle_project_workbench_sync_project(self, username: str) -> None:
         try:
             payload = self.read_json_body(512 * 1024)
-            rows = self.project_rows_from_payload(payload, write=False)
+            rows = self.project_rows_from_payload(payload, write=False, truth=True, overview=False)
             target_rows, downlink = self.sync_project_downlinks(username, rows, payload)
             if downlink.get("status") == "applied":
                 self.write_project_rows(rows)
@@ -938,32 +938,29 @@ class GatewayHandler(BaseHTTPRequestHandler):
 
     def handle_project_workbench_submit(self, username: str) -> None:
         try:
-            payload = self.read_json_body(512 * 1024)
-            rows = self.project_rows_from_payload(payload)
+            payload = self.read_json_body(64 * 1024)
+            rows = self.read_project_rows()
             scope = "project" if payload.get("submit_scope") == "project" else "global"
-            target_rows, downlink = self.sync_project_downlinks(username, rows, payload)
             active_rows = self.active_project_rows(rows)
-            prompt_rows = self.project_submit_target_rows(rows, payload) or target_rows or active_rows
-            downlink["scope"] = scope
+            prompt_rows = self.project_submit_target_rows(rows, payload) or active_rows
             self.write_json({
                 "ok": True,
                 "workbench": self.project_workbench_payload(),
-                "downlink": downlink,
-                "faryo": self.wake_faryo_after_project_submit(username, prompt_rows, downlink),
+                "faryo": self.wake_faryo_after_project_submit(username, prompt_rows, scope),
             }, HTTPStatus.OK)
         except ValueError as exc:
             self.write_json({"ok": False, "error": str(exc)}, HTTPStatus.BAD_REQUEST)
 
-    def project_rows_from_payload(self, payload: dict[str, Any], write: bool = True) -> list[dict[str, Any]]:
+    def project_rows_from_payload(self, payload: dict[str, Any], write: bool = True, truth: bool = True, overview: bool = True) -> list[dict[str, Any]]:
         source = payload.get("projects")
         if not isinstance(source, list):
             raise ValueError("projects must be a list")
-        rows = self.project_projection_rows_from_ui(source)
+        rows = self.project_projection_rows_from_ui(source, truth, overview)
         if write:
             self.write_project_rows(rows)
         return rows
 
-    def project_projection_rows_from_ui(self, source: list[Any]) -> list[dict[str, Any]]:
+    def project_projection_rows_from_ui(self, source: list[Any], truth: bool = True, overview: bool = True) -> list[dict[str, Any]]:
         existing = {row["id"]: row for row in self.read_project_rows()}
         rows: list[dict[str, Any]] = []
         for index, project in enumerate(source, 1):
@@ -972,23 +969,27 @@ class GatewayHandler(BaseHTTPRequestHandler):
             project_id = self.project_id(project)
             previous = existing.get(project_id)
             if not previous:
-                rows.append(self.clean_project_row(project, index))
+                if truth:
+                    rows.append(self.clean_project_row(project, index))
                 continue
             row = dict(previous)
-            for key in ("name", "brief", "current_d"):
-                if key in project:
-                    row[key] = self.compact_text(project.get(key))
-            row["bucket"] = self.clean_project_bucket(project.get("bucket") or previous.get("bucket"))
-            row["rank"] = self.clean_rank(project.get("rank") or index)
-            if "archived" in project:
-                row["archived"] = bool(project.get("archived"))
-            if isinstance(project.get("definition"), dict):
-                row["definition"] = project["definition"]
+            if truth:
+                for key in ("name", "brief", "current_d"):
+                    if key in project:
+                        row[key] = self.compact_text(project.get(key))
+                if isinstance(project.get("definition"), dict):
+                    row["definition"] = project["definition"]
+            if overview:
+                row["bucket"] = self.clean_project_bucket(project.get("bucket") or previous.get("bucket"))
+                row["rank"] = self.clean_rank(project.get("rank") or index)
+                if "archived" in project:
+                    row["archived"] = bool(project.get("archived"))
             rows.append(self.clean_project_row(row, index))
+        missing = set(existing) - {self.project_id(project) for project in source if isinstance(project, dict)}
+        rows.extend(existing[project_id] for project_id in missing)
         return rows
 
-    def project_submit_prompt(self, rows: list[dict[str, Any]], downlink: dict[str, Any]) -> str:
-        scope = "project" if downlink.get("scope") == "project" else "global"
+    def project_submit_prompt(self, rows: list[dict[str, Any]], scope: str) -> str:
         projects = []
         for row in self.sorted_project_rows(self.active_project_rows(rows)):
             definition = row.get("definition") if isinstance(row.get("definition"), dict) else {}
@@ -996,17 +997,17 @@ class GatewayHandler(BaseHTTPRequestHandler):
             project.update({"brief": row.get("brief") or ""})
             project.update({key: value for key in ("current_stage_id", "current_stage_title", "stage_goal", "stage_state", "stage_dod", "stage_dod_done", "stage_out_of_scope") if (value := definition.get(key)) not in ("", [], None)})
             projects.append(project)
-        payload = {"event": "project_stage_submit", "scope": scope, "downlink": downlink, "projects": projects}
+        payload = {"event": "project_stage_submit", "scope": scope, "projects": projects}
         return "\n".join([
             "项目阶段执行定义刚完成提交，你现在接棒。",
-            "先确认本次下发包已应用到 payload.projects 的项目真值层；异常只报阻塞。",
-            "本次只处理 payload.projects 内的项目说明、阶段目标和 DoD（完成定义）；拟定待裁决 item（事项），用 item_created（事项创建）写入 awaiting_owner（待裁决），不要创建 WO（工单）或 worker（施工会话）。",
+            "本次只处理 payload.projects 内已保存的项目说明、阶段目标和 DoD（完成定义）；异常只报阻塞。",
+            "基于这些定义拟定待裁决 item（事项），用 item_created（事项创建）写入 awaiting_owner（待裁决），不要创建 WO（工单）或 worker（施工会话）。",
             "生成 decision（裁决项）如需选择，写 decision_prompt（裁决输入定义）；Owner 结果会回写 owner_decision（Owner 裁决结果），不要混进正文或 recommendation（建议）。",
             json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
         ])
 
-    def wake_faryo_after_project_submit(self, username: str, rows: list[dict[str, Any]], downlink: dict[str, Any]) -> dict[str, Any]:
-        result = self.ensure_faryo_controller(username, self.project_submit_prompt(rows, downlink))
+    def wake_faryo_after_project_submit(self, username: str, rows: list[dict[str, Any]], scope: str) -> dict[str, Any]:
+        result = self.ensure_faryo_controller(username, self.project_submit_prompt(rows, scope))
         return {"ok": bool(result.get("ok")), "session": result.get("session") or "", "error": result.get("error") or ""}
 
     def handle_project_stage_state(self, username: str) -> None:
