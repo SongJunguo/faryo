@@ -46,7 +46,7 @@ function hideSheet(el) {
 }
 const ownerQueueItem = item => !item.stage || ['awaiting_owner', 'paused', 'needs_fix'].includes(item.stage);
 const activeItems = (project, type) => (project.items || []).filter(item => item.type === type && ownerQueueItem(item) && !TYPES[type].done.includes(item.status || 'open'));
-const dispatchableProject = () => projects().find(projectReadyForDispatch);
+const dispatchableProjects = () => projects().filter(projectReadyForDispatch);
 const deckProject = () => projects().find(project => project.id === deck.projectId) || projects()[0];
 const deckItems = () => { const project = deckProject(); return project ? activeItems(project, deck.type) : []; };
 function projectFilter() {
@@ -87,7 +87,7 @@ function topSyncState() {
   return { label: 'Saved', disabled: true };
 }
 function syncSubmitState() {
-  els.submit.disabled = !state || projects().some(projectBlocked) || !dispatchableProject();
+  els.submit.disabled = !state || projects().some(projectBlocked) || !dispatchableProjects().length;
 }
 function syncTopActions() {
   const sync = topSyncState();
@@ -626,17 +626,33 @@ async function submitProject(projectId, button) {
   }
 }
 async function submitApprovedWork() {
-  const project = dispatchableProject();
-  if (!project) return;
-  setProjectState(project.id, { submitting: true, submitError: '', syncLabel: 'Submitting' });
-  setLabel(els.submit, 'Running');
+  const batch = dispatchableProjects();
+  if (!batch.length) return;
+  batch.forEach(project => setProjectState(project.id, { submitting: true, submitError: '', syncLabel: 'Submitting' }));
+  setLabel(els.submit, batch.length > 1 ? `Running ${batch.length}` : 'Running');
   els.submit.disabled = true;
-  try {
-    const data = await fetchJson('/api/faryo/dispatch', { project_id: project.id, title: `P:${project.name || project.id}`, prompt: '按项目工作台已批准事项创建并执行本轮工单。' });
-    setProjectState(project.id, { submitting: false, sync: 'saved', syncLabel: '', submitError: '' });
-    if (data.redirect) location.href = data.redirect; else { await load(); setLabel(els.submit, 'Run'); }
-  } catch (_error) {
-    setProjectState(project.id, { submitting: false, sync: 'saved', syncLabel: '', submitError: 'Submit Failed' });
+  const results = await Promise.allSettled(batch.map(async project => ({
+    project,
+    data: await fetchJson('/api/faryo/dispatch', { project_id: project.id, title: `P:${project.name || project.id}`, prompt: '按项目工作台已批准事项创建并执行本轮工单。' })
+  })));
+  const failed = [];
+  let redirect = '';
+  results.forEach((result, index) => {
+    if (result.status === 'fulfilled') {
+      const { project, data } = result.value;
+      setProjectState(project.id, { submitting: false, sync: 'saved', syncLabel: '', submitError: '' });
+      if (batch.length === 1 && data.redirect) redirect = data.redirect;
+    } else {
+      const project = batch[index];
+      failed.push(project.id);
+      setProjectState(project.id, { submitting: false, sync: 'saved', syncLabel: '', submitError: 'Submit Failed' });
+    }
+  });
+  if (redirect) location.href = redirect;
+  else {
+    await load();
+    failed.forEach(projectId => setProjectState(projectId, { submitting: false, sync: 'saved', syncLabel: '', submitError: 'Submit Failed' }));
+    render();
     setLabel(els.submit, 'Run');
   }
 }

@@ -942,7 +942,9 @@ class GatewayHandler(BaseHTTPRequestHandler):
             rows = self.read_project_rows()
             scope = "project" if payload.get("submit_scope") == "project" else "global"
             active_rows = self.active_project_rows(rows)
-            prompt_rows = self.project_submit_target_rows(rows, payload) or active_rows
+            prompt_rows = self.project_submit_target_rows(rows, payload) if scope == "project" else active_rows
+            if scope == "project" and not prompt_rows:
+                raise ValueError("notify_project_ids must target at least one active project")
             self.write_json({
                 "ok": True,
                 "workbench": self.project_workbench_payload(),
