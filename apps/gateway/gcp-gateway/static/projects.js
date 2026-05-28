@@ -27,6 +27,7 @@ const STAGE_FLOW = [
 let state = null, deck = { projectId: '', type: 'decision', index: 0 }, dirty = false;
 const projectRuntime = new Map();
 const pendingDecisions = new Map();
+const pendingTransitions = new Set();
 let faryoSession = '', faryoAgentRunning = false, faryoStream = null;
 const sheetTimers = new WeakMap();
 let projectionSaveTimer = null;
@@ -45,7 +46,8 @@ function hideSheet(el) {
   sheetTimers.set(el, setTimeout(() => { el.hidden = true; el.classList.remove('is-closing'); }, 150));
 }
 const ownerQueueItem = item => !item.stage || ['awaiting_owner', 'paused', 'needs_fix'].includes(item.stage);
-const activeItems = (project, type) => (project.items || []).filter(item => item.type === type && ownerQueueItem(item) && !TYPES[type].done.includes(item.status || 'open'));
+const transitionKey = (project, item) => `${project.id}:${item.id}`;
+const activeItems = (project, type) => (project.items || []).filter(item => item.type === type && !pendingTransitions.has(transitionKey(project, item)) && ownerQueueItem(item) && !TYPES[type].done.includes(item.status || 'open'));
 const dispatchableProjects = () => projects().filter(projectReadyForDispatch);
 const deckProject = () => projects().find(project => project.id === deck.projectId) || projects()[0];
 const deckItems = () => { const project = deckProject(); return project ? activeItems(project, deck.type) : []; };
@@ -529,6 +531,8 @@ async function applyItemAction(project, item, action, button = null) {
   const eventType = TRANSITIONS[action];
   if (!eventType) return;
   if (item.type === 'decision' && action === 'accept' && !decisionReady(project, item)) return;
+  const pendingKey = transitionKey(project, item);
+  if (pendingTransitions.has(pendingKey)) return;
   const payload = {
     project_id: project.id,
     item_id: item.id,
@@ -544,18 +548,26 @@ async function applyItemAction(project, item, action, button = null) {
       payload.summary = `approve${summary ? ` ${summary}` : ''}: ${item.title || item.id}`;
     }
   }
+  pendingTransitions.add(pendingKey);
   setProjectState(project.id, { sync: 'syncing', syncLabel: 'Deciding', submitError: '' });
   if (button) { button.closest('.deck-actions')?.querySelectorAll('button').forEach(item => { item.disabled = true; }); setLabel(button, 'Deciding'); }
+  render();
+  const nextProject = deckProject();
+  const hasNextCard = nextProject && activeItems(nextProject, deck.type).length;
+  if (hasNextCard) renderDeck(); else closeDeck();
   try {
     const data = await fetchJson('/api/project-workbench/transition', payload);
     state = withLocalOverviewMeta(data.workbench);
     pendingDecisions.delete(decisionKey(project, item));
+    pendingTransitions.delete(pendingKey);
     setProjectState(project.id, { sync: 'saved', syncLabel: '' });
     render();
-    const nextProject = deckProject();
-    if (nextProject && activeItems(nextProject, deck.type).length) renderDeck(); else closeDeck();
+    if (!els.sheet.hidden) renderDeck();
   } catch (_error) {
+    pendingTransitions.delete(pendingKey);
     setProjectState(project.id, { sync: 'sync_failed', syncLabel: 'Decision Failed' });
+    render();
+    if (!hasNextCard) showSheet(els.sheet);
     renderDeck();
   }
 }
@@ -599,7 +611,7 @@ function attachSwipe(card, project, item) {
 async function load() {
   try {
     const data = await fetchJson('/api/project-workbench');
-    projectRuntime.clear(); pendingDecisions.clear(); state = data.workbench; setDirty(false); render();
+    projectRuntime.clear(); pendingDecisions.clear(); pendingTransitions.clear(); state = data.workbench; setDirty(false); render();
     refreshProjectGitStatus().catch(() => {});
   } catch (error) { setSaveState('Failed', true); els.list.replaceChildren(empty(error.message || 'Load failed')); }
 }
