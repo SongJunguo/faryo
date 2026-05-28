@@ -49,7 +49,11 @@ def clean_item_decision_prompt(value: Any, item_type: Any) -> dict[str, Any]:
     if label:
         clean["label"] = label
     if mode in {"choice", "binary"}:
-        options = [clean for option in value.get("options", []) if (clean := clean_item_decision_option(option))]
+        options = []
+        for option in value.get("options", []):
+            clean_option = clean_item_decision_option(option)
+            if clean_option:
+                options.append(clean_option)
         if len(options) < 2:
             return {}
         clean["options"] = options[: 2 if mode == "binary" else 5]
