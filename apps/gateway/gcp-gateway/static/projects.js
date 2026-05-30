@@ -38,7 +38,7 @@ const setLabel = (el, text) => { const label = el?.querySelector?.('.label'); if
 const tierBadge = bucket => `<span class="tier-badge tier-${html(String(bucket || 'B').toLowerCase())} sheet-tier">${html(bucket || 'B')}</span>`;
 const typeBadge = type => `<span class="sheet-type-badge ${html(type)}" aria-label="${html(TYPES[type]?.label || type)}">${METRIC_ICONS[type] || '•'}</span>`;
 function setDeckMeta(markup) { els.meta.innerHTML = markup; }
-function resetSheetMode() { els.sheet.classList.remove('project-overview-sheet'); }
+function resetSheetMode() { els.sheet.classList.remove('project-overview-sheet', 'run-queue-sheet'); }
 function showSheet(el) { clearTimeout(sheetTimers.get(el)); el.classList.remove('is-closing'); el.hidden = false; }
 function hideSheet(el) {
   clearTimeout(sheetTimers.get(el));
@@ -48,6 +48,7 @@ function hideSheet(el) {
 const ownerQueueItem = item => !item.stage || ['awaiting_owner', 'paused', 'needs_fix'].includes(item.stage);
 const transitionKey = (project, item) => `${project.id}:${item.id}`;
 const activeItems = (project, type) => (project.items || []).filter(item => item.type === type && !pendingTransitions.has(transitionKey(project, item)) && ownerQueueItem(item) && !TYPES[type].done.includes(item.status || 'open'));
+const readyItems = project => (project.items || []).filter(item => item.stage === 'approved_for_workorder');
 const dispatchableProjects = () => projects().filter(projectReadyForDispatch);
 const deckProject = () => projects().find(project => project.id === deck.projectId) || projects()[0];
 const deckItems = () => { const project = deckProject(); return project ? activeItems(project, deck.type) : []; };
@@ -102,7 +103,7 @@ function projectBlocked(project) {
   return runtime.submitting || ['syncing', 'sync_needed', 'sync_failed'].includes(runtime.sync);
 }
 function projectReadyForDispatch(project) {
-  return !project.archived && !projectBlocked(project) && (project.items || []).some(item => item.stage === 'approved_for_workorder');
+  return !project.archived && !projectBlocked(project) && readyItems(project).length;
 }
 function topSyncState() {
   const runtimes = projects().map(project => projectState(project.id));
@@ -681,35 +682,58 @@ async function submitProject(projectId, button) {
     if (nextProject && !els.sheet.hidden) openProjectOverview(nextProject);
   }
 }
-async function submitApprovedWork() {
-  const batch = dispatchableProjects();
-  if (!batch.length) return;
-  batch.forEach(project => setProjectState(project.id, { submitting: true, submitError: '', syncLabel: 'Submitting' }));
-  setLabel(els.submit, batch.length > 1 ? `Running ${batch.length}` : 'Running');
-  els.submit.disabled = true;
-  const results = await Promise.allSettled(batch.map(async project => ({
-    project,
-    data: await fetchJson('/api/faryo/dispatch', { project_id: project.id, title: `P:${project.name || project.id}`, prompt: '按项目工作台已批准事项创建并执行本轮工单。' })
-  })));
-  const failed = [];
-  let redirect = '';
-  results.forEach((result, index) => {
-    if (result.status === 'fulfilled') {
-      const { project, data } = result.value;
-      setProjectState(project.id, { submitting: false, sync: 'saved', syncLabel: '', submitError: '' });
-      if (batch.length === 1 && data.redirect) redirect = data.redirect;
-    } else {
-      const project = batch[index];
-      failed.push(project.id);
-      setProjectState(project.id, { submitting: false, sync: 'saved', syncLabel: '', submitError: 'Submit Failed' });
-    }
+function openRunQueue() {
+  resetSheetMode(); els.sheet.classList.add('run-queue-sheet'); els.nav.hidden = true; els.goal.hidden = true;
+  setDeckMeta('<span class="sheet-badge">Queue</span>'); els.title.textContent = 'Work Queue';
+  showSheet(els.sheet); renderRunQueue();
+}
+function renderRunQueue() {
+  const queue = dispatchableProjects();
+  const total = queue.reduce((sum, project) => sum + readyItems(project).length, 0);
+  const panel = document.createElement('section');
+  panel.className = 'run-queue';
+  panel.innerHTML = queue.length ? `<header class="run-queue-head"><strong>${html(total)} ready</strong><span>${html(queue.length)} project${queue.length > 1 ? 's' : ''}</span></header>${queue.map(runQueueProject).join('')}` : '<p class="empty">No approved items ready to run.</p>';
+  panel.addEventListener('click', event => {
+    const button = event.target.closest('button[data-run-project], button[data-return-items]');
+    if (!button) { closeDeck(); return; }
+    const project = projects().find(item => item.id === button.dataset.projectId);
+    if (!project) return;
+    if (button.matches('[data-run-project]')) runProjectWork(project, button);
+    else returnProjectItems(project, String(button.dataset.itemIds || '').split(',').filter(Boolean), button);
   });
-  if (redirect) location.href = redirect;
-  else {
-    await load();
-    failed.forEach(projectId => setProjectState(projectId, { submitting: false, sync: 'saved', syncLabel: '', submitError: 'Submit Failed' }));
-    render();
-    setLabel(els.submit, 'Run');
+  els.stage.replaceChildren(panel);
+}
+function runQueueProject(project) {
+  const items = readyItems(project), count = items.length, runtime = projectState(project.id), busy = runtime.submitting || runtime.sync === 'syncing';
+  return `<section class="run-project"><header class="run-project-head">${tierBadge(project.bucket)}<div><h3>${html(project.name || project.id)}</h3><span>${html(count)} ready</span></div><div class="run-project-actions"><button class="run-primary" type="button" data-run-project data-project-id="${html(project.id)}"${busy ? ' disabled' : ''}>Run</button><button class="run-return" type="button" data-return-items data-project-id="${html(project.id)}" data-item-ids="${html(items.map(item => item.id).join(','))}"${busy ? ' disabled' : ''}>Return All</button></div></header><ol class="run-items">${items.map(item => runQueueItem(project, item, busy)).join('')}</ol></section>`;
+}
+function runQueueItem(project, item, busy) {
+  return `<li class="run-item"><span>${html(item.title || item.id)}</span><button type="button" data-return-items data-project-id="${html(project.id)}" data-item-ids="${html(item.id)}"${busy ? ' disabled' : ''}>Return</button></li>`;
+}
+async function runProjectWork(project, button) {
+  const ids = readyItems(project).map(item => item.id).filter(Boolean);
+  if (!ids.length) return;
+  setProjectState(project.id, { submitting: true, submitError: '', syncLabel: 'Running' });
+  button.disabled = true; button.textContent = 'Running';
+  try {
+    const data = await fetchJson('/api/faryo/dispatch', { project_id: project.id, item_ids: ids, title: `P:${project.name || project.id}`, prompt: '按项目工作台本轮已批准事项创建并执行项目工单。' });
+    setProjectState(project.id, { submitting: false, sync: 'saved', syncLabel: '', submitError: '' });
+    if (data.redirect) location.href = data.redirect; else { await load(); renderRunQueue(); }
+  } catch (_error) {
+    setProjectState(project.id, { submitting: false, sync: 'saved', syncLabel: '', submitError: 'Run Failed' });
+    renderRunQueue();
+  }
+}
+async function returnProjectItems(project, itemIds, button) {
+  const ids = itemIds.filter(Boolean);
+  if (!ids.length) return;
+  setProjectState(project.id, { sync: 'syncing', syncLabel: 'Returning', submitError: '' });
+  button.disabled = true;
+  try {
+    const data = await fetchJson('/api/project-workbench/transition', { project_id: project.id, item_ids: ids, event_type: 'item_escalated', actor: 'owner', source: 'gateway-run-queue', summary: ids.length > 1 ? 'Return approved project items for review.' : 'Return approved item for review.' });
+    state = withLocalOverviewMeta(data.workbench); setProjectState(project.id, { sync: 'saved', syncLabel: '' }); render(); renderRunQueue();
+  } catch (_error) {
+    setProjectState(project.id, { sync: 'sync_failed', syncLabel: 'Return Failed' }); renderRunQueue();
   }
 }
 async function fetchJson(url, body = null) {
@@ -790,7 +814,7 @@ els.prev.addEventListener('click', () => { deck.index -= 1; renderDeck(); });
 els.next.addEventListener('click', () => { deck.index += 1; renderDeck(); });
 $('deckClose').addEventListener('click', closeDeck);
 els.sheet.addEventListener('click', event => { if (event.target.matches('[data-close]')) closeDeck(); });
-els.submit.addEventListener('click', submitApprovedWork);
+els.submit.addEventListener('click', openRunQueue);
 els.sync.addEventListener('click', saveProjection);
 els.importBtn.addEventListener('click', openImport);
 els.importForm.addEventListener('submit', importProject);
