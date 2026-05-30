@@ -115,6 +115,7 @@ PROJECT_ITEM_TYPES = {"decision", "action", "watch"}
 PROJECT_ITEM_TYPE_LIMIT = 10
 PROJECT_BUCKETS = {"S", "A", "B"}
 PROJECT_DONE_STATUSES = {"accepted", "done", "skipped", "seen", "rejected", "completed", "closed"}
+PROJECT_DEFINITION_SUBMIT_STATUSES = {"submitted", "converted"}
 PROJECT_ITEM_STAGES = {
     "awaiting_owner",
     "approved_for_workorder",
@@ -949,10 +950,22 @@ class GatewayHandler(BaseHTTPRequestHandler):
             prompt_rows = self.project_submit_target_rows(rows, payload) if scope == "project" else active_rows
             if scope == "project" and not prompt_rows:
                 raise ValueError("notify_project_ids must target at least one active project")
+            unsynced = [row["id"] for row in prompt_rows if row.get("definition_sync", {}).get("status") != "applied"]
+            if unsynced:
+                raise ValueError("definition sync must be applied: " + ", ".join(unsynced))
+            faryo = self.wake_faryo_after_project_submit(username, prompt_rows, scope)
+            if not faryo.get("ok"):
+                self.write_json({"ok": False, "error": faryo.get("error") or "faryo controller wake failed", "faryo": faryo}, HTTPStatus.BAD_GATEWAY)
+                return
+            target_ids = {row["id"] for row in prompt_rows}
+            for index, row in enumerate(rows):
+                if row["id"] in target_ids:
+                    rows[index] = self.clean_project_row({**row, "definition_submit": self.project_definition_submit(row, "submitted")}, int(row.get("rank") or index + 1))
+            self.write_project_rows(rows)
             self.write_json({
                 "ok": True,
                 "workbench": self.project_workbench_payload(),
-                "faryo": self.wake_faryo_after_project_submit(username, prompt_rows, scope),
+                "faryo": faryo,
             }, HTTPStatus.OK)
         except ValueError as exc:
             self.write_json({"ok": False, "error": str(exc)}, HTTPStatus.BAD_REQUEST)
@@ -999,16 +1012,16 @@ class GatewayHandler(BaseHTTPRequestHandler):
         projects = []
         for row in self.sorted_project_rows(self.active_project_rows(rows)):
             definition = row.get("definition") if isinstance(row.get("definition"), dict) else {}
-            project = {"id": row["id"], "name": row["name"], "owner_route": row.get("owner_route") or "", "workbench_path": row.get("workbench_path") or ""}
+            project = {"id": row["id"], "name": row["name"], "owner_route": row.get("owner_route") or "", "workbench_path": row.get("workbench_path") or "", "definition_hash": pd_state.project_definition_downlink_hash(row["id"], definition)}
             project.update({"brief": row.get("brief") or ""})
             project.update({key: value for key in ("current_stage_id", "current_stage_title", "stage_goal", "stage_state", "stage_dod", "stage_dod_done", "stage_out_of_scope") if (value := definition.get(key)) not in ("", [], None)})
             projects.append(project)
         payload = {"event": "project_stage_submit", "scope": scope, "projects": projects}
         return "\n".join([
-            "项目阶段执行定义刚完成提交，你现在接棒。",
-            "本次只处理 payload.projects 内已保存的项目说明、阶段目标和 DoD（完成定义）；异常只报阻塞。",
-            "基于这些定义拟定待裁决 item（事项），用 item_created（事项创建）写入 awaiting_owner（待裁决），不要创建 WO（工单）或 worker（施工会话）。",
-            "生成 decision（裁决项）如需选择，写 decision_prompt（裁决输入定义）；Owner 结果会回写 owner_decision（Owner 裁决结果），不要混进正文或 recommendation（建议）。",
+            "项目阶段定义已提交，请接棒处理。",
+            "只处理 payload.projects 内本次已保存的定义；先核对 definition_hash（定义哈希）与项目真值一致，异常只报阻塞。",
+            "基于阶段目标和 DoD 拟定待 Owner 裁决的 item（事项），用 item_created（事项创建）写入 awaiting_owner（待裁决）；不要创建 WO（工单）或 worker（施工会话）。",
+            "decision（裁决项）如需 Owner 选择，写 decision_prompt（裁决输入定义）；item_created 必须带回对应 definition_hash。",
             json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
         ])
 
@@ -1206,8 +1219,12 @@ class GatewayHandler(BaseHTTPRequestHandler):
                 row["code_root"] = previous.get("code_root") or ""
             if "definition" not in row and isinstance(previous.get("definition"), dict):
                 row["definition"] = previous["definition"]
+                if isinstance(previous.get("definition_sync"), dict):
+                    row["definition_sync"] = previous["definition_sync"]
             elif isinstance(project.get("definition"), dict):
                 row["definition_sync"] = self.project_definition_sync(row, "applied")
+            if isinstance(previous.get("definition_submit"), dict) and "definition_submit" not in row:
+                row["definition_submit"] = previous["definition_submit"]
             row.setdefault("archived", previous.get("archived"))
             rows.append(self.clean_project_row(row, index))
         return rows
@@ -1430,6 +1447,14 @@ class GatewayHandler(BaseHTTPRequestHandler):
             "updated_at": now_ts(),
         }
 
+    def project_definition_submit(self, row: dict[str, Any], status: Any) -> dict[str, Any]:
+        status = self.compact_text(status)
+        return {
+            "status": status if status in PROJECT_DEFINITION_SUBMIT_STATUSES else "",
+            "hash": pd_state.project_definition_downlink_hash(self.project_id(row), row.get("definition")),
+            "updated_at": now_ts(),
+        }
+
     def clean_project_definition_sync(self, source: dict[str, Any], project_id: str, definition: dict[str, Any]) -> dict[str, Any]:
         sync = source.get("definition_sync")
         if not isinstance(sync, dict):
@@ -1491,6 +1516,13 @@ class GatewayHandler(BaseHTTPRequestHandler):
                 definition_sync = self.clean_project_definition_sync(source, project_id, definition)
                 if definition_sync:
                     row["definition_sync"] = definition_sync
+                submit = source.get("definition_submit")
+                status = self.compact_text(submit.get("status")) if isinstance(submit, dict) else ""
+                expected_hash = pd_state.project_definition_downlink_hash(project_id, definition)
+                if status in PROJECT_DEFINITION_SUBMIT_STATUSES and self.compact_text(submit.get("hash")) == expected_hash:
+                    row["definition_submit"] = {"status": status, "hash": expected_hash}
+                    if isinstance(submit.get("updated_at"), int):
+                        row["definition_submit"]["updated_at"] = submit["updated_at"]
         return row
 
     def clean_project_items(self, items: Any) -> list[dict[str, Any]]:
@@ -1754,6 +1786,9 @@ class GatewayHandler(BaseHTTPRequestHandler):
                 result = self.owner_json_request(route, "/api/workbench/transition", {**payload, "project_root": cwd}, username, timeout=10)
                 if result.get("ok"):
                     updated = self.update_projection_from_owner_project(project["id"], result.get("project"))
+                    submitted = self.update_definition_submit_from_transition(project["id"], payload)
+                    if submitted:
+                        updated = submitted
                     self.write_json({"ok": True, "transition": result, "project": updated, "workbench": self.project_workbench_payload()}, HTTPStatus.OK)
                     return
                 last_error = self.compact_text(result.get("error")) or "owner transition failed"
@@ -1780,6 +1815,26 @@ class GatewayHandler(BaseHTTPRequestHandler):
         if changed:
             self.write_project_rows(rows)
         return updated_row
+
+    def update_definition_submit_from_transition(self, project_id: str, payload: dict[str, Any]) -> dict[str, Any] | None:
+        if self.compact_text(payload.get("event_type") or payload.get("eventType")) != "item_created":
+            return None
+        definition_hash = self.compact_text(payload.get("definition_hash") or payload.get("definitionHash"))
+        if not definition_hash:
+            return None
+        rows = self.read_project_rows()
+        for index, row in enumerate(rows):
+            if row["id"] != project_id:
+                continue
+            expected_hash = pd_state.project_definition_downlink_hash(project_id, row.get("definition"))
+            if definition_hash != expected_hash:
+                return None
+            updated = dict(row)
+            updated["definition_submit"] = self.project_definition_submit(row, "converted")
+            rows[index] = self.clean_project_row(updated, int(row.get("rank") or index + 1))
+            self.write_project_rows(rows)
+            return rows[index]
+        return None
 
     def dispatch_project(self, payload: dict[str, Any]) -> dict[str, Any]:
         project_id = self.project_id({"id": payload.get("project_id") or payload.get("projectId") or payload.get("id") or ""})

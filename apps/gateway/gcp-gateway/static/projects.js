@@ -69,6 +69,13 @@ function projectSyncLabel(projectId) {
 function projectNeedsSync(project) {
   return Boolean(project?.definition && Object.keys(project.definition).length) && project.definition_sync?.status !== 'applied';
 }
+function projectDefinitionHash(project) {
+  return project?.definition_sync?.status === 'applied' ? String(project.definition_sync.hash || '') : '';
+}
+function projectNeedsDefinitionSubmit(project) {
+  const hash = projectDefinitionHash(project), submit = project?.definition_submit || {};
+  return Boolean(hash && (submit.hash !== hash || !['submitted', 'converted'].includes(submit.status)));
+}
 function hydrateProjectRuntime(rows) {
   projectRuntime.clear();
   (rows || []).forEach(project => {
@@ -286,8 +293,9 @@ function syncOverviewActions(card, project, draft) {
     save.disabled = busy || !canSave;
   }
   if (submit) {
-    setLabel(submit, runtime.submitting ? 'Submitting' : (runtime.submitError ? 'Retry' : 'Submit'));
-    submit.disabled = changed || busy || (runtime.sync || 'saved') !== 'saved';
+    const needsSubmit = projectNeedsDefinitionSubmit(project);
+    setLabel(submit, runtime.submitting ? 'Submitting' : (runtime.submitError ? 'Retry' : (needsSubmit ? 'Submit' : 'Submitted')));
+    submit.disabled = changed || busy || (runtime.sync || 'saved') !== 'saved' || (!needsSubmit && !runtime.submitError);
   }
 }
 function attachOverviewDirection(card, project, draft) {
@@ -305,8 +313,9 @@ function overviewHero(project, stageState, canSave) {
   const stateLabel = STAGE_FLOW.find(item => item.state === stageState)?.label || 'Stage';
   const meta = [projectGitMeta(project.gitStatus), projectMeta(project) ? html(projectMeta(project)) : ''].filter(Boolean).join('<span class="overview-dot"> · </span>');
   const saveLabel = busy ? projectSyncLabel(project.id) : (saveReady ? 'Save' : projectSyncLabel(project.id));
-  const submitLabel = runtime.submitting ? 'Submitting' : (runtime.submitError ? 'Retry' : 'Submit');
-  const submitDisabled = canSave || busy || (runtime.sync || 'saved') !== 'saved';
+  const needsSubmit = projectNeedsDefinitionSubmit(project);
+  const submitLabel = runtime.submitting ? 'Submitting' : (runtime.submitError ? 'Retry' : (needsSubmit ? 'Submit' : 'Submitted'));
+  const submitDisabled = canSave || busy || (runtime.sync || 'saved') !== 'saved' || (!needsSubmit && !runtime.submitError);
   return `<section class="overview-hero"><div class="overview-title"><h3>${html(project.name || 'Untitled')}</h3><p>${meta || html(project.owner_route || 'project')}<span class="overview-state">Stage · ${html(stateLabel)}</span></p></div><div class="overview-actions"><button class="overview-save" type="button"${busy || !saveReady ? ' disabled' : ''}>${html(saveLabel)}</button><button class="overview-submit" type="button"${submitDisabled ? ' disabled' : ''}>${html(submitLabel)}</button></div></section>`;
 }
 function overviewStageFlow(stageState) {
@@ -654,8 +663,9 @@ async function refreshProjectGitStatus() {
 async function submitProject(projectId, button) {
   if (!state) return;
   if (!projectId) return;
+  const project = projects().find(item => item.id === projectId);
   const runtime = projectState(projectId);
-  if ((runtime.sync || 'saved') !== 'saved' || runtime.submitting) return;
+  if (!project || (runtime.sync || 'saved') !== 'saved' || runtime.submitting || (!projectNeedsDefinitionSubmit(project) && !runtime.submitError)) return;
   setProjectState(projectId, { submitting: true, submitError: '', syncLabel: 'Submitting' });
   if (button) { setLabel(button, 'Submitting'); button.disabled = true; }
   try {
