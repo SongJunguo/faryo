@@ -135,7 +135,7 @@ def next_stage(event_type: str, stage: str) -> str:
     allowed = {
         "owner_approved": {"awaiting_owner": "approved_for_workorder"},
         "owner_rejected": {"awaiting_owner": "closed"},
-        "owner_seen": {"awaiting_owner": "approved_for_workorder", "paused": "approved_for_workorder"},
+        "owner_seen": {"awaiting_owner": "closed", "paused": "closed", "needs_fix": "closed"},
         "owner_paused": {"awaiting_owner": "paused", "approved_for_workorder": "paused", "workorder_created": "paused", "in_progress": "paused", "needs_fix": "paused"},
         "workorder_created": {"approved_for_workorder": "workorder_created"},
         "workorder_dispatch_failed": {"workorder_created": "approved_for_workorder"},
@@ -168,7 +168,7 @@ def base_event(project: dict[str, Any], event_type: str, payload: dict[str, Any]
 
 
 def history_record(project: dict[str, Any], item: dict[str, str], event: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
-    final_status = compact_text(payload.get("final_status") or payload.get("finalStatus")) or {"owner_rejected": "rejected", "controller_verify_pass": "completed"}.get(str(event["event_type"]), "closed")
+    final_status = compact_text(payload.get("final_status") or payload.get("finalStatus")) or {"owner_rejected": "rejected", "owner_seen": "seen", "controller_verify_pass": "completed"}.get(str(event["event_type"]), "closed")
     summary = compact_text(payload.get("summary")) or compact_text(event.get("summary")) or item["title"]
     return {
         "ts": event["ts"],
