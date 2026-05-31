@@ -49,7 +49,8 @@ const ownerQueueItem = item => !item.stage || ['awaiting_owner', 'paused', 'need
 const transitionKey = (project, item) => `${project.id}:${item.id}`;
 const activeItems = (project, type) => (project.items || []).filter(item => item.type === type && !pendingTransitions.has(transitionKey(project, item)) && ownerQueueItem(item) && !TYPES[type].done.includes(item.status || 'open'));
 const readyItems = project => (project.items || []).filter(item => item.stage === 'approved_for_workorder');
-const dispatchableProjects = () => projects().filter(projectReadyForDispatch);
+const executableItems = project => readyItems(project).filter(item => item.type === 'action');
+const queueProjects = () => projects().filter(projectReadyForQueue);
 const deckProject = () => projects().find(project => project.id === deck.projectId) || projects()[0];
 const deckItems = () => { const project = deckProject(); return project ? activeItems(project, deck.type) : []; };
 function projectFilter() {
@@ -102,7 +103,7 @@ function projectBlocked(project) {
   const runtime = projectState(project.id);
   return runtime.submitting || ['syncing', 'sync_needed', 'sync_failed'].includes(runtime.sync);
 }
-function projectReadyForDispatch(project) {
+function projectReadyForQueue(project) {
   return !project.archived && !projectBlocked(project) && readyItems(project).length;
 }
 function topSyncState() {
@@ -117,7 +118,7 @@ function topSyncState() {
   return { label: 'Saved', disabled: true };
 }
 function syncSubmitState() {
-  els.submit.disabled = !state || projects().some(projectBlocked) || !dispatchableProjects().length;
+  els.submit.disabled = !state || projects().some(projectBlocked) || !queueProjects().length;
 }
 function syncTopActions() {
   const sync = topSyncState();
@@ -688,7 +689,7 @@ function openRunQueue() {
   showSheet(els.sheet); renderRunQueue();
 }
 function renderRunQueue() {
-  const queue = dispatchableProjects();
+  const queue = queueProjects();
   const total = queue.reduce((sum, project) => sum + readyItems(project).length, 0);
   const panel = document.createElement('section');
   panel.className = 'run-queue';
@@ -704,15 +705,15 @@ function renderRunQueue() {
   els.stage.replaceChildren(panel);
 }
 function runQueueProject(project) {
-  const items = readyItems(project), count = items.length, runtime = projectState(project.id), busy = runtime.submitting || runtime.sync === 'syncing';
-  return `<section class="run-project"><header class="run-project-head">${tierBadge(project.bucket)}<div><h3>${html(project.name || project.id)}</h3><span>${html(count)} ready</span></div><div class="run-project-actions"><button class="run-primary" type="button" data-run-project data-project-id="${html(project.id)}"${busy ? ' disabled' : ''}>Run</button><button class="run-return" type="button" data-return-items data-project-id="${html(project.id)}" data-item-ids="${html(items.map(item => item.id).join(','))}"${busy ? ' disabled' : ''}>Return All</button></div></header><ol class="run-items">${items.map(item => runQueueItem(project, item, busy)).join('')}</ol></section>`;
+  const items = readyItems(project), actions = executableItems(project), runtime = projectState(project.id), busy = runtime.submitting || runtime.sync === 'syncing';
+  return `<section class="run-project"><header class="run-project-head">${tierBadge(project.bucket)}<div><h3>${html(project.name || project.id)}</h3><span>${html(actions.length)} action / ${html(items.length)} item</span></div><div class="run-project-actions"><button class="run-primary" type="button" data-run-project data-project-id="${html(project.id)}"${busy || !actions.length ? ' disabled' : ''}>Run</button><button class="run-return" type="button" data-return-items data-project-id="${html(project.id)}" data-item-ids="${html(items.map(item => item.id).join(','))}"${busy ? ' disabled' : ''}>Return All</button></div></header><ol class="run-items">${items.map(item => runQueueItem(project, item, busy)).join('')}</ol></section>`;
 }
 function runQueueItem(project, item, busy) {
-  return `<li class="run-item"><span>${html(item.title || item.id)}</span><button type="button" data-return-items data-project-id="${html(project.id)}" data-item-ids="${html(item.id)}"${busy ? ' disabled' : ''}>Return</button></li>`;
+  return `<li class="run-item"><span>${html(TYPES[item.type]?.label || item.type || 'Item')} · ${html(item.title || item.id)}</span><button type="button" data-return-items data-project-id="${html(project.id)}" data-item-ids="${html(item.id)}"${busy ? ' disabled' : ''}>Return</button></li>`;
 }
 async function runProjectWork(project, button) {
   const ids = readyItems(project).map(item => item.id).filter(Boolean);
-  if (!ids.length) return;
+  if (!ids.length || !executableItems(project).length) return;
   setProjectState(project.id, { submitting: true, submitError: '', syncLabel: 'Running' });
   button.disabled = true; button.textContent = 'Running';
   try {

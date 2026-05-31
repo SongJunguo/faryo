@@ -5,12 +5,15 @@
 - Owner route（归属端路由）：`{{owner_route}}`
 - 项目根：`{{project_root}}`
 - 创建时间：{{created_at}}
+- 派发前真值 hash（哈希）：`{{workbench_hash}}`
 
-## 当前目标
-{{current_goal}}
-
-## 活跃事项
+## 本轮绑定 item（事项）
 {{active_items}}
+
+## 执行方式
+- 先读取 `00-system/workbench.json`，按上方 ID 定位本轮绑定 item（事项）。
+- 先理解 `decision`（裁决项）和 `watch`（说明项）作为本轮上下文，再执行 `action`（执行项）。
+- 若绑定 item 缺失，或本轮没有 `action`（执行项），停止并在 Receipt（回执）写阻塞。
 
 ## 任务
 {{task}}
@@ -23,7 +26,8 @@
 
 ## Receipt（回执）
 - Status: pending
+- Execution process:
 - Summary:
 - Verification:
-- State/event request:
-- Remaining blockers:
+- Files/evidence:
+- New items or blockers:

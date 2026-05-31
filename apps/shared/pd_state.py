@@ -89,18 +89,6 @@ def clean_owner_decision(value: Any) -> dict[str, Any]:
     return clean
 
 
-def owner_decision_text(value: Any) -> str:
-    decision = clean_owner_decision(value)
-    parts = []
-    if decision.get("selected"):
-        parts.append(str(decision["selected"]))
-    if decision.get("checked"):
-        parts.append("、".join(decision["checked"]))
-    if decision.get("note"):
-        parts.append(str(decision["note"]))
-    return "；".join(parts)
-
-
 def clean_stage_dod_done(value: Any) -> list[str]:
     if isinstance(value, list):
         return unique_compact_items(value)

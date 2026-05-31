@@ -1943,6 +1943,53 @@ def apply_workbench_transition(payload: dict[str, Any]) -> dict[str, Any]:
         "updatedAt": now_iso(),
     }
 
+
+def project_workbench_status(payload: dict[str, Any]) -> dict[str, Any]:
+    if not project_workbench_enabled():
+        raise OwnerError("project workbench is disabled", HTTPStatus.FORBIDDEN)
+    project_root = project_root_from_payload(payload)
+    project = read_project_workbench_file(project_root)
+    return {
+        "ok": True,
+        "project": project,
+        "workbenchHash": project_workbench_hash(project),
+        "updatedAt": now_iso(),
+    }
+
+
+def read_project_workorder_state(project_root: Path, workorder_id: str) -> tuple[bool, bool, dict[str, Any], list[str]]:
+    if not workorder_id:
+        raise OwnerError("missing workorder_id")
+    workorder_path = project_root / "00-system" / "workorders" / f"{workorder_id}.md"
+    if not workorder_path.is_file():
+        raise OwnerError("workorder not found", HTTPStatus.NOT_FOUND)
+    text = workorder_path.read_text(encoding="utf-8")
+    workbench_path = project_root / "00-system" / "workbench.json"
+    try:
+        project = clean_project_workbench(json.loads(workbench_path.read_text(encoding="utf-8")))
+        workbench_ok = True
+    except (OSError, json.JSONDecodeError):
+        project = {}
+        workbench_ok = False
+    item_ids = [item["id"] for item in project.get("items", []) if compact_text(item.get("workorder_id")) == workorder_id]
+    return "## Receipt" in text and "- Status: pending" not in text, workbench_ok, project, item_ids
+
+
+def project_workorder_status(payload: dict[str, Any]) -> dict[str, Any]:
+    if not project_workbench_enabled():
+        raise OwnerError("project workbench is disabled", HTTPStatus.FORBIDDEN)
+    project_root = project_root_from_payload(payload)
+    receipt_ready, workbench_ok, project, item_ids = read_project_workorder_state(project_root, clean_workorder_id(payload.get("workorder_id")))
+    return {
+        "ok": True,
+        "receiptReady": receipt_ready,
+        "workbenchOk": workbench_ok,
+        "workbenchHash": project_workbench_hash(project) if workbench_ok else "",
+        "itemIds": item_ids,
+        "updatedAt": now_iso(),
+    }
+
+
 def create_project_workorder(payload: dict[str, Any]) -> dict[str, Any]:
     if not project_workbench_enabled():
         raise OwnerError("project workbench is disabled", HTTPStatus.FORBIDDEN)
@@ -2004,24 +2051,10 @@ def verify_history_jsonl(path: Path, workorder_id: str) -> tuple[int, list[str]]
 def verify_project_workorder(payload: dict[str, Any]) -> dict[str, Any]:
     project_root = project_root_from_payload(payload)
     workorder_id = clean_workorder_id(payload.get("workorder_id"))
-    if not workorder_id:
-        raise OwnerError("missing workorder_id")
-    workorder_path = project_root / "00-system" / "workorders" / f"{workorder_id}.md"
-    if not workorder_path.is_file():
-        raise OwnerError("workorder not found", HTTPStatus.NOT_FOUND)
-    text = workorder_path.read_text(encoding="utf-8")
-    receipt_ready = "## Receipt" in text and "- Status: pending" not in text
-    workbench_path = project_root / "00-system" / "workbench.json"
-    try:
-        workbench = clean_project_workbench(json.loads(workbench_path.read_text(encoding="utf-8")))
-        workbench_ok = True
-    except (OSError, json.JSONDecodeError):
-        workbench = {}
-        workbench_ok = False
+    receipt_ready, workbench_ok, workbench, item_ids = read_project_workorder_state(project_root, workorder_id)
     transitioned = False
     transition_error = ""
     if receipt_ready and workbench_ok:
-        item_ids = [item["id"] for item in workbench.get("items", []) if compact_text(item.get("workorder_id")) == workorder_id]
         if item_ids:
             try:
                 receipt_ids = [item["id"] for item in workbench.get("items", []) if item["id"] in item_ids and wb_state.item_stage(item) != "receipt_submitted"]
@@ -2460,11 +2493,17 @@ class Handler(SimpleHTTPRequestHandler):
             if parsed.path == "/api/workbench/transition":
                 self.write_json(apply_workbench_transition(payload))
                 return
+            if parsed.path == "/api/workbench/status":
+                self.write_json(project_workbench_status(payload))
+                return
             if parsed.path == "/api/project-workbench/git-status":
                 self.write_json(project_git_status(payload))
                 return
             if parsed.path == "/api/workorder/create":
                 self.write_json(create_project_workorder(payload))
+                return
+            if parsed.path == "/api/workorder/status":
+                self.write_json(project_workorder_status(payload))
                 return
             if parsed.path == "/api/workorder/verify":
                 self.write_json(verify_project_workorder(payload))
