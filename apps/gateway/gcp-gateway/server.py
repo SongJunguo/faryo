@@ -1684,6 +1684,8 @@ class GatewayHandler(BaseHTTPRequestHandler):
         try:
             payload = self.read_json_body(128 * 1024)
             project = self.dispatch_project(payload)
+            if self.project_has_active_workorder(project["row"]):
+                raise ValueError("project already has active workorder")
             item_ids = self.workorder_item_ids(project["row"], payload)
             route = project["owner_route"]
             owner_status = self.project_owner_workbench_status(project, username)
@@ -1724,6 +1726,7 @@ class GatewayHandler(BaseHTTPRequestHandler):
             workorder["item_ids"] = item_ids
             sent = self.owner_json_request(route, "/api/send", {"session": session, "text": self.workorder_dispatch_prompt(project, workorder)}, username, timeout=10)
             if not sent.get("ok"):
+                self.rollback_failed_dispatch(username, route, selected_cwd, project["id"], item_ids, workorder_id, "Worker prompt send failed; returned items to approved workorder queue.")
                 self.owner_json_request(route, "/api/session/close", {"session": session}, username, timeout=4)
                 self.write_json({"ok": False, "error": sent.get("error") or "owner send failed", "route": route, "session": session}, HTTPStatus.BAD_GATEWAY); return
             started = self.owner_json_request(route, "/api/workbench/transition", {
@@ -1736,6 +1739,7 @@ class GatewayHandler(BaseHTTPRequestHandler):
                 "summary": f"Worker session {session} started for workorder {workorder_id}.",
             }, username, timeout=10)
             if not started.get("ok"):
+                self.rollback_failed_dispatch(username, route, selected_cwd, project["id"], item_ids, workorder_id, "Worker start transition failed; returned items to approved workorder queue.")
                 self.owner_json_request(route, "/api/session/close", {"session": session}, username, timeout=4)
                 self.write_json({"ok": False, "error": started.get("error") or "owner worker-start transition failed", "route": route, "session": session}, HTTPStatus.BAD_GATEWAY); return
             projected = self.update_projection_from_owner_project(project["id"], started.get("project"))
@@ -1878,6 +1882,25 @@ class GatewayHandler(BaseHTTPRequestHandler):
         if not any(approved.get(item_id) == "action" for item_id in requested):
             raise ValueError("item_ids must include at least one approved action item")
         return requested
+
+    def project_has_active_workorder(self, row: dict[str, Any]) -> bool:
+        for item in row.get("items") if isinstance(row.get("items"), list) else []:
+            if isinstance(item, dict) and self.compact_text(item.get("stage")) in {"workorder_created", "in_progress", "receipt_submitted", "needs_fix"}:
+                return True
+        return False
+
+    def rollback_failed_dispatch(self, username: str, route: str, cwd: str, project_id: str, item_ids: list[str], workorder_id: str, summary: str) -> None:
+        result = self.owner_json_request(route, "/api/workbench/transition", {
+            "project_root": cwd,
+            "event_type": "workorder_dispatch_failed",
+            "item_ids": item_ids,
+            "workorder_id": workorder_id,
+            "actor": "faryo-controller",
+            "source": "faryo-dispatch",
+            "summary": summary,
+        }, username, timeout=10)
+        if result.get("ok"):
+            self.update_projection_from_owner_project(project_id, result.get("project"))
 
     def project_owner_workbench_status(self, project: dict[str, Any], username: str) -> dict[str, str]:
         expected = self.project_workbench_hash(project["row"])

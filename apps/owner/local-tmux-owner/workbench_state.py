@@ -138,6 +138,7 @@ def next_stage(event_type: str, stage: str) -> str:
         "owner_seen": {"awaiting_owner": "approved_for_workorder", "paused": "approved_for_workorder"},
         "owner_paused": {"awaiting_owner": "paused", "approved_for_workorder": "paused", "workorder_created": "paused", "in_progress": "paused", "needs_fix": "paused"},
         "workorder_created": {"approved_for_workorder": "workorder_created"},
+        "workorder_dispatch_failed": {"workorder_created": "approved_for_workorder"},
         "worker_started": {"workorder_created": "in_progress"},
         "worker_receipt_submitted": {"in_progress": "receipt_submitted", "needs_fix": "receipt_submitted"},
         "controller_verify_pass": {"receipt_submitted": "closed"},
@@ -279,7 +280,9 @@ def apply_transition(project: dict[str, Any], payload: dict[str, Any]) -> tuple[
             continue
         item = dict(item)
         item.update({"stage": nxt, "status": item_status(nxt), "updated_at": now_iso()})
-        if event["workorder_id"]:
+        if event_type == "workorder_dispatch_failed":
+            item.pop("workorder_id", None)
+        elif event["workorder_id"]:
             item["workorder_id"] = event["workorder_id"]
         if clean := clean_item(item, len(remaining) + 1):
             remaining.append(clean)

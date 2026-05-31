@@ -48,6 +48,8 @@ function hideSheet(el) {
 const ownerQueueItem = item => !item.stage || ['awaiting_owner', 'paused', 'needs_fix'].includes(item.stage);
 const transitionKey = (project, item) => `${project.id}:${item.id}`;
 const activeItems = (project, type) => (project.items || []).filter(item => item.type === type && !pendingTransitions.has(transitionKey(project, item)) && ownerQueueItem(item) && !TYPES[type].done.includes(item.status || 'open'));
+const activeWorkItem = item => ['workorder_created', 'in_progress', 'receipt_submitted', 'needs_fix'].includes(item.stage);
+const projectHasActiveWork = project => (project.items || []).some(activeWorkItem);
 const readyItems = project => (project.items || []).filter(item => item.stage === 'approved_for_workorder');
 const executableItems = project => readyItems(project).filter(item => item.type === 'action');
 const queueProjects = () => projects().filter(projectReadyForQueue);
@@ -104,7 +106,7 @@ function projectBlocked(project) {
   return runtime.submitting || ['syncing', 'sync_needed', 'sync_failed'].includes(runtime.sync);
 }
 function projectReadyForQueue(project) {
-  return !project.archived && !projectBlocked(project) && readyItems(project).length;
+  return !project.archived && !projectBlocked(project) && !projectHasActiveWork(project) && readyItems(project).length;
 }
 function topSyncState() {
   const runtimes = projects().map(project => projectState(project.id));
@@ -705,7 +707,7 @@ function renderRunQueue() {
   els.stage.replaceChildren(panel);
 }
 function runQueueProject(project) {
-  const items = readyItems(project), actions = executableItems(project), runtime = projectState(project.id), busy = runtime.submitting || runtime.sync === 'syncing';
+  const items = readyItems(project), actions = executableItems(project), runtime = projectState(project.id), busy = runtime.submitting || runtime.sync === 'syncing' || projectHasActiveWork(project);
   return `<section class="run-project"><header class="run-project-head">${tierBadge(project.bucket)}<div><h3>${html(project.name || project.id)}</h3><span>${html(actions.length)} action / ${html(items.length)} item</span></div><div class="run-project-actions"><button class="run-primary" type="button" data-run-project data-project-id="${html(project.id)}"${busy || !actions.length ? ' disabled' : ''}>Run</button><button class="run-return" type="button" data-return-items data-project-id="${html(project.id)}" data-item-ids="${html(items.map(item => item.id).join(','))}"${busy ? ' disabled' : ''}>Return All</button></div></header><ol class="run-items">${items.map(item => runQueueItem(project, item, busy)).join('')}</ol></section>`;
 }
 function runQueueItem(project, item, busy) {
