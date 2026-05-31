@@ -1764,7 +1764,9 @@ class GatewayHandler(BaseHTTPRequestHandler):
             workorder_id = self.compact_text(payload.get("workorder_id") or payload.get("workorderId"))
             if not workorder_id:
                 raise ValueError("workorder_id is required")
-            result = self.verify_project_workorder_result(username, project, workorder_id, actor="faryo-controller")
+            if self.compact_text(payload.get("result")) not in {"pass", "fail"}:
+                raise ValueError("result must be pass or fail")
+            result = self.verify_project_workorder_result(username, project, workorder_id, payload, actor="faryo-controller")
             self.write_json(result, HTTPStatus.OK if result.get("ok") else HTTPStatus.BAD_GATEWAY)
         except ValueError as exc:
             self.write_json({"ok": False, "error": str(exc)}, HTTPStatus.BAD_REQUEST)
@@ -1964,9 +1966,9 @@ class GatewayHandler(BaseHTTPRequestHandler):
         return "\n".join([
             status,
             f"项目：`{project_id}` / {project_name}；Owner route（归属端路由）：`{route}`。",
-            f"工单：`{workorder_id}`；worker session（施工会话）：`{worker_session}`。",
-            f"业务验收通过时调用 Gateway `/api/faryo/workorder/verify`，payload（请求体）：`{{\"project_id\":\"{project_id}\",\"workorder_id\":\"{workorder_id}\"}}`。",
-            "未通过时继续向该 worker session（施工会话）发纠偏指令；不要重复创建 WO（工单）或 worker（施工会话）。",
+            f"工单：`{workorder_id}`；worker session（施工会话）：`{worker_session or 'unknown'}`。",
+            f"业务验收通过：调用 Gateway `/api/faryo/workorder/verify`，payload（请求体）：`{{\"project_id\":\"{project_id}\",\"workorder_id\":\"{workorder_id}\",\"result\":\"pass\"}}`。",
+            f"业务验收不通过：调用同一接口并传 `{{\"project_id\":\"{project_id}\",\"workorder_id\":\"{workorder_id}\",\"result\":\"fail\"}}`，再向该 worker session（施工会话）发纠偏指令；不要重复创建 WO（工单）或 worker（施工会话）。",
         ])
 
     def start_workorder_receipt_watch(self, username: str, route: str, cwd: str, project: dict[str, Any], workorder: dict[str, Any], worker_session: str) -> None:
@@ -1996,15 +1998,14 @@ class GatewayHandler(BaseHTTPRequestHandler):
             self.ensure_faryo_controller(username, self.faryo_receipt_notice(project_id, project_name, route, workorder_id, worker_session, result))
             return
 
-    def verify_project_workorder_result(self, username: str, project: dict[str, Any], workorder_id: str, actor: str = "faryo-controller", summary: str = "", evidence: str = "") -> dict[str, Any]:
+    def verify_project_workorder_result(self, username: str, project: dict[str, Any], workorder_id: str, source: dict[str, Any], actor: str = "faryo-controller") -> dict[str, Any]:
         route = project["owner_route"]
         last_error = ""
         for cwd in project["cwd_candidates"]:
-            payload = {"project_root": cwd, "workorder_id": workorder_id, "actor": actor}
-            if summary:
-                payload["summary"] = summary
-            if evidence:
-                payload["evidence"] = evidence
+            payload = {"project_root": cwd, "workorder_id": workorder_id, "actor": actor, "result": self.compact_text(source.get("result"))}
+            for key in ("summary", "evidence"):
+                if source.get(key):
+                    payload[key] = self.compact_text(source.get(key))
             result = self.owner_json_request(route, "/api/workorder/verify", payload, username, timeout=10)
             if result.get("ok"):
                 projected = self.update_projection_from_owner_project(project["id"], result.get("project"))
@@ -2013,6 +2014,7 @@ class GatewayHandler(BaseHTTPRequestHandler):
                 projection_synced = self.project_workbench_hash(project["row"]) == self.compact_text(result.get("workbenchHash"))
                 result["projectionSynced"] = projection_synced
                 result["closed"] = bool(result.get("closed") and projection_synced)
+                result["needsFix"] = bool(result.get("needsFix") and projection_synced)
                 result.update({"route": route, "project_id": project["id"], "cwd": cwd})
                 return result
             last_error = self.compact_text(result.get("error")) or "owner verify failed"

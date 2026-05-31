@@ -2063,20 +2063,31 @@ def verify_project_workorder(payload: dict[str, Any]) -> dict[str, Any]:
     project_root = project_root_from_payload(payload)
     workorder_id = clean_workorder_id(payload.get("workorder_id"))
     receipt_ready, workbench_ok, workbench, item_ids = read_project_workorder_state(project_root, workorder_id)
+    review_result = compact_text(payload.get("result")).lower()
+    if review_result == "pass":
+        event_type = "controller_verify_pass"
+        final_status = "completed"
+        default_summary = "Workorder receipt verified by Faryo controller."
+    elif review_result == "fail":
+        event_type = "controller_verify_fail"
+        final_status = "needs_fix"
+        default_summary = "Workorder receipt needs fixes after Faryo controller review."
+    else:
+        raise OwnerError("invalid verify result", HTTPStatus.BAD_REQUEST)
     transitioned = False
     transition_error = ""
     if receipt_ready and workbench_ok and item_ids:
         try:
             transition = apply_workbench_transition({
                 "project_root": str(project_root),
-                "event_type": "controller_verify_pass",
+                "event_type": event_type,
                 "item_ids": item_ids,
                 "workorder_id": workorder_id,
                 "actor": compact_text(payload.get("actor")) or "faryo-controller",
                 "source": "workorder-verify",
-                "summary": compact_text(payload.get("summary")) or "Workorder receipt verified by Faryo controller.",
+                "summary": compact_text(payload.get("summary")) or default_summary,
                 "evidence": compact_text(payload.get("evidence")) or "Receipt present and workbench parsed.",
-                "final_status": compact_text(payload.get("final_status")) or "completed",
+                "final_status": final_status,
             })
             workbench = transition.get("project") if isinstance(transition.get("project"), dict) else read_project_workbench_file(project_root)
             transitioned = True
@@ -2084,10 +2095,13 @@ def verify_project_workorder(payload: dict[str, Any]) -> dict[str, Any]:
             transition_error = str(exc)
     history_count, history_errors = verify_history_jsonl(project_root / "00-system" / "workbench.history.jsonl", workorder_id)
     expected_history_rows = len(item_ids) if item_ids else 1
-    ok = receipt_ready and workbench_ok and history_count >= expected_history_rows and not history_errors and not transition_error
+    closed = review_result == "pass" and receipt_ready and workbench_ok and history_count >= expected_history_rows and not history_errors and not transition_error
+    needs_fix = review_result == "fail" and receipt_ready and workbench_ok and transitioned and not transition_error
     return {
         "ok": True,
-        "closed": ok,
+        "closed": closed,
+        "needsFix": needs_fix,
+        "reviewResult": "fail" if event_type == "controller_verify_fail" else "pass",
         "receiptReady": receipt_ready,
         "workbenchOk": workbench_ok,
         "workbenchHash": project_workbench_hash(workbench) if workbench_ok else "",
