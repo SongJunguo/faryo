@@ -1563,7 +1563,7 @@ class GatewayHandler(BaseHTTPRequestHandler):
                 "status": status,
                 "stage": stage,
             }
-            for key in ("workorder_id", "updated_at"):
+            for key in ("workorder_id", "worker_session", "updated_at"):
                 value = self.compact_text(item.get(key))
                 if value:
                     clean[key] = value
@@ -1740,6 +1740,7 @@ class GatewayHandler(BaseHTTPRequestHandler):
                 "event_type": "worker_started",
                 "item_ids": item_ids,
                 "workorder_id": workorder_id,
+                "worker_session": session,
                 "actor": "faryo-controller",
                 "source": "faryo-dispatch",
                 "summary": f"Worker session {session} started for workorder {workorder_id}.",

@@ -71,7 +71,7 @@ def clean_item(item: dict[str, Any], index: int) -> dict[str, Any]:
         "status": status,
         "stage": stage,
     }
-    for key in ("workorder_id", "updated_at"):
+    for key in ("workorder_id", "worker_session", "updated_at"):
         value = compact_text(item.get(key))
         if value:
             clean[key] = value
@@ -288,8 +288,12 @@ def apply_transition(project: dict[str, Any], payload: dict[str, Any]) -> tuple[
         item.update({"stage": nxt, "status": item_status(nxt), "updated_at": now_iso()})
         if event_type == "workorder_dispatch_failed":
             item.pop("workorder_id", None)
+            item.pop("worker_session", None)
         elif event["workorder_id"]:
             item["workorder_id"] = event["workorder_id"]
+        if event_type == "worker_started":
+            if worker_session := compact_text(payload.get("worker_session") or payload.get("workerSession")):
+                item["worker_session"] = worker_session
         if clean := clean_item(item, len(remaining) + 1):
             remaining.append(clean)
     project["items"] = remaining
