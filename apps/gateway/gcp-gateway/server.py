@@ -1757,22 +1757,8 @@ class GatewayHandler(BaseHTTPRequestHandler):
             workorder_id = self.compact_text(payload.get("workorder_id") or payload.get("workorderId"))
             if not workorder_id:
                 raise ValueError("workorder_id is required")
-            route = project["owner_route"]
-            last_error = ""
-            for cwd in project["cwd_candidates"]:
-                result = self.owner_json_request(route, "/api/workorder/verify", {"project_root": cwd, "workorder_id": workorder_id}, username, timeout=10)
-                if result.get("ok"):
-                    projected = self.update_projection_from_owner_project(project["id"], result.get("project"))
-                    if projected:
-                        project["row"] = projected
-                    projection_synced = self.project_workbench_hash(project["row"]) == self.compact_text(result.get("workbenchHash"))
-                    result["projectionSynced"] = projection_synced
-                    result["closed"] = bool(result.get("closed") and projection_synced)
-                    result.update({"route": route, "project_id": project["id"], "cwd": cwd})
-                    self.write_json(result, HTTPStatus.OK)
-                    return
-                last_error = self.compact_text(result.get("error")) or "owner verify failed"
-            self.write_json({"ok": False, "error": last_error, "route": route}, HTTPStatus.BAD_GATEWAY)
+            result = self.verify_project_workorder_result(username, project, workorder_id, actor="faryo-controller")
+            self.write_json(result, HTTPStatus.OK if result.get("ok") else HTTPStatus.BAD_GATEWAY)
         except ValueError as exc:
             self.write_json({"ok": False, "error": str(exc)}, HTTPStatus.BAD_REQUEST)
 
@@ -1866,7 +1852,7 @@ class GatewayHandler(BaseHTTPRequestHandler):
             f"工单路径：`{path}`" + (f"（相对路径：`{relative_path}`）" if relative_path else "") + "。",
             item_line,
             "先读取工单和 `00-system/workbench.json`，按绑定 item（事项）核对 action（执行项）、decision（裁决项）和 watch（说明项）；decision/watch 只作为本轮上下文，执行范围只限 action。",
-            "不要直接手写 `workbench.json` 或 `workbench.history.jsonl`；状态和历史由 Faryo 状态机在主控验收时生成。",
+            "不要直接手写 `workbench.json` 或 `workbench.history.jsonl`；状态和历史由 Faryo 状态机在 Gateway 验收时生成。",
             "未写 Receipt 不得声称完成；若发现新事项，只在回执中提出，不要绕过状态机写入。",
         ])
 
@@ -1951,19 +1937,24 @@ class GatewayHandler(BaseHTTPRequestHandler):
         item_ids = workorder.get("item_ids") if isinstance(workorder.get("item_ids"), list) else []
         item_line = "覆盖事项：" + ", ".join(f"`{self.compact_text(item_id)}`" for item_id in item_ids if self.compact_text(item_id)) + "。"
         return "\n".join([
-            "项目工单已派发，主控接棒监管即可，不要重复创建 WO（工单）或 worker（施工会话）。Gateway 会按 Owner route（归属端路由）监听 Receipt（回执）状态。",
+            "项目工单已派发，主控接棒监管即可，不要重复创建 WO（工单）或 worker（施工会话）。Gateway 会按 Owner route（归属端路由）监听 Receipt（回执）并自动验收。",
             f"项目：`{project['id']}`；Owner route（归属端路由）：`{project['owner_route']}`。",
             f"工单：`{self.compact_text(workorder.get('id'))}`；worker session（施工会话）：`{worker_session}`。",
             item_line,
-            "收到 Receipt（回执）通知后，再通过 `/api/faryo/workorder/verify` 验收并推进状态机。",
+            "收到自动验收结果后，主控只复核结果；若失败再指出阻塞。",
         ])
 
-    def faryo_receipt_notice(self, project_id: str, project_name: str, route: str, workorder_id: str, worker_session: str) -> str:
+    def faryo_receipt_notice(self, project_id: str, project_name: str, route: str, workorder_id: str, worker_session: str, result: dict[str, Any]) -> str:
+        if not result.get("ok"):
+            status = f"自动验收失败：{self.compact_text(result.get('error')) or 'unknown error'}。"
+        elif result.get("closed"):
+            status = "Receipt（回执）已自动验收，状态机已闭环。"
+        else:
+            status = "Receipt（回执）已检测到，但自动验收未闭环；主控只报阻塞，不要重复创建 WO（工单）或 worker（施工会话）。"
         return "\n".join([
-            "项目工单已有 Receipt（回执），主控接棒验收。",
+            status,
             f"项目：`{project_id}` / {project_name}；Owner route（归属端路由）：`{route}`。",
             f"工单：`{workorder_id}`；worker session（施工会话）：`{worker_session}`。",
-            "先读取工单和项目端真值，再调用 `/api/faryo/workorder/verify` 推进状态机；若回执不合格，只说明阻塞，不要新建 WO（工单）。",
         ])
 
     def start_workorder_receipt_watch(self, username: str, route: str, cwd: str, project: dict[str, Any], workorder: dict[str, Any], worker_session: str, controller_session: Any) -> None:
@@ -1980,8 +1971,35 @@ class GatewayHandler(BaseHTTPRequestHandler):
             status = self.owner_json_request(route, "/api/workorder/status", {"project_root": cwd, "workorder_id": workorder_id}, username, timeout=6)
             if not status.get("ok") or not status.get("receiptReady"):
                 continue
-            self.owner_json_request("gcp", "/api/send", {"session": controller_session, "text": self.faryo_receipt_notice(project_id, project_name, route, workorder_id, worker_session)}, username, timeout=6)
+            try:
+                project = self.dispatch_project({"project_id": project_id})
+                result = self.verify_project_workorder_result(username, project, workorder_id, actor="faryo-gateway", summary="Workorder receipt auto-verified by Gateway watch.", evidence="Receipt detected by Gateway watch.")
+            except ValueError as exc:
+                result = {"ok": False, "error": str(exc)}
+            self.owner_json_request("gcp", "/api/send", {"session": controller_session, "text": self.faryo_receipt_notice(project_id, project_name, route, workorder_id, worker_session, result)}, username, timeout=6)
             return
+
+    def verify_project_workorder_result(self, username: str, project: dict[str, Any], workorder_id: str, actor: str = "faryo-controller", summary: str = "", evidence: str = "") -> dict[str, Any]:
+        route = project["owner_route"]
+        last_error = ""
+        for cwd in project["cwd_candidates"]:
+            payload = {"project_root": cwd, "workorder_id": workorder_id, "actor": actor}
+            if summary:
+                payload["summary"] = summary
+            if evidence:
+                payload["evidence"] = evidence
+            result = self.owner_json_request(route, "/api/workorder/verify", payload, username, timeout=10)
+            if result.get("ok"):
+                projected = self.update_projection_from_owner_project(project["id"], result.get("project"))
+                if projected:
+                    project["row"] = projected
+                projection_synced = self.project_workbench_hash(project["row"]) == self.compact_text(result.get("workbenchHash"))
+                result["projectionSynced"] = projection_synced
+                result["closed"] = bool(result.get("closed") and projection_synced)
+                result.update({"route": route, "project_id": project["id"], "cwd": cwd})
+                return result
+            last_error = self.compact_text(result.get("error")) or "owner verify failed"
+        return {"ok": False, "error": last_error, "route": route, "project_id": project["id"]}
 
     def project_worker_cwd_candidates(self, row: dict[str, Any]) -> list[str]:
         marker = "/00-system/workbench.json"

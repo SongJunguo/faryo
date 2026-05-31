@@ -21,7 +21,7 @@
 ## 验收口径
 - 只执行本工单批准的范围。
 - 不直接手写 `workbench.json`、`workbench.events.jsonl` 或 `workbench.history.jsonl`。
-- 状态变更和历史摘要由 Faryo 状态机在主控验收时生成。
+- 状态变更和历史摘要由 Faryo 状态机在 Gateway 验收时生成。
 - 如发现新事项，在 Receipt（回执）里提出建议，不要绕过状态机写入项目真值。
 
 ## Receipt（回执）
