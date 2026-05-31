@@ -106,7 +106,7 @@ function projectBlocked(project) {
   return runtime.submitting || ['syncing', 'sync_needed', 'sync_failed'].includes(runtime.sync);
 }
 function projectReadyForQueue(project) {
-  return !project.archived && !projectBlocked(project) && !projectHasActiveWork(project) && readyItems(project).length;
+  return !project.archived && !projectBlocked(project) && !projectHasActiveWork(project) && executableItems(project).length;
 }
 function topSyncState() {
   const runtimes = projects().map(project => projectState(project.id));
@@ -692,7 +692,7 @@ function openRunQueue() {
 }
 function renderRunQueue() {
   const queue = queueProjects();
-  const total = queue.reduce((sum, project) => sum + readyItems(project).length, 0);
+  const total = queue.reduce((sum, project) => sum + executableItems(project).length, 0);
   const panel = document.createElement('section');
   panel.className = 'run-queue';
   panel.innerHTML = queue.length ? `<header class="run-queue-head"><strong>${html(total)} ready</strong><span>${html(queue.length)} project${queue.length > 1 ? 's' : ''}</span></header>${queue.map(runQueueProject).join('')}` : '<p class="empty">No approved items ready to run.</p>';
