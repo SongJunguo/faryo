@@ -1225,7 +1225,10 @@ class GatewayHandler(BaseHTTPRequestHandler):
                 if isinstance(previous.get("definition_sync"), dict):
                     row["definition_sync"] = previous["definition_sync"]
             elif isinstance(project.get("definition"), dict):
-                row["definition_sync"] = self.project_definition_sync(row, "applied")
+                if isinstance(previous.get("definition_sync"), dict):
+                    row["definition_sync"] = previous["definition_sync"]
+                else:
+                    row["definition_sync"] = self.project_definition_sync(row, "pending")
             if isinstance(previous.get("definition_submit"), dict) and "definition_submit" not in row:
                 row["definition_submit"] = previous["definition_submit"]
             row.setdefault("archived", previous.get("archived"))
@@ -1244,7 +1247,10 @@ class GatewayHandler(BaseHTTPRequestHandler):
         if not merged.get("rank"):
             merged["rank"] = previous.get("rank") or len(rows) + 1
         if isinstance(project.get("definition"), dict):
-            merged["definition_sync"] = self.project_definition_sync(merged, "applied")
+            if isinstance(previous.get("definition_sync"), dict):
+                merged["definition_sync"] = previous["definition_sync"]
+            else:
+                merged["definition_sync"] = self.project_definition_sync(merged, "pending")
         row = self.clean_project_row(merged, int(merged.get("rank") or len(rows) + 1))
         self.write_project_rows([item for item in rows if item.get("id") != row["id"]] + [row])
         return row

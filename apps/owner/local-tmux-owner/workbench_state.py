@@ -225,10 +225,16 @@ def apply_transition(project: dict[str, Any], payload: dict[str, Any]) -> tuple[
     if missing:
         raise LookupError("item not found: " + ", ".join(missing))
 
-    if event_type in {"item_updated", "item_escalated"}:
+    if event_type in {"item_updated", "item_escalated", "item_returned"}:
         raw = payload.get("item") if isinstance(payload.get("item"), dict) else payload
         for item in project["items"]:
             if item["id"] not in item_ids:
+                continue
+            if event_type == "item_returned":
+                prev = item_stage(item)
+                item.update({"stage": "awaiting_owner", "status": "pending", "updated_at": now_iso()})
+                item.pop("workorder_id", None)
+                events.append(base_event(project, event_type, payload, item["id"], prev, "awaiting_owner"))
                 continue
             if event_type == "item_escalated":
                 prev = item_stage(item)

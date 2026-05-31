@@ -733,7 +733,7 @@ async function returnProjectItems(project, itemIds, button) {
   setProjectState(project.id, { sync: 'syncing', syncLabel: 'Returning', submitError: '' });
   button.disabled = true;
   try {
-    const data = await fetchJson('/api/project-workbench/transition', { project_id: project.id, item_ids: ids, event_type: 'item_escalated', actor: 'owner', source: 'gateway-run-queue', summary: ids.length > 1 ? 'Return approved project items for review.' : 'Return approved item for review.' });
+    const data = await fetchJson('/api/project-workbench/transition', { project_id: project.id, item_ids: ids, event_type: 'item_returned', actor: 'owner', source: 'gateway-run-queue', summary: ids.length > 1 ? 'Return approved project items for review.' : 'Return approved item for review.' });
     state = withLocalOverviewMeta(data.workbench); setProjectState(project.id, { sync: 'saved', syncLabel: '' }); render(); renderRunQueue();
   } catch (_error) {
     setProjectState(project.id, { sync: 'sync_failed', syncLabel: 'Return Failed' }); renderRunQueue();
