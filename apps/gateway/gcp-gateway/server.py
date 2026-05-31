@@ -901,6 +901,8 @@ class GatewayHandler(BaseHTTPRequestHandler):
         return {"ok": True, "workbench": self.project_workbench_payload(username)}
 
     def project_workbench_payload(self, username: str | None = None) -> dict[str, Any]:
+        if username:
+            self.recover_workorder_receipts(username)
         return {"projects": self.read_project_rows()}
 
     def project_git_statuses(self, username: str) -> dict[str, dict[str, Any] | None]:
@@ -1981,22 +1983,82 @@ class GatewayHandler(BaseHTTPRequestHandler):
     def watch_workorder_receipt(self, username: str, route: str, cwd: str, project_id: str, project_name: str, workorder_id: str, worker_session: str) -> None:
         for _attempt in range(WORKORDER_RECEIPT_WATCH_ATTEMPTS):
             time.sleep(WORKORDER_RECEIPT_WATCH_INTERVAL_SECONDS)
-            status = self.owner_json_request(route, "/api/workorder/status", {"project_root": cwd, "workorder_id": workorder_id}, username, timeout=6)
-            if not status.get("ok") or not status.get("receiptReady"):
-                continue
-            result = self.owner_json_request(route, "/api/workbench/transition", {
-                "project_root": cwd,
-                "event_type": "worker_receipt_submitted",
-                "item_ids": status.get("itemIds"),
-                "workorder_id": workorder_id,
-                "actor": "project-worker",
-                "source": "workorder-watch",
-                "summary": "Workorder receipt submitted for controller review.",
-            }, username, timeout=10)
-            if result.get("ok"):
-                self.update_projection_from_owner_project(project_id, result.get("project"))
-            self.ensure_faryo_controller(username, self.faryo_receipt_notice(project_id, project_name, route, workorder_id, worker_session, result))
+            if self.submit_workorder_receipt(username, route, cwd, project_id, project_name, workorder_id, worker_session):
+                return
+
+    def recover_workorder_receipts(self, username: str) -> None:
+        now = time.monotonic()
+        if now - float(getattr(self.server, "workorder_recover_at", 0.0)) < WORKORDER_RECEIPT_WATCH_INTERVAL_SECONDS:  # type: ignore[attr-defined]
             return
+        setattr(self.server, "workorder_recover_at", now)
+        for project in self.active_workorder_projects(username):
+            if project["receipt_submitted"]:
+                self.notify_workorder_receipt(username, project["route"], project["id"], project["name"], project["workorder_id"], project["worker_session"], {"ok": True})
+                continue
+            for cwd in self.project_worker_cwd_candidates(project["row"])[:2]:
+                if self.submit_workorder_receipt(username, project["route"], cwd, project["id"], project["name"], project["workorder_id"], project["worker_session"]):
+                    break
+
+    def active_workorder_projects(self, username: str) -> list[dict[str, Any]]:
+        projects = []
+        for row in self.read_project_rows():
+            route = self.clean_owner_route(row.get("owner_route"))
+            if not route or not self.config.allowed_route(username, route):
+                continue
+            seen: set[str] = set()
+            for item in row.get("items") if isinstance(row.get("items"), list) else []:
+                if not isinstance(item, dict):
+                    continue
+                stage = self.compact_text(item.get("stage"))
+                if stage not in {"in_progress", "receipt_submitted"}:
+                    continue
+                workorder_id = self.compact_text(item.get("workorder_id"))
+                if not workorder_id or workorder_id in seen:
+                    continue
+                seen.add(workorder_id)
+                projects.append({"id": row["id"], "name": row["name"], "route": route, "row": row, "workorder_id": workorder_id, "worker_session": self.compact_text(item.get("worker_session")), "receipt_submitted": stage == "receipt_submitted"})
+        return projects
+
+    def claim_workorder_receipt(self, route: str, workorder_id: str) -> bool:
+        claims = getattr(self.server, "workorder_receipt_claims", set())  # type: ignore[attr-defined]
+        key = f"{route}:{workorder_id}"
+        if key in claims:
+            return False
+        claims.add(key)
+        setattr(self.server, "workorder_receipt_claims", claims)
+        return True
+
+    def release_workorder_receipt(self, route: str, workorder_id: str) -> None:
+        claims = getattr(self.server, "workorder_receipt_claims", set())  # type: ignore[attr-defined]
+        claims.discard(f"{route}:{workorder_id}")
+        setattr(self.server, "workorder_receipt_claims", claims)
+
+    def notify_workorder_receipt(self, username: str, route: str, project_id: str, project_name: str, workorder_id: str, worker_session: str, result: dict[str, Any], claimed: bool = False) -> bool:
+        if not claimed and not self.claim_workorder_receipt(route, workorder_id):
+            return True
+        notice = self.ensure_faryo_controller(username, self.faryo_receipt_notice(project_id, project_name, route, workorder_id, worker_session, result))
+        if not notice.get("ok"):
+            self.release_workorder_receipt(route, workorder_id)
+        return True
+
+    def submit_workorder_receipt(self, username: str, route: str, cwd: str, project_id: str, project_name: str, workorder_id: str, worker_session: str) -> bool:
+        status = self.owner_json_request(route, "/api/workorder/status", {"project_root": cwd, "workorder_id": workorder_id}, username, timeout=6)
+        if not status.get("ok") or not status.get("receiptReady"):
+            return False
+        if not self.claim_workorder_receipt(route, workorder_id):
+            return True
+        result = self.owner_json_request(route, "/api/workbench/transition", {
+            "project_root": cwd,
+            "event_type": "worker_receipt_submitted",
+            "item_ids": status.get("itemIds"),
+            "workorder_id": workorder_id,
+            "actor": "project-worker",
+            "source": "workorder-watch",
+            "summary": "Workorder receipt submitted for controller review.",
+        }, username, timeout=10)
+        if result.get("ok"):
+            self.update_projection_from_owner_project(project_id, result.get("project"))
+        return self.notify_workorder_receipt(username, route, project_id, project_name, workorder_id, worker_session, result, claimed=True)
 
     def verify_project_workorder_result(self, username: str, project: dict[str, Any], workorder_id: str, source: dict[str, Any], actor: str = "faryo-controller") -> dict[str, Any]:
         route = project["owner_route"]
