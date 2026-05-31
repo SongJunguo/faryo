@@ -2065,37 +2065,26 @@ def verify_project_workorder(payload: dict[str, Any]) -> dict[str, Any]:
     receipt_ready, workbench_ok, workbench, item_ids = read_project_workorder_state(project_root, workorder_id)
     transitioned = False
     transition_error = ""
-    if receipt_ready and workbench_ok:
-        if item_ids:
-            try:
-                receipt_ids = [item["id"] for item in workbench.get("items", []) if item["id"] in item_ids and wb_state.item_stage(item) != "receipt_submitted"]
-                if receipt_ids:
-                    apply_workbench_transition({
-                        "project_root": str(project_root),
-                        "event_type": "worker_receipt_submitted",
-                        "item_ids": receipt_ids,
-                        "workorder_id": workorder_id,
-                        "actor": compact_text(payload.get("worker_actor") or payload.get("actor")) or "project-worker",
-                        "source": "workorder-verify",
-                        "summary": "Workorder receipt submitted.",
-                    })
-                transition = apply_workbench_transition({
-                    "project_root": str(project_root),
-                    "event_type": "controller_verify_pass",
-                    "item_ids": item_ids,
-                    "workorder_id": workorder_id,
-                    "actor": compact_text(payload.get("actor")) or "faryo-controller",
-                    "source": "workorder-verify",
-                    "summary": compact_text(payload.get("summary")) or "Workorder receipt verified by Faryo controller.",
-                    "evidence": compact_text(payload.get("evidence")) or "Receipt present and workbench parsed.",
-                    "final_status": compact_text(payload.get("final_status")) or "completed",
-                })
-                workbench = transition.get("project") if isinstance(transition.get("project"), dict) else read_project_workbench_file(project_root)
-                transitioned = True
-            except OwnerError as exc:
-                transition_error = str(exc)
+    if receipt_ready and workbench_ok and item_ids:
+        try:
+            transition = apply_workbench_transition({
+                "project_root": str(project_root),
+                "event_type": "controller_verify_pass",
+                "item_ids": item_ids,
+                "workorder_id": workorder_id,
+                "actor": compact_text(payload.get("actor")) or "faryo-controller",
+                "source": "workorder-verify",
+                "summary": compact_text(payload.get("summary")) or "Workorder receipt verified by Faryo controller.",
+                "evidence": compact_text(payload.get("evidence")) or "Receipt present and workbench parsed.",
+                "final_status": compact_text(payload.get("final_status")) or "completed",
+            })
+            workbench = transition.get("project") if isinstance(transition.get("project"), dict) else read_project_workbench_file(project_root)
+            transitioned = True
+        except OwnerError as exc:
+            transition_error = str(exc)
     history_count, history_errors = verify_history_jsonl(project_root / "00-system" / "workbench.history.jsonl", workorder_id)
-    ok = receipt_ready and workbench_ok and not history_errors and not transition_error
+    expected_history_rows = len(item_ids) if item_ids else 1
+    ok = receipt_ready and workbench_ok and history_count >= expected_history_rows and not history_errors and not transition_error
     return {
         "ok": True,
         "closed": ok,

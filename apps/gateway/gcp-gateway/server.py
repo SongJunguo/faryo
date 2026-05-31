@@ -1690,9 +1690,6 @@ class GatewayHandler(BaseHTTPRequestHandler):
             prompt = str(payload.get("prompt") or "").strip()
             if not prompt:
                 raise ValueError("prompt is required")
-            controller = self.ensure_faryo_controller(username)
-            if not controller.get("ok"):
-                self.write_json({"ok": False, "error": controller.get("error") or "faryo controller unavailable"}, HTTPStatus.BAD_GATEWAY); return
             title = clean_session_title(payload.get("title") or f"P:{project['name']}")
             selected_cwd = owner_status["cwd"]
             launch = {"command": "codex", "cwd": selected_cwd, "title": title, "max_running": self.max_running_for(username, route)}
@@ -1744,9 +1741,8 @@ class GatewayHandler(BaseHTTPRequestHandler):
             projected = self.update_projection_from_owner_project(project["id"], started.get("project"))
             if projected:
                 project["row"] = projected
-            notice = self.owner_json_request("gcp", "/api/send", {"session": controller.get("session"), "text": self.faryo_dispatch_notice(project, workorder, session)}, username, timeout=6)
-            self.start_workorder_receipt_watch(username, route, selected_cwd, project, workorder, session, controller.get("session"))
-            self.write_json({"ok": True, "route": route, "session": session, "title": title, "cwd": selected_cwd, "workorder": workorder, "controller_notice": {"ok": bool(notice.get("ok")), "error": notice.get("error") or ""}, "redirect": f"/{route}/?session={session}"}, HTTPStatus.OK)
+            self.start_workorder_receipt_watch(username, route, selected_cwd, project, workorder, session)
+            self.write_json({"ok": True, "route": route, "session": session, "title": title, "cwd": selected_cwd, "workorder": workorder, "redirect": f"/{route}/?session={session}"}, HTTPStatus.OK)
         except ValueError as exc:
             self.write_json({"ok": False, "error": str(exc)}, HTTPStatus.BAD_REQUEST)
 
@@ -1852,7 +1848,7 @@ class GatewayHandler(BaseHTTPRequestHandler):
             f"工单路径：`{path}`" + (f"（相对路径：`{relative_path}`）" if relative_path else "") + "。",
             item_line,
             "先读取工单和 `00-system/workbench.json`，按绑定 item（事项）核对 action（执行项）、decision（裁决项）和 watch（说明项）；decision/watch 只作为本轮上下文，执行范围只限 action。",
-            "不要直接手写 `workbench.json` 或 `workbench.history.jsonl`；状态和历史由 Faryo 状态机在 Gateway 验收时生成。",
+            "不要直接手写 `workbench.json` 或 `workbench.history.jsonl`；Receipt（回执）提交后由主控做业务验收，通过时再由状态机写入历史。",
             "未写 Receipt 不得声称完成；若发现新事项，只在回执中提出，不要绕过状态机写入。",
         ])
 
@@ -1933,50 +1929,41 @@ class GatewayHandler(BaseHTTPRequestHandler):
             template = template.replace("{{" + key + "}}", str(value))
         return template
 
-    def faryo_dispatch_notice(self, project: dict[str, Any], workorder: dict[str, Any], worker_session: str) -> str:
-        item_ids = workorder.get("item_ids") if isinstance(workorder.get("item_ids"), list) else []
-        item_line = "覆盖事项：" + ", ".join(f"`{self.compact_text(item_id)}`" for item_id in item_ids if self.compact_text(item_id)) + "。"
-        return "\n".join([
-            "项目工单已派发，主控接棒监管即可，不要重复创建 WO（工单）或 worker（施工会话）。Gateway 会按 Owner route（归属端路由）监听 Receipt（回执）并自动验收。",
-            f"项目：`{project['id']}`；Owner route（归属端路由）：`{project['owner_route']}`。",
-            f"工单：`{self.compact_text(workorder.get('id'))}`；worker session（施工会话）：`{worker_session}`。",
-            item_line,
-            "收到自动验收结果后，主控只复核结果；若失败再指出阻塞。",
-        ])
-
     def faryo_receipt_notice(self, project_id: str, project_name: str, route: str, workorder_id: str, worker_session: str, result: dict[str, Any]) -> str:
-        if not result.get("ok"):
-            status = f"自动验收失败：{self.compact_text(result.get('error')) or 'unknown error'}。"
-        elif result.get("closed"):
-            status = "Receipt（回执）已自动验收，状态机已闭环。"
-        else:
-            status = "Receipt（回执）已检测到，但自动验收未闭环；主控只报阻塞，不要重复创建 WO（工单）或 worker（施工会话）。"
+        status = "Receipt（回执）已提交，主控现在做业务验收。" if result.get("ok") else f"Receipt（回执）提交状态迁移失败：{self.compact_text(result.get('error')) or 'unknown error'}。"
         return "\n".join([
             status,
             f"项目：`{project_id}` / {project_name}；Owner route（归属端路由）：`{route}`。",
             f"工单：`{workorder_id}`；worker session（施工会话）：`{worker_session}`。",
+            f"业务验收通过时调用 Gateway `/api/faryo/workorder/verify`，payload（请求体）：`{{\"project_id\":\"{project_id}\",\"workorder_id\":\"{workorder_id}\"}}`。",
+            "未通过时继续向该 worker session（施工会话）发纠偏指令；不要重复创建 WO（工单）或 worker（施工会话）。",
         ])
 
-    def start_workorder_receipt_watch(self, username: str, route: str, cwd: str, project: dict[str, Any], workorder: dict[str, Any], worker_session: str, controller_session: Any) -> None:
+    def start_workorder_receipt_watch(self, username: str, route: str, cwd: str, project: dict[str, Any], workorder: dict[str, Any], worker_session: str) -> None:
         workorder_id = self.compact_text(workorder.get("id"))
-        controller = clean_session_id(str(controller_session or ""))
-        if not workorder_id or not controller:
+        if not workorder_id:
             return
-        args = (username, route, cwd, project["id"], project["name"], workorder_id, worker_session, controller)
+        args = (username, route, cwd, project["id"], project["name"], workorder_id, worker_session)
         threading.Thread(target=self.watch_workorder_receipt, args=args, daemon=True, name=f"faryo-wo-watch-{workorder_id[-8:]}").start()
 
-    def watch_workorder_receipt(self, username: str, route: str, cwd: str, project_id: str, project_name: str, workorder_id: str, worker_session: str, controller_session: str) -> None:
+    def watch_workorder_receipt(self, username: str, route: str, cwd: str, project_id: str, project_name: str, workorder_id: str, worker_session: str) -> None:
         for _attempt in range(WORKORDER_RECEIPT_WATCH_ATTEMPTS):
             time.sleep(WORKORDER_RECEIPT_WATCH_INTERVAL_SECONDS)
             status = self.owner_json_request(route, "/api/workorder/status", {"project_root": cwd, "workorder_id": workorder_id}, username, timeout=6)
             if not status.get("ok") or not status.get("receiptReady"):
                 continue
-            try:
-                project = self.dispatch_project({"project_id": project_id})
-                result = self.verify_project_workorder_result(username, project, workorder_id, actor="faryo-gateway", summary="Workorder receipt auto-verified by Gateway watch.", evidence="Receipt detected by Gateway watch.")
-            except ValueError as exc:
-                result = {"ok": False, "error": str(exc)}
-            self.owner_json_request("gcp", "/api/send", {"session": controller_session, "text": self.faryo_receipt_notice(project_id, project_name, route, workorder_id, worker_session, result)}, username, timeout=6)
+            result = self.owner_json_request(route, "/api/workbench/transition", {
+                "project_root": cwd,
+                "event_type": "worker_receipt_submitted",
+                "item_ids": status.get("itemIds"),
+                "workorder_id": workorder_id,
+                "actor": "project-worker",
+                "source": "workorder-watch",
+                "summary": "Workorder receipt submitted for controller review.",
+            }, username, timeout=10)
+            if result.get("ok"):
+                self.update_projection_from_owner_project(project_id, result.get("project"))
+            self.ensure_faryo_controller(username, self.faryo_receipt_notice(project_id, project_name, route, workorder_id, worker_session, result))
             return
 
     def verify_project_workorder_result(self, username: str, project: dict[str, Any], workorder_id: str, actor: str = "faryo-controller", summary: str = "", evidence: str = "") -> dict[str, Any]:
