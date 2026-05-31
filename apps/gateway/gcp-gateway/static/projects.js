@@ -78,7 +78,7 @@ function projectDefinitionHash(project) {
 }
 function projectNeedsDefinitionSubmit(project) {
   const hash = projectDefinitionHash(project), submit = project?.definition_submit || {};
-  return Boolean(hash && (submit.hash !== hash || !['submitted', 'converted'].includes(submit.status)));
+  return Boolean(hash && (submit.hash !== hash || submit.status !== 'converted'));
 }
 function hydrateProjectRuntime(rows) {
   projectRuntime.clear();
@@ -298,7 +298,8 @@ function syncOverviewActions(card, project, draft) {
   }
   if (submit) {
     const needsSubmit = projectNeedsDefinitionSubmit(project);
-    setLabel(submit, runtime.submitting ? 'Submitting' : (runtime.submitError ? 'Retry' : (needsSubmit ? 'Submit' : 'Submitted')));
+    const submitState = project.definition_submit || {};
+    setLabel(submit, runtime.submitting ? 'Submitting' : (runtime.submitError ? 'Retry' : (needsSubmit ? (submitState.status === 'submitted' ? 'Resubmit' : 'Submit') : 'Submitted')));
     submit.disabled = changed || busy || (runtime.sync || 'saved') !== 'saved' || (!needsSubmit && !runtime.submitError);
   }
 }
@@ -318,7 +319,8 @@ function overviewHero(project, stageState, canSave) {
   const meta = [projectGitMeta(project.gitStatus), projectMeta(project) ? html(projectMeta(project)) : ''].filter(Boolean).join('<span class="overview-dot"> · </span>');
   const saveLabel = busy ? projectSyncLabel(project.id) : (saveReady ? 'Save' : projectSyncLabel(project.id));
   const needsSubmit = projectNeedsDefinitionSubmit(project);
-  const submitLabel = runtime.submitting ? 'Submitting' : (runtime.submitError ? 'Retry' : (needsSubmit ? 'Submit' : 'Submitted'));
+  const submitState = project.definition_submit || {};
+  const submitLabel = runtime.submitting ? 'Submitting' : (runtime.submitError ? 'Retry' : (needsSubmit ? (submitState.status === 'submitted' ? 'Resubmit' : 'Submit') : 'Submitted'));
   const submitDisabled = canSave || busy || (runtime.sync || 'saved') !== 'saved' || (!needsSubmit && !runtime.submitError);
   return `<section class="overview-hero"><div class="overview-title"><h3>${html(project.name || 'Untitled')}</h3><p>${meta || html(project.owner_route || 'project')}<span class="overview-state">Stage · ${html(stateLabel)}</span></p></div><div class="overview-actions"><button class="overview-save" type="button"${busy || !saveReady ? ' disabled' : ''}>${html(saveLabel)}</button><button class="overview-submit" type="button"${submitDisabled ? ' disabled' : ''}>${html(submitLabel)}</button></div></section>`;
 }
