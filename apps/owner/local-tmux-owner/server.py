@@ -511,7 +511,7 @@ def codex_history_items(config: Config, history_root: str | None = None) -> list
         title = codex_thread_title(item, fallback, index_titles)
         if tmux_session:
             title = tmux_session_option(config, tmux_session, "@faryo_session_title") or title
-        items.append({"id": thread_id, "title": title, "gitLabel": session_git_label(session_git_cwd(config, tmux_session, cwd), git_labels, bool(tmux_session)), "cwd": short_path(cwd), "createdAt": item.get("created_at") or "", "updatedAt": item.get("updated_at") or "", "updatedTs": updated_ts, "rolloutPath": item.get("rollout_path") or "", "model": item.get("model") or "", "reasoningEffort": item.get("reasoning_effort") or "", "source": "codex-cli", "tmuxSession": tmux_session, "active": bool(tmux_session)})
+        items.append({"id": thread_id, "title": title, "gitLabel": session_git_label(session_git_cwd(config, tmux_session, cwd), git_labels, bool(tmux_session)), "cwd": short_path(cwd), "createdAt": item.get("created_at") or "", "updatedAt": item.get("updated_at") or "", "updatedTs": updated_ts, "rolloutPath": item.get("rollout_path") or "", "model": item.get("model") or "", "reasoningEffort": item.get("reasoning_effort") or "", "source": "codex-cli", "tmuxSession": tmux_session, "active": bool(tmux_session), "agentRunning": agent_session_running(config, tmux_session)})
     return items
 
 
@@ -520,7 +520,7 @@ def agent_session_items(config: Config, history_root: str | None = None) -> list
     seen_tmux = {item.get("tmuxSession") for item in items if item.get("tmuxSession")}
     active = active_claude_session_map(config)
     for item in claude_history_items(history_root):
-        if tmux_session := active.get(str(item.get("id") or "")): item.update({"tmuxSession": tmux_session, "active": True}); seen_tmux.add(tmux_session)
+        if tmux_session := active.get(str(item.get("id") or "")): item.update({"tmuxSession": tmux_session, "active": True, "agentRunning": agent_session_running(config, tmux_session)}); seen_tmux.add(tmux_session)
         items.append(item)
     git_labels: dict[str, str] = {}
     for name in tmux_sessions(config):
@@ -530,7 +530,7 @@ def agent_session_items(config: Config, history_root: str | None = None) -> list
         cwd = get_pane_cwd(target); thread = active_agent_thread(target, cwd) or {}; thread_id = str(thread.get("id") or name)
         updated_ts = session_created_ts(target); updated_at = iso_from_ts(updated_ts) if updated_ts else ""
         title = tmux_session_option(config, name, "@faryo_session_title") or (codex_thread_title(thread, short_path(cwd) or name) if thread else short_path(cwd) or name)
-        items.append({"id": thread_id, "title": title, "gitLabel": session_git_label(session_git_cwd(config, name, cwd), git_labels), "cwd": short_path(cwd), "createdAt": "", "updatedAt": updated_at, "updatedTs": updated_ts, "rolloutPath": "", "model": "", "reasoningEffort": "", "source": tmux_session_option(config, name, "@faryo_agent_source") or "runtime", "tmuxSession": name, "active": True})
+        items.append({"id": thread_id, "title": title, "gitLabel": session_git_label(session_git_cwd(config, name, cwd), git_labels), "cwd": short_path(cwd), "createdAt": "", "updatedAt": updated_at, "updatedTs": updated_ts, "rolloutPath": "", "model": "", "reasoningEffort": "", "source": tmux_session_option(config, name, "@faryo_agent_source") or "runtime", "tmuxSession": name, "active": True, "agentRunning": agent_session_running(config, name)})
     return sorted(items, key=lambda item: float(item.get("updatedTs") or 0), reverse=True)
 
 
@@ -778,6 +778,17 @@ def descendants(root_pid: int, table: dict[int, tuple[int, str]]) -> list[tuple[
 
 def agent_in_pane(config: Config) -> bool:
     return agent_profile_in_pane(config) is not None
+
+
+def agent_session_running(config: Config, session: str | None) -> bool:
+    if not session:
+        return False
+    try:
+        target = target_config(config, session)
+        profile = agent_profile_in_pane(target)
+        return bool(profile and not agent_ready_for_input(target, profile))
+    except OwnerError:
+        return False
 
 
 def agent_profile_in_pane(config: Config) -> AgentProfile | None:
