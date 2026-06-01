@@ -44,8 +44,8 @@ shell TUIs are supported but less polished.
 ## Quickstart
 
 ```bash
-curl -LO https://github.com/Snailflyer/faryo/releases/download/v1.0.0/faryo_1.0.0_all.deb
-sudo dpkg -i faryo_1.0.0_all.deb
+curl -LO https://github.com/Snailflyer/faryo/releases/download/v1.0.9/faryo_1.0.9_all.deb
+sudo dpkg -i faryo_1.0.9_all.deb
 systemctl --user daemon-reload
 systemctl --user enable --now faryo-owner-keepalive.timer
 mkdir -p ~/.faryo/owner/config

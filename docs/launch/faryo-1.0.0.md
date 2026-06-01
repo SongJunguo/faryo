@@ -70,7 +70,7 @@ Faryo is focused on continuity instead of remote display.
 
 ## Best-Supported Path
 
-The most refined path in `v1.0.0` is:
+The most refined path today is:
 
 ```text
 Linux endpoint
@@ -84,15 +84,15 @@ supported, but they have not received the same level of tuning yet.
 
 ## Installable Endpoint Artifacts
 
-The `v1.0.0` release provides:
+The current release provides:
 
-- `faryo_1.0.0_all.deb`
-- `faryo_1.0.0_macos.tar.gz`
+- `faryo_1.0.9_all.deb`
+- `faryo_1.0.9_macos.tar.gz`
 - `SHA256SUMS`
 
 Release page:
 
-https://github.com/Snailflyer/faryo/releases/tag/v1.0.0
+https://github.com/Snailflyer/faryo/releases/tag/v1.0.9
 
 ## Search Phrases
 
