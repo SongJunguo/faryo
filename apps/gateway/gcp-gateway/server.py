@@ -39,6 +39,9 @@ import pd_state
 
 COOKIE_NAME = "faryo_auth"
 COOKIE_MAX_AGE = 30 * 24 * 60 * 60
+LOGIN_RATE_WINDOW_SECONDS = 10 * 60
+LOGIN_RATE_BLOCK_SECONDS = 5 * 60
+LOGIN_RATE_MAX_FAILURES = 8
 BACKENDS = {
     "hp": ("127.0.0.1", int(os.environ.get("FARYO_HP_OWNER_PORT", "18766")), "HP"),
     "pc": ("127.0.0.1", int(os.environ.get("FARYO_PC_OWNER_PORT", "18765")), "PC"),
@@ -140,6 +143,8 @@ HOP_BY_HOP_HEADERS = {
     "transfer-encoding",
     "upgrade",
 }
+LOGIN_RATE_STATE: dict[str, dict[str, Any]] = {}
+LOGIN_RATE_LOCK = threading.Lock()
 
 
 def read_env(path: Path) -> dict[str, str]:
@@ -842,6 +847,27 @@ class GatewayHandler(BaseHTTPRequestHandler):
         self.write_mcp_json(self.mcp_error(None, -32001, "unauthorized"), HTTPStatus.UNAUTHORIZED)
         return False
 
+    def login_rate_key(self) -> str:
+        return self.headers.get("X-Forwarded-For", "").split(",", 1)[0].strip() or self.client_address[0]
+
+    def login_rate_limited(self, key: str) -> bool:
+        now = time.monotonic()
+        with LOGIN_RATE_LOCK:
+            entry = LOGIN_RATE_STATE.get(key)
+            return bool(entry and entry.get("blocked_until", 0) > now)
+
+    def record_login_failure(self, key: str) -> None:
+        now = time.monotonic()
+        with LOGIN_RATE_LOCK:
+            entry = LOGIN_RATE_STATE.setdefault(key, {"failures": [], "blocked_until": 0.0})
+            entry["failures"] = [ts for ts in entry["failures"] if now - ts < LOGIN_RATE_WINDOW_SECONDS] + [now]
+            if len(entry["failures"]) >= LOGIN_RATE_MAX_FAILURES:
+                entry["blocked_until"] = now + LOGIN_RATE_BLOCK_SECONDS
+
+    def clear_login_rate(self, key: str) -> None:
+        with LOGIN_RATE_LOCK:
+            LOGIN_RATE_STATE.pop(key, None)
+
     def handle_login(self, parsed: Any) -> None:
         length = int(self.headers.get("Content-Length", "0") or "0")
         raw = self.rfile.read(min(length, 8192)).decode("utf-8", errors="replace")
@@ -849,11 +875,14 @@ class GatewayHandler(BaseHTTPRequestHandler):
         username = form.get("username", [""])[0].strip()
         password = form.get("password", [""])[0]
         next_target = form.get("next", [self.safe_next(parsed)])[0] or "/"
+        rate_key = self.login_rate_key()
         user = self.config.user(username)
-        ok = bool(user) and bcrypt.checkpw(password.encode("utf-8"), self.config.password_hash(username))
+        ok = not self.login_rate_limited(rate_key) and bool(user) and bcrypt.checkpw(password.encode("utf-8"), self.config.password_hash(username))
         if not ok:
+            self.record_login_failure(rate_key)
             self.write_login_page(self.safe_target(next_target), error="Invalid username or password")
             return
+        self.clear_login_rate(rate_key)
         self.send_response(HTTPStatus.SEE_OTHER)
         self.send_header("Set-Cookie", self.auth_cookie(username))
         self.send_header("Location", self.safe_target(next_target))
