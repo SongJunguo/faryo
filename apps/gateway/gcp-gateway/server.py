@@ -550,6 +550,7 @@ class GatewayConfig:
         if not package_id: raise ValueError("invalid package id")
         if not asset_sources: raise ValueError("attachment is required")
         if not package: raise ValueError("package not found")
+        if package.get("status") != "pending": raise ValueError("package is already delivered")
         assets = package.get("assets") if isinstance(package.get("assets"), list) else []
         package["assets"] = assets + self.save_bridge_assets(package_id, self.bridge_root / package_id, asset_sources[:BRIDGE_ASSET_LIMIT], len(assets) + 1)
         package["prompt"] = str(package.get("prompt") or "").strip() or self.attachment_only_prompt(str(package.get("title") or "Handoff package")); self.update_bridge_package(package); return package
@@ -2403,8 +2404,7 @@ class GatewayHandler(BaseHTTPRequestHandler):
         for item in [backend_status(route) for route in routes]:
             item.update({key: route_payloads[item["id"]][key] for key in ("activeCount", "maxRunning", "canCreate")})
             entries.append(item)
-        pending = self.config.list_bridge_packages(username, "pending")
-        inbox = pending[:1] if pending else self.config.list_bridge_packages(username)[:1]
+        inbox = self.config.list_bridge_packages(username, "pending")[:1]
         return {"ok": True, "entries": entries, "sessions": sessions[:HISTORY_TOTAL_LIMITS[history_mode]], "history": {"mode": history_mode, "total": HISTORY_TOTAL_LIMITS[history_mode]}, "newSessionCommands": sorted(NEW_SESSION_COMMANDS if username == self.config.mcp_user else {"codex"}), "packages": inbox, "inbox": inbox, "updatedAt": now_ts()}
 
     def write_bridge_package_asset(self, path: str, username: str) -> None:
