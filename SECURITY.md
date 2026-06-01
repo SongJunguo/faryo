@@ -22,7 +22,8 @@ Security fixes target the latest released version.
 - Do not use query-string Owner tokens as a public entry pattern. Gateway should
   inject Owner tokens server-side.
 - Review any public Gateway `/mcp` exposure and protect it with
-  `FARYO_MCP_TOKEN`.
+  an explicit `FARYO_MCP_TOKEN`; only set `FARYO_MCP_CORS_ORIGIN` for trusted
+  browser origins.
 
 ## Reporting
 
