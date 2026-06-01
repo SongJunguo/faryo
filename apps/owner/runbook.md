@@ -40,6 +40,29 @@ these directories exist:
 ./scripts/status.sh
 ```
 
+## Install Acceptance
+
+Use the read-only diagnostic after installing or upgrading an endpoint:
+
+```bash
+./scripts/diagnose-owner-gateway.sh
+```
+
+Read the result as layers, not one generic online/offline state:
+
+- Owner installed: package files and `~/.faryo/owner/config/faryo.env` exist.
+- Owner reachable locally: `/health` on `127.0.0.1` returns OK.
+- Owner authenticated: `/api/status` returns `releaseVersion` with the Owner
+  token.
+- Gateway route prepared: Gateway config contains the route and matching Owner
+  token.
+- Reverse tunnel prepared: the endpoint has a configured remote loopback port.
+- Visible session usable: a real tmux session can be captured through Owner.
+
+For tunneled endpoints, run `scripts/verify-gcp-reverse-tunnel.sh` when the
+diagnostic shows the tunnel config is present but the Gateway still reports the
+route offline.
+
 ## Local Smoke Test
 
 ```bash

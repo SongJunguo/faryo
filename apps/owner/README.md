@@ -41,3 +41,12 @@ systemctl --user enable --now faryo-owner-keepalive.timer
 
 Use `/health` for liveness and `/api/status` for authenticated runtime checks.
 The status payload includes `releaseVersion` for endpoint upgrade acceptance.
+
+## Joining Gateway
+
+Installing Owner only proves local runtime health. Gateway visibility also needs
+route config, a matching Owner token, any required reverse tunnel loopback port,
+and the workspace/file-inbox roots used by that route.
+
+After configuration, run the read-only `scripts/diagnose-owner-gateway.sh`
+endpoint check. See `runbook.md` for the layered acceptance flow.

@@ -363,8 +363,7 @@ class GatewayConfig:
         self.gateway_home = secret_file.parent.parent
         self.faryo_profile_name = env.get("FARYO_CONTROLLER_CODEX_PROFILE", "faryo").strip() or "faryo"
         self.faryo_session_title = clean_session_title(env.get("FARYO_CONTROLLER_SESSION_TITLE") or "Faryo")
-        self.faryo_work_root = Path(env.get("FARYO_CONTROLLER_WORK_ROOT", str(Path.home()))).expanduser()
-        self.faryo_project_root = Path(env.get("FARYO_CONTROLLER_PROJECT_ROOT", str(Path.home() / ".faryo" / "projects" / "faryo"))).expanduser()
+        self.faryo_work_root = Path(env.get("FARYO_CONTROLLER_WORK_ROOT", str(Path(__file__).resolve().parents[3]))).expanduser()
         self.faryo_code_root = Path(env.get("FARYO_CONTROLLER_CODE_ROOT", str(Path(__file__).resolve().parents[3]))).expanduser()
         self.owner_project_roots = self.load_owner_project_roots(env)
         self.faryo_codex_home = Path(env.get("CODEX_HOME") or os.environ.get("CODEX_HOME") or str(Path.home() / ".codex")).expanduser()
@@ -376,7 +375,6 @@ class GatewayConfig:
 
     def install_faryo_codex_profile(self) -> None:
         self.faryo_work_root.mkdir(parents=True, exist_ok=True)
-        self.faryo_project_root.mkdir(parents=True, exist_ok=True)
         self.faryo_profile_runtime.parent.mkdir(parents=True, exist_ok=True)
         self.faryo_codex_home.mkdir(parents=True, exist_ok=True)
         profile_text = FARYO_PROFILE_SOURCE.read_text(encoding="utf-8") + "\n".join([
@@ -384,7 +382,6 @@ class GatewayConfig:
             "## Runtime Paths",
             "",
             f"- Faryo controller work root: `{self.faryo_work_root}`",
-            f"- Faryo project truth root: `{self.faryo_project_root}`",
             f"- Faryo code root: `{self.faryo_code_root}`",
             f"- Gateway workbench projection: `{self.project_workbench_index}`",
             f"- Gateway downlink packages: `{self.project_downlink_root}`",
@@ -708,8 +705,8 @@ class GatewayHandler(BaseHTTPRequestHandler):
         if parsed.path == "/api/project-workbench/downlink/ack":
             self.handle_project_workbench_downlink_ack()
             return
-        controller_paths = {"/api/faryo/dispatch", "/api/faryo/start", "/api/faryo/workorder/verify"}
-        flex_token_paths = {"/api/project-workbench/transition"}
+        controller_paths = {"/api/faryo/dispatch", "/api/faryo/workorder/verify"}
+        flex_token_paths = {"/api/faryo/start", "/api/project-workbench/transition"}
         if parsed.path in controller_paths:
             username = self.controller_token_username()
         elif parsed.path in flex_token_paths:
@@ -2190,9 +2187,10 @@ class GatewayHandler(BaseHTTPRequestHandler):
 
     def latest_faryo_thread_id(self) -> str:
         if not self.config.faryo_codex_state.is_file(): return ""
-        sql = "SELECT id, rollout_path FROM threads WHERE source = 'cli' AND thread_source = 'user' AND COALESCE(archived, 0) = 0 AND cwd = ? ORDER BY updated_at DESC LIMIT 20"
+        cutoff = int(time.time()) - 48 * 60 * 60
+        sql = "SELECT id, rollout_path FROM threads WHERE source = 'cli' AND thread_source = 'user' AND COALESCE(archived, 0) = 0 AND cwd = ? AND created_at >= ? ORDER BY created_at DESC, updated_at DESC LIMIT 20"
         try:
-            conn = sqlite3.connect(f"file:{self.config.faryo_codex_state.as_posix()}?mode=ro", uri=True, timeout=1); rows = conn.execute(sql, (str(self.config.faryo_work_root),)).fetchall(); conn.close()
+            conn = sqlite3.connect(f"file:{self.config.faryo_codex_state.as_posix()}?mode=ro", uri=True, timeout=1); rows = conn.execute(sql, (str(self.config.faryo_work_root), cutoff)).fetchall(); conn.close()
         except sqlite3.Error:
             return ""
         return next((clean_agent_session_id(str(thread_id)) or "" for thread_id, rollout_path in rows if self.faryo_profile_rollout(rollout_path)), "")
@@ -2263,9 +2261,9 @@ class GatewayHandler(BaseHTTPRequestHandler):
         shell = shutil.which("zsh") or "/usr/bin/zsh"
         initial_prompt = prompt or "启动 Faryo 主控。先读取项目工作台投影和 Faryo 运行真值，给出当前项目优先级、需要用户裁决的事项，并等待用户下一步指令。"
         if thread_id:
-            command = shlex.join([codex, "resume", "--profile-v2", self.config.faryo_profile_name, "--cd", str(self.config.faryo_work_root), thread_id, initial_prompt])
+            command = shlex.join([codex, "resume", "--profile", self.config.faryo_profile_name, "--cd", str(self.config.faryo_work_root), thread_id, initial_prompt])
         else:
-            command = shlex.join([codex, "--profile-v2", self.config.faryo_profile_name, "--cd", str(self.config.faryo_work_root), initial_prompt])
+            command = shlex.join([codex, "--profile", self.config.faryo_profile_name, "--cd", str(self.config.faryo_work_root), initial_prompt])
         launch = f"{command}; exec {shlex.quote(shell)} -l"
         try:
             result = subprocess.run(
