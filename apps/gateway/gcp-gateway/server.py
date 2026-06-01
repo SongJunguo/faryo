@@ -355,7 +355,8 @@ class GatewayConfig:
         self.auth_config = auth_config
         auth = json.loads(auth_config.read_text(encoding="utf-8"))
         env = read_env(owner_env)
-        self.mcp_token = (env.get("FARYO_MCP_TOKEN") or env.get("FARYO_GUARD_TOKEN") or "").strip()
+        self.mcp_token = env.get("FARYO_MCP_TOKEN", "").strip()
+        self.mcp_cors_origin = env.get("FARYO_MCP_CORS_ORIGIN", "").strip()
         self.mcp_user = env.get("FARYO_MCP_USER", "").strip()
         self.users = self.load_users(auth)
         self.owner_tokens = self.load_owner_tokens(env)
@@ -588,7 +589,7 @@ class GatewayHandler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         if parsed.path == "/mcp":
             self.send_response(HTTPStatus.NO_CONTENT)
-            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_mcp_cors_headers()
             self.send_header("Access-Control-Allow-Headers", "authorization, content-type, mcp-protocol-version, mcp-session-id, x-faryo-mcp-token")
             self.send_header("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
             self.end_headers()
@@ -781,7 +782,7 @@ class GatewayHandler(BaseHTTPRequestHandler):
     def handle_mcp_get(self, parsed: Any) -> None:
         if not self.require_mcp_token():
             return
-        self.send_response(HTTPStatus.METHOD_NOT_ALLOWED); self.send_header("Access-Control-Allow-Origin", "*"); self.send_header("Allow", "POST, OPTIONS"); self.send_header("Cache-Control", "no-store"); self.end_headers()
+        self.send_response(HTTPStatus.METHOD_NOT_ALLOWED); self.send_mcp_cors_headers(); self.send_header("Allow", "POST, OPTIONS"); self.send_header("Cache-Control", "no-store"); self.end_headers()
 
     def handle_mcp_post(self, parsed: Any) -> None:
         if not self.require_mcp_token():
@@ -790,7 +791,7 @@ class GatewayHandler(BaseHTTPRequestHandler):
         except ValueError as exc: self.write_mcp_json(self.mcp_error(None, -32700, str(exc)), HTTPStatus.BAD_REQUEST); return
         try: response = self.mcp_response(payload)
         except ValueError as exc: self.write_mcp_json(self.mcp_error(None, -32700, str(exc)), HTTPStatus.BAD_REQUEST); return
-        if response is None: self.send_response(HTTPStatus.ACCEPTED); self.send_header("Access-Control-Allow-Origin", "*"); self.end_headers(); return
+        if response is None: self.send_response(HTTPStatus.ACCEPTED); self.send_mcp_cors_headers(); self.end_headers(); return
         self.write_mcp_json(response)
 
     def mcp_response(self, payload: Any) -> dict[str, Any] | list[dict[str, Any]] | None:
@@ -834,10 +835,23 @@ class GatewayHandler(BaseHTTPRequestHandler):
     def public_base_url(self) -> str:
         return f"{self.headers.get('X-Forwarded-Proto') or 'https'}://{self.headers.get('X-Forwarded-Host') or self.headers.get('Host') or ''}".rstrip("/")
 
+    def mcp_cors_allowed(self) -> str:
+        origin = self.headers.get("Origin", "").strip()
+        return origin if origin and origin == self.config.mcp_cors_origin else ""
+
+    def send_mcp_cors_headers(self) -> None:
+        origin = self.mcp_cors_allowed()
+        if origin:
+            self.send_header("Access-Control-Allow-Origin", origin)
+            self.send_header("Vary", "Origin")
+
     def write_mcp_json(self, data: dict[str, Any], status: HTTPStatus = HTTPStatus.OK) -> None:
-        body = json.dumps(data, ensure_ascii=False).encode("utf-8"); self.send_response(status); self.send_header("Content-Type", "application/json; charset=utf-8"); self.send_header("Access-Control-Allow-Origin", "*"); self.send_header("Cache-Control", "no-store"); self.send_header("Content-Length", str(len(body))); self.end_headers(); self.write_bytes(body)
+        body = json.dumps(data, ensure_ascii=False).encode("utf-8"); self.send_response(status); self.send_header("Content-Type", "application/json; charset=utf-8"); self.send_mcp_cors_headers(); self.send_header("Cache-Control", "no-store"); self.send_header("Content-Length", str(len(body))); self.end_headers(); self.write_bytes(body)
 
     def require_mcp_token(self) -> bool:
+        if not self.config.mcp_token:
+            self.write_mcp_json(self.mcp_error(None, -32001, "mcp disabled"), HTTPStatus.NOT_FOUND)
+            return False
         auth = self.headers.get("Authorization", "").strip()
         token = self.headers.get("X-Faryo-Mcp-Token", "").strip()
         if auth.lower().startswith("bearer "):
