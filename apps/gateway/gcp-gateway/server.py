@@ -39,6 +39,7 @@ import pd_state
 
 COOKIE_NAME = "faryo_auth"
 COOKIE_MAX_AGE = 30 * 24 * 60 * 60
+CSRF_HEADER = "X-Faryo-Csrf"
 LOGIN_RATE_WINDOW_SECONDS = 10 * 60
 LOGIN_RATE_BLOCK_SECONDS = 5 * 60
 LOGIN_RATE_MAX_FAILURES = 8
@@ -643,6 +644,9 @@ class GatewayHandler(BaseHTTPRequestHandler):
         if not username:
             self.redirect("/login?" + urlencode({"next": self.request_target()}))
             return
+        if parsed.path == "/api/csrf":
+            self.write_json({"ok": True, "csrf": self.csrf_token(username)}, HTTPStatus.OK)
+            return
         if parsed.path == "/api/gateway-status":
             routes = self.config.user_routes(username)
             self.write_json({"ok": True, "entries": [backend_status(route) for route in routes]}, HTTPStatus.OK)
@@ -723,8 +727,14 @@ class GatewayHandler(BaseHTTPRequestHandler):
         if not username:
             self.write_json({"ok": False, "error": "unauthorized"}, HTTPStatus.UNAUTHORIZED)
             return
+        route = self.route_for(parsed)
+        if route:
+            self.proxy(parsed, route, username)
+            return
         if parsed.path == "/password":
             self.handle_password_change(username)
+            return
+        if not self.require_csrf_header(username):
             return
         if parsed.path == "/api/bridge-packages":
             self.handle_bridge_package_create(username)
@@ -773,10 +783,6 @@ class GatewayHandler(BaseHTTPRequestHandler):
             return
         if parsed.path == "/api/agent/resume":
             self.handle_agent_resume(username)
-            return
-        route = self.route_for(parsed)
-        if route:
-            self.proxy(parsed, route, username)
             return
         self.write_not_found(parsed.path)
 
@@ -862,6 +868,19 @@ class GatewayHandler(BaseHTTPRequestHandler):
         self.write_mcp_json(self.mcp_error(None, -32001, "unauthorized"), HTTPStatus.UNAUTHORIZED)
         return False
 
+    def csrf_token(self, username: str) -> str:
+        message = f"{username}|{self.config.auth_epoch(username)}".encode("utf-8")
+        return hmac.new(self.config.cookie_secret, message, hashlib.sha256).hexdigest()
+
+    def require_csrf_header(self, username: str) -> bool:
+        if self.controller_token_username() == username:
+            return True
+        token = self.headers.get(CSRF_HEADER, "").strip()
+        if token and hmac.compare_digest(token, self.csrf_token(username)):
+            return True
+        self.write_json({"ok": False, "error": "csrf required"}, HTTPStatus.FORBIDDEN)
+        return False
+
     def login_rate_key(self) -> str:
         return self.headers.get("X-Forwarded-For", "").split(",", 1)[0].strip() or self.client_address[0]
 
@@ -910,6 +929,9 @@ class GatewayHandler(BaseHTTPRequestHandler):
         current = form.get("current_password", [""])[0]
         new_password = form.get("new_password", [""])[0]
         confirm = form.get("confirm_password", [""])[0]
+        if not hmac.compare_digest(form.get("csrf", [""])[0], self.csrf_token(username)):
+            self.write_password_page(error="Reload and try again")
+            return
         if not bcrypt.checkpw(current.encode("utf-8"), self.config.password_hash(username)):
             self.write_password_page(error="Current password is incorrect")
             return
@@ -2417,10 +2439,10 @@ class GatewayHandler(BaseHTTPRequestHandler):
         self.write_asset(asset_path.read_bytes(), BRIDGE_SUFFIX_MIME.get(Path(filename).suffix.lower(), "application/octet-stream"), "private, no-store")
 
     def route_for(self, parsed: Any) -> tuple[str, str] | None:
-        match = re.match(r"^/(hp|pc|gcp)/(.*)$", parsed.path)
-        if not match:
+        parts = parsed.path.split("/", 2)
+        if len(parts) < 3 or parts[1] not in BACKENDS:
             return None
-        route_name, tail = match.group(1), match.group(2)
+        route_name, tail = parts[1], parts[2]
         if tail == "":
             return (route_name, "/") if parse_qs(parsed.query).get("session") else None
         if tail.startswith("api/") or tail in OWNER_STATIC_FILES or tail.startswith(OWNER_STATIC_PREFIXES):
@@ -2428,7 +2450,7 @@ class GatewayHandler(BaseHTTPRequestHandler):
         return None
 
     def is_api_path(self, path: str) -> bool:
-        return path.startswith("/api/") or bool(re.match(r"^/(hp|pc|gcp)/api/", path))
+        return path.startswith("/api/") or any(path.startswith(f"/{route}/api/") for route in BACKENDS)
 
     def proxy(self, parsed: Any, route: tuple[str, str], username: str) -> None:
         route_name, upstream_path = route
@@ -2444,7 +2466,7 @@ class GatewayHandler(BaseHTTPRequestHandler):
             upstream_path += "?" + parsed.query
         length = int(self.headers.get("Content-Length", "0") or "0")
         body = self.rfile.read(length) if length else None
-        blocked_headers = {"host", "content-length", "x-owner-token", "x-faryo-owner-label", "x-faryo-user", "x-faryo-history-scope", "x-faryo-file-inbox-root", "x-faryo-workspace-root"}
+        blocked_headers = {"host", "content-length", "x-owner-token", "x-faryo-owner-label", "x-faryo-user", "x-faryo-history-scope", "x-faryo-file-inbox-root", "x-faryo-workspace-root", "x-faryo-csrf"}
         headers = {key: value for key, value in self.headers.items() if key.lower() not in HOP_BY_HOP_HEADERS and key.lower() not in blocked_headers}
         headers["Host"] = f"{host}:{port}"
         headers["X-Faryo-Owner-Label"] = label
@@ -2584,7 +2606,8 @@ class GatewayHandler(BaseHTTPRequestHandler):
         self.write_page(login_html(next_target, error))
 
     def write_password_page(self, error: str = "") -> None:
-        self.write_page(password_html(error))
+        username = self.current_username() or ""
+        self.write_page(password_html(self.csrf_token(username) if username else "", error))
 
     def write_page(self, html: str, status: HTTPStatus = HTTPStatus.OK) -> None:
         body = html.encode("utf-8")
@@ -2644,7 +2667,7 @@ PORTAL_CSS = """*{box-sizing:border-box}body{margin:0;min-height:100vh;padding:c
 .settings-menu{position:absolute;right:0;top:47px;z-index:20;display:none;width:min(72vw,248px);min-width:210px;padding:10px;border:1px solid color-mix(in srgb,var(--accent) 28%,var(--line));border-radius:20px;background:linear-gradient(145deg,color-mix(in srgb,var(--panel) 94%,var(--panel2)),color-mix(in srgb,var(--panel2) 82%,var(--panel)));box-shadow:var(--shadow);backdrop-filter:blur(18px) saturate(1.18);transform-origin:calc(100% - 24px) 0;animation:settings-bloom .16s ease-out}.settings-menu::after{content:"";position:absolute;right:18px;top:-7px;width:14px;height:14px;transform:rotate(45deg);border-left:1px solid color-mix(in srgb,var(--accent) 26%,var(--line));border-top:1px solid color-mix(in srgb,var(--accent) 26%,var(--line));background:color-mix(in srgb,var(--panel) 94%,var(--panel2))}.settings.open .settings-menu{display:grid;gap:6px}.settings-menu .menu-title{padding:6px 4px 0;color:color-mix(in srgb,var(--muted) 82%,transparent);font-size:10px;font-weight:850;letter-spacing:.10em;text-transform:uppercase}.settings-row{width:100%;min-height:46px;display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:8px;padding:8px 10px;border:1px solid color-mix(in srgb,var(--line) 72%,transparent);border-radius:14px;background:color-mix(in srgb,var(--panel2) 56%,transparent);color:var(--text);text-align:left;text-decoration:none;font:inherit}.settings-row:hover,.settings-row:focus-visible{border-color:color-mix(in srgb,var(--accent) 42%,var(--line));background:color-mix(in srgb,var(--panel2) 78%,transparent);outline:none}.settings-row strong{display:block;font-size:12px;line-height:1.2}.settings-row small{display:block;margin-top:2px;color:var(--muted);font-size:10px;line-height:1.2}.settings-row em{color:var(--accent2);font-size:14px;font-style:normal}.settings-row.install-row{border-color:color-mix(in srgb,var(--accent2) 42%,var(--line));background:linear-gradient(135deg,color-mix(in srgb,var(--accent2) 14%,var(--panel2)),color-mix(in srgb,var(--accent) 10%,var(--panel)))}.settings-menu [hidden]{display:none!important}@keyframes settings-bloom{from{opacity:0;transform:translateY(-4px) scale(.96)}to{opacity:1;transform:translateY(0) scale(1)}}
 .routes{display:flex;flex-wrap:wrap;gap:8px;overflow:visible;min-height:42px;margin-bottom:10px;padding:1px}.route-chip{display:flex;align-items:center;gap:5px;white-space:nowrap;padding:7px 8px;border:1px solid var(--line);border-radius:999px;background:var(--panel);color:var(--text);text-decoration:none;font-size:12px}.dot{width:8px;height:8px;border-radius:999px;background:var(--muted)}.online .dot{background:var(--ok)}.slow .dot{background:var(--warn)}.offline .dot,.error .dot{background:var(--danger)}.handoff-strip{display:grid;grid-template-columns:minmax(0,1fr) minmax(160px,200px);gap:10px;align-items:stretch;margin-bottom:12px}.handoff{padding:9px;border:1px solid var(--line);border-radius:8px;background:var(--panel);box-shadow:var(--shadow)}.handoff.drop-ready{border-color:var(--accent2)}.handoff-head,.section-head{display:flex;align-items:center;justify-content:space-between;gap:8px}.handoff-head{margin-bottom:7px}.eyebrow{margin:0 0 2px;color:var(--accent2);font-size:10px;font-weight:800;letter-spacing:.08em;text-transform:uppercase}h2{margin:0;font-size:calc(15px + var(--font-step));line-height:1.2}.mini-btn{padding:6px 8px;border:1px solid var(--line);border-radius:7px;background:var(--panel);color:var(--text);font:inherit;font-size:calc(12px + var(--font-step));white-space:nowrap}.primary-btn{border-color:color-mix(in srgb,var(--accent) 44%,var(--line));color:var(--accent)}.package-list{min-height:48px}.package-card{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;align-items:center;padding:8px;border:1px solid var(--line);border-radius:7px;background:var(--panel2);touch-action:none}.package-card.dragging{opacity:.55}.drag-ghost{position:fixed;z-index:9999;pointer-events:none;transform:translate(-50%,-50%);box-shadow:var(--shadow)}.package-card strong{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:calc(13px + var(--font-step))}.package-meta{display:block;margin-top:3px;line-height:1.35}main{display:grid;gap:8px}.sessions{display:grid;gap:8px}.session-card{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;align-items:center;width:100%;padding:11px;border:1px solid var(--line);border-radius:8px;background:var(--panel);color:var(--text);text-decoration:none;text-align:left;font:inherit}.new-session-slot{display:grid;gap:8px}.new-session-slot .session-card{min-height:44px}.session-card>div:first-child{min-width:0}.session-card.inactive{opacity:.72}.session-card.running{border:2px solid var(--warn);background:color-mix(in srgb,var(--warn) 10%,var(--panel));box-shadow:inset 5px 0 0 var(--warn),0 0 0 3px color-mix(in srgb,var(--warn) 24%,transparent)}.session-card.waiting{border-color:color-mix(in srgb,var(--accent) 48%,var(--line));background:color-mix(in srgb,var(--accent) 7%,var(--panel))}.session-card.drop-target{border-color:var(--accent);box-shadow:0 0 0 3px color-mix(in srgb,var(--accent) 24%,transparent)}.session-title{font-size:calc(15px + var(--font-step));font-weight:760;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.session-meta{margin-top:4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.arrow{color:var(--muted);font-size:20px}.modal{position:fixed;inset:0;z-index:20;display:none;place-items:end center;padding:16px;background:rgba(0,0,0,.42)}.modal.open{display:grid}.sheet{width:min(100%,420px);padding:14px;border:1px solid var(--line);border-radius:12px;background:var(--panel);box-shadow:var(--shadow)}.sheet h3{margin:0 0 6px;font-size:18px}.sheet p{margin:0 0 12px;color:var(--muted);font-size:13px;line-height:1.45}.choice-list{display:grid;gap:8px}.choice-btn{width:100%;padding:11px;border:1px solid var(--line);border-radius:8px;background:var(--panel2);color:var(--text);text-align:left;font:inherit}.choice-btn strong{display:block}.choice-btn span{display:block;margin-top:3px;color:var(--muted);font-size:12px}.choice-btn.danger{border-color:color-mix(in srgb,var(--danger) 55%,var(--line));color:var(--danger)}.choice-btn:disabled{opacity:.45}.modal-actions{display:flex;justify-content:flex-end;margin-top:10px}.empty-state{padding:10px;border:1px dashed var(--line);border-radius:7px;background:var(--panel2);color:var(--muted);font-size:12px;text-align:center}@media(max-width:620px){.handoff-strip{grid-template-columns:minmax(0,1fr) minmax(142px,38%)}.handoff{box-shadow:none}}
 .modal.open.anchored{display:block}.modal.anchored .sheet{position:absolute;left:var(--sheet-left,16px);top:var(--sheet-top,16px);width:min(320px,calc(100vw - 32px))}"""
-PORTAL_JS_TEMPLATE = """let installPrompt=null,lastAnchorRect=null;const HISTORY={key:'faryoHistoryDensity',values:['less','more'],labels:{less:'Less',more:'More'},totals:{less:10,more:18}};function historyValue(){const value=localStorage.getItem(HISTORY.key);return HISTORY.values.includes(value)?value:HISTORY.values[0];}function applyHistorySetting(){const value=historyValue(),btn=document.getElementById('historyBtn'),count=document.getElementById('sessionCount');if(btn){const meta=btn.querySelector('small');if(meta)meta.textContent=HISTORY.labels[value];}if(count)count.textContent=`Latest ${HISTORY.totals[value]}`;}function cycleHistory(){const values=HISTORY.values;localStorage.setItem(HISTORY.key,values[(values.indexOf(historyValue())+1)%values.length]);applyHistorySetting();refreshWorkbench().catch(()=>{});}window.FaryoAppearance?.apply();applyHistorySetting();if('serviceWorker'in navigator)navigator.serviceWorker.register('/sw.js').catch(()=>{});window.addEventListener('beforeinstallprompt',(event)=>{event.preventDefault();installPrompt=event;const btn=document.getElementById('installApp');if(btn)btn.hidden=false;});document.addEventListener('pointerdown',(event)=>{const el=event.target.closest('button,a,.session-card,.package-card,[role="button"]');if(!el)return;const rect=el.getBoundingClientRect();lastAnchorRect={left:rect.left,right:rect.right,top:rect.top,bottom:rect.bottom};},{capture:true,passive:true});document.addEventListener('click',(event)=>{const settings=document.getElementById('settings');if(event.target.closest('#settings>button'))settings.classList.toggle('open');else if(!event.target.closest('#settings'))settings.classList.remove('open');const appearanceBtn=event.target.closest?.('.appearance-btn');if(appearanceBtn?.id==='themeBtn'){window.FaryoAppearance?.cycle('theme');return;}if(appearanceBtn?.id==='fontBtn'){window.FaryoAppearance?.cycle('font');return;}if(appearanceBtn?.id==='sizeBtn'){window.FaryoAppearance?.cycle('size');return;}if(event.target.closest?.('#historyBtn')){cycleHistory();return;}const installBtn=event.target.closest?.('#installApp');if(installBtn&&installPrompt){installPrompt.prompt();installPrompt=null;installBtn.hidden=true;}});
+PORTAL_JS_TEMPLATE = """let installPrompt=null,lastAnchorRect=null,csrfToken=null;async function csrfHeaders(){if(!csrfToken){const data=await (await fetch('/api/csrf',{cache:'no-store'})).json();csrfToken=data.csrf||'';}return {'X-Faryo-Csrf':csrfToken};}const HISTORY={key:'faryoHistoryDensity',values:['less','more'],labels:{less:'Less',more:'More'},totals:{less:10,more:18}};function historyValue(){const value=localStorage.getItem(HISTORY.key);return HISTORY.values.includes(value)?value:HISTORY.values[0];}function applyHistorySetting(){const value=historyValue(),btn=document.getElementById('historyBtn'),count=document.getElementById('sessionCount');if(btn){const meta=btn.querySelector('small');if(meta)meta.textContent=HISTORY.labels[value];}if(count)count.textContent=`Latest ${HISTORY.totals[value]}`;}function cycleHistory(){const values=HISTORY.values;localStorage.setItem(HISTORY.key,values[(values.indexOf(historyValue())+1)%values.length]);applyHistorySetting();refreshWorkbench().catch(()=>{});}window.FaryoAppearance?.apply();applyHistorySetting();if('serviceWorker'in navigator)navigator.serviceWorker.register('/sw.js').catch(()=>{});window.addEventListener('beforeinstallprompt',(event)=>{event.preventDefault();installPrompt=event;const btn=document.getElementById('installApp');if(btn)btn.hidden=false;});document.addEventListener('pointerdown',(event)=>{const el=event.target.closest('button,a,.session-card,.package-card,[role="button"]');if(!el)return;const rect=el.getBoundingClientRect();lastAnchorRect={left:rect.left,right:rect.right,top:rect.top,bottom:rect.bottom};},{capture:true,passive:true});document.addEventListener('click',(event)=>{const settings=document.getElementById('settings');if(event.target.closest('#settings>button'))settings.classList.toggle('open');else if(!event.target.closest('#settings'))settings.classList.remove('open');const appearanceBtn=event.target.closest?.('.appearance-btn');if(appearanceBtn?.id==='themeBtn'){window.FaryoAppearance?.cycle('theme');return;}if(appearanceBtn?.id==='fontBtn'){window.FaryoAppearance?.cycle('font');return;}if(appearanceBtn?.id==='sizeBtn'){window.FaryoAppearance?.cycle('size');return;}if(event.target.closest?.('#historyBtn')){cycleHistory();return;}const installBtn=event.target.closest?.('#installApp');if(installBtn&&installPrompt){installPrompt.prompt();installPrompt=null;installBtn.hidden=true;}});
 const WORKBENCH_CACHE_KEY='faryoWorkbenchSnapshot';const labels=__LABELS_JS__;let draggedPackage=null;let touchDrag=null;let assetTargetPackage=null;let actionBusy=false;
 function storeWorkbench(data){try{sessionStorage.setItem(WORKBENCH_CACHE_KEY,JSON.stringify({storedAt:Date.now(),data}));}catch(_error){}}
 function restoreWorkbench(){try{const cached=JSON.parse(sessionStorage.getItem(WORKBENCH_CACHE_KEY)||'null');if(cached?.data)renderWorkbench(cached.data);}catch(_error){}}
@@ -2660,18 +2683,18 @@ async function withBusy(task){if(actionBusy)return;actionBusy=true;try{return aw
 async function selectNewRoute(entries,label){const online=(entries||[]).filter(e=>['online','slow'].includes(e.state));if(!online.length){await notice('No endpoint online','No online endpoint can start sessions.');return null;}const choices=online.map(e=>({label:e.label||labels[e.id]||e.id,meta:`${e.id} · ${e.activeCount||0}/${e.maxRunning||0}${e.canCreate?'':' · limit reached'}`,value:e.id,disabled:!e.canCreate}));const available=choices.filter(item=>!item.disabled);if(!available.length){await sheet('Agent limit reached','Close a running session first.',choices);return null;}if(online.length===1&&available.length===1)return available[0].value;return await sheet('Select endpoint',`Choose where ${label} starts.`,choices);}
 function newAgentCard(item){const {entries,command,label}=item,card=document.createElement('button');card.type='button';card.className='session-card';card.innerHTML=`<div><div class="session-title">+ ${label}</div><div class="session-meta">$ ${command}</div></div><div class="arrow">›</div>`;card.addEventListener('click',()=>withBusy(async()=>{const route=await selectNewRoute(entries,label);if(!route)return;const original=card.innerHTML;card.disabled=true;card.innerHTML=`<div><div class="session-title">Starting ${label}...</div><div class="session-meta">$ ${command}</div></div><div class="arrow">↗</div>`;try{await agentNew(route,command);}finally{card.disabled=false;card.innerHTML=original;}}));return card;}
 function sessionCard(item){const targetSession=item.tmuxSession||'',agentSessionId=item.id||'',source=item.source||'',active=!!targetSession,running=active&&!!item.agentRunning,blocked=!!item.limitReached;const card=document.createElement('div');card.className=`session-card${active?'':' inactive'}${running?' running':(active?' waiting':'')}`;card.dataset.route=item.route;card.dataset.session=targetSession;card.dataset.agentSessionId=agentSessionId;card.dataset.source=source;const state=active?(running?'Running':'Waiting'):(blocked?'Limit reached':'Resume'),where=item.cwdLabel||item.cwd||'',updatedAt=localSessionTime(item),agent=source==='claude-code'?'Claude':(source==='codex-cli'?'Codex':'Runtime'),title=[item.title||item.id||'Untitled session',item.gitLabel||''].filter(Boolean).join(' ');card.innerHTML=`<div><div class="session-title">${escapeHtml(title)}</div><div class="session-meta">${escapeHtml(item.routeLabel||labels[item.route]||item.route)} · ${agent}${where?` · ${escapeHtml(where)}`:''} · ${escapeHtml(updatedAt)} · ${state}</div></div><div>${active?'<button class="mini-btn close-session" type="button">Close</button>':'<span class="arrow">›</span>'}</div>`;card.title=[title,item.cwd||'',updatedAt,state].filter(Boolean).join(' · ');card.addEventListener('click',(event)=>withBusy(async()=>{if(event.target.closest('.close-session')){event.preventDefault();event.stopPropagation();await closeSession(item.route,targetSession);return;}if(active){location.href=`/${item.route}/?session=${encodeURIComponent(targetSession)}`;return;}if(!agentSessionId)return;event.preventDefault();if(blocked){await notice('Agent limit reached','Close a running session first.');return;}await resumeSession(item.route,agentSessionId,source);}));card.addEventListener('dragover',(event)=>{if(draggedPackage&&agentSessionId){event.preventDefault();card.classList.add('drop-target');}});card.addEventListener('dragleave',()=>card.classList.remove('drop-target'));card.addEventListener('drop',async(event)=>{event.preventDefault();card.classList.remove('drop-target');const packageId=event.dataTransfer.getData('text/plain')||draggedPackage;if(packageId)await injectPackage(packageId,item.route,targetSession,agentSessionId,source);});return card;}
-async function agentNew(route,command){const res=await fetch('/api/agent/new',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({route,command})}),data=await res.json();if(!data.ok)throw new Error(data.error||'Failed to create session');location.href=data.redirect;}
-async function resumeSession(route,agentSessionId,source){const res=await fetch('/api/agent/resume',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({route,agent_session_id:agentSessionId,source})}),data=await res.json();if(!data.ok)throw new Error(data.error||'Failed to resume session');location.href=data.redirect||`/${route}/?session=${encodeURIComponent(data.session)}`;}
-async function closeSession(route,session){const ok=await sheet('Close Session','This closes the running session. Busy sessions may refuse to close.',[{label:'Close Session',meta:session,value:'ok',danger:true}]);if(ok!=='ok')return;const res=await fetch(`/${route}/api/session/close`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({session})}),data=await res.json();if(!data.ok)throw new Error(data.error||'Failed to close session');await refreshWorkbench();}
-async function injectPackage(packageId,route,session,agentSessionId,source){const payload={package_id:packageId,route};if(session)payload.session=session;if(agentSessionId){payload.agent_session_id=agentSessionId;payload.source=source;}const res=await fetch('/api/bridge-inject',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)}),data=await res.json();if(!data.ok)throw new Error(data.error||'Failed to inject package');location.href=data.redirect||`/${route}/${session?`?session=${encodeURIComponent(session)}`:''}`;}
+async function agentNew(route,command){const res=await fetch('/api/agent/new',{method:'POST',headers:{'Content-Type':'application/json',...(await csrfHeaders())},body:JSON.stringify({route,command})}),data=await res.json();if(!data.ok)throw new Error(data.error||'Failed to create session');location.href=data.redirect;}
+async function resumeSession(route,agentSessionId,source){const res=await fetch('/api/agent/resume',{method:'POST',headers:{'Content-Type':'application/json',...(await csrfHeaders())},body:JSON.stringify({route,agent_session_id:agentSessionId,source})}),data=await res.json();if(!data.ok)throw new Error(data.error||'Failed to resume session');location.href=data.redirect||`/${route}/?session=${encodeURIComponent(data.session)}`;}
+async function closeSession(route,session){const ok=await sheet('Close Session','This closes the running session. Busy sessions may refuse to close.',[{label:'Close Session',meta:session,value:'ok',danger:true}]);if(ok!=='ok')return;const res=await fetch(`/${route}/api/session/close`,{method:'POST',headers:{'Content-Type':'application/json',...(await csrfHeaders())},body:JSON.stringify({session})}),data=await res.json();if(!data.ok)throw new Error(data.error||'Failed to close session');await refreshWorkbench();}
+async function injectPackage(packageId,route,session,agentSessionId,source){const payload={package_id:packageId,route};if(session)payload.session=session;if(agentSessionId){payload.agent_session_id=agentSessionId;payload.source=source;}const res=await fetch('/api/bridge-inject',{method:'POST',headers:{'Content-Type':'application/json',...(await csrfHeaders())},body:JSON.stringify(payload)}),data=await res.json();if(!data.ok)throw new Error(data.error||'Failed to inject package');location.href=data.redirect||`/${route}/${session?`?session=${encodeURIComponent(session)}`:''}`;}
 function renderWorkbench(data){markRoutes(data.entries||[]);const packages=data.inbox||data.packages||[],sessions=data.sessions||[],entries=data.entries||[],pkg=packages[0],packageItems=pkg?[pkg]:[],allowedCommands=new Set(data.newSessionCommands||['codex']),launchers=[{id:'new-codex',command:'codex',label:'Codex CLI',entries},{id:'new-claude',command:'claude',label:'Claude Code',entries}].filter(item=>allowedCommands.has(item.command));document.getElementById('packageCount').textContent=pkg?(pkg.status==='pending'?'· New':'· Done'):'· Empty';syncChildren(document.getElementById('packageList'),packageItems,item=>`pkg-${item.id}`,packageCard,'No handoff package');syncChildren(document.getElementById('newSessionSlot'),launchers,item=>item.id,newAgentCard,'');syncChildren(document.getElementById('sessionList'),sessions,item=>`session-${item.route}-${item.id}-${item.tmuxSession||''}`,sessionCard,'No sessions');}
 async function refreshWorkbench(){const res=await fetch(`/api/workbench?history=${encodeURIComponent(historyValue())}`,{cache:'no-store'}),data=await res.json();storeWorkbench(data);renderWorkbench(data);return data;}
 function empty(text){const el=document.createElement('div');el.className='empty-state';el.textContent=text;return el;}
 function escapeHtml(value){return String(value).replace(/[&<>"']/g,(ch)=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));}
 function fileToAttachment(file){return new Promise((resolve,reject)=>{if(file.size>20*1024*1024){reject(new Error('Attachment must be 20 MB or smaller'));return;}const reader=new FileReader();reader.onload=()=>resolve({file_name:file.name||'attachment',mime_type:file.type||'application/octet-stream',data_url:String(reader.result||'')});reader.onerror=()=>reject(reader.error||new Error('Failed to read attachment'));reader.readAsDataURL(file);});}
 async function filesToAttachments(fileList){const files=Array.from(fileList||[]).slice(0,4),attachments=[];for(const file of files)attachments.push(await fileToAttachment(file));return attachments;}
-async function createPackage(files){const attachments=await filesToAttachments(files);if(!attachments.length)return;const title=attachments.length===1?attachments[0].file_name:`${attachments.length} files`;const res=await fetch('/api/bridge-packages',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({title,source:'Manual upload',intent:'Transfer these attachments to a selected session.',attachments})}),data=await res.json();if(!data.ok)throw new Error(data.error||'Failed to create handoff package');await refreshWorkbench();}
-async function appendAttachmentsToPackage(packageId,files){const attachments=await filesToAttachments(files);if(!attachments.length)return;const res=await fetch('/api/bridge-package-assets',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({package_id:packageId,attachments})}),data=await res.json();if(!data.ok)throw new Error(data.error||'Failed to add attachments');await refreshWorkbench();}
+async function createPackage(files){const attachments=await filesToAttachments(files);if(!attachments.length)return;const title=attachments.length===1?attachments[0].file_name:`${attachments.length} files`;const res=await fetch('/api/bridge-packages',{method:'POST',headers:{'Content-Type':'application/json',...(await csrfHeaders())},body:JSON.stringify({title,source:'Manual upload',intent:'Transfer these attachments to a selected session.',attachments})}),data=await res.json();if(!data.ok)throw new Error(data.error||'Failed to create handoff package');await refreshWorkbench();}
+async function appendAttachmentsToPackage(packageId,files){const attachments=await filesToAttachments(files);if(!attachments.length)return;const res=await fetch('/api/bridge-package-assets',{method:'POST',headers:{'Content-Type':'application/json',...(await csrfHeaders())},body:JSON.stringify({package_id:packageId,attachments})}),data=await res.json();if(!data.ok)throw new Error(data.error||'Failed to add attachments');await refreshWorkbench();}
 document.getElementById('newPackage')?.addEventListener('click',()=>document.getElementById('packageInput')?.click());
 document.getElementById('packageInput')?.addEventListener('change',async(event)=>{try{await createPackage(event.target.files);}catch(error){alert(error.message||error);}finally{event.target.value='';}});
 document.getElementById('packageAssetInput')?.addEventListener('change',async(event)=>{try{if(assetTargetPackage)await appendAttachmentsToPackage(assetTargetPackage,event.target.files);}catch(error){alert(error.message||error);}finally{assetTargetPackage=null;event.target.value='';}});
@@ -2716,10 +2739,11 @@ def password_field(field_id: str, name: str, label: str, autocomplete: str, minl
     return f"""<label for="{field_id}">{label}</label><div class="password-row"><input id="{field_id}" name="{name}" type="password" autocomplete="{autocomplete}" autocapitalize="none" spellcheck="false"{min_attr} required>{EYE_BUTTON}</div>"""
 
 
-def auth_page(title: str, heading: str, intro: str, action: str, autocomplete: str, body: str, error: str) -> str:
+def auth_page(title: str, heading: str, intro: str, action: str, autocomplete: str, body: str, error: str, csrf: str = "") -> str:
+    csrf_input = f'<input type="hidden" name="csrf" value="{html_escape(csrf)}">' if csrf else ""
     return f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"><title>{title}</title><meta name="theme-color" content="#F7F0E5" media="(prefers-color-scheme: light)"><meta name="theme-color" content="#17130F" media="(prefers-color-scheme: dark)"><link rel="icon" href="/icons/favicon.png?v=faryo-ui-1" type="image/png"><link rel="apple-touch-icon" href="/icons/pwa-light-192.png"><script src="/appearance.js?v=unified-1"></script><link rel="stylesheet" href="/appearance.css?v=unified-1"><style>{AUTH_CSS}</style></head>
-<body><main><div class="auth-brand"><img class="auth-logo" src="/icons/faryo-mark.png?v=faryo-ui-1" alt=""><div><h1>{heading}</h1><p>{intro}</p></div></div><form method="post" action="{action}" autocomplete="{autocomplete}">{body}<div class="error">{html_escape(error)}</div></form></main><script>{AUTH_SCRIPT}</script></body></html>"""
+<body><main><div class="auth-brand"><img class="auth-logo" src="/icons/faryo-mark.png?v=faryo-ui-1" alt=""><div><h1>{heading}</h1><p>{intro}</p></div></div><form method="post" action="{action}" autocomplete="{autocomplete}">{csrf_input}{body}<div class="error">{html_escape(error)}</div></form></main><script>{AUTH_SCRIPT}</script></body></html>"""
 
 
 def login_html(next_target: str, error: str = "") -> str:
@@ -2732,14 +2756,14 @@ def login_html(next_target: str, error: str = "") -> str:
     return auth_page("Faryo Sign In", "Faryo", "Enter your gateway username and password.", "/login", "on", body, error)
 
 
-def password_html(error: str = "") -> str:
+def password_html(csrf: str = "", error: str = "") -> str:
     body = (
         password_field("current_password", "current_password", "Current password", "current-password")
         + password_field("new_password", "new_password", "New password", "new-password", 12)
         + password_field("confirm_password", "confirm_password", "Confirm new password", "new-password", 12)
         + '<button class="submit" type="submit">Save password</button><a class="secondary" href="/">Back to Faryo</a>'
     )
-    return auth_page("Faryo Change Password", "Change password", "Update the gateway password. Changes take effect immediately.", "/password", "off", body, error)
+    return auth_page("Faryo Change Password", "Change password", "Update the gateway password. Changes take effect immediately.", "/password", "off", body, error, csrf)
 
 
 def main() -> None:

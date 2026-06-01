@@ -741,8 +741,13 @@ async function returnProjectItems(project, itemIds, button) {
     setProjectState(project.id, { sync: 'sync_failed', syncLabel: 'Return Failed' }); renderRunQueue();
   }
 }
+let csrfToken = '';
+async function csrfHeader() {
+  if (!csrfToken) csrfToken = (await (await fetch('/api/csrf', { cache: 'no-store' })).json()).csrf || '';
+  return { 'X-Faryo-Csrf': csrfToken };
+}
 async function fetchJson(url, body = null) {
-  const init = body ? { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) } : { cache: 'no-store' };
+  const init = body ? { method: 'POST', headers: { 'Content-Type': 'application/json', ...(await csrfHeader()) }, body: JSON.stringify(body) } : { cache: 'no-store' };
   const data = await (await fetch(url, init)).json();
   if (!data.ok) throw new Error(data.error || 'Request failed');
   return data;
