@@ -1,26 +1,37 @@
 # Faryo
 
-## Documentation
+Faryo is a lightweight project and mobile workbench for the same live
+`tmux`-backed Codex CLI, Claude Code, or shell session.
 
-- Launch guide: docs/launch/faryo-1.0.0.md
-- Troubleshooting: docs/launch/faryo-1.0.0.md#troubleshooting--deployment-verification
+Use it to open a project deck, check what an agent is doing, send one
+instruction, approve or interrupt work, attach context, and return to the same
+desktop terminal session. It is not remote desktop, a hosted IDE, a browser
+terminal, or a second AI chat history.
 
 Canonical repository: https://github.com/Snailflyer/faryo
 
-Faryo is a lightweight phone and desktop workbench for the same live
-`tmux`-backed Codex CLI, Claude Code, or shell session.
-
-Use it to check output, send one instruction, approve or interrupt an agent,
-attach context, and return to the same desktop terminal. It is not remote
-desktop, a hosted IDE, a browser terminal, or a second AI chat history.
-
-Read the launch note:
-[`Faryo: mobile workbench for tmux-backed Codex and Claude sessions`](docs/launch/faryo-1.0.0.md).
+## Visual Proof
 
 <p>
-  <img src="docs/assets/screenshots/faryo-gateway-workbench-redacted.png" alt="Faryo Gateway workbench showing route health, handoff package, launch shortcuts, and session history" width="280">
-  <img src="docs/assets/screenshots/faryo-owner-session-redacted.png" alt="Faryo Owner session view showing compact output, agent metadata, approval controls, and composer" width="280">
+  <img src="docs/assets/screenshots/faryo-projects-workbench-redacted.png" alt="Faryo Projects workbench showing project cards, Run, Import, Saved, and Decision Action Watch counts" width="250">
+  <img src="docs/assets/screenshots/faryo-project-control-promo.png" alt="Faryo project control surface showing project cards routed to the same tmux session" width="250">
+  <img src="docs/assets/screenshots/faryo-same-session-handoff-walkthrough.gif" alt="Faryo same-session handoff walkthrough showing browser workbench and terminal session continuity" width="250">
 </p>
+
+The project workbench keeps project state, owner decisions, actions, watch
+items, and the live session route in one phone-sized surface. The same-session
+handoff walkthrough demonstrates the other half of the contract: browser actions
+return to the same live `tmux` session instead of creating a detached mobile
+chat or stale terminal copy.
+
+## Current Release
+
+- Linux endpoint package: `faryo_1.0.9_all.deb`
+- macOS endpoint package: `faryo_1.0.9_macos.tar.gz`
+- Release page: https://github.com/Snailflyer/faryo/releases/tag/v1.0.9
+- Launch guide: [docs/launch/faryo-1.0.0.md](docs/launch/faryo-1.0.0.md)
+- Troubleshooting:
+  [docs/launch/faryo-1.0.0.md#troubleshooting--deployment-verification](docs/launch/faryo-1.0.0.md#troubleshooting--deployment-verification)
 
 ## Use It For
 
@@ -28,6 +39,8 @@ Read the launch note:
 - send a short follow-up without opening a raw terminal
 - approve, interrupt, attach files, or hand off notes
 - keep phone and desktop on the same `tmux` session history
+- keep project decisions, action items, and watch items close to the live agent
+  session that will execute them
 
 Best-supported path:
 
@@ -73,7 +86,9 @@ phone / desktop browser
 
 `apps/gateway` is the public workbench. It owns login, route authorization,
 endpoint health, session selection, handoff packages, and proxying to Owner
-endpoints. Owner tokens are injected server-side and are not exposed to the
+endpoints. It also renders the project deck, owner decisions, action queues,
+watch items, and run handoffs that route approved work back to the selected
+live session. Owner tokens are injected server-side and are not exposed to the
 browser.
 
 `apps/owner` is the local execution surface. It binds to loopback, controls a
@@ -160,8 +175,12 @@ near the top are redacted examples.
 
 Core interactions:
 
-- Workbench first: Gateway opens to route status, active sessions, recent
-  history, and pending handoff packages.
+- Workbench first: Gateway opens to route status, project cards, active
+  sessions, recent history, and pending handoff packages.
+- Project deck: project cards keep decisions, action items, watch items,
+  stage goals, and owner review close to the session that can execute them.
+- Run queue: approved project actions can be dispatched back to the live Faryo
+  session instead of becoming a disconnected task list.
 - Session cards: each card represents a resumable agent session or active tmux
   session. Opening a card routes the browser to that endpoint and session.
 - Compact output: the default mobile view reduces noisy terminal output into
@@ -186,6 +205,8 @@ feel fast enough to open, inspect, dictate a command, attach context, and leave.
 
 ## Core Features
 
+- Project workbench with project cards, owner decisions, action items, watch
+  items, stage goals, and run queue handoff.
 - Mobile-first PWA workbench with compact and raw terminal views.
 - Shared session history across phone and desktop through the same `tmux`
   session.

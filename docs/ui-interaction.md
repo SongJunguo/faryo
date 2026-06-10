@@ -1,17 +1,19 @@
 # Faryo UI Interaction Model
 
-Faryo is designed as a mobile-first workbench for terminal AI sessions.
+Faryo is designed as a project and mobile workbench for terminal AI sessions.
 
 The UI should feel closer to a cockpit than a chat app. It gives the user quick
-access to route health, sessions, output, input, handoff packages, attachments,
-and agent controls while leaving the terminal runtime in `tmux`.
+access to project cards, owner decisions, route health, sessions, output,
+input, handoff packages, attachments, and agent controls while leaving the
+terminal runtime in `tmux`.
 
 Screenshots below are redacted examples. Session titles and project discussion
 content are replaced with representative labels.
 
 <p>
-  <img src="assets/screenshots/faryo-gateway-workbench-redacted.png" alt="Faryo Gateway workbench showing route health, handoff package, launch shortcuts, and session history" width="280">
-  <img src="assets/screenshots/faryo-owner-session-redacted.png" alt="Faryo Owner session view showing compact output, agent metadata, approval controls, and composer" width="280">
+  <img src="assets/screenshots/faryo-projects-workbench-redacted.png" alt="Faryo Projects workbench showing project cards, Run, Import, Saved, and Decision Action Watch counts" width="250">
+  <img src="assets/screenshots/faryo-project-control-promo.png" alt="Faryo project control surface showing project cards routed to the same tmux session" width="250">
+  <img src="assets/screenshots/faryo-same-session-handoff-walkthrough.gif" alt="Faryo same-session handoff walkthrough showing browser workbench and terminal session continuity" width="250">
 </p>
 
 ## UI Target Images
@@ -19,6 +21,21 @@ content are replaced with representative labels.
 项目页 UI target（UI 目标图）统一放在 `docs/assets/ui-targets/`，包括项目总览大卡片和方向编辑面板的浅色/深色目标。
 
 ## Surfaces
+
+### Projects Workbench
+
+The Projects workbench is the project-level control surface.
+
+It shows:
+
+- project cards
+- Decision, Action, and Watch counts
+- stage goals and owner review state
+- import, save, and run actions
+- a compact Faryo input dock for the active session route
+
+The project deck is not a standalone issue tracker. Its job is to keep project
+state close to the live agent session that can execute the next action.
 
 ### Gateway Workbench
 
@@ -106,6 +123,33 @@ A package can include:
 
 Packages can be created from Gateway, received through the MCP bridge, and
 injected into a selected session.
+
+## Same-Session Handoff Walkthrough
+
+1. Start from an existing Owner machine `tmux` session that is already running
+   Codex, Claude Code, or a shell.
+2. Open the Faryo Gateway workbench from a phone or desktop browser.
+3. Select the route and the target live session. The browser talks to Gateway;
+   Gateway proxies to Owner; Owner controls the selected `tmux` pane.
+4. Review compact output from the target session. Use raw output only when exact
+   terminal evidence is needed.
+5. Send one short instruction from the workbench composer. The instruction
+   appears in the same live `tmux` session.
+6. Create a text handoff package from the Gateway workbench and inject it into
+   the same target session. The session receives a `# Faryo Handoff Package`
+   block.
+7. Create an attachment handoff. Gateway uploads the file to the Owner inbox and
+   injects the attachment path into the same target session.
+8. Return to the desktop terminal and continue from that original session. No
+   second chat history or remote desktop session is created.
+
+Public proof asset:
+`assets/screenshots/faryo-same-session-handoff-walkthrough.gif`.
+
+The GIF is captured from the real Gateway workbench at a 393 x 917 mobile
+viewport. It shows short input, text handoff, and attachment handoff all landing
+in the same `tmux`-backed session. Hostnames, paths, git details, and private
+content are redacted.
 
 ## Control Actions
 
