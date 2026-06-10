@@ -43,11 +43,25 @@ CSRF_HEADER = "X-Faryo-Csrf"
 LOGIN_RATE_WINDOW_SECONDS = 10 * 60
 LOGIN_RATE_BLOCK_SECONDS = 5 * 60
 LOGIN_RATE_MAX_FAILURES = 8
-BACKENDS = {
-    "hp": ("127.0.0.1", int(os.environ.get("FARYO_HP_OWNER_PORT", "18766")), "HP"),
-    "pc": ("127.0.0.1", int(os.environ.get("FARYO_PC_OWNER_PORT", "18765")), "PC"),
-    "gcp": ("127.0.0.1", int(os.environ.get("FARYO_GCP_OWNER_PORT", "8765")), "GCP"),
-}
+
+
+def backend_from_values(route: str, default_port: int, default_label: str, values: Any) -> tuple[str, int, str]:
+    prefix = f"FARYO_{route.upper()}_OWNER"
+    host = str(values.get(f"{prefix}_HOST", "127.0.0.1")).strip() or "127.0.0.1"
+    port = int(values.get(f"{prefix}_PORT", str(default_port)))
+    label = str(values.get(f"{prefix}_LABEL", default_label)).strip() or default_label
+    return host, port, label
+
+
+def load_backends(values: Any) -> dict[str, tuple[str, int, str]]:
+    return {
+        "hp": backend_from_values("hp", 18766, "HP", values),
+        "pc": backend_from_values("pc", 18765, "PC", values),
+        "gcp": backend_from_values("gcp", 8765, "GCP", values),
+    }
+
+
+BACKENDS = load_backends(os.environ)
 SESSION_POLICY = {"gcp": (3, 2), "hp": (4, 4), "pc": (4, 2)}
 WORKORDER_RECEIPT_WATCH_INTERVAL_SECONDS = 20
 WORKORDER_RECEIPT_WATCH_ATTEMPTS = 90
@@ -356,6 +370,8 @@ class GatewayConfig:
         self.auth_config = auth_config
         auth = json.loads(auth_config.read_text(encoding="utf-8"))
         env = read_env(owner_env)
+        BACKENDS.clear()
+        BACKENDS.update(load_backends(env))
         self.mcp_token = env.get("FARYO_MCP_TOKEN", "").strip()
         self.mcp_cors_origin = env.get("FARYO_MCP_CORS_ORIGIN", "").strip()
         self.mcp_user = env.get("FARYO_MCP_USER", "").strip()
