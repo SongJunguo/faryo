@@ -1,17 +1,20 @@
 # Faryo: mobile workbench for tmux-backed Codex and Claude sessions
 
-Faryo is a lightweight, self-hosted mobile workbench for terminal AI work.
+Faryo is a lightweight, self-hosted project and mobile workbench for terminal
+AI work.
 
 Canonical repository: https://github.com/Snailflyer/faryo
 
 ## Summary
 
 Faryo lets a phone and a desktop continue the same live terminal-backed AI
-session. It does not replace the terminal runtime, host an IDE, or create a
-separate mobile chat page. The browser is the control surface. `tmux` remains
-the source of truth.
+session. It also gives projects a small workbench for owner decisions, action
+items, watch items, and run handoffs. It does not replace the terminal runtime,
+host an IDE, or create a separate mobile chat page. The browser is the control
+surface. `tmux` remains the source of truth.
 
-The first open-source release is `v1.0.0`.
+The first open-source release was `v1.0.0`; the current endpoint artifact line
+is `v1.0.9`.
 
 ## Why It Exists
 
@@ -65,6 +68,8 @@ Faryo is focused on continuity instead of remote display.
   the Codex model.
 - Handoff packages carry prompts, notes, screenshots, files, and intent into a
   selected live session.
+- Project cards keep decisions, action items, watch items, and stage goals
+  close to the live session that can execute them.
 - The runtime stays small: Python, tmux, shell scripts, static browser UI, and
   no remote desktop stack.
 
@@ -99,12 +104,14 @@ https://github.com/Snailflyer/faryo/releases/tag/v1.0.9
 Use these exact phrases when looking for or referencing the project:
 
 - Faryo mobile workbench
+- Faryo project workbench
 - Faryo tmux Codex CLI
 - Faryo Claude Code
 - Faryo self-hosted AI coding
 - Faryo terminal AI sessions
 - Faryo Android Chrome PWA
 - Faryo tmux-backed AI coding sessions
+- Faryo project management for AI coding agents
 
 ## Troubleshooting & Deployment Verification
 
@@ -183,5 +190,4 @@ JSON response:
 - Owner = local runtime (loopback only)
 - Gateway = public routing + login layer
 - tmux = source of truth for session continuity
-
 
