@@ -110,9 +110,16 @@ class GatewayCsrfContractTest(unittest.TestCase):
         sig = hmac.new(self.config.cookie_secret, payload_b64.encode("ascii"), hashlib.sha256).hexdigest()
         return f"{gateway.COOKIE_NAME}={payload_b64}.{sig}"
 
-    def request(self, method: str, path: str, body: dict[str, Any] | None = None, extra_headers: dict[str, str] | None = None) -> tuple[int, dict[str, Any]]:
+    def request(
+        self,
+        method: str,
+        path: str,
+        body: dict[str, Any] | None = None,
+        extra_headers: dict[str, str] | None = None,
+        include_cookie: bool = True,
+    ) -> tuple[int, dict[str, Any]]:
         payload = json.dumps(body or {}).encode("utf-8") if body is not None else None
-        headers = {"Cookie": self.cookie}
+        headers = {"Cookie": self.cookie} if include_cookie else {}
         if payload is not None:
             headers["Content-Type"] = "application/json"
         headers.update(extra_headers or {})
@@ -150,6 +157,28 @@ class GatewayCsrfContractTest(unittest.TestCase):
         self.assertEqual(len(OwnerHandler.requests), 1)
         self.assertEqual(OwnerHandler.requests[0]["path"], "/api/send")
         self.assertNotIn(gateway.CSRF_HEADER, OwnerHandler.requests[0]["headers"])
+
+    def test_dispatch_with_cookie_requires_csrf_not_guard_token(self) -> None:
+        status, data = self.request("POST", "/api/faryo/dispatch", {})
+        self.assertEqual(status, HTTPStatus.FORBIDDEN)
+        self.assertEqual(data.get("error"), "csrf required")
+
+    def test_dispatch_accepts_cookie_with_valid_csrf(self) -> None:
+        csrf = self.csrf_token()
+        status, data = self.request("POST", "/api/faryo/dispatch", {}, {gateway.CSRF_HEADER: csrf})
+        self.assertEqual(status, HTTPStatus.BAD_REQUEST)
+        self.assertEqual(data.get("error"), "project_id is required")
+
+    def test_dispatch_rejects_guard_token_without_cookie(self) -> None:
+        status, data = self.request(
+            "POST",
+            "/api/faryo/dispatch",
+            {},
+            {"X-Faryo-Guard-Token": "guard-token"},
+            include_cookie=False,
+        )
+        self.assertEqual(status, HTTPStatus.UNAUTHORIZED)
+        self.assertEqual(data.get("error"), "unauthorized")
 
 
 if __name__ == "__main__":

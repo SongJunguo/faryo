@@ -716,7 +716,7 @@ class GatewayHandler(BaseHTTPRequestHandler):
         if parsed.path == "/api/project-workbench/downlink/ack":
             self.handle_project_workbench_downlink_ack()
             return
-        controller_paths = {"/api/faryo/dispatch", "/api/faryo/workorder/verify"}
+        controller_paths = {"/api/faryo/workorder/verify"}
         flex_token_paths = {"/api/faryo/start", "/api/project-workbench/transition"}
         if parsed.path in controller_paths:
             username = self.controller_token_username()
