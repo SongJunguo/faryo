@@ -15,14 +15,16 @@ Canonical repository: https://github.com/Snailflyer/faryo
 <p>
   <img src="docs/assets/screenshots/faryo-projects-workbench-redacted.png" alt="Faryo Projects workbench showing project cards, Run, Import, Saved, and Decision Action Watch counts" width="250">
   <img src="docs/assets/screenshots/faryo-project-control-promo.png" alt="Faryo project control surface showing project cards routed to the same tmux session" width="250">
+  <img src="docs/assets/screenshots/faryo-project-run-session-main.gif" alt="Faryo project queue Run action opening a live tmux-backed owner session" width="250">
   <img src="docs/assets/screenshots/faryo-same-session-handoff-walkthrough.gif" alt="Faryo same-session handoff walkthrough showing browser workbench and terminal session continuity" width="250">
 </p>
 
 The project workbench keeps project state, owner decisions, actions, watch
-items, and the live session route in one phone-sized surface. The same-session
-handoff walkthrough demonstrates the other half of the contract: browser actions
-return to the same live `tmux` session instead of creating a detached mobile
-chat or stale terminal copy.
+items, and the live session route in one phone-sized surface. The project-run
+walkthrough shows a queued project action opening a live `tmux`-backed owner
+session. The same-session handoff walkthrough demonstrates the other half of the
+contract: browser actions return to the same live `tmux` session instead of
+creating a detached mobile chat or stale terminal copy.
 
 ## Current Release
 

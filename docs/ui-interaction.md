@@ -13,6 +13,7 @@ content are replaced with representative labels.
 <p>
   <img src="assets/screenshots/faryo-projects-workbench-redacted.png" alt="Faryo Projects workbench showing project cards, Run, Import, Saved, and Decision Action Watch counts" width="250">
   <img src="assets/screenshots/faryo-project-control-promo.png" alt="Faryo project control surface showing project cards routed to the same tmux session" width="250">
+  <img src="assets/screenshots/faryo-project-run-session-main.gif" alt="Faryo project queue Run action opening a live tmux-backed owner session" width="250">
   <img src="assets/screenshots/faryo-same-session-handoff-walkthrough.gif" alt="Faryo same-session handoff walkthrough showing browser workbench and terminal session continuity" width="250">
 </p>
 
@@ -143,13 +144,14 @@ injected into a selected session.
 8. Return to the desktop terminal and continue from that original session. No
    second chat history or remote desktop session is created.
 
-Public proof asset:
+Public proof assets:
+`assets/screenshots/faryo-project-run-session-main.gif` and
 `assets/screenshots/faryo-same-session-handoff-walkthrough.gif`.
 
-The GIF is captured from the real Gateway workbench at a 393 x 917 mobile
-viewport. It shows short input, text handoff, and attachment handoff all landing
-in the same `tmux`-backed session. Hostnames, paths, git details, and private
-content are redacted.
+The GIFs are captured from the real Gateway workbench at a 393 x 917 mobile
+viewport. They show project Run dispatch, short input, text handoff, and
+attachment handoff landing in `tmux`-backed sessions. Hostnames, paths, git
+details, and private content are redacted.
 
 ## Control Actions
 
