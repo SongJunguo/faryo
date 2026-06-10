@@ -26,9 +26,9 @@ chat or stale terminal copy.
 
 ## Current Release
 
-- Linux endpoint package: `faryo_1.0.10_all.deb`
-- macOS endpoint package: `faryo_1.0.10_macos.tar.gz`
-- Release page: https://github.com/Snailflyer/faryo/releases/tag/v1.0.10
+- Linux endpoint package: `faryo_1.1.0_all.deb`
+- macOS endpoint package: `faryo_1.1.0_macos.tar.gz`
+- Release page: https://github.com/Snailflyer/faryo/releases/tag/v1.1.0
 - Launch guide: [docs/launch/faryo-1.0.0.md](docs/launch/faryo-1.0.0.md)
 - Troubleshooting:
   [docs/launch/faryo-1.0.0.md#troubleshooting--deployment-verification](docs/launch/faryo-1.0.0.md#troubleshooting--deployment-verification)
@@ -57,8 +57,8 @@ shell TUIs are supported but less polished.
 ## Quickstart
 
 ```bash
-curl -LO https://github.com/Snailflyer/faryo/releases/download/v1.0.10/faryo_1.0.10_all.deb
-sudo dpkg -i faryo_1.0.10_all.deb
+curl -LO https://github.com/Snailflyer/faryo/releases/download/v1.1.0/faryo_1.1.0_all.deb
+sudo dpkg -i faryo_1.1.0_all.deb
 systemctl --user daemon-reload
 systemctl --user enable --now faryo-owner-keepalive.timer
 mkdir -p ~/.faryo/owner/config
