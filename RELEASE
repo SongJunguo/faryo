@@ -1,6 +1,6 @@
 repo=faryo
-version=v1.0.9
-owner_version=v1.0.9
-gateway_version=v1.0.9
+version=v1.0.10
+owner_version=v1.0.10
+gateway_version=v1.0.10
 package=faryo
 package_scope=owner-endpoint-runtime
