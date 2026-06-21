@@ -48,6 +48,7 @@ import workbench_state as wb_state
 import urllib.error
 import urllib.request
 from urllib.parse import parse_qs, quote, urlencode, urlparse
+from devfs import handle_devfs, handle_task
 
 try:
     from rich.console import Console as RichConsole
@@ -169,6 +170,18 @@ AGENT_BOUNDARY_RE = re.compile(r"^[\s─━═\-—_]*(Worked for .*?)[\s─━�
 AGENT_PLACEHOLDER_RE = re.compile(r"^\s*[›>]\s*Write tests for @filename\s*$", re.I)
 USER_PROMPT_RE = re.compile(r"^\s*›\s+")
 AGENT_INPUT_PROMPT_RE = re.compile(r"^\s*[›>](?:\s|$)")
+CODEX_BLOCKED_RE = re.compile(
+    r"(?:"
+    r"\bupdate available\b|"
+    r"\bnew (?:codex )?version\b|"
+    r"\b(?:update|upgrade) (?:codex|now)\b|"
+    r"\bwould you like to (?:update|upgrade|install|run|make|grant)\b|"
+    r"\bapproval requested\b|"
+    r"\ballow codex to run\b|"
+    r"\bgrant (?:these )?permissions\b"
+    r")",
+    re.I,
+)
 AGENT_META_RE = re.compile(r"^\s*((?:gpt|o\d|claude)[\w.\- ]*)\s*·\s+(.+?)\s*$", re.I)
 CLAUDE_USER_PROMPT_RE = re.compile(r"^\s*(?:[›>❯]\s+|[│┃]\s*[›>❯]\s+)")
 CLAUDE_INPUT_PROMPT_RE = re.compile(r"^\s*(?:[›>❯](?:\s|$)|[│┃]\s*[›>❯](?:\s|$))")
@@ -511,7 +524,8 @@ def codex_history_items(config: Config, history_root: str | None = None) -> list
         title = codex_thread_title(item, fallback, index_titles)
         if tmux_session:
             title = tmux_session_option(config, tmux_session, "@faryo_session_title") or title
-        items.append({"id": thread_id, "title": title, "gitLabel": session_git_label(session_git_cwd(config, tmux_session, cwd), git_labels, bool(tmux_session)), "cwd": short_path(cwd), "createdAt": item.get("created_at") or "", "updatedAt": item.get("updated_at") or "", "updatedTs": updated_ts, "rolloutPath": item.get("rollout_path") or "", "model": item.get("model") or "", "reasoningEffort": item.get("reasoning_effort") or "", "source": "codex-cli", "tmuxSession": tmux_session, "active": bool(tmux_session), "agentRunning": agent_session_running(config, tmux_session)})
+        state = agent_session_state(config, tmux_session)
+        items.append({"id": thread_id, "title": title, "gitLabel": session_git_label(session_git_cwd(config, tmux_session, cwd), git_labels, bool(tmux_session)), "cwd": short_path(cwd), "createdAt": item.get("created_at") or "", "updatedAt": item.get("updated_at") or "", "updatedTs": updated_ts, "rolloutPath": item.get("rollout_path") or "", "model": item.get("model") or "", "reasoningEffort": item.get("reasoning_effort") or "", "source": "codex-cli", "tmuxSession": tmux_session, "active": bool(tmux_session), "agentRunning": state == "running", "agentState": state})
     return items
 
 
@@ -520,7 +534,10 @@ def agent_session_items(config: Config, history_root: str | None = None) -> list
     seen_tmux = {item.get("tmuxSession") for item in items if item.get("tmuxSession")}
     active = active_claude_session_map(config)
     for item in claude_history_items(history_root):
-        if tmux_session := active.get(str(item.get("id") or "")): item.update({"tmuxSession": tmux_session, "active": True, "agentRunning": agent_session_running(config, tmux_session)}); seen_tmux.add(tmux_session)
+        if tmux_session := active.get(str(item.get("id") or "")):
+            state = agent_session_state(config, tmux_session)
+            item.update({"tmuxSession": tmux_session, "active": True, "agentRunning": state == "running", "agentState": state})
+            seen_tmux.add(tmux_session)
         items.append(item)
     git_labels: dict[str, str] = {}
     for name in tmux_sessions(config):
@@ -530,7 +547,8 @@ def agent_session_items(config: Config, history_root: str | None = None) -> list
         cwd = get_pane_cwd(target); thread = active_agent_thread(target, cwd) or {}; thread_id = str(thread.get("id") or name)
         updated_ts = session_created_ts(target); updated_at = iso_from_ts(updated_ts) if updated_ts else ""
         title = tmux_session_option(config, name, "@faryo_session_title") or (codex_thread_title(thread, short_path(cwd) or name) if thread else short_path(cwd) or name)
-        items.append({"id": thread_id, "title": title, "gitLabel": session_git_label(session_git_cwd(config, name, cwd), git_labels), "cwd": short_path(cwd), "createdAt": "", "updatedAt": updated_at, "updatedTs": updated_ts, "rolloutPath": "", "model": "", "reasoningEffort": "", "source": tmux_session_option(config, name, "@faryo_agent_source") or "runtime", "tmuxSession": name, "active": True, "agentRunning": agent_session_running(config, name)})
+        state = agent_session_state(config, name)
+        items.append({"id": thread_id, "title": title, "gitLabel": session_git_label(session_git_cwd(config, name, cwd), git_labels), "cwd": short_path(cwd), "createdAt": "", "updatedAt": updated_at, "updatedTs": updated_ts, "rolloutPath": "", "model": "", "reasoningEffort": "", "source": tmux_session_option(config, name, "@faryo_agent_source") or "runtime", "tmuxSession": name, "active": True, "agentRunning": state == "running", "agentState": state})
     return sorted(items, key=lambda item: float(item.get("updatedTs") or 0), reverse=True)
 
 
@@ -639,7 +657,13 @@ def cleanup_managed_sessions(config: Config, agent_idle_seconds: int = 0) -> Non
 
 def managed_agent_count(config: Config) -> int:
     cleanup_managed_sessions(config)
-    return sum(1 for name in tmux_sessions(config) if managed_session(config, name) and agent_in_pane(Config(name, config.token, config.pane_width)))
+    return sum(
+        1
+        for name in tmux_sessions(config)
+        if managed_session(config, name)
+        and (profile := agent_profile_in_pane(target := Config(name, config.token, config.pane_width)))
+        and agent_state(target, profile) == "running"
+    )
 
 
 def bounded_max_running(payload: dict[str, Any]) -> int:
@@ -654,15 +678,27 @@ def agent_tail_ignorable(line: str, profile: AgentProfile) -> bool:
     return bool(profile.prompt_hint_re.match(line) or SEPARATOR_RE.match(line) or SEPARATOR_OUTPUT_RE.match(line) or LONG_SEPARATOR_RE.search(line))
 
 
-def agent_ready_for_input(config: Config, profile: AgentProfile = CODEX_PROFILE) -> bool:
-    res = tmux(config, ["capture-pane", "-p", "-J", "-t", tmux_target(config), "-S", "-40"], timeout=3)
-    if res.returncode != 0: return False
-    text = CONTROL_RE.sub("", res.stdout.replace("\r\n", "\n").replace("\r", "\n"))
+def agent_state_from_text(text: str, profile: AgentProfile = CODEX_PROFILE) -> str:
+    text = CONTROL_RE.sub("", text.replace("\r\n", "\n").replace("\r", "\n"))
     lines = [line.rstrip() for line in text.splitlines() if line.strip()]
-    if any("esc to interrupt" in line.lower() for line in lines[-12:]): return False
+    if any("esc to interrupt" in line.lower() for line in lines[-12:]):
+        return "running"
     while lines and agent_tail_ignorable(lines[-1].strip(), profile):
         lines.pop()
-    return bool(lines and profile.input_prompt_re.match(lines[-1]))
+    if lines and profile.input_prompt_re.match(lines[-1]):
+        return "ready"
+    if profile is CODEX_PROFILE and CODEX_BLOCKED_RE.search("\n".join(lines[-12:])):
+        return "blocked"
+    return "running"
+
+
+def agent_state(config: Config, profile: AgentProfile = CODEX_PROFILE) -> str:
+    res = tmux(config, ["capture-pane", "-p", "-J", "-t", tmux_target(config), "-S", "-40"], timeout=3)
+    return agent_state_from_text(res.stdout, profile) if res.returncode == 0 else "blocked"
+
+
+def agent_ready_for_input(config: Config, profile: AgentProfile = CODEX_PROFILE) -> bool:
+    return agent_state(config, profile) == "ready"
 
 
 def close_shell_session(config: Config, session: str | None) -> None:
@@ -781,14 +817,18 @@ def agent_in_pane(config: Config) -> bool:
 
 
 def agent_session_running(config: Config, session: str | None) -> bool:
+    return agent_session_state(config, session) == "running"
+
+
+def agent_session_state(config: Config, session: str | None) -> str:
     if not session:
-        return False
+        return "inactive"
     try:
         target = target_config(config, session)
         profile = agent_profile_in_pane(target)
-        return bool(profile and not agent_ready_for_input(target, profile))
+        return agent_state(target, profile) if profile else "inactive"
     except OwnerError:
-        return False
+        return "inactive"
 
 
 def agent_profile_in_pane(config: Config) -> AgentProfile | None:
@@ -1477,7 +1517,8 @@ def status_payload(config: Config) -> dict[str, Any]:
         except Exception:
             weekly_rate_limit = None
     agent_active = profile is not None
-    agent_running = bool(agent_active and not agent_ready_for_input(config, capture_profile))
+    current_agent_state = agent_state(config, capture_profile) if agent_active else "inactive"
+    agent_running = current_agent_state == "running"
     target_alive = tmux_alive
     session_title = codex_thread_title(thread, str(thread.get("id") or "Untitled session")) if thread else (claude_item.get("title") if claude_item else None)
     return {
@@ -1500,6 +1541,7 @@ def status_payload(config: Config) -> dict[str, Any]:
         "contextUsage": context_usage,
         "weeklyRateLimit": weekly_rate_limit,
         "agentRunning": agent_running,
+        "agentState": current_agent_state,
         "paneCommand": get_pane_current_command(config) if tmux_alive else None,
         "agentSource": profile.source if profile else "",
         "agentProfile": profile.key if profile else "",
@@ -2432,19 +2474,20 @@ class Handler(SimpleHTTPRequestHandler):
         self.send_header("Connection", "keep-alive")
         self.end_headers()
         last_hash = ""
-        last_running = None
+        last_agent_state = None
         deadline = time.monotonic() + EVENT_STREAM_MAX_SECONDS
         try:
             while time.monotonic() < deadline:
                 try:
                     profile = agent_profile_in_pane(target); capture_profile = profile or RUNTIME_PROFILE
                     text = capture_text(target, lines, capture_profile)
-                    agent_running = bool(profile and not agent_ready_for_input(target, capture_profile))
+                    current_agent_state = agent_state(target, capture_profile) if profile else "inactive"
+                    agent_running = current_agent_state == "running"
                     digest = hash(text)
-                    if digest != last_hash or agent_running != last_running:
+                    if digest != last_hash or current_agent_state != last_agent_state:
                         last_hash = digest
-                        last_running = agent_running
-                        payload = {"ok": True, "text": text, "agentRunning": agent_running, "agentSource": capture_profile.source, "agentProfile": capture_profile.key, "updatedAt": now_iso()}
+                        last_agent_state = current_agent_state
+                        payload = {"ok": True, "text": text, "agentRunning": agent_running, "agentState": current_agent_state, "agentSource": capture_profile.source, "agentProfile": capture_profile.key, "updatedAt": now_iso()}
                         if not self.send_event("capture", payload):
                             return
                 except OwnerError:
@@ -2473,6 +2516,14 @@ class Handler(SimpleHTTPRequestHandler):
                 self.write_json({"ok": True, "path": str(path), "bytes": size, "kind": kind, "updatedAt": now_iso()})
                 return
             payload = self.read_json()
+            if parsed.path == "/api/devfs":
+                result, status = handle_devfs(payload)
+                self.write_json(result, status=HTTPStatus(status))
+                return
+            if parsed.path == "/api/task":
+                result, status = handle_task(payload)
+                self.write_json(result, status=HTTPStatus(status))
+                return
             if parsed.path == "/api/agent/new":
                 workspace_root = self.workspace_root()
                 raw_cwd = compact_text(payload.get("cwd") or payload.get("project_root"))
