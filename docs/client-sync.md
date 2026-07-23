@@ -17,7 +17,7 @@ RELEASE
 
 ## Gateway Host
 
-For the GCP/public gateway host, use sparse checkout with:
+For the TXY/public gateway host, use sparse checkout with:
 
 ```text
 apps/gateway/
