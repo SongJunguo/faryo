@@ -472,10 +472,11 @@ def path_under_root(path_value: str | None, root_value: str | None) -> bool:
 
 def claude_history_items(history_root: str | None = None) -> list[dict[str, Any]]:
     if not CLAUDE_PROJECTS_ROOT.exists(): return []
-    try: paths = sorted((path for path in CLAUDE_PROJECTS_ROOT.glob("**/*.jsonl") if path.is_file()), key=lambda path: path.stat().st_mtime, reverse=True)[:AGENT_SESSION_LIST_LIMIT]
+    try: paths = sorted((path for path in CLAUDE_PROJECTS_ROOT.glob("**/*.jsonl") if path.is_file() and not path.name.startswith("agent-")), key=lambda path: path.stat().st_mtime, reverse=True)[:AGENT_SESSION_LIST_LIMIT]
     except OSError: return []
     items = []; git_labels: dict[str, str] = {}
     for path in paths:
+        sidechain = False
         try:
             stat = path.stat(); session_id = path.stem; cwd = ""; title = ""; last_prompt = ""
             with path.open(encoding="utf-8", errors="replace") as fh:
@@ -483,6 +484,9 @@ def claude_history_items(history_root: str | None = None) -> list[dict[str, Any]
                     try: row = json.loads(line)
                     except json.JSONDecodeError: continue
                     if not isinstance(row, dict): continue
+                    if row.get("isSidechain") is True:
+                        sidechain = True
+                        break
                     session_id = str(row.get("sessionId") or row.get("session_id") or session_id)
                     cwd = str(row.get("cwd") or cwd)
                     message = row.get("message") if isinstance(row.get("message"), dict) else row
@@ -494,6 +498,7 @@ def claude_history_items(history_root: str | None = None) -> list[dict[str, Any]
                     elif not title and (row.get("type") == "user" or message.get("role") == "user"): title = text[:80]
         except OSError:
             continue
+        if sidechain: continue
         if history_root is not None and not path_under_root(cwd, history_root): continue
         updated_at = _dt.datetime.fromtimestamp(stat.st_mtime, _dt.timezone.utc).astimezone().isoformat(timespec="seconds")
         items.append({"id": session_id, "title": session_title_topic(title or last_prompt, short_path(cwd) or session_id or "Untitled session"), "gitLabel": session_git_label(cwd, git_labels, False), "cwd": short_path(cwd), "createdAt": "", "updatedAt": updated_at, "updatedTs": stat.st_mtime, "historyPath": path.as_posix(), "rolloutPath": "", "model": "", "reasoningEffort": "", "source": "claude-code", "tmuxSession": "", "active": False})
@@ -546,6 +551,8 @@ def agent_launch_executable(command: str) -> str:
 
 
 def start_agent_runtime(config: Config, cwd: Path, command: str, args: list[str], max_running: int = 0, wait_ready: bool = True, agent_id: str = "", title: str = "") -> str:
+    if command == "claude":
+        args = [*args, "--dangerously-skip-permissions"]
     with RUNTIME_LOCK:
         if max_running and managed_agent_count(config) >= max_running: raise OwnerError("running agent limit reached", HTTPStatus.CONFLICT)
         name = f"faryo-{_dt.datetime.now():%m%d-%H%M%S}-{secrets.token_hex(2)}"; executable = agent_launch_executable(command)
