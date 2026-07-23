@@ -14,7 +14,7 @@ host an IDE, or create a separate mobile chat page. The browser is the control
 surface. `tmux` remains the source of truth.
 
 The first open-source release was `v1.0.0`; the current endpoint artifact line
-is `v1.1.0`.
+is `v1.1.1`.
 
 ## Why It Exists
 
@@ -91,13 +91,13 @@ supported, but they have not received the same level of tuning yet.
 
 The current release provides:
 
-- `faryo_1.1.0_all.deb`
-- `faryo_1.1.0_macos.tar.gz`
+- `faryo_1.1.1_all.deb`
+- `faryo_1.1.1_macos.tar.gz`
 - `SHA256SUMS`
 
 Release page:
 
-https://github.com/Snailflyer/faryo/releases/tag/v1.1.0
+https://github.com/Snailflyer/faryo/releases/tag/v1.1.1
 
 ## Search Phrases
 
