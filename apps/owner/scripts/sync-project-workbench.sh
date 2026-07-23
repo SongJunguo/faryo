@@ -69,7 +69,7 @@ def read_project(path):
     except json.JSONDecodeError as exc: raise SystemExit(f'invalid JSON: {file_path}: {exc}') from exc
     if not isinstance(payload, dict): raise SystemExit(f'workbench must be a JSON object: {file_path}')
     row = dict(payload); row.setdefault('path', compact(file_path)); row.setdefault('workbench_path', str(file_path.resolve()))
-    definition_path = file_path.parent / 'project.md'
+    definition_path = file_path.parent / 'conops.md'
     if definition_path.is_file():
         row['definition'] = pd_state.parse_project_definition(definition_path.read_text(encoding='utf-8'))
     return row

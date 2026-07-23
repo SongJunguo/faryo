@@ -125,7 +125,7 @@ for line in env_path.read_text(encoding="utf-8").splitlines():
     if line and not line.lstrip().startswith("#") and "=" in line:
         key, value = line.split("=", 1)
         values[key] = value.strip().strip("'\"")
-routes = [item.strip().lower() for item in values.get("FARYO_GATEWAY_ROUTES", "hp,gcp,pc").split(",") if item.strip()]
+routes = [item.strip().lower() for item in values.get("FARYO_GATEWAY_ROUTES", "hp,txy,pc").split(",") if item.strip()]
 print(f"gateway routes              {','.join(routes) or 'missing'}")
 route = owner_label.lower()
 if route in routes:

@@ -283,7 +283,7 @@ def git_status(cwd: str | None) -> dict[str, Any] | None:
 
 
 def session_title_topic(value: Any, fallback: str = "Untitled session") -> str:
-    labels = {owner_label(), "GCP", "HP", "PC", FALLBACK_OWNER_LABEL}
+    labels = {owner_label(), "TXY", "HP", "PC", FALLBACK_OWNER_LABEL}
     lines = [line.strip() for line in str(value or "").replace("\r", "\n").split("\n") if line.strip()]
     topic = next((line for line in lines if line not in labels and not line.startswith(SESSION_GIT_PREFIXES) and not SESSION_TITLE_NOISE_RE.match(line)), "")
     return topic or fallback
@@ -328,8 +328,8 @@ def default_owner_label() -> str:
         return "HP"
     if hostname == "sl" or hostname.startswith("sl-") or hostname.endswith("-sl") or "-sl-" in hostname:
         return "PC"
-    if "cloud" in hostname or "gcp" in hostname:
-        return "GCP"
+    if "cloud" in hostname or "txy" in hostname:
+        return "TXY"
     return (hostname.split(".", 1)[0][:16] or FALLBACK_OWNER_LABEL).upper()
 
 
@@ -1785,7 +1785,7 @@ def cleanup_staged_project_workbenches(staged: list[tuple[Path, Path]]) -> None:
 
 
 def project_definition_path(project_root: Path) -> Path:
-    return project_root / "00-system" / "project.md"
+    return project_root / "00-system" / "conops.md"
 
 
 def project_definition_text(project_root: Path, project: dict[str, Any]) -> str:
@@ -1847,7 +1847,7 @@ def project_definition_payload(payload: dict[str, Any]) -> dict[str, Any]:
     try:
         text = path.read_text(encoding="utf-8")
     except OSError as exc:
-        raise OwnerError("project.md not found", HTTPStatus.NOT_FOUND) from exc
+        raise OwnerError("conops.md not found", HTTPStatus.NOT_FOUND) from exc
     return {"ok": True, "definition": pd_state.parse_project_definition(text), "updatedAt": now_iso()}
 
 

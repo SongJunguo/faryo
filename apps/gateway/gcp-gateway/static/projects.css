@@ -31,7 +31,7 @@ button { -webkit-tap-highlight-color: transparent; }
 .controller-dock { position: fixed; left: 50%; bottom: calc(env(safe-area-inset-bottom) + 10px); z-index: 24; width: min(520px, calc(100vw - 24px)); transform: translateX(-50%); display: grid; grid-template-columns: 54px minmax(0, 1fr); gap: 8px; align-items: end; pointer-events: none; }
 .controller-dock.is-expanded { width: min(760px, calc(100vw - 24px)); }
 .controller-pet { pointer-events: auto; width: 54px; min-width: 54px; height: 48px; padding: 0; border: 0; background: transparent; box-shadow: none; user-select: none; -webkit-tap-highlight-color: transparent; }
-.controller-pet::before { content: ""; width: 58px; height: 48px; display: block; margin-left: -2px; background: url("/gcp/pet/pet-sprite.png") 0% center / 500% auto no-repeat; pointer-events: none; }
+.controller-pet::before { content: ""; width: 58px; height: 48px; display: block; margin-left: -2px; background: url("/txy/pet/pet-sprite.png") 0% center / 500% auto no-repeat; pointer-events: none; }
 .controller-pet.pet-carrying::before, .controller-pet.pet-send::before { background-position: 25% center; }
 .controller-pet.pet-working::before { background-position: 50% center; }
 .controller-pet.pet-running::before { background-position: 50% center; animation: pet-running 1.12s ease-in-out infinite; }

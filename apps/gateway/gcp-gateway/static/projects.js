@@ -783,7 +783,7 @@ function applyFaryoStatus(data) {
 function startFaryoStream() {
   closeFaryoStream();
   if (!window.EventSource || !faryoSession) return;
-  const source = new EventSource(`/gcp/api/events?session=${encodeURIComponent(faryoSession)}&lines=60`);
+  const source = new EventSource(`/txy/api/events?session=${encodeURIComponent(faryoSession)}&lines=60`);
   faryoStream = source;
   source.addEventListener('capture', event => { const capture = JSON.parse(event.data || '{}'), line = lastActivityLine(capture.text); faryoAgentRunning = Boolean(capture.agentRunning); setFaryoStatus(faryoAgentRunning ? 'Working' : 'Ready', line || 'Ready.', faryoAgentRunning ? 'running' : 'resting'); });
   source.onerror = () => { if (faryoStream !== source) return; closeFaryoStream(); loadFaryoStatus().catch(() => setFaryoStatus('Offline', 'Standing by.', 'offline')); };
@@ -794,12 +794,12 @@ async function loadFaryoStatus() {
 }
 async function ensureFaryoSession(prompt = '') {
   const status = await loadFaryoStatus();
-  if (status?.running && faryoSession) return { session: faryoSession, redirect: `/gcp/?session=${encodeURIComponent(faryoSession)}` };
+  if (status?.running && faryoSession) return { session: faryoSession, redirect: `/txy/?session=${encodeURIComponent(faryoSession)}` };
   setFaryoBusy(true); setFaryoStatus('Waking', prompt ? 'Resuming.' : 'Starting.', 'running');
   try { const data = await fetchJson('/api/faryo/start', { prompt }); faryoSession = data.session || ''; if (!faryoSession) throw new Error('Faryo session missing'); setFaryoStatus('Ready', 'Ready.', 'resting'); startFaryoStream(); return data; }
   finally { setFaryoBusy(false); }
 }
-async function sendToFaryoSession(text) { return fetchJson('/gcp/api/send', { session: faryoSession, text }); }
+async function sendToFaryoSession(text) { return fetchJson('/txy/api/send', { session: faryoSession, text }); }
 async function sendFaryoPrompt(event) {
   event.preventDefault();
   const text = els.prompt.value.trim();
@@ -813,11 +813,11 @@ async function sendFaryoPrompt(event) {
   } catch (error) { setFaryoStatus('Failed', error.message || 'Send failed.', 'offline'); }
   finally { setFaryoBusy(false); }
 }
-async function openFaryoSession() { try { const data = await ensureFaryoSession(); location.href = data.redirect || `/gcp/?session=${encodeURIComponent(faryoSession)}`; } catch (error) { setFaryoStatus('Failed', error.message || 'Open failed.', 'offline'); } }
+async function openFaryoSession() { try { const data = await ensureFaryoSession(); location.href = data.redirect || `/txy/?session=${encodeURIComponent(faryoSession)}`; } catch (error) { setFaryoStatus('Failed', error.message || 'Open failed.', 'offline'); } }
 async function tapFaryoPet() {
   if (!faryoSession || !faryoAgentRunning) return;
   setFaryoStatus('Stopping', 'Stopping.', 'working');
-  try { await fetchJson('/gcp/api/interrupt', { session: faryoSession }); faryoAgentRunning = false; setFaryoStatus('Ready', 'Ready.', 'resting'); }
+  try { await fetchJson('/txy/api/interrupt', { session: faryoSession }); faryoAgentRunning = false; setFaryoStatus('Ready', 'Ready.', 'resting'); }
   catch (error) { setFaryoStatus('Failed', error.message || 'Faryo action failed.', 'offline'); }
 }
 els.prev.addEventListener('click', () => { deck.index -= 1; renderDeck(); });

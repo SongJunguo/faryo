@@ -1,4 +1,4 @@
-"""Shared project.md parsing and current-stage update helpers."""
+"""Shared conops.md parsing and current-stage update helpers."""
 
 from __future__ import annotations
 

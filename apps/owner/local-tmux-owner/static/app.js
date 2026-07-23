@@ -54,7 +54,7 @@
   let outputActivity = 0, outputActivityTimer = null, lastCaptureSignature = '', lastCapture = null;
   let outputMode = 'compact', fullLocked = false, fullRefreshTimer = null, preserveErrorUntil = 0, seenInitialPageShow = false, needsConfirmUI = false, errorTimer = null, currentPromptTip = '';
   let pendingAttachments = [];
-  const routeMatch = location.pathname.match(/^\/(hp|pc|gcp)(?:\/|$)/);
+  const routeMatch = location.pathname.match(/^\/(hp|pc|txy)(?:\/|$)/);
   const routeBase = routeMatch ? `/${routeMatch[1]}` : '';
   const params = new URLSearchParams(location.search);
   const ownerToken = params.get('token') || '';

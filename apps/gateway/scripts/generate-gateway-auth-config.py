@@ -10,7 +10,7 @@ import bcrypt
 ROOT = Path(__file__).resolve().parents[1]
 ENV_FILE = ROOT / "config" / "faryo.env"
 AUTH_FILE = ROOT / "config" / "gateway-auth.json"
-ROUTES = ("hp", "gcp", "pc")
+ROUTES = ("hp", "txy", "pc")
 
 
 def read_env(path: Path) -> dict[str, str]:
@@ -52,7 +52,7 @@ def main() -> None:
                 "bcrypt_hash": bcrypt.hashpw(password, bcrypt.gensalt()).decode("utf-8"),
                 "auth_epoch": 0,
                 "routes": routes,
-                "default_route": "gcp" if "gcp" in routes else routes[0],
+                "default_route": "txy" if "txy" in routes else routes[0],
                 "workspace_roots": {route: path_value(route_value(values, route, "WORKSPACE", workspace)) for route in routes},
                 "file_inbox_roots": {route: path_value(route_value(values, route, "FILE_INBOX", file_inbox)) for route in routes},
             }

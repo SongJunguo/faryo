@@ -57,16 +57,16 @@ def load_backends(values: Any) -> dict[str, tuple[str, int, str]]:
     return {
         "hp": backend_from_values("hp", 18766, "HP", values),
         "pc": backend_from_values("pc", 18765, "PC", values),
-        "gcp": backend_from_values("gcp", 8765, "GCP", values),
+        "txy": backend_from_values("txy", 8765, "TXY", values),
     }
 
 
 BACKENDS = load_backends(os.environ)
-SESSION_POLICY = {"gcp": (3, 2), "hp": (4, 4), "pc": (4, 2)}
+SESSION_POLICY = {"txy": (3, 2), "hp": (4, 4), "pc": (4, 2)}
 WORKORDER_RECEIPT_WATCH_INTERVAL_SECONDS = 20
 WORKORDER_RECEIPT_WATCH_ATTEMPTS = 90
 NEW_SESSION_COMMANDS = {"codex", "claude"}
-HISTORY_SESSION_LIMITS = {"less": {"gcp": 3, "hp": 4, "pc": 4}, "more": {"gcp": 5, "pc": 6, "hp": 7}}
+HISTORY_SESSION_LIMITS = {"less": {"txy": 3, "hp": 4, "pc": 4}, "more": {"txy": 5, "pc": 6, "hp": 7}}
 HISTORY_TOTAL_LIMITS = {"less": 10, "more": 18}
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 FARYO_PROFILE_SOURCE = Path(__file__).resolve().parent / "faryo_profile.md"
@@ -470,7 +470,7 @@ class GatewayConfig:
             if not name:
                 continue
             routes = [route for route in payload.get("routes", list(BACKENDS)) if route in BACKENDS] or list(BACKENDS)
-            default_route = str(payload.get("default_route") or (routes[0] if routes else "gcp"))
+            default_route = str(payload.get("default_route") or (routes[0] if routes else "txy"))
             if default_route not in routes and routes:
                 default_route = routes[0]
             users[name] = {
@@ -714,10 +714,10 @@ class GatewayHandler(BaseHTTPRequestHandler):
         if not self.config.guard_token or not hmac.compare_digest(token, self.config.guard_token):
             self.write_json({"ok": False, "error": "forbidden"}, HTTPStatus.FORBIDDEN)
             return
-        gcp_status = backend_status("gcp")
-        ok = gcp_status.get("state") in {"online", "slow"}
+        txy_status = backend_status("txy")
+        ok = txy_status.get("state") in {"online", "slow"}
         status = HTTPStatus.OK if ok else HTTPStatus.SERVICE_UNAVAILABLE
-        self.write_json({"ok": ok, "gcp": gcp_status, "updatedAt": int(time.time())}, status)
+        self.write_json({"ok": ok, "txy": txy_status, "updatedAt": int(time.time())}, status)
 
     def do_POST(self) -> None:
         parsed = urlparse(self.path)
@@ -856,7 +856,7 @@ class GatewayHandler(BaseHTTPRequestHandler):
 
     def mcp_devfs(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         target = str(arguments.get("target") or "").strip().lower()
-        if target not in {"gcp", "hp"}: raise ValueError("target must be gcp or hp")
+        if target not in {"txy", "hp"}: raise ValueError("target must be txy or hp")
         payload = dict(arguments); payload.pop("target", None); payload["action"] = name.removeprefix("faryo_")
         result = self.owner_json_request(target, "/api/devfs", payload, self.config.mcp_user, timeout=30)
         if not result.get("ok"): raise ValueError(str(result.get("error") or "devfs request failed"))
@@ -864,7 +864,7 @@ class GatewayHandler(BaseHTTPRequestHandler):
 
     def mcp_task(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         target = str(arguments.get("target") or "").strip().lower()
-        if target not in {"gcp", "hp"}: raise ValueError("target must be gcp or hp")
+        if target not in {"txy", "hp"}: raise ValueError("target must be txy or hp")
         payload = dict(arguments); payload.pop("target", None); payload["action"] = name.removeprefix("faryo_")
         result = self.owner_json_request(target, "/api/task", payload, self.config.mcp_user, timeout=905)
         if not result.get("ok"): raise ValueError(str(result.get("error") or "task request failed"))
@@ -2221,19 +2221,19 @@ class GatewayHandler(BaseHTTPRequestHandler):
         return segments
 
     def handle_faryo_status(self, username: str) -> None:
-        if not self.config.allowed_route(username, "gcp"):
+        if not self.config.allowed_route(username, "txy"):
             self.write_json({"ok": False, "error": "forbidden"}, HTTPStatus.FORBIDDEN)
             return
         sessions = self.live_faryo_sessions(username)
         session = sessions[0] if len(sessions) == 1 else ""
         self.write_json({
             "ok": True,
-            "route": "gcp",
+            "route": "txy",
             "session": session,
             "running": bool(session),
             "conflict": len(sessions) > 1,
             "sessions": sessions,
-            "redirect": f"/gcp/?session={session}" if session else "",
+            "redirect": f"/txy/?session={session}" if session else "",
             "updatedAt": now_ts(),
         }, HTTPStatus.OK)
 
@@ -2251,7 +2251,7 @@ class GatewayHandler(BaseHTTPRequestHandler):
             self.write_json({"ok": False, "error": str(exc)}, HTTPStatus.BAD_REQUEST)
 
     def ensure_faryo_controller(self, username: str, prompt: str = "") -> dict[str, Any]:
-        if not self.config.allowed_route(username, "gcp"):
+        if not self.config.allowed_route(username, "txy"):
             return {"ok": False, "error": "forbidden"}
         session = self.faryo_session_name(username)
         self.config.install_faryo_codex_profile()
@@ -2272,10 +2272,10 @@ class GatewayHandler(BaseHTTPRequestHandler):
         if not self.faryo_controller_ready(username, session):
             return {"ok": False, "error": "Faryo controller did not become ready", "session": session}
         if prompt and not started:
-            sent = self.owner_json_request("gcp", "/api/send", {"session": session, "text": prompt}, username, timeout=6)
+            sent = self.owner_json_request("txy", "/api/send", {"session": session, "text": prompt}, username, timeout=6)
             if not sent.get("ok"):
                 return {"ok": False, "error": self.compact_text(sent.get("error")) or "failed to send prompt to Faryo", "session": session}
-        return {"ok": True, "redirect": f"/gcp/?session={session}", "session": session}
+        return {"ok": True, "redirect": f"/txy/?session={session}", "session": session}
 
     def faryo_start_prompt(self) -> str:
         length = int(self.headers.get("Content-Length", "0") or "0")
@@ -2318,7 +2318,7 @@ class GatewayHandler(BaseHTTPRequestHandler):
     def faryo_controller_ready(self, username: str, session: str, timeout: float = 15) -> bool:
         deadline = time.monotonic() + timeout; path = "/api/status?" + urlencode({"session": session})
         while time.monotonic() < deadline:
-            status = self.owner_json_request("gcp", path, None, username, method="GET", timeout=3)
+            status = self.owner_json_request("txy", path, None, username, method="GET", timeout=3)
             if status.get("ok") and status.get("agentProfile") == "codex": return True
             time.sleep(0.5)
         return False
