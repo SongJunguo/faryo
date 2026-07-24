@@ -30,6 +30,7 @@ import sys
 import tempfile
 import threading
 import time
+import urllib.request
 import uuid
 try:
     import tomllib
@@ -470,6 +471,10 @@ def path_under_root(path_value: str | None, root_value: str | None) -> bool:
     except OSError: return False
 
 
+def claude_command_text(text: str) -> bool:
+    return text.startswith(("<local-command-caveat>", "<local-command-stdout>", "<command-name>", "<command-message>"))
+
+
 def claude_history_items(history_root: str | None = None) -> list[dict[str, Any]]:
     if not CLAUDE_PROJECTS_ROOT.exists(): return []
     try: paths = sorted((path for path in CLAUDE_PROJECTS_ROOT.glob("**/*.jsonl") if path.is_file() and not path.name.startswith("agent-")), key=lambda path: path.stat().st_mtime, reverse=True)[:AGENT_SESSION_LIST_LIMIT]
@@ -477,6 +482,7 @@ def claude_history_items(history_root: str | None = None) -> list[dict[str, Any]
     items = []; git_labels: dict[str, str] = {}
     for path in paths:
         sidechain = False
+        interactive = False
         try:
             stat = path.stat(); session_id = path.stem; cwd = ""; title = ""; last_prompt = ""
             with path.open(encoding="utf-8", errors="replace") as fh:
@@ -493,12 +499,16 @@ def claude_history_items(history_root: str | None = None) -> list[dict[str, Any]
                     content = message.get("content") if isinstance(message, dict) else ""
                     if isinstance(content, list): content = " ".join(str(part.get("text", "") if isinstance(part, dict) else part) for part in content)
                     text = " ".join(str(content).split())
-                    if row.get("type") == "custom-title": title = str(row.get("customTitle") or title).strip()[:80]
-                    elif row.get("type") == "last-prompt": last_prompt = str(row.get("lastPrompt") or last_prompt).strip()[:80]
-                    elif not title and (row.get("type") == "user" or message.get("role") == "user"): title = text[:80]
+                    if row.get("type") == "mode": interactive = True
+                    elif row.get("type") == "custom-title": title = str(row.get("customTitle") or title).strip()[:80]
+                    elif row.get("type") == "last-prompt":
+                        value = str(row.get("lastPrompt") or "").strip()
+                        if value and not claude_command_text(value): last_prompt = value[:80]
+                    elif not title and (row.get("type") == "user" or message.get("role") == "user") and text and not claude_command_text(text): title = text[:80]
         except OSError:
             continue
-        if sidechain: continue
+        if sidechain or not interactive: continue
+        if not (title or last_prompt): continue
         if history_root is not None and not path_under_root(cwd, history_root): continue
         updated_at = _dt.datetime.fromtimestamp(stat.st_mtime, _dt.timezone.utc).astimezone().isoformat(timespec="seconds")
         items.append({"id": session_id, "title": session_title_topic(title or last_prompt, short_path(cwd) or session_id or "Untitled session"), "gitLabel": session_git_label(cwd, git_labels, False), "cwd": short_path(cwd), "createdAt": "", "updatedAt": updated_at, "updatedTs": stat.st_mtime, "historyPath": path.as_posix(), "rolloutPath": "", "model": "", "reasoningEffort": "", "source": "claude-code", "tmuxSession": "", "active": False})
@@ -551,12 +561,14 @@ def agent_launch_executable(command: str) -> str:
 
 
 def start_agent_runtime(config: Config, cwd: Path, command: str, args: list[str], max_running: int = 0, wait_ready: bool = True, agent_id: str = "", title: str = "") -> str:
+    env_prefix = ""
     if command == "claude":
         args = [*args, "--dangerously-skip-permissions"]
+        env_prefix = "CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN=1 "
     with RUNTIME_LOCK:
         if max_running and managed_agent_count(config) >= max_running: raise OwnerError("running agent limit reached", HTTPStatus.CONFLICT)
         name = f"faryo-{_dt.datetime.now():%m%d-%H%M%S}-{secrets.token_hex(2)}"; executable = agent_launch_executable(command)
-        shell = shutil.which("zsh") or "/usr/bin/zsh"; launch = f"{shlex.join([executable, *args])}; exec {shlex.quote(shell)} -l"
+        shell = shutil.which("zsh") or "/usr/bin/zsh"; launch = f"{env_prefix}{shlex.join([executable, *args])}; exec {shlex.quote(shell)} -l"
         res = tmux(config, ["new-session", "-d", "-s", name, "-c", str(cwd), shell, "-lc", launch], timeout=5)
         if res.returncode != 0: raise OwnerError(res.stderr.strip() or "tmux session start failed", HTTPStatus.INTERNAL_SERVER_ERROR)
         if source := AGENT_SOURCE_BY_COMMAND.get(command): tmux_session_option(config, name, "@faryo_agent_source", source)
@@ -1052,7 +1064,7 @@ def active_agent_thread(config: Config, cwd: str | None) -> dict[str, Any] | Non
     return threads[0] if threads else None
 
 
-def latest_context_usage(history_path: str | None, model: str | None = None) -> dict[str, int | float] | None:
+def latest_context_usage(history_path: str | None) -> dict[str, int | float] | None:
     if not history_path:
         return None
 
@@ -1061,7 +1073,6 @@ def latest_context_usage(history_path: str | None, model: str | None = None) -> 
         return None
 
     latest_info: dict[str, Any] | None = None
-    latest_usage: dict[str, Any] | None = None
     try:
         with path.open("r", encoding="utf-8", errors="replace") as fh:
             for line in fh:
@@ -1074,24 +1085,16 @@ def latest_context_usage(history_path: str | None, model: str | None = None) -> 
                     info = payload.get("info")
                     if isinstance(info, dict):
                         latest_info = info
-                message = event.get("message") if isinstance(event, dict) else None
-                usage = message.get("usage") if isinstance(message, dict) else None
-                if isinstance(usage, dict) and any(usage.get(key) for key in ("input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens")):
-                    latest_usage = usage
     except OSError:
         return None
 
+    if not latest_info:
+        return None
     try:
-        if latest_info:
-            last_usage = latest_info.get("last_token_usage")
-            if not isinstance(last_usage, dict): return None
-            input_tokens = int(last_usage.get("input_tokens") or 0)
-            context_window = int(latest_info.get("model_context_window") or 0)
-        elif latest_usage:
-            input_tokens = sum(int(latest_usage.get(key) or 0) for key in ("input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens"))
-            context_window = 1_000_000 if "[1m]" in str(model or "").lower() else 200_000
-        else:
-            return None
+        last_usage = latest_info.get("last_token_usage")
+        if not isinstance(last_usage, dict): return None
+        input_tokens = int(last_usage.get("input_tokens") or 0)
+        context_window = int(latest_info.get("model_context_window") or 0)
     except (TypeError, ValueError):
         return None
     if input_tokens <= 0 or context_window <= 0:
@@ -1102,6 +1105,113 @@ def latest_context_usage(history_path: str | None, model: str | None = None) -> 
         "contextWindow": context_window,
         "percent": round((input_tokens / context_window) * 100, 1),
     }
+
+
+CLAUDE_CONTEXT_WINDOW = 200_000
+CLAUDE_CONTEXT_WINDOW_1M = 1_000_000
+
+
+def claude_status_meta(history_path: str | None) -> dict[str, Any]:
+    if not history_path:
+        return {}
+    path = Path(history_path).expanduser()
+    if not path.exists():
+        return {}
+
+    model = None
+    usage: dict[str, Any] | None = None
+    try:
+        with path.open("r", encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                try:
+                    event = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if not isinstance(event, dict) or event.get("isSidechain"):
+                    continue
+                message = event.get("message")
+                if not isinstance(message, dict):
+                    continue
+                if message.get("model"):
+                    model = str(message["model"])
+                value = message.get("usage")
+                if isinstance(value, dict) and any(value.get(key) for key in ("input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens")):
+                    usage = value
+    except OSError:
+        return {}
+
+    meta: dict[str, Any] = {"model": model}
+    if usage:
+        input_tokens = sum(int(usage.get(key) or 0) for key in ("input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens"))
+        context_window = CLAUDE_CONTEXT_WINDOW_1M if "[1m]" in str(model or "").lower() else CLAUDE_CONTEXT_WINDOW
+        if input_tokens > 0:
+            meta["contextUsage"] = {
+                "inputTokens": input_tokens,
+                "contextWindow": context_window,
+                "percent": round((input_tokens / context_window) * 100, 1),
+            }
+    return meta
+
+
+CLAUDE_CREDENTIALS_PATH = Path("~/.claude/.credentials.json").expanduser()
+CLAUDE_USAGE_URL = "https://api.anthropic.com/api/oauth/usage"
+_claude_rate_limit_cache: dict[str, Any] | None = None
+_claude_rate_limit_cache_at = 0.0
+_claude_rate_limit_lock = threading.Lock()
+
+
+def fetch_claude_rate_limits(timeout: float = 6.0) -> dict[str, Any] | None:
+    try:
+        token = json.loads(CLAUDE_CREDENTIALS_PATH.read_text(encoding="utf-8"))["claudeAiOauth"]["accessToken"]
+    except (OSError, KeyError, TypeError, ValueError):
+        return None
+    request = urllib.request.Request(CLAUDE_USAGE_URL, headers={"Authorization": f"Bearer {token}", "anthropic-beta": "oauth-2025-04-20"})
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            data = json.loads(response.read().decode("utf-8", "replace"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(data, dict):
+        return None
+
+    weekly_all = None
+    weekly_scoped = None
+    for limit in data.get("limits") or []:
+        if not isinstance(limit, dict):
+            continue
+        if limit.get("kind") == "weekly_all":
+            weekly_all = limit
+        elif limit.get("kind") == "weekly_scoped":
+            weekly_scoped = limit
+    if not isinstance(weekly_all, dict):
+        return None
+    try:
+        result: dict[str, Any] = {"usedPercent": round(float(weekly_all["percent"]), 1)}
+    except (KeyError, TypeError, ValueError):
+        return None
+    if isinstance(weekly_scoped, dict):
+        try:
+            result["scopedPercent"] = round(float(weekly_scoped["percent"]), 1)
+        except (KeyError, TypeError, ValueError):
+            pass
+        else:
+            scope_model = (weekly_scoped.get("scope") or {}).get("model") or {}
+            result["scopedLabel"] = str(scope_model.get("display_name") or "Model")
+    return result
+
+
+def cached_claude_rate_limits() -> dict[str, Any] | None:
+    global _claude_rate_limit_cache, _claude_rate_limit_cache_at
+    now = time.monotonic()
+    with _claude_rate_limit_lock:
+        if _claude_rate_limit_cache is not None and now - _claude_rate_limit_cache_at < RATE_LIMIT_CACHE_TTL:
+            return _claude_rate_limit_cache
+    fresh = fetch_claude_rate_limits()
+    with _claude_rate_limit_lock:
+        if fresh is not None:
+            _claude_rate_limit_cache = fresh
+            _claude_rate_limit_cache_at = time.monotonic()
+        return _claude_rate_limit_cache
 
 
 def send_app_server_message(process: subprocess.Popen[str], message: dict[str, Any]) -> bool:
@@ -1472,17 +1582,26 @@ def status_payload(config: Config) -> dict[str, Any]:
     cwd = get_pane_cwd(config) if tmux_alive else None
     thread = active_agent_thread(config, cwd) if tmux_alive else None
     claude_item = None
+    context_usage = None
+    weekly_rate_limit = None
     if profile is CLAUDE_PROFILE:
         claude_id = tmux_session_option(config, config.session, "@faryo_agent_id")
         claude_item = next((item for item in claude_history_items() if item.get("id") == claude_id), None)
-        model = model or env_value("ANTHROPIC_MODEL", default="deepseek-v4-pro[1m]")
-    context_usage = latest_context_usage(thread.get("rollout_path") if thread else (claude_item.get("historyPath") if claude_item else None), model)
-    weekly_rate_limit = None
-    if tmux_alive and profile is CODEX_PROFILE:
-        try:
-            weekly_rate_limit = cached_weekly_rate_limit()
-        except Exception:
-            weekly_rate_limit = None
+        claude_meta = claude_status_meta(claude_item.get("historyPath") if claude_item else None)
+        model = model or claude_meta.get("model")
+        context_usage = claude_meta.get("contextUsage")
+        if tmux_alive:
+            try:
+                weekly_rate_limit = cached_claude_rate_limits()
+            except Exception:
+                weekly_rate_limit = None
+    else:
+        context_usage = latest_context_usage(thread.get("rollout_path") if thread else None)
+        if tmux_alive and profile is CODEX_PROFILE:
+            try:
+                weekly_rate_limit = cached_weekly_rate_limit()
+            except Exception:
+                weekly_rate_limit = None
     agent_active = profile is not None
     agent_running = bool(agent_active and not agent_ready_for_input(config, capture_profile))
     target_alive = tmux_alive
