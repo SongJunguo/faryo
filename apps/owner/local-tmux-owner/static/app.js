@@ -446,6 +446,16 @@
     const usageFill = $('quotaFill');
     const weekFill = $('quotaWeekFill');
     const percent = Number(rateLimit.usedPercent);
+    const scopedPercent = Number(rateLimit.scopedPercent);
+    if (Number.isFinite(scopedPercent)) {
+      button.style.setProperty('--quota-pct', Number.isFinite(percent) ? Math.max(0, Math.min(100, percent)) : 0);
+      button.style.setProperty('--quota-week-pct', Math.max(0, Math.min(100, scopedPercent)));
+      usageFill.setAttribute('aria-hidden', 'true');
+      weekFill.setAttribute('aria-hidden', 'true');
+      button.title = `Week ${percent}% · ${rateLimit.scopedLabel || 'Model'} ${scopedPercent}%`;
+      button.setAttribute('aria-label', button.title);
+      return;
+    }
     const days = formatWeeklyElapsedDays(rateLimit);
     const weekPercent = weeklyElapsedPercent(rateLimit);
     if (!Number.isFinite(percent)) {
