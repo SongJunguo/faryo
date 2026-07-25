@@ -1,8 +1,8 @@
 # Faryo Gateway
 
-Faryo Gateway is the public gateway component. It handles the GCP-facing web
-gateway, login, route authorization, the handoff workbench, and proxying to
-available local execution surfaces.
+Faryo Gateway is the public gateway component. It handles the public web entry,
+login, route authorization, the handoff workbench, and proxying to available
+local execution surfaces.
 
 ## Runtime Boundary
 

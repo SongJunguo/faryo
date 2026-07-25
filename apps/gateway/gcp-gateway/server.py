@@ -380,6 +380,7 @@ class GatewayConfig:
         self.portal_dir = portal_dir
         self.cookie_secret = load_secret(secret_file)
         self.guard_token = env.get("FARYO_GUARD_TOKEN", "")
+        self.icp_record = env.get("FARYO_ICP_RECORD", "").strip()
         self.bridge_root = secret_file.parent / "bridge-packages"
         self.project_workbench_index = secret_file.parent / "project-workbench.jsonl"
         self.project_downlink_root = secret_file.parent / "project-workbench-downlinks"
@@ -2619,11 +2620,11 @@ class GatewayHandler(BaseHTTPRequestHandler):
         self.send_error(HTTPStatus.NOT_FOUND)
 
     def write_login_page(self, next_target: str, error: str = "") -> None:
-        self.write_page(login_html(next_target, error))
+        self.write_page(login_html(next_target, error, self.config.icp_record))
 
     def write_password_page(self, error: str = "") -> None:
         username = self.current_username() or ""
-        self.write_page(password_html(self.csrf_token(username) if username else "", error))
+        self.write_page(password_html(self.csrf_token(username) if username else "", error, self.config.icp_record))
 
     def write_page(self, html: str, status: HTTPStatus = HTTPStatus.OK) -> None:
         body = html.encode("utf-8")
@@ -2755,39 +2756,37 @@ def password_field(field_id: str, name: str, label: str, autocomplete: str, minl
     return f"""<label for="{field_id}">{label}</label><div class="password-row"><input id="{field_id}" name="{name}" type="password" autocomplete="{autocomplete}" autocapitalize="none" spellcheck="false"{min_attr} required>{EYE_BUTTON}</div>"""
 
 
-ICP_RECORD = os.environ.get("FARYO_ICP_RECORD", "").strip()
-ICP_FOOTER = (
-    f'<p class="icp"><a href="https://beian.miit.gov.cn/" target="_blank" rel="noopener noreferrer">{html_escape(ICP_RECORD)}</a></p>'
-    if ICP_RECORD
-    else ""
-)
+def icp_footer(record: str) -> str:
+    if not record:
+        return ""
+    return f'<p class="icp"><a href="https://beian.miit.gov.cn/" target="_blank" rel="noopener noreferrer">{html_escape(record)}</a></p>'
 
 
-def auth_page(title: str, heading: str, intro: str, action: str, autocomplete: str, body: str, error: str, csrf: str = "") -> str:
+def auth_page(title: str, heading: str, intro: str, action: str, autocomplete: str, body: str, error: str, csrf: str = "", icp: str = "") -> str:
     csrf_input = f'<input type="hidden" name="csrf" value="{html_escape(csrf)}">' if csrf else ""
     return f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"><title>{title}</title><meta name="theme-color" content="#F7F0E5" media="(prefers-color-scheme: light)"><meta name="theme-color" content="#17130F" media="(prefers-color-scheme: dark)"><link rel="icon" href="/icons/favicon.png?v=faryo-ui-1" type="image/png"><link rel="apple-touch-icon" href="/icons/pwa-light-192.png"><script src="/appearance.js?v=unified-1"></script><link rel="stylesheet" href="/appearance.css?v=unified-1"><style>{AUTH_CSS}</style></head>
-<body><main><div class="auth-brand"><img class="auth-logo" src="/icons/faryo-mark.png?v=faryo-ui-1" alt=""><div><h1>{heading}</h1><p>{intro}</p></div></div><form method="post" action="{action}" autocomplete="{autocomplete}">{csrf_input}{body}<div class="error">{html_escape(error)}</div></form>{ICP_FOOTER}</main><script>{AUTH_SCRIPT}</script></body></html>"""
+<body><main><div class="auth-brand"><img class="auth-logo" src="/icons/faryo-mark.png?v=faryo-ui-1" alt=""><div><h1>{heading}</h1><p>{intro}</p></div></div><form method="post" action="{action}" autocomplete="{autocomplete}">{csrf_input}{body}<div class="error">{html_escape(error)}</div></form>{icp_footer(icp)}</main><script>{AUTH_SCRIPT}</script></body></html>"""
 
 
-def login_html(next_target: str, error: str = "") -> str:
+def login_html(next_target: str, error: str = "", icp: str = "") -> str:
     body = (
         f'<input type="hidden" name="next" value="{html_escape(next_target)}">'
         '<label for="username">Username</label><input id="username" name="username" autocomplete="username" autocapitalize="none" spellcheck="false" required>'
         + password_field("password", "password", "Password", "current-password")
         + '<button class="submit" type="submit">Sign in</button>'
     )
-    return auth_page("Faryo Sign In", "Faryo", "Enter your gateway username and password.", "/login", "on", body, error)
+    return auth_page("Faryo Sign In", "Faryo", "Enter your gateway username and password.", "/login", "on", body, error, icp=icp)
 
 
-def password_html(csrf: str = "", error: str = "") -> str:
+def password_html(csrf: str = "", error: str = "", icp: str = "") -> str:
     body = (
         password_field("current_password", "current_password", "Current password", "current-password")
         + password_field("new_password", "new_password", "New password", "new-password", 12)
         + password_field("confirm_password", "confirm_password", "Confirm new password", "new-password", 12)
         + '<button class="submit" type="submit">Save password</button><a class="secondary" href="/">Back to Faryo</a>'
     )
-    return auth_page("Faryo Change Password", "Change password", "Update the gateway password. Changes take effect immediately.", "/password", "off", body, error, csrf)
+    return auth_page("Faryo Change Password", "Change password", "Update the gateway password. Changes take effect immediately.", "/password", "off", body, error, csrf, icp)
 
 
 def main() -> None:
