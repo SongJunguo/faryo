@@ -82,6 +82,9 @@ CAPTURE_MAX_LINES = CAPTURE_FULL_LINES
 EVENT_STREAM_MAX_SECONDS = 75
 EVENT_STREAM_MAX_CONNECTIONS = 6
 RATE_LIMIT_CACHE_TTL = 120.0
+CLAUDE_CREDENTIALS_PATH = Path("~/.claude/.credentials.json").expanduser()
+CLAUDE_USAGE_URL = "https://api.anthropic.com/api/oauth/usage"
+CLAUDE_COMMAND_PREFIXES = ("<local-command-caveat>", "<local-command-stdout>", "<command-name>", "<command-message>")
 THREAD_COLUMNS = "id, title, rollout_path, tokens_used, model, reasoning_effort, cwd, updated_at, source, thread_source"
 AGENT_SESSION_LIST_LIMIT = 20
 EMPTY_MANAGED_SESSION_TTL_SECONDS = 60
@@ -209,8 +212,7 @@ CLAUDE_DEEPSEEK_LAUNCHER = Path(_CLAUDE_DEEPSEEK_LAUNCHER).expanduser() if _CLAU
 BLACK_VALUES = {"#000", "#000000", "black", "rgb(0,0,0)", "rgb(0, 0, 0)"}
 USER_INPUT_COLOR = "var(--user-input-color, #E0C29D)"
 LOW_CONTRAST_TERMINAL_VALUES = {"#000080", "#0000aa", "#0000cd", "#0000ff", "blue"}
-_rate_limit_cache: dict[str, Any] | None = None
-_rate_limit_cache_at = 0.0
+_rate_limit_cache: dict[str, tuple[float, dict[str, Any]]] = {}
 _rate_limit_lock = threading.Lock()
 
 
@@ -495,7 +497,7 @@ def claude_history_items(history_root: str | None = None) -> list[dict[str, Any]
                     text = " ".join(str(content).split())
                     if row.get("type") == "custom-title": title = str(row.get("customTitle") or title).strip()[:80]
                     elif row.get("type") == "last-prompt": last_prompt = str(row.get("lastPrompt") or last_prompt).strip()[:80]
-                    elif not title and (row.get("type") == "user" or message.get("role") == "user"): title = text[:80]
+                    elif not title and not text.startswith(CLAUDE_COMMAND_PREFIXES) and (row.get("type") == "user" or message.get("role") == "user"): title = text[:80]
         except OSError:
             continue
         if sidechain: continue
@@ -1234,20 +1236,45 @@ def fetch_weekly_rate_limit(timeout: float = 6.0) -> dict[str, Any] | None:
     return None
 
 
-def cached_weekly_rate_limit() -> dict[str, Any] | None:
-    global _rate_limit_cache, _rate_limit_cache_at
+def fetch_claude_weekly_rate_limit(timeout: float = 6.0) -> dict[str, Any] | None:
+    try:
+        token = json.loads(CLAUDE_CREDENTIALS_PATH.read_text(encoding="utf-8"))["claudeAiOauth"]["accessToken"]
+        request = urllib.request.Request(CLAUDE_USAGE_URL, headers={"Authorization": f"Bearer {token}", "anthropic-beta": "oauth-2025-04-20"})
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            payload = json.loads(response.read().decode("utf-8", "replace"))
+        limits = {limit.get("kind"): limit for limit in payload.get("limits") or [] if isinstance(limit, dict)}
+        result = {"usedPercent": round(float(limits["weekly_all"]["percent"]), 1)}
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+    scoped = limits.get("weekly_scoped")
+    try:
+        result["scopedPercent"] = round(float(scoped["percent"]), 1)
+        result["scopedLabel"] = str(((scoped.get("scope") or {}).get("model") or {}).get("display_name") or "Model")
+    except (KeyError, TypeError, ValueError):
+        pass
+    return result
+
+
+RATE_LIMIT_FETCHERS = {"codex": fetch_weekly_rate_limit, "claude": fetch_claude_weekly_rate_limit}
+
+
+def cached_weekly_rate_limit(profile: AgentProfile) -> dict[str, Any] | None:
+    fetcher = RATE_LIMIT_FETCHERS.get(profile.key)
+    if fetcher is None:
+        return None
 
     now = time.monotonic()
     with _rate_limit_lock:
-        if _rate_limit_cache is not None and now - _rate_limit_cache_at < RATE_LIMIT_CACHE_TTL:
-            return _rate_limit_cache
+        cached = _rate_limit_cache.get(profile.key)
+        if cached and now - cached[0] < RATE_LIMIT_CACHE_TTL:
+            return cached[1]
 
-    fresh = fetch_weekly_rate_limit()
+    fresh = fetcher()
     with _rate_limit_lock:
         if fresh is not None:
-            _rate_limit_cache = fresh
-            _rate_limit_cache_at = time.monotonic()
-        return _rate_limit_cache
+            _rate_limit_cache[profile.key] = (time.monotonic(), fresh)
+        cached = _rate_limit_cache.get(profile.key)
+        return cached[1] if cached else None
 
 
 def ansi_plain(line: str) -> str:
@@ -1478,9 +1505,9 @@ def status_payload(config: Config) -> dict[str, Any]:
         model = model or env_value("ANTHROPIC_MODEL", default="deepseek-v4-pro[1m]")
     context_usage = latest_context_usage(thread.get("rollout_path") if thread else (claude_item.get("historyPath") if claude_item else None), model)
     weekly_rate_limit = None
-    if tmux_alive and profile is CODEX_PROFILE:
+    if tmux_alive and profile is not None:
         try:
-            weekly_rate_limit = cached_weekly_rate_limit()
+            weekly_rate_limit = cached_weekly_rate_limit(profile)
         except Exception:
             weekly_rate_limit = None
     agent_active = profile is not None
