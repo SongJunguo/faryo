@@ -23,15 +23,15 @@ echo "web:  $(web_url_public)"
 echo
 
 echo "== Web control plane =="
-printf 'gcp tunnel: '
+printf 'reverse tunnel: '
 tunnel_state=$(service_state "$TUNNEL_SERVICE")
 echo "$tunnel_state"
-printf 'gcp tunnel remote health: '
+printf 'reverse tunnel remote health: '
 if [[ "$tunnel_state" != "active" ]]; then
   echo "skipped ($tunnel_state)"
-elif [[ "${GCP_TUNNEL_VERIFY_IN_STATUS:-0}" != "1" ]]; then
-  echo "manual (run scripts/verify-gcp-reverse-tunnel.sh)"
-elif "$SCRIPT_DIR/verify-gcp-reverse-tunnel.sh" >/dev/null 2>&1; then
+elif [[ "${GATEWAY_TUNNEL_VERIFY_IN_STATUS:-0}" != "1" ]]; then
+  echo "manual (run scripts/verify-reverse-tunnel.sh)"
+elif "$SCRIPT_DIR/verify-reverse-tunnel.sh" >/dev/null 2>&1; then
   echo "ok"
 else
   echo "failed"

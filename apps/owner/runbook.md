@@ -59,7 +59,7 @@ Read the result as layers, not one generic online/offline state:
 - Reverse tunnel prepared: the endpoint has a configured remote loopback port.
 - Visible session usable: a real tmux session can be captured through Owner.
 
-For tunneled endpoints, run `scripts/verify-gcp-reverse-tunnel.sh` when the
+For tunneled endpoints, run `scripts/verify-reverse-tunnel.sh` when the
 diagnostic shows the tunnel config is present but the Gateway still reports the
 route offline.
 
@@ -72,7 +72,7 @@ route offline.
 ## Reverse Tunnel Verification
 
 ```bash
-./scripts/verify-gcp-reverse-tunnel.sh
+./scripts/verify-reverse-tunnel.sh
 ```
 
 This check logs in to the Gateway host over SSH, calls the remote loopback
@@ -87,7 +87,7 @@ check.
 - Web opens but cannot send: check the owner token, target tmux session, and
   current pane.
 - Gateway shows this endpoint offline: check local Owner health, the reverse
-  tunnel, `scripts/verify-gcp-reverse-tunnel.sh`, and the Gateway-side loopback
+  tunnel, `scripts/verify-reverse-tunnel.sh`, and the Gateway-side loopback
   port.
 - Owner is directly visible from the public internet: this is wrong. Bind Owner
   to `127.0.0.1` and expose it only through Gateway.

@@ -35,9 +35,8 @@ Gateway VM: the host that terminates public HTTPS and forwards to Faryo Gateway.
 - `/txy/?session=...`, `/txy/api/...`, and required owner static assets proxy
   to the Owner running on the Gateway host itself at `127.0.0.1:8765`.
 - `/hp/?session=...`, `/hp/api/...`, and required owner static assets proxy to
-  the address configured in `FARYO_HP_OWNER_HOST`. A tailnet route points at the
-  Owner device MagicDNS name on port `8765`; a tunneled route points at a
-  Gateway loopback port instead.
+  the HP reverse tunnel on `127.0.0.1:18766`. This port must be provided by the
+  real HP reverse tunnel; do not bridge it to the local Owner port.
 - `/pc/?session=...`, `/pc/api/...`, and required owner static assets proxy to
   the PC reverse tunnel on `127.0.0.1:18765`. This port must be provided by the
   real PC/WSL reverse tunnel; do not bridge it to the local Owner port.
@@ -68,8 +67,8 @@ Expected:
 - TLS verification result is `0`.
 - After login, `/` shows the workbench, route status, and recent sessions.
 - Bare `/hp/`, `/txy/`, and `/pc/` are not shown as direct user entry points.
-- PC is online only when the real PC/WSL reverse tunnel exists and its Owner
-  `/health` endpoint is reachable.
+- HP and PC are online only when their real reverse tunnels exist and each
+  Owner `/health` endpoint is reachable.
 
 ## 5. Non-Goals
 

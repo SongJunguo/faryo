@@ -12,7 +12,7 @@ GATEWAY_AUTH_CONFIG="${GATEWAY_AUTH_CONFIG:-$FARYO_HOME/gateway/config/gateway-a
 GATEWAY_SECRET_FILE="${GATEWAY_SECRET_FILE:-$FARYO_HOME/gateway/state/gateway-cookie-secret}"
 PORTAL_DIR="${PORTAL_DIR:-$FARYO_HOME/gateway/portal}"
 
-exec python3 "$FARYO_GATEWAY_ROOT/gcp-gateway/server.py" \
+exec python3 "$FARYO_GATEWAY_ROOT/server/server.py" \
   --host "$GATEWAY_HOST" \
   --port "$GATEWAY_PORT" \
   --auth-config "$GATEWAY_AUTH_CONFIG" \

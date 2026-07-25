@@ -71,7 +71,7 @@ but the default upload destination should come from the Faryo data directory.
 ```bash
 ./scripts/status.sh
 ./scripts/smoke-test.sh
-./scripts/verify-gcp-reverse-tunnel.sh
+./scripts/verify-reverse-tunnel.sh
 ss -ltnp | grep ':22 ' || true
 ```
 
@@ -81,7 +81,7 @@ Expected:
 - Smoke test passes.
 - Owner listens only on loopback.
 - If this endpoint uses a reverse tunnel, its tunnel service is active.
-- If this endpoint uses a reverse tunnel, `verify-gcp-reverse-tunnel.sh` can
+- If this endpoint uses a reverse tunnel, `verify-reverse-tunnel.sh` can
   read Owner `/api/status` from the Gateway side and validate owner label and
   session.
 - No unauthorized inbound `:22` listener is present.

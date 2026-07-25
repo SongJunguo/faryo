@@ -38,7 +38,7 @@ not prove the Gateway route is online.
 ## Start Gateway
 
 ```bash
-./scripts/run-gcp-gateway.sh
+./scripts/run-gateway.sh
 ```
 
 Canonical user systemd unit:
@@ -61,8 +61,9 @@ Saving the form updates the Gateway password hash immediately.
   `127.0.0.1:8780`.
 - A route is offline: check that route's upstream Owner `/health`, for example
   the address in `FARYO_HP_OWNER_HOST`.
-- PC is offline: check that the real PC/WSL reverse tunnel provides Gateway
-  host `127.0.0.1:18765`; do not bridge it to the local Owner port.
+- HP or PC is offline: check that the endpoint's real reverse tunnel provides
+  its Gateway host loopback port (`127.0.0.1:18766` for HP, `127.0.0.1:18765`
+  for PC); do not bridge either to the local Owner port.
 - Login works but sending fails: check that the route owner token matches the
   upstream Owner endpoint.
 - A user sees a route they should not see: check private route auth bindings.

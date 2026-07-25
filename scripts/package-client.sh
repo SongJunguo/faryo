@@ -49,14 +49,14 @@ release_checks() {
   python3 -m py_compile \
     "$ROOT/apps/shared/pd_state.py" \
     "$ROOT/apps/owner/local-tmux-owner/server.py" \
-    "$ROOT/apps/gateway/gcp-gateway/server.py" \
+    "$ROOT/apps/gateway/server/server.py" \
     "$ROOT/apps/gateway/scripts/generate-gateway-auth-config.py"
   for js_file in \
     "$ROOT/apps/owner/local-tmux-owner/static/compact-rules-codex.js" \
     "$ROOT/apps/owner/local-tmux-owner/static/compact-rules-claude.js" \
     "$ROOT/apps/shared/static/appearance.js" \
     "$ROOT/apps/owner/local-tmux-owner/static/app.js" \
-    "$ROOT/apps/gateway/gcp-gateway/static/projects.js"
+    "$ROOT/apps/gateway/server/static/projects.js"
   do
     node --check "$js_file"
   done
@@ -66,7 +66,7 @@ import plistlib
 import sys
 root = Path(sys.argv[1])
 index = (root / "apps/owner/local-tmux-owner/static/index.html").read_text(encoding="utf-8")
-gateway = (root / "apps/gateway/gcp-gateway/server.py").read_text(encoding="utf-8")
+gateway = (root / "apps/gateway/server/server.py").read_text(encoding="utf-8")
 assert "compact-rules-codex.js" in index, "index.html must load compact-rules-codex.js"
 assert "compact-rules-claude.js" in index, "index.html must load compact-rules-claude.js"
 assert "compact-rules-codex.js" in gateway, "gateway must allow compact-rules-codex.js"
@@ -80,7 +80,7 @@ from pathlib import Path
 import sys
 root = Path(sys.argv[1])
 out = Path(sys.argv[2])
-source = (root / "apps/gateway/gcp-gateway/server.py").read_text(encoding="utf-8")
+source = (root / "apps/gateway/server/server.py").read_text(encoding="utf-8")
 start = source.index('PORTAL_JS_TEMPLATE = """') + len('PORTAL_JS_TEMPLATE = """')
 end = source.index('"""', start)
 out.write_text(source[start:end].replace("__LABELS_JS__", "{}"), encoding="utf-8")

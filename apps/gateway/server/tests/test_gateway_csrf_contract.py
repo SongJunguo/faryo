@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Any
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
-SERVER_PATH = REPO_ROOT / "apps" / "gateway" / "gcp-gateway" / "server.py"
+SERVER_PATH = REPO_ROOT / "apps" / "gateway" / "server" / "server.py"
 
 spec = importlib.util.spec_from_file_location("faryo_gateway_server", SERVER_PATH)
 gateway = importlib.util.module_from_spec(spec)

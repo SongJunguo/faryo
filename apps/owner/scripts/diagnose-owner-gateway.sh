@@ -99,8 +99,8 @@ check_reverse_tunnel() {
   else
     status "reverse tunnel service" "skipped: systemctl not found"
   fi
-  if [[ -n "${GCP_TUNNEL_HOST:-}" && -n "${GCP_TUNNEL_USER:-}" && -n "${GCP_TUNNEL_REMOTE_PORT:-}" ]]; then
-    status "reverse tunnel remote" "configured: 127.0.0.1:$GCP_TUNNEL_REMOTE_PORT"
+  if [[ -n "${GATEWAY_TUNNEL_HOST:-}" && -n "${GATEWAY_TUNNEL_USER:-}" && -n "${GATEWAY_TUNNEL_REMOTE_PORT:-}" ]]; then
+    status "reverse tunnel remote" "configured: 127.0.0.1:$GATEWAY_TUNNEL_REMOTE_PORT"
   else
     status "reverse tunnel remote" "skipped: tunnel env incomplete"
   fi

@@ -19,7 +19,7 @@ check_url "gateway" "$gateway_url"
 check_url "owner" "$owner_url"
 
 printf 'processes:\n'
-pgrep -af 'faryo|local-tmux-owner|gcp-gateway|python3 server.py' || true
+pgrep -af 'faryo|local-tmux-owner|server|python3 server.py' || true
 
 if command -v tmux >/dev/null 2>&1; then
   owner_cwd="$(tmux display-message -p -t local-tmux-owner '#{pane_current_path}' 2>/dev/null || true)"

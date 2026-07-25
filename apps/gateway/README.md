@@ -20,7 +20,7 @@ Runtime configuration defaults to:
 ## Local Run
 
 ```bash
-./scripts/run-gcp-gateway.sh
+./scripts/run-gateway.sh
 ```
 
 The user-level service template lives at:

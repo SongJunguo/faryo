@@ -10,7 +10,7 @@ Type=simple
 WorkingDirectory=@FARYO_ROOT@/apps/gateway
 Environment=FARYO_HOME=@FARYO_HOME@
 ExecStartPre=@FARYO_ROOT@/apps/gateway/scripts/cleanup-gateway-port.sh
-ExecStart=@FARYO_ROOT@/apps/gateway/scripts/run-gcp-gateway.sh
+ExecStart=@FARYO_ROOT@/apps/gateway/scripts/run-gateway.sh
 Restart=on-failure
 RestartSec=5
 TimeoutStopSec=10
