@@ -63,6 +63,16 @@
     return isBanner ? lines.slice(0, start).concat(lines.slice(end)) : lines;
   }
 
+  function stripComposerBox(lines) {
+    const dividers = [];
+    for (let i = 0; i < lines.length; i += 1) if (isDividerLine(lines[i])) dividers.push(i);
+    if (dividers.length < 2) return lines;
+    const [start, end] = dividers.slice(-2);
+    const first = lines.slice(start + 1, end).find((line) => line.trim());
+    if (first === undefined || /^\s*[❯›]/.test(first)) return lines.slice(0, start).concat(lines.slice(end + 1));
+    return lines;
+  }
+
   function cleanOutput(line) { return String(line || '').replace(/^\s*●\s?/, ''); }
   function blockText(kind, lines) {
     return (kind === 'output' ? lines.map(cleanOutput) : lines).join('\n').trim();
@@ -78,7 +88,7 @@
       }
       kind = ''; lines = [];
     };
-    for (const line of stripStartupBanner(String(text || '').split('\n'))) {
+    for (const line of stripComposerBox(stripStartupBanner(String(text || '').split('\n')))) {
       const footerMode = /shift\+tab to cycle/i.test(line) && line.match(/\b((?:bypass permissions|accept edits|plan mode|default mode)\s+(?:on|off))\b/i);
       if (footerMode) { flush(); blocks.push({ kind: 'status', text: '⏵ ' + footerMode[1].toLowerCase() }); continue; }
       if (isChromeLine(line) || isDividerLine(line)) { flush(); continue; }

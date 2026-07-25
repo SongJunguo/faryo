@@ -1143,7 +1143,7 @@ def claude_status_meta(history_path: str | None) -> dict[str, Any]:
     meta: dict[str, Any] = {"model": model}
     if usage:
         input_tokens = sum(int(usage.get(key) or 0) for key in ("input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens"))
-        context_window = CLAUDE_CONTEXT_WINDOW_1M if "[1m]" in str(model or "").lower() else CLAUDE_CONTEXT_WINDOW
+        context_window = CLAUDE_CONTEXT_WINDOW_1M if ("[1m]" in str(model or "").lower() or input_tokens > CLAUDE_CONTEXT_WINDOW) else CLAUDE_CONTEXT_WINDOW
         if input_tokens > 0:
             meta["contextUsage"] = {
                 "inputTokens": input_tokens,
