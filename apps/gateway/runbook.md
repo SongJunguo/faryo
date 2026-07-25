@@ -25,6 +25,10 @@ python3 -m pip install -r requirements.txt
 Real runtime config lives under `~/.faryo/gateway/` and is never committed to
 Git. Config field names use Faryo naming.
 
+`FARYO_ICP_RECORD` is read from the Gateway process environment. When set, the
+sign-in page footer shows that record number linked to the official filing site.
+Leave it unset outside mainland China hosting.
+
 Each route needs a matching Owner token, a Gateway loopback port, and user auth
 binding before it is considered joined. A live tmux session on the endpoint does
 not prove the Gateway route is online.
