@@ -25,7 +25,7 @@ load_env() {
   : "${FARYO_OWNER_CACHE_DIR:=$FARYO_OWNER_DATA/cache}"
   : "${FARYO_OWNER_LOGS_DIR:=$FARYO_OWNER_DATA/logs}"
   : "${FARYO_OWNER_FILE_INBOX:=$FARYO_OWNER_INBOX_DIR}"
-  : "${TUNNEL_SERVICE:=tmux-gcp-tunnel.service}"
+  : "${TUNNEL_SERVICE:=faryo-gateway-tunnel.service}"
   : "${KEEPALIVE_TIMER:=faryo-owner-keepalive.timer}"
   : "${TMUX_HISTORY_LIMIT:=500}"
   : "${WEB_CAPTURE_LINES:=800}"

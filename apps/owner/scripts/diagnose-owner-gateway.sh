@@ -23,7 +23,7 @@ load_owner_env() {
   : "${FARYO_OWNER_HOST:=127.0.0.1}"
   : "${FARYO_OWNER_PORT:=8765}"
   : "${FARYO_OWNER_DIRECT_SESSION:=__faryo_no_default__}"
-  : "${TUNNEL_SERVICE:=tmux-gcp-tunnel.service}"
+  : "${TUNNEL_SERVICE:=faryo-gateway-tunnel.service}"
 }
 
 json_field() {

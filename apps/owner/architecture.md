@@ -24,9 +24,9 @@ Gateway or used only for local smoke/status checks.
 ## 2. Local Runtime
 
 - `local-tmux-owner`: local execution backend, bound to `127.0.0.1`.
-- `tmux-gcp-tunnel.service`: optional SSH reverse tunnel from a local endpoint
-  to the Gateway host. When enabled, verify from the Gateway side with the
-  owner token and expected endpoint identity.
+- An optional SSH reverse tunnel from a local endpoint to the Gateway host, run
+  as a user service on that endpoint. When enabled, verify from the Gateway side
+  with the owner token and expected endpoint identity.
 - `faryo-owner-keepalive.timer`: user-level keepalive timer.
 - `tmux:<target>`: the controlled target session.
 - `tmux:local-tmux-owner`: the Owner service session.
@@ -80,7 +80,7 @@ Expected:
 - Owner health is OK.
 - Smoke test passes.
 - Owner listens only on loopback.
-- If this endpoint uses a reverse tunnel, `tmux-gcp-tunnel.service` is active.
+- If this endpoint uses a reverse tunnel, its tunnel service is active.
 - If this endpoint uses a reverse tunnel, `verify-gcp-reverse-tunnel.sh` can
   read Owner `/api/status` from the Gateway side and validate owner label and
   session.

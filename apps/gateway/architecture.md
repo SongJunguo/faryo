@@ -12,12 +12,12 @@ phone browser
   -> Caddy
   -> Faryo Gateway 127.0.0.1:8780
   -> Faryo workbench
-  -> /gcp/?session=... /hp/?session=... /pc/?session=...
+  -> /txy/?session=... /hp/?session=... /pc/?session=...
   -> Faryo local execution endpoint
 ```
 
 The phone talks only to Gateway. Owner tokens are not exposed to the browser;
-Gateway injects them by route when proxying upstream requests. HP, PC, and GCP
+Gateway injects them by route when proxying upstream requests. HP, PC, and TXY
 endpoints should use independent owner tokens.
 
 ## 2. Gateway Host Responsibilities
@@ -32,14 +32,16 @@ Gateway VM: the host that terminates public HTTPS and forwards to Faryo Gateway.
   and attachment inbox roots.
 - Gateway probes each route through its real `/health` endpoint. Offline
   routes affect session resume and new-session selection only.
-- `/gcp/?session=...`, `/gcp/api/...`, and required owner static assets proxy
-  to local GCP Owner at `127.0.0.1:8765`.
+- `/txy/?session=...`, `/txy/api/...`, and required owner static assets proxy
+  to the Owner running on the Gateway host itself at `127.0.0.1:8765`.
 - `/hp/?session=...`, `/hp/api/...`, and required owner static assets proxy to
-  the HP reverse tunnel on `127.0.0.1:18766`.
+  the address configured in `FARYO_HP_OWNER_HOST`. A tailnet route points at the
+  Owner device MagicDNS name on port `8765`; a tunneled route points at a
+  Gateway loopback port instead.
 - `/pc/?session=...`, `/pc/api/...`, and required owner static assets proxy to
   the PC reverse tunnel on `127.0.0.1:18765`. This port must be provided by the
-  real PC/WSL reverse tunnel; do not bridge it to GCP `127.0.0.1:8765`.
-- Bare `/gcp/`, `/hp/`, and `/pc/` paths are not user entry points.
+  real PC/WSL reverse tunnel; do not bridge it to the local Owner port.
+- Bare `/txy/`, `/hp/`, and `/pc/` paths are not user entry points.
 
 The Gateway host SSH service must remain available when HP/PC endpoints need to
 establish reverse tunnels to it.
@@ -65,7 +67,7 @@ Expected:
 - Public unauthenticated access returns the login page or a login redirect.
 - TLS verification result is `0`.
 - After login, `/` shows the workbench, route status, and recent sessions.
-- Bare `/hp/`, `/gcp/`, and `/pc/` are not shown as direct user entry points.
+- Bare `/hp/`, `/txy/`, and `/pc/` are not shown as direct user entry points.
 - PC is online only when the real PC/WSL reverse tunnel exists and its Owner
   `/health` endpoint is reachable.
 
