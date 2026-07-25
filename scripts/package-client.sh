@@ -50,7 +50,6 @@ release_checks() {
     "$ROOT/apps/shared/pd_state.py" \
     "$ROOT/apps/owner/local-tmux-owner/server.py" \
     "$ROOT/apps/gateway/gcp-gateway/server.py" \
-    "$ROOT/apps/gateway/cloud-run/faryo-vm-guard/main.py" \
     "$ROOT/apps/gateway/scripts/generate-gateway-auth-config.py"
   for js_file in \
     "$ROOT/apps/owner/local-tmux-owner/static/compact-rules-codex.js" \

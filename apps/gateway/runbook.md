@@ -18,8 +18,8 @@ route as online by bridging another port.
 ## Configuration
 
 ```bash
-cd /path/to/faryo/apps/gateway
-python3 -m pip install -r requirements.txt
+cd /path/to/faryo
+python3 -m pip install -r apps/gateway/requirements.txt
 ```
 
 Real runtime config lives under `~/.faryo/gateway/` and is never committed to

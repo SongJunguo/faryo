@@ -646,9 +646,6 @@ class GatewayHandler(BaseHTTPRequestHandler):
         if parsed.path == "/favicon.ico":
             self.write_icon("favicon.ico")
             return
-        if parsed.path == "/api/guard-health":
-            self.write_guard_health()
-            return
         if parsed.path == "/logout":
             self.send_response(HTTPStatus.SEE_OTHER)
             self.send_header("Set-Cookie", self.expired_cookie())
@@ -705,16 +702,6 @@ class GatewayHandler(BaseHTTPRequestHandler):
             self.serve_portal(username)
             return
         self.write_not_found(parsed.path)
-
-    def write_guard_health(self) -> None:
-        token = self.headers.get("X-Faryo-Guard-Token", "")
-        if not self.config.guard_token or not hmac.compare_digest(token, self.config.guard_token):
-            self.write_json({"ok": False, "error": "forbidden"}, HTTPStatus.FORBIDDEN)
-            return
-        txy_status = backend_status("txy")
-        ok = txy_status.get("state") in {"online", "slow"}
-        status = HTTPStatus.OK if ok else HTTPStatus.SERVICE_UNAVAILABLE
-        self.write_json({"ok": ok, "txy": txy_status, "updatedAt": int(time.time())}, status)
 
     def do_POST(self) -> None:
         parsed = urlparse(self.path)
