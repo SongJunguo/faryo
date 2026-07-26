@@ -113,7 +113,7 @@
     const sessions = (data?.sessions || []).slice().sort((a, b) => Number(b.updatedTs || 0) - Number(a.updatedTs || 0));
     for (const item of sessions) {
       const cwd = String(item.cwd || '').trim();
-      if (!cwd || (route && String(item.route || '') !== route) || seen.has(cwd)) continue;
+      if (!cwd || cwd === '~' || (route && String(item.route || '') !== route) || seen.has(cwd)) continue;
       if (String(item.tmuxSession || '') === selectedSession && String(item.route || '') === route) continue;
       seen.add(cwd);
       items.push(`cd ${cwd}`);

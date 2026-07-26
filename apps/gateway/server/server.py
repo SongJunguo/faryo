@@ -281,7 +281,7 @@ def select_recent_agent_cwd(sessions: list[dict[str, Any]], workspace_root: str 
     root = str(workspace_root or "").strip().rstrip("/")
     for item in sorted(sessions, key=lambda entry: float(entry.get("updatedTs") or 0), reverse=True):
         cwd = str(item.get("cwd") or "").strip().rstrip("/")
-        if not cwd:
+        if not cwd or cwd == "~":
             continue
         if root and (cwd == root or (cwd.startswith("~/") and root.endswith(cwd[1:]))):
             continue

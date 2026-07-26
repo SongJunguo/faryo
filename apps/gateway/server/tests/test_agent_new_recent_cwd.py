@@ -44,9 +44,14 @@ class SelectRecentAgentCwdTest(unittest.TestCase):
         root = "/home/xiaofeng/brain/00_inbox"
         self.assertEqual(gateway.select_recent_agent_cwd(sessions, root), "~/brain/projects/faryo")
 
+    def test_skips_owner_home_directory(self) -> None:
+        sessions = [session("~", 30), session("~/brain/projects/faryo", 10)]
+        self.assertEqual(gateway.select_recent_agent_cwd(sessions, None), "~/brain/projects/faryo")
+
     def test_empty_when_no_candidate(self) -> None:
         self.assertEqual(gateway.select_recent_agent_cwd([], "/srv/brain"), "")
         self.assertEqual(gateway.select_recent_agent_cwd([session("/srv/brain", 5)], "/srv/brain"), "")
+        self.assertEqual(gateway.select_recent_agent_cwd([session("~", 5)], "/home/xiaofeng/brain/00_inbox"), "")
 
 
 if __name__ == "__main__":
