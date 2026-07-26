@@ -275,6 +275,20 @@ def clean_agent_launch_command(value: str | None) -> str | None:
     return command if command in NEW_SESSION_COMMANDS else None
 
 
+def select_recent_agent_cwd(sessions: list[dict[str, Any]], workspace_root: str | None) -> str:
+    # Owner session cwds are home-shortened ("~/..."), workspace_root is absolute; the
+    # endswith branch matches the two forms without knowing the owner's home directory.
+    root = str(workspace_root or "").strip().rstrip("/")
+    for item in sorted(sessions, key=lambda entry: float(entry.get("updatedTs") or 0), reverse=True):
+        cwd = str(item.get("cwd") or "").strip().rstrip("/")
+        if not cwd:
+            continue
+        if root and (cwd == root or (cwd.startswith("~/") and root.endswith(cwd[1:]))):
+            continue
+        return cwd
+    return ""
+
+
 def blocked_asset_ip(ip: Any) -> bool:
     return ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_multicast or ip.is_reserved or ip.is_unspecified
 
@@ -1749,7 +1763,11 @@ class GatewayHandler(BaseHTTPRequestHandler):
             if route not in BACKENDS or not command: raise ValueError("route and command are required")
             if not self.config.allowed_route(username, route): self.write_json({"ok": False, "error": "forbidden"}, HTTPStatus.FORBIDDEN); return
             if username != self.config.mcp_user and command != "codex": self.write_json({"ok": False, "error": "forbidden command"}, HTTPStatus.FORBIDDEN); return
-            response = self.owner_json_request(route, "/api/agent/new", {"command": command, "max_running": self.max_running_for(username, route)}, username)
+            launch = {"command": command, "max_running": self.max_running_for(username, route)}
+            recent_cwd = select_recent_agent_cwd(self.owner_agent_sessions(route, username)["sessions"], self.config.workspace_root(username, route))
+            response = self.owner_json_request(route, "/api/agent/new", {**launch, "cwd": recent_cwd} if recent_cwd else launch, username)
+            if recent_cwd and not response.get("ok"):
+                response = self.owner_json_request(route, "/api/agent/new", launch, username)
             target_session = clean_session_id(str(response.get("session") or "")) if response.get("ok") else ""
             if not target_session: self.write_json({"ok": False, "error": response.get("error") or "owner new session failed"}, HTTPStatus.BAD_GATEWAY); return
             self.write_json({"ok": True, "redirect": f"/{route}/?session={target_session}", "session": target_session}, HTTPStatus.OK)

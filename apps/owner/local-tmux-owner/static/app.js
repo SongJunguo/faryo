@@ -35,6 +35,7 @@
     'Tap pet to interrupt',
     'Tap + for tools',
     'Type / for commands',
+    'Type cd for recent dirs',
     'Ctrl/⌘ Enter sends',
     'Tap Confirm to approve',
     'Raw shows terminal',
@@ -103,7 +104,24 @@
   }
   autosize();
 
-  function commandMatches() { const q = promptInput.value.trimStart().toLowerCase(); return (/^\/[a-z]*$/.test(q) || /^(?:codex|claude)(?:\s+[-\w]+){0,3}\s*$/.test(q)) ? COMMAND_SUGGESTIONS.filter((v) => v.startsWith(q) && v !== q).slice(0, 5) : []; }
+  let recentDirFetchAt = 0;
+  function recentDirCommands() {
+    const data = cachedWorkbench();
+    if (!data && Date.now() - recentDirFetchAt > 30000) { recentDirFetchAt = Date.now(); refreshSessionMenu().then(() => renderCommandSuggestions()).catch(() => {}); }
+    const route = routeBase.replace('/', '');
+    const seen = new Set(), items = [];
+    const sessions = (data?.sessions || []).slice().sort((a, b) => Number(b.updatedTs || 0) - Number(a.updatedTs || 0));
+    for (const item of sessions) {
+      const cwd = String(item.cwd || '').trim();
+      if (!cwd || (route && String(item.route || '') !== route) || seen.has(cwd)) continue;
+      if (String(item.tmuxSession || '') === selectedSession && String(item.route || '') === route) continue;
+      seen.add(cwd);
+      items.push(`cd ${cwd}`);
+      if (items.length >= 4) break;
+    }
+    return items;
+  }
+  function commandMatches() { const q = promptInput.value.trimStart().toLowerCase(); if (/^cd(\s.*)?$/.test(q)) return recentDirCommands().filter((v) => v.toLowerCase().startsWith(q) && v.toLowerCase() !== q).slice(0, 5); return (/^\/[a-z]*$/.test(q) || /^(?:codex|claude)(?:\s+[-\w]+){0,3}\s*$/.test(q)) ? COMMAND_SUGGESTIONS.filter((v) => v.startsWith(q) && v !== q).slice(0, 5) : []; }
   function applyCommandSuggestion(value) { promptInput.value = value; promptInput.focus(); promptInput.setSelectionRange(value.length, value.length); autosize(); updateSendVisibility(); renderCommandSuggestions(); return true; }
   function renderCommandSuggestions() { const items = commandMatches(); if (!commandSuggest) return; commandSuggest.classList.toggle('hidden', !items.length); commandSuggest.innerHTML = items.map((v) => `<button type="button" data-value="${escapeHtml(v)}">${escapeHtml(v)}</button>`).join(''); }
   function handleCommandSuggestionKey(event) { const [value] = commandMatches(); if ((event.key === 'Tab' || event.key === 'Enter') && value) { event.preventDefault(); return applyCommandSuggestion(value); } if (event.key === 'Escape') commandSuggest?.classList.add('hidden'); return false; }
