@@ -1107,8 +1107,7 @@ def latest_context_usage(history_path: str | None) -> dict[str, int | float] | N
     }
 
 
-CLAUDE_CONTEXT_WINDOW = 200_000
-CLAUDE_CONTEXT_WINDOW_1M = 1_000_000
+CLAUDE_CONTEXT_WINDOW = 1_000_000
 
 
 def claude_status_meta(history_path: str | None) -> dict[str, Any]:
@@ -1143,12 +1142,11 @@ def claude_status_meta(history_path: str | None) -> dict[str, Any]:
     meta: dict[str, Any] = {"model": model}
     if usage:
         input_tokens = sum(int(usage.get(key) or 0) for key in ("input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens"))
-        context_window = CLAUDE_CONTEXT_WINDOW_1M if ("[1m]" in str(model or "").lower() or input_tokens > CLAUDE_CONTEXT_WINDOW) else CLAUDE_CONTEXT_WINDOW
         if input_tokens > 0:
             meta["contextUsage"] = {
                 "inputTokens": input_tokens,
-                "contextWindow": context_window,
-                "percent": round((input_tokens / context_window) * 100, 1),
+                "contextWindow": CLAUDE_CONTEXT_WINDOW,
+                "percent": round((input_tokens / CLAUDE_CONTEXT_WINDOW) * 100, 1),
             }
     return meta
 
