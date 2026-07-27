@@ -560,10 +560,17 @@ def agent_launch_executable(command: str) -> str:
     return shutil.which(command) or command
 
 
+CLAUDE_STAMP_HOOK = APP_DIR.parent / "scripts" / "claude-session-stamp.sh"
+
+
+def claude_stamp_settings() -> str:
+    return json.dumps({"hooks": {"SessionStart": [{"hooks": [{"type": "command", "command": CLAUDE_STAMP_HOOK.as_posix()}]}]}})
+
+
 def start_agent_runtime(config: Config, cwd: Path, command: str, args: list[str], max_running: int = 0, wait_ready: bool = True, agent_id: str = "", title: str = "") -> str:
     env_prefix = ""
     if command == "claude":
-        args = [*args, "--dangerously-skip-permissions"]
+        args = [*args, "--dangerously-skip-permissions", "--settings", claude_stamp_settings()]
         env_prefix = "CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN=1 "
     with RUNTIME_LOCK:
         if max_running and managed_agent_count(config) >= max_running: raise OwnerError("running agent limit reached", HTTPStatus.CONFLICT)
