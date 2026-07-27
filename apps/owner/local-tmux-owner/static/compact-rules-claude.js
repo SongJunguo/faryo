@@ -25,7 +25,12 @@
       || /^esc to interrupt$/i.test(value)
       || /^\? for shortcuts\b/i.test(value)
       || /shift\+tab to cycle/i.test(value)
+      || /\/clear to save\b/i.test(value)
       || /^⎿\s*Tip:/i.test(value);
+  }
+  function isBottomChromeLine(line) {
+    const value = line.trim();
+    return /^[█░▓]{3,}\s*\d+%\s*context\b/.test(value) || isChromeLine(line);
   }
   function isApprovalOptionLine(line) {
     return /^(?:[❯›]\s*)?\d+\.\s+(?:Yes|No)\b/i.test(line.trim());
@@ -63,14 +68,26 @@
     return isBanner ? lines.slice(0, start).concat(lines.slice(end)) : lines;
   }
 
-  function stripComposerBox(lines) {
-    const dividers = [];
-    for (let i = 0; i < lines.length; i += 1) if (isDividerLine(lines[i])) dividers.push(i);
-    if (dividers.length < 2) return lines;
-    const [start, end] = dividers.slice(-2);
-    const first = lines.slice(start + 1, end).find((line) => line.trim());
-    if (first === undefined || /^\s*[❯›]/.test(first)) return lines.slice(0, start).concat(lines.slice(end + 1));
-    return lines;
+  // The owner's clean_capture drops the composer box's divider lines before
+  // the text reaches the browser, so nothing here may anchor on dividers.
+  // Instead walk up from the end of the frame: the bottom-most ❯ line with
+  // only chrome, blanks, or a few wrapped continuation lines below it is the
+  // live composer — typed-but-unsubmitted input included — and everything
+  // from it down is bottom chrome. Keep only the mode footer.
+  function stripBottomChrome(lines) {
+    let composer = -1;
+    let plain = 0;
+    for (let i = lines.length - 1; i >= 0; i -= 1) {
+      const line = lines[i];
+      if (!line.trim()) continue;
+      if (/^\s*[❯›]/.test(line.trim())) { composer = i; break; }
+      if (isBottomChromeLine(line) || isDividerLine(line)) continue;
+      if (isStatusLine(line) || plain >= 6) break;
+      plain += 1;
+    }
+    if (composer < 0) return lines;
+    const kept = lines.slice(composer + 1).filter((line) => /shift\+tab to cycle/i.test(line));
+    return lines.slice(0, composer).concat(kept);
   }
 
   function cleanOutput(line) { return String(line || '').replace(/^\s*●\s?/, ''); }
@@ -88,7 +105,7 @@
       }
       kind = ''; lines = [];
     };
-    for (const line of stripComposerBox(stripStartupBanner(String(text || '').split('\n')))) {
+    for (const line of stripBottomChrome(stripStartupBanner(String(text || '').split('\n')))) {
       const footerMode = /shift\+tab to cycle/i.test(line) && line.match(/\b((?:bypass permissions|accept edits|plan mode|default mode)\s+(?:on|off))\b/i);
       if (footerMode) { flush(); blocks.push({ kind: 'status', text: '⏵ ' + footerMode[1].toLowerCase() }); continue; }
       if (isChromeLine(line) || isDividerLine(line)) { flush(); continue; }
