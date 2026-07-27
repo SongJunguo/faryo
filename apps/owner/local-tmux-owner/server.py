@@ -389,19 +389,21 @@ def active_codex_thread_state(config: Config) -> tuple[dict[str, str], set[str]]
     active: dict[str, str] = {}
     superseded: set[str] = set()
     for name in tmux_sessions(config):
-        if managed_session(config, name):
-            source = tmux_session_option(config, name, "@faryo_agent_source")
-            session_id = tmux_session_option(config, name, "@faryo_agent_session_id")
-            if source == CODEX_PROFILE.source and session_id:
-                active[session_id] = name
-                continue
-            target = target_config(config, name); cwd = get_pane_cwd(target)
-            threads = active_agent_threads(target, cwd)
-            if not threads:
-                continue
+        if not managed_session(config, name):
+            continue
+        # The live fd scan wins over the id recorded at dispatch: /new inside
+        # a resumed session rotates the thread id, and the frozen id would
+        # keep the Running badge on a transcript the pane no longer writes.
+        target = target_config(config, name); cwd = get_pane_cwd(target)
+        threads = active_agent_threads(target, cwd)
+        if threads:
             thread_id = str(threads[0].get("id") or "")
             if thread_id: active[thread_id] = name
             superseded.update(str(row.get("id") or "") for row in threads[1:] if row.get("id"))
+            continue
+        session_id = tmux_session_option(config, name, "@faryo_agent_session_id")
+        if tmux_session_option(config, name, "@faryo_agent_source") == CODEX_PROFILE.source and session_id:
+            active[session_id] = name
     return active, superseded
 
 def active_codex_thread_map(config: Config) -> dict[str, str]:
