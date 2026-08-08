@@ -415,11 +415,55 @@ def tmux_session_option(config: Config, session: str, key: str, value: str | Non
         tmux(config, ["set-option", "-q", "-t", session, key, value], timeout=2); return value
     res = tmux(config, ["show-options", "-qv", "-t", session, key], timeout=2); return res.stdout.strip() if res.returncode == 0 else ""
 
+def claude_project_dir(cwd: str) -> Path:
+    return CLAUDE_PROJECTS_ROOT / re.sub(r"[^A-Za-z0-9]", "-", cwd)
+
+
+def process_start_epoch(pid: int) -> float:
+    res = run_cmd(["ps", "-o", "etimes=", "-p", str(pid)], timeout=2)
+    if res.returncode != 0: return 0.0
+    try: return time.time() - float(res.stdout.strip())
+    except ValueError: return 0.0
+
+
+def claude_pane_start_ts(config: Config) -> float:
+    pane_pid = get_pane_pid(config)
+    if pane_pid is None: return 0.0
+    pids = [pid for pid, cmd in descendants(pane_pid, process_table()) if agent_profile_matches_cmd(CLAUDE_PROFILE, cmd)]
+    return min((ts for pid in pids if (ts := process_start_epoch(pid))), default=0.0)
+
+
+def live_claude_transcript_id(config: Config) -> str:
+    # Claude Code does not keep its transcript open, so the codex fd scan cannot
+    # tell which session a pane is writing; the newest transcript in the pane
+    # cwd's project dir touched since the pane's claude process started is the
+    # next best live signal. Returns "" when nothing has been written yet.
+    started = claude_pane_start_ts(config); cwd = get_pane_cwd(config)
+    if not started or not cwd: return ""
+    try: candidates = [(path.stat().st_mtime, path.stem) for path in claude_project_dir(cwd).glob("*.jsonl") if not path.name.startswith("agent-") and path.stat().st_mtime >= started - 5.0]
+    except OSError: return ""
+    return max(candidates, default=(0.0, ""))[1]
+
+
 def active_claude_session_map(config: Config) -> dict[str, str]:
+    # The stamp hook only fires for claudes the owner launched; a claude relaunched
+    # by hand from the surviving pane shell leaves the stamp pointing at the exited
+    # session, which used to surface the live conversation as a shadow card. The
+    # live transcript scan overrides such a stale stamp; stamped panes claim their
+    # ids first so a same-cwd live scan cannot steal an id a hook already pinned.
     active: dict[str, str] = {}
+    relaunched: list[tuple[str, str, str]] = []
     for name in tmux_sessions(config):
-        if managed_session(config, name) and tmux_session_option(config, name, "@faryo_agent_source") == "claude-code" and agent_in_pane(Config(name, config.token, config.pane_width)):
-            if session_id := (tmux_session_option(config, name, "@faryo_agent_session_id") or tmux_session_option(config, name, "@faryo_agent_id")): active[session_id] = name
+        if not (managed_session(config, name) and tmux_session_option(config, name, "@faryo_agent_source") == "claude-code"): continue
+        target = Config(name, config.token, config.pane_width)
+        if not agent_in_pane(target): continue
+        stamped = tmux_session_option(config, name, "@faryo_agent_session_id") or tmux_session_option(config, name, "@faryo_agent_id")
+        live = live_claude_transcript_id(target)
+        if live and live != stamped: relaunched.append((name, live, stamped))
+        elif stamped: active[stamped] = name
+    for name, live, stamped in relaunched:
+        if live not in active: active[live] = name
+        elif stamped and stamped not in active: active[stamped] = name
     return active
 
 
@@ -570,15 +614,19 @@ def claude_stamp_settings() -> str:
 
 
 def start_agent_runtime(config: Config, cwd: Path, command: str, args: list[str], max_running: int = 0, wait_ready: bool = True, agent_id: str = "", title: str = "") -> str:
-    env_prefix = ""
+    env_args: list[str] = []
     if command == "claude":
         args = [*args, "--dangerously-skip-permissions", "--settings", claude_stamp_settings()]
-        env_prefix = "CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN=1 "
+        # Pane-level env (new-session -e), not a launch-string prefix: the prefix
+        # would only cover the first claude, while a claude relaunched by hand from
+        # the surviving shell must also stay out of the alternate screen so tmux
+        # scrollback keeps accumulating for capture.
+        env_args = ["-e", "CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN=1"]
     with RUNTIME_LOCK:
         if max_running and managed_agent_count(config) >= max_running: raise OwnerError("running agent limit reached", HTTPStatus.CONFLICT)
         name = f"faryo-{_dt.datetime.now():%m%d-%H%M%S}-{secrets.token_hex(2)}"; executable = agent_launch_executable(command)
-        shell = shutil.which("zsh") or "/usr/bin/zsh"; launch = f"{env_prefix}{shlex.join([executable, *args])}; exec {shlex.quote(shell)} -l"
-        res = tmux(config, ["new-session", "-d", "-s", name, "-c", str(cwd), shell, "-lc", launch], timeout=5)
+        shell = shutil.which("zsh") or "/usr/bin/zsh"; launch = f"{shlex.join([executable, *args])}; exec {shlex.quote(shell)} -l"
+        res = tmux(config, ["new-session", "-d", "-s", name, "-c", str(cwd), *env_args, shell, "-lc", launch], timeout=5)
         if res.returncode != 0: raise OwnerError(res.stderr.strip() or "tmux session start failed", HTTPStatus.INTERNAL_SERVER_ERROR)
         if source := AGENT_SOURCE_BY_COMMAND.get(command): tmux_session_option(config, name, "@faryo_agent_source", source)
         if title:
