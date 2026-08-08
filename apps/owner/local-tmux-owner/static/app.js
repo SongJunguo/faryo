@@ -47,7 +47,7 @@
     'Tap folder to switch sessions',
     'Set font on home',
   ];
-  const COMMAND_SUGGESTIONS = ['/permissions', '/model', '/rename', '/new', 'codex', 'codex resume', 'codex --yolo', 'claude'];
+  const COMMAND_SUGGESTIONS = ['/permissions', '/model', '/rename', '/new', 'codex', 'codex resume', 'codex --yolo', 'claude', 'claude --dangerously-skip-permissions', 'claude --resume'];
   let captureRefreshInFlight = false, pendingCaptureRefreshLines = null, pendingDeferredCapture = null, activeCaptureRefreshController = null, captureRefreshRunId = 0;
   let statusRefreshInFlight = false, activeStatusRefreshController = null, statusRefreshRunId = 0, statusRefreshTimer = null;
   let eventSource = null, eventRetryTimer = null, captureFallbackTimer = null, eventRetryDelayMs = 1800, liveState = 'fallback';
@@ -121,7 +121,7 @@
     }
     return items;
   }
-  function commandMatches() { const q = promptInput.value.trimStart().toLowerCase(); if (/^cd(\s.*)?$/.test(q)) return recentDirCommands().filter((v) => v.toLowerCase().startsWith(q) && v.toLowerCase() !== q).slice(0, 5); return (/^\/[a-z]*$/.test(q) || /^(?:codex|claude)(?:\s+[-\w]+){0,3}\s*$/.test(q)) ? COMMAND_SUGGESTIONS.filter((v) => v.startsWith(q) && v !== q).slice(0, 5) : []; }
+  function commandMatches() { const q = promptInput.value.trimStart().toLowerCase(); if (/^cd(\s.*)?$/.test(q)) return recentDirCommands().filter((v) => v.toLowerCase().startsWith(q) && v.toLowerCase() !== q).slice(0, 5); return (/^\/[a-z]*$/.test(q) || (q.length >= 2 && ('codex'.startsWith(q) || 'claude'.startsWith(q))) || /^(?:codex|claude)(?:\s+[-\w]+){0,3}\s*$/.test(q)) ? COMMAND_SUGGESTIONS.filter((v) => v.startsWith(q) && v !== q).slice(0, 5) : []; }
   function applyCommandSuggestion(value) { promptInput.value = value; promptInput.focus(); promptInput.setSelectionRange(value.length, value.length); autosize(); updateSendVisibility(); renderCommandSuggestions(); return true; }
   function renderCommandSuggestions() { const items = commandMatches(); if (!commandSuggest) return; commandSuggest.classList.toggle('hidden', !items.length); commandSuggest.innerHTML = items.map((v) => `<button type="button" data-value="${escapeHtml(v)}">${escapeHtml(v)}</button>`).join(''); }
   function handleCommandSuggestionKey(event) { const [value] = commandMatches(); if ((event.key === 'Tab' || event.key === 'Enter') && value) { event.preventDefault(); return applyCommandSuggestion(value); } if (event.key === 'Escape') commandSuggest?.classList.add('hidden'); return false; }
