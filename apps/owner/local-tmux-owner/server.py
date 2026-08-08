@@ -208,6 +208,10 @@ AGENT_SOURCE_BY_COMMAND = {profile.command: profile.source for profile in AGENT_
 _CLAUDE_DEEPSEEK_LAUNCHER = os.environ.get("FARYO_CLAUDE_DEEPSEEK_LAUNCHER", "").strip()
 CLAUDE_DEEPSEEK_LAUNCHER = Path(_CLAUDE_DEEPSEEK_LAUNCHER).expanduser() if _CLAUDE_DEEPSEEK_LAUNCHER else None
 BLACK_VALUES = {"#000", "#000000", "black", "rgb(0,0,0)", "rgb(0, 0, 0)"}
+# Explicit terminal white (e.g. Claude Code diff text over the stripped green/red
+# background) is the light-theme twin of BLACK_VALUES: drop it so the text
+# inherits the theme foreground instead of vanishing on light backgrounds.
+WHITE_VALUES = {"#fff", "#ffffff", "white", "rgb(255,255,255)", "rgb(255, 255, 255)"}
 USER_INPUT_COLOR = "var(--user-input-color, #E0C29D)"
 LOW_CONTRAST_TERMINAL_VALUES = {"#000080", "#0000aa", "#0000cd", "#0000ff", "blue"}
 _rate_limit_cache: dict[str, Any] | None = None
@@ -1469,7 +1473,7 @@ def sanitize_style_attr(match: re.Match[str]) -> str:
         normalized_value = value.lower().replace(" ", "")
         if prop in {"background", "background-color", "text-decoration-color"}:
             continue
-        if prop == "color" and normalized_value in BLACK_VALUES:
+        if prop == "color" and normalized_value in BLACK_VALUES | WHITE_VALUES:
             continue
         if prop == "color" and normalized_value in LOW_CONTRAST_TERMINAL_VALUES:
             value = USER_INPUT_COLOR
