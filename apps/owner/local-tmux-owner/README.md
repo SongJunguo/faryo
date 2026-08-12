@@ -27,6 +27,31 @@ Direct local URL printed at startup:
 http://<host>:8765/?token=<token>
 ```
 
+## Math Rendering
+
+The compact Chat view renders supported LaTeX delimiters with KaTeX, including
+`$...$`, `$$...$$`, `\(...\)`, and `\[...\]`. Raw view and copied output keep
+the original terminal text. KaTeX assets are loaded from jsDelivr; if they are
+unavailable, Faryo leaves the original LaTeX visible instead of blocking the
+session UI.
+
+Inline-dollar detection is deliberately conservative so shell variables and
+code spans are not treated as formulas. KaTeX runs with `trust: false`.
+
+Run the parser test with:
+
+```bash
+node tests/math-render.test.js
+```
+
+The optional live-browser test requires a running Owner, a tmux session that
+already contains inline and display formulas, and Chrome:
+
+```bash
+FARYO_SMOKE_URL='http://127.0.0.1:8765/?token=<token>&session=<session>' \
+  node tests/browser-katex-smoke.mjs
+```
+
 ## Security Boundary
 
 - Does not expose arbitrary shell execution.

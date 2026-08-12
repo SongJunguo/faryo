@@ -220,3 +220,22 @@ button.product-mark:active { transform: none; }
   .error { margin-top: 6px; }
   button { min-height: 38px; }
 }
+/* Compact-view KaTeX rendering. Keep terminal/raw wrapping rules away from
+   KaTeX's internal layout, and let wide display equations scroll on phones. */
+.compact-block .katex,
+.compact-block .katex * {
+  white-space: normal;
+  overflow-wrap: normal;
+  word-break: normal;
+}
+.compact-block .katex-display {
+  max-width: 100%;
+  margin: .65em 0;
+  padding: 2px 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  -webkit-overflow-scrolling: touch;
+}
+.compact-block .katex-display > .katex {
+  white-space: nowrap;
+}

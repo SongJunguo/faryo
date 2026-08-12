@@ -54,12 +54,14 @@ release_checks() {
   for js_file in \
     "$ROOT/apps/owner/local-tmux-owner/static/compact-rules-codex.js" \
     "$ROOT/apps/owner/local-tmux-owner/static/compact-rules-claude.js" \
+    "$ROOT/apps/owner/local-tmux-owner/static/math-render.js" \
     "$ROOT/apps/shared/static/appearance.js" \
     "$ROOT/apps/owner/local-tmux-owner/static/app.js" \
     "$ROOT/apps/gateway/server/static/projects.js"
   do
     node --check "$js_file"
   done
+  node "$ROOT/apps/owner/local-tmux-owner/tests/math-render.test.js"
   python3 - "$ROOT" <<'PY'
 from pathlib import Path
 import plistlib
@@ -71,6 +73,11 @@ assert "compact-rules-codex.js" in index, "index.html must load compact-rules-co
 assert "compact-rules-claude.js" in index, "index.html must load compact-rules-claude.js"
 assert "compact-rules-codex.js" in gateway, "gateway must allow compact-rules-codex.js"
 assert "compact-rules-claude.js" in gateway, "gateway must allow compact-rules-claude.js"
+assert "math-render.js" in index, "index.html must load math-render.js"
+assert "math-render.js" in gateway, "gateway must allow math-render.js"
+app = (root / "apps/owner/local-tmux-owner/static/app.js").read_text(encoding="utf-8")
+assert "headers['X-Owner-Token'] = ownerToken" in app, "Owner API calls must include the token header"
+assert "next.searchParams.set('token', ownerToken)" in app, "session switches must preserve direct Owner auth"
 with (root / "deploy/launchd/dev.faryo.owner.keepalive.plist").open("rb") as fh:
     plistlib.load(fh)
 PY

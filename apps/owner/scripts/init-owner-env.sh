@@ -91,6 +91,7 @@ if env_file.exists():
             existing[match.group(1)] = parse_value(match.group(2))
 
 faryo_home = os.environ["FARYO_HOME"]
+rotate_token = os.environ.get("FARYO_OWNER_TOKEN_ROTATE") == "1"
 owner_data = existing.get("FARYO_OWNER_DATA") or f"{faryo_home}/owner/data"
 label = (
     os.environ.get("FARYO_PROJECT_WORKBENCH_SYNC_OWNER_LABEL")
@@ -103,7 +104,7 @@ if not existing.get("FARYO_OWNER_LABEL"):
 values = {
     "FARYO_OWNER_HOST": existing.get("FARYO_OWNER_HOST") or os.environ["FARYO_OWNER_HOST"],
     "FARYO_OWNER_PORT": existing.get("FARYO_OWNER_PORT") or os.environ["FARYO_OWNER_PORT"],
-    "FARYO_OWNER_TOKEN": existing.get("FARYO_OWNER_TOKEN") or secrets.token_urlsafe(32),
+    "FARYO_OWNER_TOKEN": secrets.token_urlsafe(32) if rotate_token else (existing.get("FARYO_OWNER_TOKEN") or secrets.token_urlsafe(32)),
     "FARYO_OWNER_DIRECT_SESSION": existing.get("FARYO_OWNER_DIRECT_SESSION") or os.environ["FARYO_OWNER_DIRECT_SESSION"],
     "FARYO_OWNER_TMUX_SESSION": existing.get("FARYO_OWNER_TMUX_SESSION") or os.environ["FARYO_OWNER_TMUX_SESSION"],
     "FARYO_OWNER_LABEL": existing["FARYO_OWNER_LABEL"],
@@ -130,6 +131,8 @@ force_keys = {
 }
 if not parse_value(raw_values.get("FARYO_OWNER_LABEL", "")):
     force_keys.add("FARYO_OWNER_LABEL")
+if rotate_token:
+    force_keys.add("FARYO_OWNER_TOKEN")
 seen = set()
 updated = []
 for line in lines:

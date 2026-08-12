@@ -17,6 +17,7 @@
   const metaLineRe = /^\s*(gpt|o\d|claude)[\w.\- ]*·\s+/;
   const codexCompactRules = window.FaryoCodexCompactRules || {};
   const claudeCompactRules = window.FaryoClaudeCompactRules || {};
+  const mathRenderer = window.FaryoMath || {};
   const runtimeCompactRules = {
     userPromptRe: /^\s*›\s+/,
     compactBlocks: (text) => [{ kind: 'output', text: text || 'No output yet' }],
@@ -54,6 +55,7 @@
   let petSending = false, petSendTimer = null, petStopping = false, petStopTimer = null, agentRunning = false, lastPetPhase = '';
   let outputActivity = 0, outputActivityTimer = null, lastCaptureSignature = '', lastCapture = null;
   let outputMode = 'compact', fullLocked = false, fullRefreshTimer = null, preserveErrorUntil = 0, seenInitialPageShow = false, needsConfirmUI = false, errorTimer = null, currentPromptTip = '';
+  let compactOutputSources = [];
   let pendingAttachments = [];
   const routeMatch = location.pathname.match(/^\/(hp|pc|txy)(?:\/|$)/);
   const routeBase = routeMatch ? `/${routeMatch[1]}` : '';
@@ -79,6 +81,9 @@
   window.visualViewport?.addEventListener('scroll', syncKeyboardState);
   window.addEventListener('resize', syncKeyboardState);
   syncKeyboardState();
+  window.addEventListener('faryo-math-ready', () => {
+    if (lastCapture && outputMode === 'compact') renderOutput(lastCapture);
+  });
 
   function fitPromptTip(text) { return Array.from(text || '').length > 22 ? Array.from(text).slice(0, 21).join('') + '...' : text; }
   function setPromptTip(tip) { currentPromptTip = tip || PROMPT_TIPS[0]; promptInput.placeholder = fitPromptTip(currentPromptTip); promptInput.title = currentPromptTip; }
@@ -181,9 +186,12 @@
     const copy = event.target.closest('.copy-output-block');
     if (copy) {
       const block = copy.closest('.compact-block.output');
-      const clone = block && block.cloneNode(true);
+      const sourceIndex = Number(block?.dataset.sourceIndex);
+      const source = Number.isInteger(sourceIndex) && sourceIndex >= 0 ? compactOutputSources[sourceIndex] : '';
+      const clone = !source && block ? block.cloneNode(true) : null;
       clone && clone.querySelector('.copy-output-block')?.remove();
-      try { await navigator.clipboard.writeText((clone?.innerText || '').trim()); copy.textContent = '✓'; setTimeout(() => { if (copy.isConnected) copy.textContent = '⧉'; }, 900); }
+      const text = source || clone?.innerText || '';
+      try { await navigator.clipboard.writeText(text.trim()); copy.textContent = '✓'; setTimeout(() => { if (copy.isConnected) copy.textContent = '⧉'; }, 900); }
       catch (err) { setError('Copy failed'); }
       return;
     }
@@ -237,6 +245,7 @@
 
   async function api(path, options = {}) {
     const headers = Object.assign({}, options.headers || {});
+    if (ownerToken) headers['X-Owner-Token'] = ownerToken;
     if (options.body && !headers['Content-Type'] && !(options.body instanceof FormData)) headers['Content-Type'] = 'application/json';
     const requestPath = path.startsWith('/api/') ? `${routeBase}${path}` : path;
     const res = await fetch(requestPath, Object.assign({}, options, { headers, cache: 'no-store' }));
@@ -540,8 +549,11 @@
   }
 
   function switchSession(route, session) {
-    if (routeBase !== `/${route}`) return location.assign(`/${route}/?session=${encodeURIComponent(session)}`);
-    selectedSession = session; history.replaceState(null, '', `${location.pathname}?session=${encodeURIComponent(session)}${location.hash}`); sessionMenu.classList.add('hidden'); resetRefreshState(); closeEventStream(); lastCaptureSignature = ''; refreshStatus({ silent: true }).catch(handleBackgroundError); refreshCapture(currentCaptureLines(), { silent: true }).catch(handleBackgroundError); if (outputMode === 'compact') startEventStream();
+    const next = new URL(routeBase === `/${route}` ? location.href : `/${route}/`, location.origin);
+    next.searchParams.set('session', session);
+    if (ownerToken) next.searchParams.set('token', ownerToken);
+    if (routeBase !== `/${route}`) return location.assign(`${next.pathname}${next.search}${location.hash}`);
+    selectedSession = session; history.replaceState(null, '', `${next.pathname}${next.search}${location.hash}`); sessionMenu.classList.add('hidden'); resetRefreshState(); closeEventStream(); lastCaptureSignature = ''; refreshStatus({ silent: true }).catch(handleBackgroundError); refreshCapture(currentCaptureLines(), { silent: true }).catch(handleBackgroundError); if (outputMode === 'compact') startEventStream();
   }
 
   function cachedWorkbench() {
@@ -559,7 +571,8 @@
   }
 
   async function refreshSessionMenu() {
-    const res = await fetch('/api/workbench', { cache: 'no-store' }), data = await res.json(); if (!res.ok || data.ok === false) throw new Error(data.error || 'Failed to load sessions');
+    const headers = ownerToken ? { 'X-Owner-Token': ownerToken } : {};
+    const res = await fetch('/api/workbench', { headers, cache: 'no-store' }), data = await res.json(); if (!res.ok || data.ok === false) throw new Error(data.error || 'Failed to load sessions');
     try { sessionStorage.setItem(WORKBENCH_CACHE_KEY, JSON.stringify({ storedAt: Date.now(), data })); } catch (_err) {}
     renderSessionMenu(data, false);
   }
@@ -651,7 +664,10 @@
   }
 
   function renderTextWithFiles(text) {
-    return String(text || '').split('\n').map((line) => renderImageLine(line) || renderFileLine(line) || escapeHtml(line)).join('\n');
+    const originalLines = String(text || '').split('\n');
+    const prepared = typeof mathRenderer.prepareText === 'function' ? mathRenderer.prepareText(text) : String(text || '');
+    const preparedLines = prepared.split('\n');
+    return originalLines.map((line, index) => renderImageLine(line) || renderFileLine(line) || escapeHtml(preparedLines[index] ?? line)).join('\n');
   }
 
   function compactRulesForCapture(capture) {
@@ -666,14 +682,18 @@
   }
 
   function renderCompactOutput(text, rules) {
+    compactOutputSources = [];
     output.innerHTML = rules.compactBlocks(text).map((block) => {
       if (block.kind === 'process') return `<section class="compact-process-line">${escapeHtml(rules.processSummaryCard(block.text))}</section>`;
       if (block.kind === 'status') return `<section class="compact-status-line">${escapeHtml(block.text)}</section>`;
       if (block.kind === 'plan') return renderPlanBlock(block.text);
-      return `<section class="compact-block ${block.kind}">${renderTextWithFiles(block.text)}</section>`;
+      const sourceIndex = block.kind === 'output' ? compactOutputSources.push(block.text) - 1 : -1;
+      const sourceAttr = sourceIndex >= 0 ? ` data-source-index="${sourceIndex}"` : '';
+      return `<section class="compact-block ${block.kind}"${sourceAttr}>${renderTextWithFiles(block.text)}</section>`;
     }).join('') || '<section class="compact-block output">No output yet</section>';
     const blocks = output.querySelectorAll('.compact-block.output');
     blocks[blocks.length - 1]?.insertAdjacentHTML('beforeend', '<button class="copy-output-block" type="button" aria-label="Copy this output" title="Copy this output">⧉</button>');
+    mathRenderer.renderOutput?.(output);
   }
 
   function renderPlainOutput(text, rules) {
@@ -919,6 +939,7 @@
       xhr.onerror = () => reject(new Error('Upload failed'));
       xhr.onabort = () => { const err = new Error('Upload canceled'); err.canceled = true; reject(err); };
       xhr.open('POST', `${routeBase}/api/attachment`);
+      if (ownerToken) xhr.setRequestHeader('X-Owner-Token', ownerToken);
       xhr.send(form);
     });
   }

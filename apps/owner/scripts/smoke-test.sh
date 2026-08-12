@@ -43,6 +43,8 @@ test "$(curl --noproxy '*' -sS -o "$TMP" -w '%{http_code}' "http://$FARYO_OWNER_
 grep -q 'FaryoCodexCompactRules' "$TMP"
 test "$(curl --noproxy '*' -sS -o "$TMP" -w '%{http_code}' "http://$FARYO_OWNER_HOST:$FARYO_OWNER_PORT/compact-rules-claude.js")" = "200"
 grep -q 'FaryoClaudeCompactRules' "$TMP"
+test "$(curl --noproxy '*' -sS -o "$TMP" -w '%{http_code}' "http://$FARYO_OWNER_HOST:$FARYO_OWNER_PORT/math-render.js")" = "200"
+grep -q 'FaryoMath' "$TMP"
 
 echo
 echo "== capture =="

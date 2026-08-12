@@ -2506,7 +2506,9 @@ class Handler(SimpleHTTPRequestHandler):
         return self.server.config  # type: ignore[attr-defined]
 
     def log_message(self, fmt: str, *args: Any) -> None:
-        sys.stderr.write("[%s] %s\n" % (now_iso(), fmt % args))
+        message = fmt % args
+        message = re.sub(r"([?&]token=)[^&\s]+", r"\1<redacted>", message)
+        sys.stderr.write("[%s] %s\n" % (now_iso(), message))
 
     def end_headers(self) -> None:
         self.send_header("Cache-Control", "no-store")
