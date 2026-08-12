@@ -31,9 +31,10 @@ http://<host>:8765/?token=<token>
 
 The compact Chat view renders supported LaTeX delimiters with KaTeX, including
 `$...$`, `$$...$$`, `\(...\)`, and `\[...\]`. Raw view and copied output keep
-the original terminal text. KaTeX assets are loaded from jsDelivr; if they are
-unavailable, Faryo leaves the original LaTeX visible instead of blocking the
-session UI.
+the original terminal text. KaTeX 0.18.4, its fonts, and its MIT license are
+vendored under `static/vendor/katex`, so formula rendering does not depend on a
+CDN or a permissive external-resource CSP. If the local renderer is unavailable,
+Faryo still leaves the original LaTeX visible instead of blocking the session UI.
 
 For a bound Codex session, compact Chat reads the original message text through
 Codex App Server instead of reconstructing Markdown from the tmux screen. Raw
@@ -42,6 +43,25 @@ live pane and falls back to tmux if structured history is unavailable.
 Because structured capture does not need a wide terminal, Owner also leaves
 Codex pane sizing to tmux and its attached client so TUI lines wrap at the
 visible terminal width.
+
+Compact Chat renders structured messages with the locally vendored
+`markdown-it` 14.3.0 library. Raw HTML and `data:` URLs are disabled, unsafe
+link protocols retain markdown-it's default rejection, and external links open
+with `noopener noreferrer`. Math spans are protected before Markdown parsing
+and rendered by KaTeX afterwards, while fenced and inline code stays literal.
+
+For Codex sessions, finalized chat remains sourced from structured App Server
+thread data. A separately running Codex TUI does not publish its in-progress
+item deltas to this Owner process, so while a turn is active Compact Chat adds
+a short, transient, redacted tmux tail. The live tail disappears when the turn
+finishes and the structured Markdown/KaTeX message takes over.
+
+Browser sends use a client-generated message id. Owner confirms that tmux
+accepted the paste and that the Codex composer consumed Enter before returning
+success. A delayed second Enter is attempted only while the same draft is
+still present. Network retries are idempotent, and a failed/unconfirmed send
+keeps the browser draft instead of clearing it. If the TUI already contains a
+different desktop draft, Owner returns `409` rather than overwriting it.
 
 The tmux fallback still handles Codex terminal output, which removes the
 backslashes from `\(...\)` and `\[...\]`, by recognizing conservative
@@ -81,5 +101,6 @@ display. Without it, the service still works as a generic tmux control surface.
 
 - `GET /api/status`
 - `GET /api/capture?lines=240`
-- `POST /api/send {"text":"..."}`
+- `GET /api/events?lines=320` (SSE structured capture plus transient live tail)
+- `POST /api/send` with `text`, `session`, and optional `clientMessageId`
 - `POST /api/approve`

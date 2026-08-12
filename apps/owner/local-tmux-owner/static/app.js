@@ -18,6 +18,7 @@
   const codexCompactRules = window.FaryoCodexCompactRules || {};
   const claudeCompactRules = window.FaryoClaudeCompactRules || {};
   const mathRenderer = window.FaryoMath || {};
+  const markdownRenderer = window.FaryoMarkdown || {};
   const runtimeCompactRules = {
     userPromptRe: /^\s*›\s+/,
     compactBlocks: (text) => [{ kind: 'output', text: text || 'No output yet' }],
@@ -62,10 +63,50 @@
   const params = new URLSearchParams(location.search);
   const ownerToken = params.get('token') || '';
   let selectedSession = params.get('session') || '';
+  let submitInFlight = false, pendingSubmission = null;
+
+  function promptDraftKey(session = selectedSession) { return `faryoPromptDraft:${routeBase || 'owner'}:${session || 'default'}`; }
+  function pendingSubmissionKey(session = selectedSession) { return `${promptDraftKey(session)}:pending`; }
+  function persistPromptDraft() {
+    try {
+      if (promptInput.value) sessionStorage.setItem(promptDraftKey(), promptInput.value);
+      else sessionStorage.removeItem(promptDraftKey());
+    } catch (_err) {}
+  }
+  function persistPendingSubmission() {
+    try {
+      if (pendingSubmission) sessionStorage.setItem(pendingSubmissionKey(), JSON.stringify(pendingSubmission));
+      else sessionStorage.removeItem(pendingSubmissionKey());
+    } catch (_err) {}
+  }
+  function restorePromptDraft() {
+    try {
+      promptInput.value = sessionStorage.getItem(promptDraftKey()) || '';
+      const restored = JSON.parse(sessionStorage.getItem(pendingSubmissionKey()) || 'null');
+      pendingSubmission = restored?.browserText === promptInput.value ? restored : null;
+      if (!pendingSubmission) sessionStorage.removeItem(pendingSubmissionKey());
+    } catch (_err) {
+      pendingSubmission = null;
+    }
+  }
+  function newClientMessageId() {
+    if (window.crypto?.randomUUID) return `web-${window.crypto.randomUUID()}`;
+    return `web-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 14)}`;
+  }
 
   const isStandalone = window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone;
   document.documentElement.classList.toggle('standalone', Boolean(isStandalone));
-  promptInput.addEventListener('input', () => { autosize(); updateSendVisibility(); renderCommandSuggestions(); });
+  restorePromptDraft();
+  promptInput.addEventListener('input', () => {
+    if (pendingSubmission?.browserText !== promptInput.value) {
+      pendingSubmission = null;
+      persistPendingSubmission();
+    }
+    persistPromptDraft();
+    autosize();
+    updateSendVisibility();
+    renderCommandSuggestions();
+  });
 
   function syncKeyboardState() {
     const viewport = window.visualViewport;
@@ -161,14 +202,14 @@
 
   function renderCaptureWhenSafe(capture, keepBottom) {
     noteOutputActivity(capture);
-    if (!keepBottom || !isNearBottom()) {
-      pendingDeferredCapture = capture;
-      updateBottomButton();
-      return;
-    }
+    const previousScrollTop = outputWrap.scrollTop;
     pendingDeferredCapture = null;
     renderOutput(capture);
-    scrollBottom(true);
+    if (keepBottom) scrollBottom(true);
+    else requestAnimationFrame(() => {
+      outputWrap.scrollTop = previousScrollTop;
+      updateBottomButton();
+    });
   }
 
   function scrollBottom(force = false) {
@@ -198,6 +239,11 @@
     const image = event.target.closest('.chat-image-thumb');
     if (image) {
       showImageLightbox(image.dataset.src || '', image.dataset.label || '');
+      return;
+    }
+    const markdownImage = event.target.closest('.chat-markdown-image');
+    if (markdownImage) {
+      showImageLightbox(markdownImage.currentSrc || markdownImage.src || '', markdownImage.alt || 'Image preview');
       return;
     }
   });
@@ -287,7 +333,7 @@
   }
 
   function noteOutputActivity(capture) {
-    const text = capture?.text || '';
+    const text = `${capture?.text || ''}\n${capture?.liveText || ''}`;
     const signature = `${text.length}:${text.slice(-180)}`;
     if (signature === lastCaptureSignature) return;
     const delta = Math.max(0, text.length - Number(lastCaptureSignature.split(':', 1)[0] || 0));
@@ -553,7 +599,14 @@
     next.searchParams.set('session', session);
     if (ownerToken) next.searchParams.set('token', ownerToken);
     if (routeBase !== `/${route}`) return location.assign(`${next.pathname}${next.search}${location.hash}`);
-    selectedSession = session; history.replaceState(null, '', `${next.pathname}${next.search}${location.hash}`); sessionMenu.classList.add('hidden'); resetRefreshState(); closeEventStream(); lastCaptureSignature = ''; refreshStatus({ silent: true }).catch(handleBackgroundError); refreshCapture(currentCaptureLines(), { silent: true }).catch(handleBackgroundError); if (outputMode === 'compact') startEventStream();
+    persistPromptDraft();
+    persistPendingSubmission();
+    selectedSession = session;
+    pendingSubmission = null;
+    restorePromptDraft();
+    autosize();
+    updateSendVisibility();
+    history.replaceState(null, '', `${next.pathname}${next.search}${location.hash}`); sessionMenu.classList.add('hidden'); resetRefreshState(); closeEventStream(); lastCaptureSignature = ''; refreshStatus({ silent: true }).catch(handleBackgroundError); refreshCapture(currentCaptureLines(), { silent: true }).catch(handleBackgroundError); if (outputMode === 'compact') startEventStream();
   }
 
   function cachedWorkbench() {
@@ -619,7 +672,7 @@
   }
 
   const imagePathRe = /\.(?:jpe?g|png|webp|gif|heic|heif)$/i;
-  const filePathRe = /\.(?:md|txt|json|csv|rtf|pdf|docx?|xlsx?|pptx?|odt|odp|ods)$/i;
+  const filePathRe = /\.(?:md|txt|json|csv|rtf|pdf|docx?|xlsx?|pptx?|odt|odp|ods|bash|c|cc|cfg|cpp|css|go|h|hpp|html|ini|java|js|jsx|lean|log|py|rs|sh|sql|tex|toml|ts|tsx|xml|ya?ml|zsh)$/i;
 
   function cleanTypedPath(value, suffixRe) {
     let text = String(value || '').trim();
@@ -667,6 +720,40 @@
     const originalLines = String(text || '').split('\n');
     const prepared = typeof mathRenderer.prepareText === 'function' ? mathRenderer.prepareText(text, mathOptions) : String(text || '');
     const preparedLines = prepared.split('\n');
+    if (typeof markdownRenderer.render === 'function' && markdownRenderer.ready?.()) {
+      const rendered = [];
+      let markdownLines = [];
+      let fenceChar = '';
+      const flushMarkdown = () => {
+        if (!markdownLines.length) return;
+        rendered.push(`<div class="markdown-body">${markdownRenderer.render(markdownLines.join('\n'), {
+          localFileHref: (path, line = 0, column = 0) => {
+            const location = `/api/local-file/view?path=${encodeURIComponent(path)}${line ? `&line=${line}` : ''}${column ? `&column=${column}` : ''}`;
+            return routeBase + authenticatedApiPath(location);
+          },
+          localImageHref: (path) => routeBase + authenticatedApiPath(`/api/local-image?path=${encodeURIComponent(path)}`),
+        })}</div>`);
+        markdownLines = [];
+      };
+      originalLines.forEach((line, index) => {
+        const fenceMatch = line.trimStart().match(/^(`{3,}|~{3,})/);
+        const insideFence = Boolean(fenceChar);
+        const special = !insideFence && !fenceMatch && (renderImageLine(line) || renderFileLine(line));
+        if (special) {
+          flushMarkdown();
+          rendered.push(special);
+        } else {
+          markdownLines.push(preparedLines[index] ?? line);
+        }
+        if (fenceMatch) {
+          const char = fenceMatch[1][0];
+          if (!fenceChar) fenceChar = char;
+          else if (fenceChar === char) fenceChar = '';
+        }
+      });
+      flushMarkdown();
+      return rendered.join('');
+    }
     return originalLines.map((line, index) => renderImageLine(line) || renderFileLine(line) || escapeHtml(preparedLines[index] ?? line)).join('\n');
   }
 
@@ -722,6 +809,9 @@
     if (outputMode === 'compact') renderCompactOutput(text, rules, { terminal: capture.captureSource !== 'codex-app-server' });
     else if (capture.html) output.innerHTML = decorateMetaLines(capture.html, text);
     else renderPlainOutput(text, rules);
+    if (outputMode === 'compact' && capture.agentRunning && capture.liveText) {
+      output.insertAdjacentHTML('beforeend', `<section class="compact-live-terminal"><div class="compact-live-title"><span class="live-dot"></span>Live from tmux</div><pre>${escapeHtml(String(capture.liveText))}</pre></section>`);
+    }
   }
 
   function resetRefreshState() {
@@ -982,6 +1072,10 @@
       const format = outputMode === 'compact' ? '' : '&format=html';
       const capture = await api(apiPath(`/api/capture?lines=${lines}${format}`), { signal: controller.signal });
       if (runId !== captureRefreshRunId) return;
+      if (Object.prototype.hasOwnProperty.call(capture, 'agentRunning')) {
+        agentRunning = Boolean(capture.agentRunning);
+        updatePetControl();
+      }
       renderCaptureWhenSafe(capture, keepBottom);
     } catch (err) {
       if (err.name === 'AbortError') return;
@@ -1097,17 +1191,28 @@
   });
 
   async function submitPrompt() {
+    if (submitInFlight) return;
     const text = promptInput.value.trim();
     if (!text && !pendingAttachments.length) return;
     if (pendingAttachments.some((item) => ['compressing', 'uploading'].includes(item.status))) { setError('Attachments are still uploading'); return; }
     if (pendingAttachments.some((item) => item.status === 'error')) { setError('Remove failed attachments and try again'); return; }
     const attachmentText = pendingAttachments.filter((item) => item.path).map((item) => `${item.kind === 'image' ? 'Image' : 'Attachment'}: ${item.path}`).join('\n');
+    const browserText = promptInput.value;
+    const outboundText = [text, attachmentText].filter(Boolean).join('\n');
+    if (!pendingSubmission || pendingSubmission.browserText !== browserText || pendingSubmission.outboundText !== outboundText) {
+      pendingSubmission = { id: newClientMessageId(), browserText, outboundText };
+      persistPendingSubmission();
+    }
+    submitInFlight = true;
     try {
       closeDockMenu();
       playPetSend();
-      await postAction('/api/send', { text: [text, attachmentText].filter(Boolean).join('\n') });
-      promptInput.value = '';
+      await postAction('/api/send', { text: outboundText, clientMessageId: pendingSubmission.id });
+      if (promptInput.value === browserText) promptInput.value = '';
       clearPendingAttachments();
+      pendingSubmission = null;
+      persistPendingSubmission();
+      persistPromptDraft();
       autosize();
       updateSendVisibility();
       refreshStatus({ silent: true }).catch(handleBackgroundError);
@@ -1116,7 +1221,11 @@
     } catch (err) {
       stopPetSend();
       updatePetControl();
+      persistPromptDraft();
+      persistPendingSubmission();
       setError(userErrorMessage(err));
+    } finally {
+      submitInFlight = false;
     }
   }
 

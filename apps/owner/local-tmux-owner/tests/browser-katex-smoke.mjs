@@ -5,6 +5,10 @@ import path from 'node:path';
 
 const targetUrl = process.env.FARYO_SMOKE_URL;
 const sendText = process.env.FARYO_SMOKE_SEND_TEXT || '';
+const expectSendFailure = process.env.FARYO_SMOKE_EXPECT_SEND_FAILURE === '1';
+const expectLive = process.env.FARYO_SMOKE_EXPECT_LIVE === '1';
+const expectLiveClears = process.env.FARYO_SMOKE_EXPECT_LIVE_CLEARS === '1';
+const skipRenderChecks = process.env.FARYO_SMOKE_SKIP_RENDER_CHECKS === '1';
 const debugLayout = process.env.FARYO_SMOKE_DEBUG_LAYOUT === '1';
 const screenshotPath = process.env.FARYO_SMOKE_SCREENSHOT || '';
 const expectedTex = JSON.parse(process.env.FARYO_SMOKE_EXPECT_TEX || '[]');
@@ -31,6 +35,7 @@ try {
     '--disable-sync',
     '--no-first-run',
     '--no-proxy-server',
+    '--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE 127.0.0.1',
     `--user-data-dir=${profile}`,
     '--remote-debugging-port=0',
     'about:blank',
@@ -107,6 +112,13 @@ try {
         const outputWrap = document.getElementById('outputWrap');
         const katexCount = output?.querySelectorAll('.katex').length || 0;
         const displayCount = output?.querySelectorAll('.katex-display').length || 0;
+        const markdownCount = output?.querySelectorAll('.markdown-body').length || 0;
+        const katexAssetUrls = performance.getEntriesByType('resource')
+          .map((entry) => String(entry.name || ''))
+          .filter((url) => /(?:\\/vendor\\/katex\\/|cdn\\.jsdelivr\\.net\\/npm\\/katex)/i.test(url));
+        const markdownAssetUrls = performance.getEntriesByType('resource')
+          .map((entry) => String(entry.name || ''))
+          .filter((url) => /(?:\\/vendor\\/markdown-it\\/|cdn\\.jsdelivr\\.net\\/npm\\/markdown-it)/i.test(url));
         const displayLayout = [...(output?.querySelectorAll('.katex-display') || [])].map((display) => {
           const formula = display.querySelector(':scope > .katex');
           const block = display.closest('.compact-block');
@@ -167,12 +179,18 @@ try {
           };
         });
         return {
-          ready: katexCount >= 2 && displayCount >= 1,
+          domReady: Boolean(output && document.getElementById('promptInput')),
+          ready: katexCount >= 2 && displayCount >= 1 && markdownCount >= 1,
           katexCount,
           displayCount,
+          markdownCount,
           viewport: { width: innerWidth, height: innerHeight },
           outputHorizontalOverflow: Boolean(outputWrap && outputWrap.scrollWidth > outputWrap.clientWidth + 1),
           katexStylesheetLoaded: [...document.styleSheets].some((sheet) => String(sheet.href || '').includes('/katex')),
+          katexAssetUrls,
+          katexAssetsLocal: katexAssetUrls.length >= 3 && katexAssetUrls.every((url) => new URL(url).origin === location.origin),
+          markdownAssetUrls,
+          markdownAssetsLocal: markdownAssetUrls.length >= 1 && markdownAssetUrls.every((url) => new URL(url).origin === location.origin),
           displayLayout,
           outputText: String(output?.innerText || '').slice(-600),
           outputHtml: String(output?.innerHTML || '').slice(-2400),
@@ -182,30 +200,38 @@ try {
       returnByValue: true,
     });
     state = result.result?.value || {};
-    if (state.ready) break;
+    if (skipRenderChecks ? state.domReady : state.ready) break;
   }
 
-  if (!state.ready) {
+  if (!(skipRenderChecks ? state.domReady : state.ready)) {
     throw new Error(`KaTeX did not appear in the live Faryo DOM: ${JSON.stringify(state)}`);
   }
-  const brokenDisplayLayout = state.displayLayout.filter((item) => item.html?.whiteSpace !== 'nowrap');
-  if (brokenDisplayLayout.length) {
-    throw new Error(`KaTeX display layout lost nowrap: ${JSON.stringify(brokenDisplayLayout)}`);
-  }
-  if (state.outputHorizontalOverflow) {
-    throw new Error('Formula rendering caused page-level horizontal overflow');
-  }
-  for (const expected of expectedTex) {
-    if (!state.displayLayout.some((item) => item.tex.includes(expected))) {
-      throw new Error(`Expected display TeX was not rendered: ${JSON.stringify(expected)}`);
+  if (!skipRenderChecks) {
+    const brokenDisplayLayout = state.displayLayout.filter((item) => item.html?.whiteSpace !== 'nowrap');
+    if (brokenDisplayLayout.length) {
+      throw new Error(`KaTeX display layout lost nowrap: ${JSON.stringify(brokenDisplayLayout)}`);
     }
-  }
-  if (minMatrixRows > 0 && !state.displayLayout.some((item) => item.matrixRows >= minMatrixRows)) {
-    throw new Error(`Expected a KaTeX matrix with at least ${minMatrixRows} rows`);
-  }
+    if (state.outputHorizontalOverflow) {
+      throw new Error('Formula rendering caused page-level horizontal overflow');
+    }
+    if (!state.katexAssetsLocal) {
+      throw new Error(`KaTeX loaded a missing or external asset: ${JSON.stringify(state.katexAssetUrls)}`);
+    }
+    if (!state.markdownAssetsLocal) {
+      throw new Error(`markdown-it loaded a missing or external asset: ${JSON.stringify(state.markdownAssetUrls)}`);
+    }
+    for (const expected of expectedTex) {
+      if (!state.displayLayout.some((item) => item.tex.includes(expected))) {
+        throw new Error(`Expected display TeX was not rendered: ${JSON.stringify(expected)}`);
+      }
+    }
+    if (minMatrixRows > 0 && !state.displayLayout.some((item) => item.matrixRows >= minMatrixRows)) {
+      throw new Error(`Expected a KaTeX matrix with at least ${minMatrixRows} rows`);
+    }
 
-  console.log('faryo-browser-katex-smoke=PASS');
-  if (debugLayout) console.log(`faryo-browser-katex-layout=${JSON.stringify(state)}`);
+    console.log('faryo-browser-katex-smoke=PASS');
+    if (debugLayout) console.log(`faryo-browser-katex-layout=${JSON.stringify(state)}`);
+  }
 
   if (screenshotPath) {
     const targetResult = await send('Runtime.evaluate', {
@@ -287,6 +313,7 @@ try {
           inputValue: document.getElementById('promptInput')?.value || '',
           errorText: document.getElementById('errorBox')?.innerText || '',
           errorHidden: document.getElementById('errorBox')?.classList.contains('hidden'),
+          storedDrafts: Object.entries(sessionStorage).filter(([key]) => key.startsWith('faryoPromptDraft:')).map(([, value]) => value),
         }))()`,
         returnByValue: true,
       });
@@ -295,10 +322,44 @@ try {
       if (!sendState.inputValue) break;
     }
 
-    if (sendState.errorText || sendState.inputValue) {
+    if (expectSendFailure) {
+      if (!sendState.errorText || sendState.inputValue !== sendText || !sendState.storedDrafts?.includes(sendText)) {
+        throw new Error(`Faryo browser did not preserve a failed draft: ${JSON.stringify(sendState)}`);
+      }
+      console.log('faryo-browser-send-failure-retains-draft=PASS');
+    } else if (sendState.errorText || sendState.inputValue || sendState.storedDrafts?.includes(sendText)) {
       throw new Error(`Faryo browser send failed: ${JSON.stringify(sendState)}`);
+    } else {
+      console.log('faryo-browser-send-smoke=PASS');
     }
-    console.log('faryo-browser-send-smoke=PASS');
+
+    if (expectLive && !expectSendFailure) {
+      let liveState = {};
+      for (let attempt = 0; attempt < 80; attempt += 1) {
+        await delay(100);
+        const result = await send('Runtime.evaluate', {
+          expression: `(() => { const live = document.querySelector('.compact-live-terminal'); return { found: Boolean(live), text: String(live?.innerText || '') }; })()`,
+          returnByValue: true,
+        });
+        liveState = result.result?.value || {};
+        if (liveState.found) break;
+      }
+      if (!liveState.found) throw new Error(`Faryo live tmux panel did not appear: ${JSON.stringify(liveState)}`);
+      console.log('faryo-browser-live-smoke=PASS');
+      if (expectLiveClears) {
+        for (let attempt = 0; attempt < 120; attempt += 1) {
+          await delay(100);
+          const result = await send('Runtime.evaluate', {
+            expression: `(() => ({ found: Boolean(document.querySelector('.compact-live-terminal')) }))()`,
+            returnByValue: true,
+          });
+          liveState = result.result?.value || {};
+          if (!liveState.found) break;
+        }
+        if (liveState.found) throw new Error('Faryo live tmux panel did not clear after turn completion');
+        console.log('faryo-browser-live-finalized=PASS');
+      }
+    }
   }
 } finally {
   try {

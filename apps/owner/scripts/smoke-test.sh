@@ -45,6 +45,15 @@ test "$(curl --noproxy '*' -sS -o "$TMP" -w '%{http_code}' "http://$FARYO_OWNER_
 grep -q 'FaryoClaudeCompactRules' "$TMP"
 test "$(curl --noproxy '*' -sS -o "$TMP" -w '%{http_code}' "http://$FARYO_OWNER_HOST:$FARYO_OWNER_PORT/math-render.js")" = "200"
 grep -q 'FaryoMath' "$TMP"
+test "$(curl --noproxy '*' -sS -o "$TMP" -w '%{http_code}' "http://$FARYO_OWNER_HOST:$FARYO_OWNER_PORT/markdown-render.js")" = "200"
+grep -q 'FaryoMarkdown' "$TMP"
+test "$(curl --noproxy '*' -sS -o "$TMP" -w '%{http_code}' "http://$FARYO_OWNER_HOST:$FARYO_OWNER_PORT/vendor/markdown-it/markdown-it.min.js")" = "200"
+grep -q 'markdownit' "$TMP"
+test "$(curl --noproxy '*' -sS -o "$TMP" -w '%{http_code}' "http://$FARYO_OWNER_HOST:$FARYO_OWNER_PORT/vendor/katex/katex.min.css")" = "200"
+grep -q 'KaTeX_Main-Regular' "$TMP"
+test "$(curl --noproxy '*' -sS -o "$TMP" -w '%{http_code}' "http://$FARYO_OWNER_HOST:$FARYO_OWNER_PORT/vendor/katex/katex.min.js")" = "200"
+grep -q 'renderToString' "$TMP"
+test "$(curl --noproxy '*' -sS -o /dev/null -w '%{http_code}' "http://$FARYO_OWNER_HOST:$FARYO_OWNER_PORT/vendor/katex/fonts/KaTeX_Main-Regular.woff2")" = "200"
 
 echo
 echo "== capture =="

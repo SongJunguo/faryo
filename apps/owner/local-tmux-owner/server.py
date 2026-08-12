@@ -76,10 +76,15 @@ MAX_SEND_CHARS = 120_000
 PASTE_READY_TIMEOUT = 1.2
 PASTE_READY_POLL_INTERVAL = 0.05
 PASTE_READY_MIN_PROBE_CHARS = 8
+PASTE_SETTLE_SECONDS = 0.08
+SEND_ACCEPT_TIMEOUT = 1.4
+SEND_ACCEPT_RETRY_DELAY = 0.22
+SEND_DELIVERY_TTL_SECONDS = 15 * 60
 CAPTURE_COMPACT_LINES = 320
 CAPTURE_FULL_LINES = 800
 CAPTURE_DEFAULT_LINES = CAPTURE_FULL_LINES
 CAPTURE_MAX_LINES = CAPTURE_FULL_LINES
+CODEX_LIVE_TAIL_LINES = 60
 EVENT_STREAM_MAX_SECONDS = 75
 EVENT_STREAM_MAX_CONNECTIONS = 6
 RATE_LIMIT_CACHE_TTL = 120.0
@@ -157,6 +162,34 @@ LOCAL_FILE_CONTENT_TYPES = {
     ".odt": "application/vnd.oasis.opendocument.text",
     ".odp": "application/vnd.oasis.opendocument.presentation",
     ".ods": "application/vnd.oasis.opendocument.spreadsheet",
+    ".bash": "text/plain; charset=utf-8",
+    ".c": "text/plain; charset=utf-8",
+    ".cc": "text/plain; charset=utf-8",
+    ".cfg": "text/plain; charset=utf-8",
+    ".cpp": "text/plain; charset=utf-8",
+    ".css": "text/plain; charset=utf-8",
+    ".go": "text/plain; charset=utf-8",
+    ".h": "text/plain; charset=utf-8",
+    ".hpp": "text/plain; charset=utf-8",
+    ".html": "text/plain; charset=utf-8",
+    ".ini": "text/plain; charset=utf-8",
+    ".java": "text/plain; charset=utf-8",
+    ".js": "text/plain; charset=utf-8",
+    ".jsx": "text/plain; charset=utf-8",
+    ".lean": "text/plain; charset=utf-8",
+    ".log": "text/plain; charset=utf-8",
+    ".py": "text/plain; charset=utf-8",
+    ".rs": "text/plain; charset=utf-8",
+    ".sh": "text/plain; charset=utf-8",
+    ".sql": "text/plain; charset=utf-8",
+    ".tex": "text/plain; charset=utf-8",
+    ".toml": "text/plain; charset=utf-8",
+    ".ts": "text/plain; charset=utf-8",
+    ".tsx": "text/plain; charset=utf-8",
+    ".xml": "text/plain; charset=utf-8",
+    ".yaml": "text/plain; charset=utf-8",
+    ".yml": "text/plain; charset=utf-8",
+    ".zsh": "text/plain; charset=utf-8",
 }
 LOCAL_FILE_SUFFIXES = set(LOCAL_FILE_CONTENT_TYPES)
 EXTERNAL_VIEWER_SUFFIXES = {".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx", ".odt", ".odp", ".ods", ".rtf"}
@@ -224,6 +257,8 @@ _codex_app_server_request_id = 0
 _codex_app_server_lock = threading.Lock()
 _codex_thread_cache: dict[str, tuple[float, dict[str, Any]]] = {}
 _codex_thread_cache_lock = threading.Lock()
+_send_delivery_lock = threading.RLock()
+_send_deliveries: dict[str, dict[str, Any]] = {}
 
 
 def short_path(path: str | None) -> str | None:
@@ -763,6 +798,7 @@ def close_shell_session(config: Config, session: str | None) -> None:
 
 TMUX_SESSION_NAME_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,80}$")
 CODEX_THREAD_ID_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,120}$")
+CLIENT_MESSAGE_ID_RE = re.compile(r"^[A-Za-z0-9_.:-]{8,128}$")
 
 
 def clean_tmux_session_name(value: str | None) -> str | None:
@@ -777,6 +813,13 @@ def clean_agent_session_id(value: str | None) -> str | None:
         return None
     value = value.strip()
     return value if CODEX_THREAD_ID_RE.fullmatch(value) else None
+
+
+def clean_client_message_id(value: str | None) -> str | None:
+    if not value:
+        return None
+    value = value.strip()
+    return value if CLIENT_MESSAGE_ID_RE.fullmatch(value) else None
 
 
 def clean_agent_launch_command(value: str | None) -> str | None:
@@ -1407,6 +1450,8 @@ def _start_codex_app_server_locked(timeout: float) -> subprocess.Popen[str] | No
         if message.get("id") != request_id:
             continue
         if isinstance(message.get("result"), dict):
+            if not send_app_server_message(process, {"method": "initialized", "params": {}}):
+                break
             return process
         break
     _stop_codex_app_server_locked()
@@ -1581,6 +1626,9 @@ def fetch_weekly_rate_limit(timeout: float = 6.0) -> dict[str, Any] | None:
         else:
             return None
 
+        if not send_app_server_message(process, {"method": "initialized", "params": {}}):
+            return None
+
         if not send_app_server_message(process, {"id": 2, "method": "account/rateLimits/read"}):
             return None
 
@@ -1747,6 +1795,20 @@ def capture_text(config: Config, lines: int = CAPTURE_DEFAULT_LINES, profile: Ag
     return strip_agent_meta_lines(clean_capture(res.stdout, profile=profile), profile)
 
 
+def codex_live_tail(text: str, max_lines: int = CODEX_LIVE_TAIL_LINES) -> str:
+    lines = text.splitlines()
+    user_starts = [index for index, line in enumerate(lines) if CODEX_PROFILE.user_prompt_re.match(line)]
+    running_starts = [index for index, line in enumerate(lines) if re.match(r"^\s*•\s+Running\b", line)]
+    starts = user_starts + running_starts
+    selected = lines[max(starts):] if starts else lines[-min(len(lines), 24):]
+    selected = selected[-max(1, max_lines):]
+    redacted = [
+        re.sub(r"(?i)(\bAccount:\s*).*$", r"\1<redacted>", line)
+        for line in selected
+    ]
+    return "\n".join(redacted).strip()
+
+
 def capture_html(config: Config, lines: int = CAPTURE_DEFAULT_LINES, profile: AgentProfile = CODEX_PROFILE) -> str | None:
     if RichConsole is None or RichText is None:
         return None
@@ -1776,11 +1838,40 @@ def tmux_capture_compact(config: Config, lines: int = 100) -> str:
     return compact_capture_for_probe(res.stdout) if res.returncode == 0 else ""
 
 
+def tmux_cursor_position(config: Config) -> tuple[int, int] | None:
+    res = tmux(config, ["display-message", "-p", "-t", tmux_target(config), "#{cursor_x}\t#{cursor_y}"], timeout=2)
+    if res.returncode != 0:
+        return None
+    try:
+        x, y = res.stdout.strip().split("\t", 1)
+        return int(x), int(y)
+    except (TypeError, ValueError):
+        return None
+
+
+def tmux_current_capture(config: Config) -> str:
+    res = tmux(config, ["capture-pane", "-p", "-J", "-t", tmux_target(config)], timeout=2)
+    return CONTROL_RE.sub("", res.stdout.replace("\r\n", "\n").replace("\r", "\n")) if res.returncode == 0 else ""
+
+
 def paste_tail_probe(text: str) -> str:
     compacted = " ".join(text.split())
     if len(compacted) <= PASTE_READY_MIN_PROBE_CHARS:
         return compacted
     return compacted[-min(80, len(compacted)):]
+
+
+def last_agent_prompt_block(config: Config, profile: AgentProfile = CODEX_PROFILE) -> str:
+    lines = tmux_current_capture(config).splitlines()
+    prompt_index = next((index for index in range(len(lines) - 1, -1, -1) if profile.input_prompt_re.match(lines[index].strip())), None)
+    if prompt_index is None:
+        return ""
+    return compact_capture_for_probe("\n".join(lines[prompt_index:]))
+
+
+def codex_composer_has_draft(config: Config) -> bool:
+    cursor = tmux_cursor_position(config)
+    return bool(cursor and cursor[0] > 2)
 
 
 def release_version() -> str:
@@ -1799,16 +1890,39 @@ def release_version() -> str:
     return RELEASE_VERSION_CACHE
 
 
-def wait_for_paste_tail(config: Config, text: str, baseline: str) -> None:
+def wait_for_paste_tail(
+    config: Config,
+    text: str,
+    baseline: str,
+    baseline_cursor: tuple[int, int] | None = None,
+) -> bool:
     probe = paste_tail_probe(text)
     if not probe:
-        return
+        return True
+    baseline_cursor = baseline_cursor or tmux_cursor_position(config)
     deadline = time.monotonic() + PASTE_READY_TIMEOUT
     while time.monotonic() < deadline:
         captured = tmux_capture_compact(config)
         if captured.count(probe) > baseline.count(probe):
-            return
+            return True
+        cursor = tmux_cursor_position(config)
+        if cursor and baseline_cursor and cursor != baseline_cursor and cursor[0] > 2:
+            return True
         time.sleep(PASTE_READY_POLL_INTERVAL)
+    return False
+
+
+def wait_for_codex_submission(config: Config, text: str, timeout: float = SEND_ACCEPT_TIMEOUT) -> str | None:
+    probe = paste_tail_probe(text)
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        cursor = tmux_cursor_position(config)
+        prompt = last_agent_prompt_block(config, CODEX_PROFILE)
+        queued = "Queued follow-up inputs" in tmux_current_capture(config)
+        if cursor and cursor[0] <= 2 and (not probe or probe not in prompt):
+            return "queued" if queued else "submitted"
+        time.sleep(PASTE_READY_POLL_INTERVAL)
+    return None
 
 
 def status_payload(config: Config) -> dict[str, Any]:
@@ -2643,53 +2757,136 @@ class MultipartFile:
         self.file = io.BytesIO(data)
 
 
-def send_text(config: Config, text: str) -> None:
+def prune_send_deliveries(now: float | None = None) -> None:
+    cutoff = (now if now is not None else time.monotonic()) - SEND_DELIVERY_TTL_SECONDS
+    for delivery_id in [key for key, value in _send_deliveries.items() if float(value.get("updatedAt") or 0) < cutoff]:
+        _send_deliveries.pop(delivery_id, None)
+
+
+def send_delivery_receipt(delivery_id: str, config: Config, state: str, enter_attempts: int, *, duplicate: bool = False) -> dict[str, Any]:
+    return {
+        "deliveryId": delivery_id,
+        "delivery": "accepted",
+        "deliveryState": state,
+        "session": config.session,
+        "enterAttempts": enter_attempts,
+        "duplicate": duplicate,
+    }
+
+
+def send_text(config: Config, text: str, client_message_id: str | None = None) -> dict[str, Any]:
     if not has_session(config):
         raise OwnerError(f"tmux session not found: {config.session}", HTTPStatus.NOT_FOUND)
     if not text.strip():
         raise OwnerError("empty text")
     if len(text) > MAX_SEND_CHARS:
         raise OwnerError(f"text too long: {len(text)} > {MAX_SEND_CHARS}", HTTPStatus.REQUEST_ENTITY_TOO_LARGE)
+    if client_message_id and not clean_client_message_id(client_message_id):
+        raise OwnerError("invalid client message id")
+    delivery_id = clean_client_message_id(client_message_id) or uuid.uuid4().hex
+    digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
     line = text.strip()
     words = line.split()
     launch_command = Path(words[0]).name.lower() if words else ""
     shell_prep = bool(words and (launch_command in AGENT_LAUNCH_COMMANDS or SHELL_PREP_RE.fullmatch(line)))
-    if shell_prep and not agent_in_pane(config):
-        for keys in (["-l", line], ["Enter"]):
-            res = tmux(config, ["send-keys", "-t", tmux_target(config), *keys], timeout=3)
-            if res.returncode != 0:
-                raise OwnerError(res.stderr.strip() or "tmux send shell prep failed", HTTPStatus.INTERNAL_SERVER_ERROR)
-        return
-    profile = agent_profile_in_pane(config)
-    buffer_name = f"local-tmux-owner-{secrets.token_hex(4)}"
-    tmp_path: str | None = None
-    try:
-        baseline = tmux_capture_compact(config)
-        with tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False, prefix="local-tmux-owner-", suffix=".txt") as tmp:
-            tmp.write(text)
-            tmp_path = tmp.name
-        res = tmux(config, ["load-buffer", "-b", buffer_name, tmp_path], timeout=3)
-        if res.returncode != 0:
-            raise OwnerError(res.stderr.strip() or "tmux load-buffer failed", HTTPStatus.INTERNAL_SERVER_ERROR)
-        paste_args = ["paste-buffer", "-d", "-r", "-b", buffer_name, "-t", tmux_target(config)]
-        if profile is not CLAUDE_PROFILE:
-            paste_args.insert(2, "-p")
-        res = tmux(config, paste_args, timeout=3)
-        if res.returncode != 0:
-            raise OwnerError(res.stderr.strip() or "tmux paste-buffer failed", HTTPStatus.INTERNAL_SERVER_ERROR)
-        wait_for_paste_tail(config, text, baseline)
-        # Some terminal TUIs treat carriage return more reliably than a plain
-        # Enter after tmux paste, especially through mobile/browser paths.
-        res = tmux(config, ["send-keys", "-t", tmux_target(config), "C-m"], timeout=3)
-        if res.returncode != 0:
-            raise OwnerError(res.stderr.strip() or "tmux send Enter failed", HTTPStatus.INTERNAL_SERVER_ERROR)
-    finally:
-        if tmp_path:
+    with _send_delivery_lock:
+        now = time.monotonic()
+        prune_send_deliveries(now)
+        existing = _send_deliveries.get(delivery_id)
+        if existing and (existing.get("session") != config.session or existing.get("digest") != digest):
+            raise OwnerError("client message id was already used for different content", HTTPStatus.CONFLICT)
+        if existing and existing.get("status") == "accepted":
+            receipt = dict(existing["receipt"])
+            receipt["duplicate"] = True
+            existing["updatedAt"] = now
+            return receipt
+
+        if shell_prep and not agent_in_pane(config):
+            for keys in (["-l", line], ["Enter"]):
+                res = tmux(config, ["send-keys", "-t", tmux_target(config), *keys], timeout=3)
+                if res.returncode != 0:
+                    raise OwnerError(res.stderr.strip() or "tmux send shell prep failed", HTTPStatus.INTERNAL_SERVER_ERROR)
+            receipt = send_delivery_receipt(delivery_id, config, "shell", 1)
+            _send_deliveries[delivery_id] = {"session": config.session, "digest": digest, "status": "accepted", "receipt": receipt, "updatedAt": time.monotonic()}
+            return receipt
+
+        profile = agent_profile_in_pane(config)
+        continuing_paste = bool(existing and existing.get("status") == "pasted")
+        if profile is CODEX_PROFILE and not continuing_paste and codex_composer_has_draft(config):
+            raise OwnerError("Codex TUI already has an unsent draft; the browser draft was kept", HTTPStatus.CONFLICT)
+
+        if not continuing_paste:
+            buffer_name = f"local-tmux-owner-{secrets.token_hex(4)}"
+            tmp_path: str | None = None
             try:
-                os.unlink(tmp_path)
-            except FileNotFoundError:
-                pass
-        tmux(config, ["delete-buffer", "-b", buffer_name], timeout=1)
+                baseline = tmux_capture_compact(config)
+                baseline_cursor = tmux_cursor_position(config)
+                with tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False, prefix="local-tmux-owner-", suffix=".txt") as tmp:
+                    tmp.write(text)
+                    tmp_path = tmp.name
+                res = tmux(config, ["load-buffer", "-b", buffer_name, tmp_path], timeout=3)
+                if res.returncode != 0:
+                    raise OwnerError(res.stderr.strip() or "tmux load-buffer failed", HTTPStatus.INTERNAL_SERVER_ERROR)
+                paste_args = ["paste-buffer", "-d", "-r", "-b", buffer_name, "-t", tmux_target(config)]
+                if profile is not CLAUDE_PROFILE:
+                    paste_args.insert(2, "-p")
+                res = tmux(config, paste_args, timeout=3)
+                if res.returncode != 0:
+                    raise OwnerError(res.stderr.strip() or "tmux paste-buffer failed", HTTPStatus.INTERNAL_SERVER_ERROR)
+                paste_ready = wait_for_paste_tail(config, text, baseline, baseline_cursor)
+                _send_deliveries[delivery_id] = {
+                    "session": config.session,
+                    "digest": digest,
+                    "status": "pasted",
+                    "pasteReady": paste_ready,
+                    "updatedAt": time.monotonic(),
+                }
+                if not paste_ready:
+                    _send_deliveries.pop(delivery_id, None)
+                    raise OwnerError("text paste could not be confirmed; the browser draft was kept", HTTPStatus.GATEWAY_TIMEOUT)
+            finally:
+                if tmp_path:
+                    try:
+                        os.unlink(tmp_path)
+                    except FileNotFoundError:
+                        pass
+                tmux(config, ["delete-buffer", "-b", buffer_name], timeout=1)
+            time.sleep(PASTE_SETTLE_SECONDS)
+        elif profile is CODEX_PROFILE and not codex_composer_has_draft(config):
+            receipt = send_delivery_receipt(delivery_id, config, "recovered", 0)
+            existing.update({"status": "accepted", "receipt": receipt, "updatedAt": time.monotonic()})
+            return receipt
+
+        enter_attempts = 0
+        accepted_state: str | None = None
+        for key in ("C-m", "Enter"):
+            enter_attempts += 1
+            res = tmux(config, ["send-keys", "-t", tmux_target(config), key], timeout=3)
+            if res.returncode != 0:
+                raise OwnerError(res.stderr.strip() or "tmux send Enter failed", HTTPStatus.INTERNAL_SERVER_ERROR)
+            if profile is CODEX_PROFILE:
+                accepted_state = wait_for_codex_submission(config, text)
+                if accepted_state:
+                    break
+                time.sleep(SEND_ACCEPT_RETRY_DELAY)
+            else:
+                accepted_state = "sent"
+                break
+
+        if not accepted_state:
+            state = _send_deliveries[delivery_id]
+            state["updatedAt"] = time.monotonic()
+            raise OwnerError("Codex did not accept Enter; the browser and TUI drafts were kept for retry", HTTPStatus.GATEWAY_TIMEOUT)
+
+        receipt = send_delivery_receipt(delivery_id, config, accepted_state, enter_attempts)
+        _send_deliveries[delivery_id] = {
+            "session": config.session,
+            "digest": digest,
+            "status": "accepted",
+            "receipt": receipt,
+            "updatedAt": time.monotonic(),
+        }
+        return receipt
 
 
 def send_key(config: Config, key: str) -> None:
@@ -2753,16 +2950,22 @@ class Handler(SimpleHTTPRequestHandler):
                 profile = agent_profile_in_pane(target) or RUNTIME_PROFILE
                 want_html = query.get("format", [""])[0] == "html" or query.get("html", [""])[0].lower() in {"1", "true", "yes"}
                 text = capture_text(target, lines, profile)
+                terminal_text = text
+                agent_running = bool(profile is not RUNTIME_PROFILE and not agent_ready_for_input(target, profile))
                 capture_source = "tmux"
                 thread_id = ""
+                live_text = ""
                 if profile is CODEX_PROFILE and not want_html:
                     structured = codex_structured_capture(target, lines)
                     if structured:
                         text, thread_id = structured
                         capture_source = "codex-app-server"
+                        if agent_running:
+                            live_text = codex_live_tail(terminal_text)
                 payload = {
                     "ok": True,
                     "text": text,
+                    "agentRunning": agent_running,
                     "agentSource": profile.source,
                     "agentProfile": profile.key,
                     "captureSource": capture_source,
@@ -2770,6 +2973,8 @@ class Handler(SimpleHTTPRequestHandler):
                 }
                 if thread_id:
                     payload["sessionId"] = thread_id
+                if live_text:
+                    payload["liveText"] = live_text
                 if want_html:
                     payload["html"] = capture_html(target, lines, profile)
                 self.write_json(payload)
@@ -2841,21 +3046,27 @@ class Handler(SimpleHTTPRequestHandler):
                 try:
                     profile = agent_profile_in_pane(target); capture_profile = profile or RUNTIME_PROFILE
                     text = capture_text(target, lines, capture_profile)
+                    terminal_text = text
                     capture_source = "tmux"
                     thread_id = ""
+                    live_text = ""
+                    agent_running = bool(profile and not agent_ready_for_input(target, capture_profile))
                     if profile is CODEX_PROFILE:
                         structured = codex_structured_capture(target, lines)
                         if structured:
                             text, thread_id = structured
                             capture_source = "codex-app-server"
-                    agent_running = bool(profile and not agent_ready_for_input(target, capture_profile))
-                    digest = hash(text)
+                            if agent_running:
+                                live_text = codex_live_tail(terminal_text)
+                    digest = hash((text, live_text))
                     if digest != last_hash or agent_running != last_running:
                         last_hash = digest
                         last_running = agent_running
                         payload = {"ok": True, "text": text, "agentRunning": agent_running, "agentSource": capture_profile.source, "agentProfile": capture_profile.key, "captureSource": capture_source, "updatedAt": now_iso()}
                         if thread_id:
                             payload["sessionId"] = thread_id
+                        if live_text:
+                            payload["liveText"] = live_text
                         if not self.send_event("capture", payload):
                             return
                 except OwnerError:
@@ -2953,8 +3164,8 @@ class Handler(SimpleHTTPRequestHandler):
             target = self.target_from_payload(payload)
             ensure_pane_width(target)
             if parsed.path == "/api/send":
-                send_text(target, str(payload.get("text", "")))
-                self.write_json({"ok": True, "updatedAt": now_iso()})
+                receipt = send_text(target, str(payload.get("text", "")), str(payload.get("clientMessageId") or ""))
+                self.write_json({"ok": True, **receipt, "updatedAt": now_iso()})
                 return
             if parsed.path == "/api/interrupt":
                 profile = agent_profile_in_pane(target)

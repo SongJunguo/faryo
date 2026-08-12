@@ -240,3 +240,37 @@ button.product-mark:active { transform: none; }
 .compact-block .katex-display > .katex {
   white-space: nowrap;
 }
+
+/* Safe markdown-it output. Raw HTML is disabled by the renderer. */
+.markdown-body { min-width: 0; white-space: normal; overflow-wrap: anywhere; line-height: 1.55; }
+.markdown-body > :first-child { margin-top: 0; }
+.markdown-body > :last-child { margin-bottom: 0; }
+.markdown-body p { margin: .5em 0; }
+.markdown-body h1, .markdown-body h2, .markdown-body h3, .markdown-body h4, .markdown-body h5, .markdown-body h6 { margin: .9em 0 .38em; line-height: 1.25; }
+.markdown-body h1 { font-size: 1.32em; }
+.markdown-body h2 { font-size: 1.2em; }
+.markdown-body h3 { font-size: 1.1em; }
+.markdown-body h4, .markdown-body h5, .markdown-body h6 { font-size: 1em; }
+.markdown-body ul, .markdown-body ol { margin: .45em 0; padding-left: 1.45em; }
+.markdown-body li { margin: .18em 0; }
+.markdown-body li > p { margin: .2em 0; }
+.markdown-body blockquote { margin: .65em 0; padding: .1em 0 .1em .8em; border-left: 3px solid color-mix(in srgb, var(--accent) 55%, var(--line)); color: var(--muted); }
+.markdown-body pre { max-width: 100%; margin: .65em 0; padding: 9px 10px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel2); overflow: auto; white-space: pre; }
+.markdown-body code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .9em; }
+.markdown-body :not(pre) > code { padding: .12em .32em; border: 1px solid color-mix(in srgb, var(--line) 78%, transparent); border-radius: 5px; background: var(--panel2); white-space: break-spaces; }
+.markdown-body table { display: block; max-width: 100%; margin: .65em 0; border-collapse: collapse; overflow-x: auto; white-space: nowrap; }
+.markdown-body th, .markdown-body td { padding: 5px 8px; border: 1px solid var(--line); text-align: left; }
+.markdown-body th { background: var(--panel2); font-weight: 700; }
+.markdown-body hr { height: 1px; margin: .8em 0; border: 0; background: var(--line); }
+.markdown-body a:not(.file-link) { color: var(--accent); text-decoration-thickness: 1px; text-underline-offset: 2px; }
+.markdown-body .markdown-file-link { vertical-align: middle; }
+.markdown-body .chat-markdown-image { cursor: zoom-in; }
+
+/* While the standalone Codex TUI owns a turn, structured thread/read data has
+   no token deltas. Show a small, explicitly transient tmux tail until the
+   finalized structured message replaces it. */
+.compact-live-terminal { align-self: stretch; max-width: 100%; padding: 8px 10px; border: 1px dashed color-mix(in srgb, var(--accent) 38%, var(--line)); border-radius: 11px; background: color-mix(in srgb, var(--panel2) 82%, transparent); }
+.compact-live-title { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; color: var(--muted); font-size: calc(11px + var(--font-step)); font-weight: 700; letter-spacing: .02em; }
+.compact-live-title .live-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 17%, transparent); animation: live-pulse 1.3s ease-in-out infinite; }
+.compact-live-terminal pre { max-height: min(42vh, 360px); margin: 0; overflow: auto; color: var(--muted); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; font-size: calc(12px + var(--font-step)); line-height: 1.42; white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; }
+@keyframes live-pulse { 0%, 100% { opacity: .45; } 50% { opacity: 1; } }

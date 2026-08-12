@@ -55,6 +55,7 @@ release_checks() {
     "$ROOT/apps/owner/local-tmux-owner/static/compact-rules-codex.js" \
     "$ROOT/apps/owner/local-tmux-owner/static/compact-rules-claude.js" \
     "$ROOT/apps/owner/local-tmux-owner/static/math-render.js" \
+    "$ROOT/apps/owner/local-tmux-owner/static/markdown-render.js" \
     "$ROOT/apps/shared/static/appearance.js" \
     "$ROOT/apps/owner/local-tmux-owner/static/app.js" \
     "$ROOT/apps/gateway/server/static/projects.js"
@@ -62,6 +63,7 @@ release_checks() {
     node --check "$js_file"
   done
   node "$ROOT/apps/owner/local-tmux-owner/tests/math-render.test.js"
+  node "$ROOT/apps/owner/local-tmux-owner/tests/markdown-render.test.js"
   node "$ROOT/apps/owner/local-tmux-owner/tests/compact-rules-codex.test.js"
   python3 -m unittest discover -s "$ROOT/apps/owner/local-tmux-owner/tests" -p 'test_*.py'
   python3 - "$ROOT" <<'PY'
@@ -77,6 +79,26 @@ assert "compact-rules-codex.js" in gateway, "gateway must allow compact-rules-co
 assert "compact-rules-claude.js" in gateway, "gateway must allow compact-rules-claude.js"
 assert "math-render.js" in index, "index.html must load math-render.js"
 assert "math-render.js" in gateway, "gateway must allow math-render.js"
+assert "markdown-render.js" in index, "index.html must load markdown-render.js"
+assert "markdown-render.js" in gateway, "gateway must allow markdown-render.js"
+assert "cdn.jsdelivr.net/npm/katex" not in index, "KaTeX must not require an external CDN"
+assert 'vendor/katex/katex.min.css?v=0.18.4' in index, "index.html must load local KaTeX CSS"
+assert 'vendor/katex/katex.min.js?v=0.18.4' in index, "index.html must load local KaTeX JS"
+assert 'vendor/katex/contrib/auto-render.min.js?v=0.18.4' in index, "index.html must load local KaTeX auto-render"
+assert '"vendor/katex/"' in gateway, "gateway must proxy local KaTeX assets"
+for relative in (
+    "katex.min.css",
+    "katex.min.js",
+    "contrib/auto-render.min.js",
+    "fonts/KaTeX_Main-Regular.woff2",
+    "LICENSE",
+):
+    assert (root / "apps/owner/local-tmux-owner/static/vendor/katex" / relative).is_file(), f"missing vendored KaTeX asset: {relative}"
+assert "cdn.jsdelivr.net/npm/markdown-it" not in index, "Markdown must not require an external CDN"
+assert 'vendor/markdown-it/markdown-it.min.js?v=14.3.0' in index, "index.html must load local markdown-it"
+assert '"vendor/markdown-it/"' in gateway, "gateway must proxy local markdown-it assets"
+for relative in ("markdown-it.min.js", "LICENSE"):
+    assert (root / "apps/owner/local-tmux-owner/static/vendor/markdown-it" / relative).is_file(), f"missing vendored markdown-it asset: {relative}"
 app = (root / "apps/owner/local-tmux-owner/static/app.js").read_text(encoding="utf-8")
 assert "headers['X-Owner-Token'] = ownerToken" in app, "Owner API calls must include the token header"
 assert "next.searchParams.set('token', ownerToken)" in app, "session switches must preserve direct Owner auth"

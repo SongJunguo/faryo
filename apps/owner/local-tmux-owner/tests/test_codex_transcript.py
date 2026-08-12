@@ -60,6 +60,35 @@ class CodexTranscriptTest(unittest.TestCase):
         self.assertIn("› new", transcript)
         self.assertIn("\\[\nx^2+y^2\n\\]", transcript)
 
+    def test_live_tail_starts_at_the_latest_turn_and_redacts_account(self):
+        capture = (
+            "› old question\n\n"
+            "• old answer\n\n"
+            "› current question\n"
+            "│ Account: person@example.com (Plus)\n"
+            "• Ran command\n"
+            "• Working (2s • esc to interrupt)"
+        )
+
+        tail = server.codex_live_tail(capture)
+
+        self.assertNotIn("old question", tail)
+        self.assertIn("› current question", tail)
+        self.assertIn("Account: <redacted>", tail)
+        self.assertNotIn("person@example.com", tail)
+
+    def test_live_shell_tail_drops_prior_status_panels(self):
+        capture = (
+            "› previous question\n"
+            "│ Account: person@example.com (Plus)\n"
+            "• Running sleep 4\n"
+            "• Working (1s • esc to interrupt)"
+        )
+
+        tail = server.codex_live_tail(capture)
+
+        self.assertEqual("• Running sleep 4\n• Working (1s • esc to interrupt)", tail)
+
 
 if __name__ == "__main__":
     unittest.main()
