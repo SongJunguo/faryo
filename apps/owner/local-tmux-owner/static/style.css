@@ -221,10 +221,11 @@ button.product-mark:active { transform: none; }
   button { min-height: 38px; }
 }
 /* Compact-view KaTeX rendering. Keep terminal/raw wrapping rules away from
-   KaTeX's internal layout, and let wide display equations scroll on phones. */
+   KaTeX's internal layout, and let wide display equations scroll on phones.
+   In particular, do not override white-space on KaTeX descendants: its
+   min-content layout relies on inherited nowrap values. */
 .compact-block .katex,
 .compact-block .katex * {
-  white-space: normal;
   overflow-wrap: normal;
   word-break: normal;
 }

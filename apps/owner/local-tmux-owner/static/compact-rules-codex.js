@@ -22,7 +22,8 @@
   function isProcessLine(line) {
     const value = line.trim();
     return processLineRe.test(value)
-      || /^(?:[│|└├↳])/.test(value)
+      || /^(?:[│└├↳])/.test(value)
+      || /^\|\s/.test(value)
       || /^(?:[-*•]\s*)?(?:\.{3}|…|⋯)\s*[+-]\d+\s+lines\b/i.test(value)
       || /^(?:\d+\s+)?[-+]?(?:<<<<<<<|=======|\|\|\|\|\|\|\||>>>>>>>)\b/.test(value)
       || /^\d{2,}\s+[-+]\s+/.test(value)

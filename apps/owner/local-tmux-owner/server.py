@@ -83,7 +83,9 @@ CAPTURE_MAX_LINES = CAPTURE_FULL_LINES
 EVENT_STREAM_MAX_SECONDS = 75
 EVENT_STREAM_MAX_CONNECTIONS = 6
 RATE_LIMIT_CACHE_TTL = 120.0
+CODEX_TRANSCRIPT_CACHE_TTL = 0.6
 THREAD_COLUMNS = "id, title, rollout_path, tokens_used, model, reasoning_effort, cwd, updated_at, source, thread_source"
+INTERACTIVE_CODEX_THREAD_SOURCES = {"cli", "vscode"}
 AGENT_SESSION_LIST_LIMIT = 20
 EMPTY_MANAGED_SESSION_TTL_SECONDS = 60
 MAX_MANAGED_AGENT_IDLE_SECONDS = 24 * 60 * 60
@@ -217,6 +219,11 @@ LOW_CONTRAST_TERMINAL_VALUES = {"#000080", "#0000aa", "#0000cd", "#0000ff", "blu
 _rate_limit_cache: dict[str, Any] | None = None
 _rate_limit_cache_at = 0.0
 _rate_limit_lock = threading.Lock()
+_codex_app_server_process: subprocess.Popen[str] | None = None
+_codex_app_server_request_id = 0
+_codex_app_server_lock = threading.Lock()
+_codex_thread_cache: dict[str, tuple[float, dict[str, Any]]] = {}
+_codex_thread_cache_lock = threading.Lock()
 
 
 def short_path(path: str | None) -> str | None:
@@ -566,7 +573,7 @@ def claude_history_items(history_root: str | None = None) -> list[dict[str, Any]
 
 def codex_history_items(config: Config, history_root: str | None = None) -> list[dict[str, Any]]:
     active, superseded = active_codex_thread_state(config); index_titles = codex_session_index_titles(); items = []; git_labels: dict[str, str] = {}
-    for item in codex_rows("source = 'cli' AND thread_source = 'user' AND COALESCE(archived, 0) = 0", (), AGENT_SESSION_LIST_LIMIT):
+    for item in codex_rows("source IN ('cli', 'vscode') AND thread_source = 'user' AND COALESCE(archived, 0) = 0", (), AGENT_SESSION_LIST_LIMIT):
         cwd = str(item.get("cwd") or "")
         if history_root is not None and not path_under_root(cwd, history_root): continue
         thread_id = str(item.get("id") or ""); tmux_session = active.get(thread_id, "")
@@ -600,7 +607,7 @@ def agent_session_items(config: Config, history_root: str | None = None) -> list
 
 
 def codex_thread_by_id(thread_id: str) -> dict[str, Any] | None:
-    rows = codex_rows("id = ? AND source = 'cli' AND COALESCE(archived, 0) = 0", (thread_id,), 1)
+    rows = codex_rows("id = ? AND source IN ('cli', 'vscode') AND COALESCE(archived, 0) = 0", (thread_id,), 1)
     return rows[0] if rows else None
 
 
@@ -1116,13 +1123,31 @@ def active_agent_threads(config: Config, cwd: str | None) -> list[dict[str, Any]
     placeholders = ",".join("?" for _ in thread_ids)
     rows = agent_state_rows(f"SELECT {THREAD_COLUMNS} FROM threads WHERE id IN ({placeholders})", tuple(thread_ids))
 
-    cli_rows = [dict(row) for row in rows if row.get("source") == "cli" and row.get("thread_source") == "user"]
-    matches = [row for row in cli_rows if cwd is None or row["cwd"] == cwd]
-    return sorted(matches or cli_rows, key=lambda row: parse_sqlite_timestamp(row.get("updated_at")), reverse=True)
+    interactive_rows = [dict(row) for row in rows if row.get("source") in INTERACTIVE_CODEX_THREAD_SOURCES and row.get("thread_source") == "user"]
+    matches = [row for row in interactive_rows if cwd is None or row["cwd"] == cwd]
+    return sorted(matches or interactive_rows, key=lambda row: parse_sqlite_timestamp(row.get("updated_at")), reverse=True)
 
 def active_agent_thread(config: Config, cwd: str | None) -> dict[str, Any] | None:
     threads = active_agent_threads(config, cwd)
-    return threads[0] if threads else None
+    if threads:
+        thread = threads[0]
+        thread_id = str(thread.get("id") or "")
+        if thread_id and has_session(config):
+            tmux_session_option(config, config.session, "@faryo_agent_source", CODEX_PROFILE.source)
+            tmux_session_option(config, config.session, "@faryo_agent_session_id", thread_id)
+        return thread
+
+    # Codex may close the rollout file while idle. Reuse the last thread id
+    # observed while the pane was active so structured clients do not fall
+    # back to the lossy terminal screen between turns.
+    if not codex_cli_in_pane(config):
+        return None
+    thread_id = tmux_session_option(config, config.session, "@faryo_agent_session_id")
+    thread = codex_thread_by_id(thread_id) if thread_id else None
+    if not thread:
+        return None
+    thread_cwd = str(thread.get("cwd") or "")
+    return thread if cwd is None or not thread_cwd or thread_cwd == cwd else None
 
 
 def latest_context_usage(history_path: str | None) -> dict[str, int | float] | None:
@@ -1303,6 +1328,179 @@ def read_app_server_message(process: subprocess.Popen[str], deadline: float) -> 
     except json.JSONDecodeError:
         return None
     return message if isinstance(message, dict) else None
+
+
+def _stop_codex_app_server_locked() -> None:
+    global _codex_app_server_process
+    process = _codex_app_server_process
+    _codex_app_server_process = None
+    if process is None:
+        return
+    if process.stdin is not None:
+        try:
+            process.stdin.close()
+        except OSError:
+            pass
+    if process.poll() is None:
+        process.terminate()
+        try:
+            process.wait(timeout=0.5)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            try:
+                process.wait(timeout=0.5)
+            except subprocess.TimeoutExpired:
+                pass
+
+
+def stop_codex_app_server() -> None:
+    with _codex_app_server_lock:
+        _stop_codex_app_server_locked()
+
+
+def _start_codex_app_server_locked(timeout: float) -> subprocess.Popen[str] | None:
+    global _codex_app_server_process, _codex_app_server_request_id
+    process = _codex_app_server_process
+    if process is not None and process.poll() is None:
+        return process
+    _stop_codex_app_server_locked()
+    try:
+        process = subprocess.Popen(
+            ["codex", "app-server", "--listen", "stdio://"],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
+    except OSError:
+        return None
+    _codex_app_server_process = process
+    _codex_app_server_request_id += 1
+    request_id = _codex_app_server_request_id
+    if not send_app_server_message(
+        process,
+        {
+            "id": request_id,
+            "method": "initialize",
+            "params": {
+                "clientInfo": {"name": "local-tmux-owner", "title": "Faryo Owner", "version": release_version() or "0"},
+                "capabilities": {},
+            },
+        },
+    ):
+        _stop_codex_app_server_locked()
+        return None
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        message = read_app_server_message(process, deadline)
+        if message is None:
+            break
+        if message.get("id") != request_id:
+            continue
+        if isinstance(message.get("result"), dict):
+            return process
+        break
+    _stop_codex_app_server_locked()
+    return None
+
+
+def codex_app_server_request(method: str, params: dict[str, Any], timeout: float = 2.5) -> dict[str, Any] | None:
+    global _codex_app_server_request_id
+    with _codex_app_server_lock:
+        for _attempt in range(2):
+            process = _start_codex_app_server_locked(timeout)
+            if process is None:
+                continue
+            _codex_app_server_request_id += 1
+            request_id = _codex_app_server_request_id
+            if not send_app_server_message(process, {"id": request_id, "method": method, "params": params}):
+                _stop_codex_app_server_locked()
+                continue
+            deadline = time.monotonic() + timeout
+            while time.monotonic() < deadline:
+                message = read_app_server_message(process, deadline)
+                if message is None:
+                    break
+                if message.get("id") != request_id:
+                    continue
+                result = message.get("result")
+                return result if isinstance(result, dict) else None
+            _stop_codex_app_server_locked()
+    return None
+
+
+def cached_codex_thread(thread_id: str) -> dict[str, Any] | None:
+    now = time.monotonic()
+    with _codex_thread_cache_lock:
+        cached = _codex_thread_cache.get(thread_id)
+        if cached and now - cached[0] < CODEX_TRANSCRIPT_CACHE_TTL:
+            return cached[1]
+        result = codex_app_server_request("thread/read", {"threadId": thread_id, "includeTurns": True})
+        thread = result.get("thread") if isinstance(result, dict) else None
+        if not isinstance(thread, dict):
+            return None
+        _codex_thread_cache[thread_id] = (time.monotonic(), thread)
+        return thread
+
+
+def codex_user_message_text(item: dict[str, Any]) -> str:
+    values: list[str] = []
+    for content in item.get("content") or []:
+        if not isinstance(content, dict):
+            continue
+        if text := str(content.get("text") or "").strip():
+            values.append(text)
+        elif path := str(content.get("path") or content.get("url") or "").strip():
+            values.append(f"Attachment: {path}")
+    return "\n".join(values).strip()
+
+
+def codex_thread_transcript(thread: dict[str, Any], max_lines: int) -> str:
+    turns: list[str] = []
+    for turn in thread.get("turns") or []:
+        if not isinstance(turn, dict):
+            continue
+        messages: list[str] = []
+        for item in turn.get("items") or []:
+            if not isinstance(item, dict):
+                continue
+            item_type = item.get("type")
+            if item_type == "userMessage":
+                if text := codex_user_message_text(item):
+                    messages.append(f"› {text}")
+            elif item_type == "agentMessage":
+                if text := str(item.get("text") or "").strip():
+                    messages.append(f"• {text}")
+            elif item_type == "plan":
+                if text := str(item.get("text") or "").strip():
+                    messages.append(f"• Updated Plan\n{text}")
+        if messages:
+            turns.append("\n\n".join(messages))
+
+    selected: list[str] = []
+    used_lines = 0
+    for turn in reversed(turns):
+        turn_lines = turn.count("\n") + 1
+        if selected and used_lines + turn_lines > max_lines:
+            break
+        selected.append(turn)
+        used_lines += turn_lines
+    return "\n\n".join(reversed(selected)).strip()
+
+
+def codex_structured_capture(config: Config, lines: int) -> tuple[str, str] | None:
+    cwd = get_pane_cwd(config)
+    thread = active_agent_thread(config, cwd)
+    thread_id = str(thread.get("id") or "") if thread else ""
+    if not thread_id:
+        return None
+    stored = cached_codex_thread(thread_id)
+    if not stored:
+        return None
+    text = codex_thread_transcript(stored, lines)
+    return (text, thread_id) if text else None
 
 
 def rate_limit_from_response(result: dict[str, Any]) -> dict[str, Any] | None:
@@ -2546,15 +2744,25 @@ class Handler(SimpleHTTPRequestHandler):
                 except ValueError:
                     lines = CAPTURE_DEFAULT_LINES
                 profile = agent_profile_in_pane(target) or RUNTIME_PROFILE
-                text = capture_text(target, lines, profile)
                 want_html = query.get("format", [""])[0] == "html" or query.get("html", [""])[0].lower() in {"1", "true", "yes"}
+                text = capture_text(target, lines, profile)
+                capture_source = "tmux"
+                thread_id = ""
+                if profile is CODEX_PROFILE and not want_html:
+                    structured = codex_structured_capture(target, lines)
+                    if structured:
+                        text, thread_id = structured
+                        capture_source = "codex-app-server"
                 payload = {
                     "ok": True,
                     "text": text,
                     "agentSource": profile.source,
                     "agentProfile": profile.key,
+                    "captureSource": capture_source,
                     "updatedAt": now_iso(),
                 }
+                if thread_id:
+                    payload["sessionId"] = thread_id
                 if want_html:
                     payload["html"] = capture_html(target, lines, profile)
                 self.write_json(payload)
@@ -2626,12 +2834,21 @@ class Handler(SimpleHTTPRequestHandler):
                 try:
                     profile = agent_profile_in_pane(target); capture_profile = profile or RUNTIME_PROFILE
                     text = capture_text(target, lines, capture_profile)
+                    capture_source = "tmux"
+                    thread_id = ""
+                    if profile is CODEX_PROFILE:
+                        structured = codex_structured_capture(target, lines)
+                        if structured:
+                            text, thread_id = structured
+                            capture_source = "codex-app-server"
                     agent_running = bool(profile and not agent_ready_for_input(target, capture_profile))
                     digest = hash(text)
                     if digest != last_hash or agent_running != last_running:
                         last_hash = digest
                         last_running = agent_running
-                        payload = {"ok": True, "text": text, "agentRunning": agent_running, "agentSource": capture_profile.source, "agentProfile": capture_profile.key, "updatedAt": now_iso()}
+                        payload = {"ok": True, "text": text, "agentRunning": agent_running, "agentSource": capture_profile.source, "agentProfile": capture_profile.key, "captureSource": capture_source, "updatedAt": now_iso()}
+                        if thread_id:
+                            payload["sessionId"] = thread_id
                         if not self.send_event("capture", payload):
                             return
                 except OwnerError:
@@ -3003,6 +3220,7 @@ def main() -> int:
     except KeyboardInterrupt:
         print("stopping", flush=True)
     finally:
+        stop_codex_app_server()
         server.server_close()
     return 0
 

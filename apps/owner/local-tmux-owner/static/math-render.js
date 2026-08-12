@@ -98,12 +98,150 @@
     }).join('\n');
   }
 
+  function looksLikeTerminalDisplayMath(body) {
+    const value = String(body || '').trim();
+    if (!value || value.length > 8000 || /```|~~~/u.test(value)) return false;
+    if (/["'`]/u.test(value)) return false;
+    if (/\\[A-Za-z]+/u.test(value)) return true;
+    return /[_^=<>+*/]/u.test(value) && /[A-Za-z0-9()[\]{}]/u.test(value);
+  }
+
+  function restoreTerminalRowBreaks(lines) {
+    const values = Array.from(lines || [], (line) => String(line));
+    if (!/\\begin\{(?:cases|aligned|alignedat|array|matrix|pmatrix|bmatrix|Bmatrix|vmatrix|Vmatrix|smallmatrix)\}/u.test(values.join('\n'))) {
+      return values;
+    }
+    return values.map((line) => {
+      const match = line.match(/(\\+)(\s*)$/u);
+      if (!match || match[1].length % 2 === 0) return line;
+      return `${line.slice(0, -(match[1].length + match[2].length))}${match[1]}\\${match[2]}`;
+    });
+  }
+
+  function normalizeTerminalDisplayMath(text) {
+    const lines = String(text || '').split('\n');
+    const out = [];
+    let fenceChar = '';
+
+    for (let index = 0; index < lines.length; index += 1) {
+      const line = lines[index];
+      const trimmed = line.trimStart();
+      const fenceMatch = trimmed.match(/^(`{3,}|~{3,})/);
+      if (fenceMatch) {
+        const char = fenceMatch[1][0];
+        if (!fenceChar) fenceChar = char;
+        else if (fenceChar === char) fenceChar = '';
+        out.push(line);
+        continue;
+      }
+      if (fenceChar || line.trim() !== '[') {
+        out.push(line);
+        continue;
+      }
+
+      let close = index + 1;
+      while (close < lines.length && close - index <= 80 && lines[close].trim() !== ']') close += 1;
+      if (close >= lines.length || close - index > 80) {
+        out.push(line);
+        continue;
+      }
+      const bodyLines = restoreTerminalRowBreaks(lines.slice(index + 1, close));
+      const body = bodyLines.join('\n');
+      if (!looksLikeTerminalDisplayMath(body)) {
+        out.push(line);
+        continue;
+      }
+      out.push('\\[', ...bodyLines, '\\]');
+      index = close;
+    }
+    return out.join('\n');
+  }
+
+  function replaceTerminalParenthesisMath(segment) {
+    let out = '';
+    let cursor = 0;
+    while (cursor < segment.length) {
+      const open = segment.indexOf('(', cursor);
+      if (open < 0) {
+        out += segment.slice(cursor);
+        break;
+      }
+      out += segment.slice(cursor, open);
+      const before = open > 0 ? segment[open - 1] : '';
+      if (before === '\\' || before === '$' || /[A-Za-z0-9_]/u.test(before)) {
+        out += '(';
+        cursor = open + 1;
+        continue;
+      }
+      let depth = 1;
+      let close = open + 1;
+      while (close < segment.length && depth > 0) {
+        if (segment[close] === '(') depth += 1;
+        else if (segment[close] === ')') depth -= 1;
+        close += 1;
+      }
+      if (depth !== 0) {
+        out += segment.slice(open);
+        break;
+      }
+      const body = segment.slice(open + 1, close - 1);
+      const after = segment[close] || '';
+      if (!/[A-Za-z0-9_]/u.test(after) && looksLikeInlineMath(body)) out += `\\(${body}\\)`;
+      else out += segment.slice(open, close);
+      cursor = close;
+    }
+    return out;
+  }
+
+  function normalizeTerminalInlineMath(text) {
+    const lines = String(text || '').split('\n');
+    let fenceChar = '';
+    let displayEnd = '';
+    return lines.map((line) => {
+      const trimmed = line.trimStart();
+      const value = line.trim();
+      const fenceMatch = trimmed.match(/^(`{3,}|~{3,})/);
+      if (fenceMatch) {
+        const char = fenceMatch[1][0];
+        if (!fenceChar) fenceChar = char;
+        else if (fenceChar === char) fenceChar = '';
+        return line;
+      }
+      if (fenceChar) return line;
+      if (displayEnd) {
+        if (value === displayEnd) displayEnd = '';
+        return line;
+      }
+      if (value === '\\[') {
+        displayEnd = '\\]';
+        return line;
+      }
+      if (value === '$$') {
+        displayEnd = '$$';
+        return line;
+      }
+      const begin = value.match(/^\\begin\{(equation|align|alignat|gather|CD)\}/u);
+      if (begin) {
+        if (!value.includes(`\\end{${begin[1]}}`)) displayEnd = `\\end{${begin[1]}}`;
+        return line;
+      }
+      if (/^(?: {4}|\t)/u.test(line) || value.includes('$$')) return line;
+      return transformOutsideInlineCode(line, replaceTerminalParenthesisMath);
+    }).join('\n');
+  }
+
+  function normalizeTerminalMath(text) {
+    return normalizeTerminalInlineMath(normalizeTerminalDisplayMath(text));
+  }
+
   function ready() {
     return Boolean(root && typeof root.renderMathInElement === 'function');
   }
 
-  function prepareText(text) {
-    return ready() ? normalizeInlineDollarMath(text) : String(text || '');
+  function prepareText(text, options = {}) {
+    if (!ready()) return String(text || '');
+    const normalized = normalizeInlineDollarMath(text);
+    return options.terminal === false ? normalized : normalizeTerminalMath(normalized);
   }
 
   function renderElement(element) {
@@ -138,7 +276,12 @@
   return {
     DEFAULT_DELIMITERS,
     looksLikeInlineMath,
+    looksLikeTerminalDisplayMath,
+    restoreTerminalRowBreaks,
     normalizeInlineDollarMath,
+    normalizeTerminalDisplayMath,
+    normalizeTerminalInlineMath,
+    normalizeTerminalMath,
     prepareText,
     ready,
     renderElement,

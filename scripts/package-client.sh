@@ -62,6 +62,8 @@ release_checks() {
     node --check "$js_file"
   done
   node "$ROOT/apps/owner/local-tmux-owner/tests/math-render.test.js"
+  node "$ROOT/apps/owner/local-tmux-owner/tests/compact-rules-codex.test.js"
+  python3 -m unittest discover -s "$ROOT/apps/owner/local-tmux-owner/tests" -p 'test_*.py'
   python3 - "$ROOT" <<'PY'
 from pathlib import Path
 import plistlib

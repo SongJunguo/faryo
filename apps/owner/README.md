@@ -22,6 +22,9 @@ Runtime configuration defaults to:
 ./scripts/start-web-owner.sh
 ```
 
+Set `FARYO_PYTHON` in the private Owner env file to pin the service to a
+dedicated virtual environment instead of whichever `python3` is first on PATH.
+
 The user-level timer template lives at:
 
 ```text

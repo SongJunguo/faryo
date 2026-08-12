@@ -18,6 +18,7 @@ load_env() {
   : "${FARYO_OWNER_TOKEN:?missing FARYO_OWNER_TOKEN}"
   : "${FARYO_OWNER_DIRECT_SESSION:=__faryo_no_default__}"
   : "${FARYO_OWNER_TMUX_SESSION:=local-tmux-owner}"
+  : "${FARYO_PYTHON:=python3}"
   : "${FARYO_OWNER_LABEL:=}"
   : "${FARYO_OWNER_DATA:=$FARYO_HOME/owner/data}"
   : "${FARYO_OWNER_INBOX_DIR:=$FARYO_OWNER_DATA/inbox}"

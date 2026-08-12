@@ -35,6 +35,15 @@ the original terminal text. KaTeX assets are loaded from jsDelivr; if they are
 unavailable, Faryo leaves the original LaTeX visible instead of blocking the
 session UI.
 
+For a bound Codex session, compact Chat reads the original message text through
+Codex App Server instead of reconstructing Markdown from the tmux screen. Raw
+view remains the terminal capture. Owner remembers the thread id observed for a
+live pane and falls back to tmux if structured history is unavailable.
+
+The tmux fallback still handles Codex terminal output, which removes the
+backslashes from `\(...\)` and `\[...\]`, by recognizing conservative
+math-like parenthetical spans and standalone `[ ... ]` display blocks.
+
 Inline-dollar detection is deliberately conservative so shell variables and
 code spans are not treated as formulas. KaTeX runs with `trust: false`.
 

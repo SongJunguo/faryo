@@ -663,9 +663,9 @@
     return `<a class="file-link" href="${escapeHtml(href)}">File ${escapeHtml(label)}</a>`;
   }
 
-  function renderTextWithFiles(text) {
+  function renderTextWithFiles(text, mathOptions = {}) {
     const originalLines = String(text || '').split('\n');
-    const prepared = typeof mathRenderer.prepareText === 'function' ? mathRenderer.prepareText(text) : String(text || '');
+    const prepared = typeof mathRenderer.prepareText === 'function' ? mathRenderer.prepareText(text, mathOptions) : String(text || '');
     const preparedLines = prepared.split('\n');
     return originalLines.map((line, index) => renderImageLine(line) || renderFileLine(line) || escapeHtml(preparedLines[index] ?? line)).join('\n');
   }
@@ -681,7 +681,7 @@
     };
   }
 
-  function renderCompactOutput(text, rules) {
+  function renderCompactOutput(text, rules, mathOptions = {}) {
     compactOutputSources = [];
     output.innerHTML = rules.compactBlocks(text).map((block) => {
       if (block.kind === 'process') return `<section class="compact-process-line">${escapeHtml(rules.processSummaryCard(block.text))}</section>`;
@@ -689,7 +689,7 @@
       if (block.kind === 'plan') return renderPlanBlock(block.text);
       const sourceIndex = block.kind === 'output' ? compactOutputSources.push(block.text) - 1 : -1;
       const sourceAttr = sourceIndex >= 0 ? ` data-source-index="${sourceIndex}"` : '';
-      return `<section class="compact-block ${block.kind}"${sourceAttr}>${renderTextWithFiles(block.text)}</section>`;
+      return `<section class="compact-block ${block.kind}"${sourceAttr}>${renderTextWithFiles(block.text, mathOptions)}</section>`;
     }).join('') || '<section class="compact-block output">No output yet</section>';
     const blocks = output.querySelectorAll('.compact-block.output');
     blocks[blocks.length - 1]?.insertAdjacentHTML('beforeend', '<button class="copy-output-block" type="button" aria-label="Copy this output" title="Copy this output">⧉</button>');
@@ -719,7 +719,7 @@
     needsConfirmUI = hasConfirmUI(text, rules);
     updateStatusLineAutoExpand();
     output.classList.toggle('compact-blocks', outputMode === 'compact');
-    if (outputMode === 'compact') renderCompactOutput(text, rules);
+    if (outputMode === 'compact') renderCompactOutput(text, rules, { terminal: capture.captureSource !== 'codex-app-server' });
     else if (capture.html) output.innerHTML = decorateMetaLines(capture.html, text);
     else renderPlainOutput(text, rules);
   }

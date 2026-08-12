@@ -32,6 +32,35 @@ assert.equal(
   'Before \\(x\\)\n```bash\necho $y$\n```\nAfter \\(z\\)'
 );
 
+assert.equal(
+  math.normalizeTerminalDisplayMath('[\n\\dot x=d(t),\\qquad d\\in\\mathcal D\n]'),
+  '\\[\n\\dot x=d(t),\\qquad d\\in\\mathcal D\n\\]'
+);
+assert.equal(
+  math.normalizeTerminalDisplayMath('[\n{"name": "not math"}\n]'),
+  '[\n{"name": "not math"}\n]'
+);
+assert.equal(
+  math.normalizeTerminalInlineMath('Assume (f_i,g_i) is regular and (d\\in\\mathcal D).'),
+  'Assume \\(f_i,g_i\\) is regular and \\(d\\in\\mathcal D\\).'
+);
+assert.equal(
+  math.normalizeTerminalInlineMath('Keep prose (Definition 1), function call source(foo), and `echo (x)`.'),
+  'Keep prose (Definition 1), function call source(foo), and `echo (x)`.'
+);
+assert.equal(
+  math.normalizeTerminalMath('Example:\n[\nx(t)=x(0)+\\int_0^t v(s)\\,ds\n]\nThen (x\\in\\mathbb R^n).'),
+  'Example:\n\\[\nx(t)=x(0)+\\int_0^t v(s)\\,ds\n\\]\nThen \\(x\\in\\mathbb R^n\\).'
+);
+assert.equal(
+  math.normalizeTerminalMath('[\n(a+b)^2=a^2+2ab+b^2\n]'),
+  '\\[\n(a+b)^2=a^2+2ab+b^2\n\\]'
+);
+assert.equal(
+  math.normalizeTerminalMath('[\nd(t)=\\begin{cases}\n-1,&t<1,\\\n1,&t\\ge1.\n\\end{cases}\n]'),
+  '\\[\nd(t)=\\begin{cases}\n-1,&t<1,\\\\\n1,&t\\ge1.\n\\end{cases}\n\\]'
+);
+
 assert.equal(math.ready(), false);
 assert.equal(math.prepareText('Use $x$ here.'), 'Use $x$ here.');
 
@@ -51,6 +80,11 @@ vm.runInNewContext(browserSource, context, { filename: 'math-render.js' });
 const browserMath = browserWindow.FaryoMath;
 assert.equal(browserMath.ready(), true);
 assert.equal(browserMath.prepareText('Use $x$ here.'), 'Use \\(x\\) here.');
+assert.equal(browserMath.prepareText('[\n\\dot x=d(t)\n]'), '\\[\n\\dot x=d(t)\n\\]');
+assert.equal(
+  browserMath.prepareText('[Assumption 1](/home/user/paper_1.tex:17)', { terminal: false }),
+  '[Assumption 1](/home/user/paper_1.tex:17)'
+);
 const fakeBlocks = [{ id: 1 }, { id: 2 }];
 assert.equal(browserMath.renderOutput({ querySelectorAll: () => fakeBlocks }), true);
 assert.equal(calls.length, 2);

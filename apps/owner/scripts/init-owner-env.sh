@@ -32,11 +32,12 @@ export FARYO_OWNER_PORT="${FARYO_OWNER_PORT:-8765}"
 export FARYO_OWNER_LABEL="${FARYO_OWNER_LABEL:-}"
 export FARYO_OWNER_DIRECT_SESSION="${FARYO_OWNER_DIRECT_SESSION:-__faryo_no_default__}"
 export FARYO_OWNER_TMUX_SESSION="${FARYO_OWNER_TMUX_SESSION:-local-tmux-owner}"
+export FARYO_PYTHON="${FARYO_PYTHON:-python3}"
 export FARYO_PROJECT_WORKBENCH_PROJECTS_ROOT="${FARYO_PROJECT_WORKBENCH_PROJECTS_ROOT:-$HOME/brain/projects}"
 export FARYO_PROJECT_WORKBENCH_ALLOWED_ROOTS="${FARYO_PROJECT_WORKBENCH_ALLOWED_ROOTS:-$HOME/brain/projects:$HOME/brain/tools:$HOME/.faryo/projects}"
 export FARYO_PROJECT_WORKBENCH_ROOTS="${FARYO_PROJECT_WORKBENCH_ROOTS:-}"
 
-python3 - <<'PY'
+"$FARYO_PYTHON" - <<'PY'
 import os
 import re
 import secrets
@@ -50,6 +51,7 @@ ORDER = [
     "FARYO_OWNER_TOKEN",
     "FARYO_OWNER_DIRECT_SESSION",
     "FARYO_OWNER_TMUX_SESSION",
+    "FARYO_PYTHON",
     "FARYO_OWNER_LABEL",
     "FARYO_OWNER_DATA",
     "FARYO_OWNER_INBOX_DIR",
@@ -107,6 +109,7 @@ values = {
     "FARYO_OWNER_TOKEN": secrets.token_urlsafe(32) if rotate_token else (existing.get("FARYO_OWNER_TOKEN") or secrets.token_urlsafe(32)),
     "FARYO_OWNER_DIRECT_SESSION": existing.get("FARYO_OWNER_DIRECT_SESSION") or os.environ["FARYO_OWNER_DIRECT_SESSION"],
     "FARYO_OWNER_TMUX_SESSION": existing.get("FARYO_OWNER_TMUX_SESSION") or os.environ["FARYO_OWNER_TMUX_SESSION"],
+    "FARYO_PYTHON": existing.get("FARYO_PYTHON") or os.environ["FARYO_PYTHON"],
     "FARYO_OWNER_LABEL": existing["FARYO_OWNER_LABEL"],
     "FARYO_OWNER_DATA": owner_data,
     "FARYO_OWNER_INBOX_DIR": existing.get("FARYO_OWNER_INBOX_DIR") or f"{owner_data}/inbox",
