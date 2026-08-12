@@ -50,6 +50,8 @@ establish reverse tunnels to it.
 - Gateway bind: `127.0.0.1:8780`.
 - Only routes listed in `FARYO_GATEWAY_ROUTES` are loaded; only those routes
   require Owner tokens.
+- Live agent limits are configured per route and are independent from the
+  merged Session History display budget.
 - Login cookie: uses the Faryo cookie name.
 - Owner tokens: private runtime config, never committed to Git.
 - Route auth: private runtime config, never committed to Git.

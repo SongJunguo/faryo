@@ -53,6 +53,7 @@ class GatewayRouteConfigTest(unittest.TestCase):
             "activeCount": 0,
             "sessions": [],
         })
+        handler.max_running_for = mock.Mock(return_value=8)
 
         handler.owner_agent_sessions("txy", "tester", "less")
         self.assertEqual(
@@ -95,6 +96,65 @@ class GatewayRouteConfigTest(unittest.TestCase):
 
             self.assertEqual(config.owner_tokens, {"txy": "enabled-token"})
             self.assertEqual(list(gateway.BACKENDS), ["txy"])
+            self.assertEqual(config.max_running("txy"), 8)
+
+    def test_gateway_config_accepts_route_max_running_override(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            auth = root / "gateway-auth.json"
+            env = root / "faryo.env"
+            auth.write_text(json.dumps({
+                "users": {
+                    "tester": {
+                        "bcrypt_hash": "not-checked-during-load",
+                        "routes": ["txy"],
+                    }
+                }
+            }), encoding="utf-8")
+            env.write_text(
+                "FARYO_GATEWAY_ROUTES=txy\n"
+                "FARYO_TXY_OWNER_TOKEN=enabled-token\n"
+                "FARYO_TXY_MAX_RUNNING=12\n",
+                encoding="utf-8",
+            )
+
+            config = gateway.GatewayConfig(
+                auth,
+                env,
+                root / "portal",
+                root / "state" / "cookie-secret",
+            )
+
+            self.assertEqual(config.max_running("txy"), 12)
+
+    def test_gateway_config_rejects_invalid_route_max_running(self) -> None:
+        for invalid in ("0", "33", "many"):
+            with self.subTest(invalid=invalid), tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+                auth = root / "gateway-auth.json"
+                env = root / "faryo.env"
+                auth.write_text(json.dumps({
+                    "users": {
+                        "tester": {
+                            "bcrypt_hash": "not-checked-during-load",
+                            "routes": ["txy"],
+                        }
+                    }
+                }), encoding="utf-8")
+                env.write_text(
+                    "FARYO_GATEWAY_ROUTES=txy\n"
+                    "FARYO_TXY_OWNER_TOKEN=enabled-token\n"
+                    f"FARYO_TXY_MAX_RUNNING={invalid}\n",
+                    encoding="utf-8",
+                )
+
+                with self.assertRaisesRegex(ValueError, "FARYO_TXY_MAX_RUNNING"):
+                    gateway.GatewayConfig(
+                        auth,
+                        env,
+                        root / "portal",
+                        root / "state" / "cookie-secret",
+                    )
 
     def test_gateway_config_reads_shell_quoted_private_values(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -242,6 +302,7 @@ class GatewayRouteConfigTest(unittest.TestCase):
             self.assertFalse((auth.parent / "initial-password").exists())
             self.assertEqual(auth.stat().st_mode & 0o777, 0o600)
             self.assertEqual(gateway_env.stat().st_mode & 0o777, 0o600)
+            self.assertIn("FARYO_TXY_MAX_RUNNING=8\n", gateway_env.read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":

@@ -85,6 +85,7 @@ workspace = (
 )
 inbox = owner.get("FARYO_OWNER_INBOX_DIR") or str(Path.home() / ".faryo" / "owner" / "data" / "inbox")
 route_upper = route.upper()
+max_running_defaults = {"txy": "8", "hp": "4", "pc": "4"}
 values = {
     "FARYO_GATEWAY_USER": existing.get("FARYO_GATEWAY_USER") or "faryo",
     "FARYO_PYTHON": os.environ["FARYO_PYTHON"],
@@ -93,6 +94,7 @@ values = {
     f"FARYO_{route_upper}_OWNER_HOST": owner.get("FARYO_OWNER_HOST") or "127.0.0.1",
     f"FARYO_{route_upper}_OWNER_PORT": owner.get("FARYO_OWNER_PORT") or "8765",
     f"FARYO_{route_upper}_OWNER_LABEL": route_upper,
+    f"FARYO_{route_upper}_MAX_RUNNING": existing.get(f"FARYO_{route_upper}_MAX_RUNNING") or max_running_defaults[route],
     "FARYO_DEFAULT_WORKSPACE": workspace,
     "FARYO_DEFAULT_FILE_INBOX": inbox,
     "GATEWAY_HOST": "127.0.0.1",
@@ -113,6 +115,7 @@ order = [
     f"FARYO_{route_upper}_OWNER_HOST",
     f"FARYO_{route_upper}_OWNER_PORT",
     f"FARYO_{route_upper}_OWNER_LABEL",
+    f"FARYO_{route_upper}_MAX_RUNNING",
     "FARYO_DEFAULT_WORKSPACE",
     "FARYO_DEFAULT_FILE_INBOX",
     "GATEWAY_HOST",

@@ -71,6 +71,12 @@ routine reconfiguration cannot silently restore an old login password. To
 perform an intentional credential reset, set `FARYO_GATEWAY_RESET_AUTH=1` and
 read the newly generated mode-`600` initial-password file.
 
+The initializer sets `FARYO_TXY_MAX_RUNNING=8` for the local TXY route. This is
+the number of live agent TUIs that may remain open, including idle TUIs waiting
+for input; it is not the number of history cards. Per-route values must be from
+1 through 32. Change the private env value and restart
+`faryo-gateway.service` to use another limit.
+
 `FARYO_ICP_RECORD` belongs in the same `faryo.env` as the other route settings.
 When set, the sign-in and password pages show that record number in the footer,
 linked to the official filing site. Leave it unset outside mainland China

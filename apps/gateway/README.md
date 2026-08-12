@@ -55,5 +55,10 @@ requires a token for the enabled route. Re-running it preserves an existing
 login config. Set `FARYO_GATEWAY_RESET_AUTH=1` only when intentionally rotating
 the Gateway login.
 
+Running-session limits are independent from history display. Configure them per
+enabled route with `FARYO_TXY_MAX_RUNNING`, `FARYO_HP_MAX_RUNNING`, or
+`FARYO_PC_MAX_RUNNING` (valid range `1`–`32`). Defaults are 8 for TXY and 4 for
+HP/PC.
+
 See [runbook.md](runbook.md) for Cloudflare Tunnel, first login, verification,
 and rollback instructions.

@@ -86,7 +86,8 @@ def load_backends(values: Any) -> dict[str, tuple[str, int, str]]:
 
 
 BACKENDS = load_backends(os.environ)
-SESSION_POLICY = {"txy": (3, 2), "hp": (4, 4), "pc": (4, 2)}
+SESSION_MAX_RUNNING_DEFAULTS = {"txy": 8, "hp": 4, "pc": 4}
+SESSION_MAX_RUNNING_LIMIT = 32
 WORKORDER_RECEIPT_WATCH_INTERVAL_SECONDS = 20
 WORKORDER_RECEIPT_WATCH_ATTEMPTS = 90
 NEW_SESSION_COMMANDS = {"codex", "claude"}
@@ -413,6 +414,7 @@ class GatewayConfig:
         env = read_env(owner_env)
         BACKENDS.clear()
         BACKENDS.update(load_backends(env))
+        self.route_max_running = self.load_route_max_running(env)
         self.mcp_token = env.get("FARYO_MCP_TOKEN", "").strip()
         self.mcp_cors_origin = env.get("FARYO_MCP_CORS_ORIGIN", "").strip()
         self.mcp_user = env.get("FARYO_MCP_USER", "").strip()
@@ -493,6 +495,23 @@ class GatewayConfig:
         if missing:
             raise ValueError("missing route owner token env: " + ", ".join(missing))
         return tokens
+
+    def load_route_max_running(self, env: dict[str, str]) -> dict[str, int]:
+        limits: dict[str, int] = {}
+        for route in BACKENDS:
+            key = f"FARYO_{route.upper()}_MAX_RUNNING"
+            raw = env.get(key, str(SESSION_MAX_RUNNING_DEFAULTS[route])).strip()
+            try:
+                value = int(raw)
+            except ValueError as exc:
+                raise ValueError(f"{key} must be an integer from 1 to {SESSION_MAX_RUNNING_LIMIT}") from exc
+            if not 1 <= value <= SESSION_MAX_RUNNING_LIMIT:
+                raise ValueError(f"{key} must be an integer from 1 to {SESSION_MAX_RUNNING_LIMIT}")
+            limits[route] = value
+        return limits
+
+    def max_running(self, route: str) -> int:
+        return self.route_max_running[route]
 
     def load_users(self, auth: dict[str, Any]) -> dict[str, dict[str, Any]]:
         if "users" in auth and isinstance(auth["users"], dict):
@@ -2460,7 +2479,7 @@ class GatewayHandler(BaseHTTPRequestHandler):
         return result if isinstance(result, dict) else {"ok": False, "error": "invalid owner response"}
 
     def max_running_for(self, username: str, route: str) -> int:
-        return SESSION_POLICY[route][1]
+        return self.config.max_running(route)
 
     def owner_agent_sessions(self, route: str, username: str, history_mode: str = "less") -> dict[str, Any]:
         history_mode = history_mode if history_mode in HISTORY_TOTAL_LIMITS else "less"
