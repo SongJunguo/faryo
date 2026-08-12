@@ -70,7 +70,10 @@ SHARED_STATIC_FILES = {
     "appearance.css": "text/css; charset=utf-8",
     "appearance.js": "text/javascript; charset=utf-8",
 }
-DEFAULT_PANE_WIDTH = 500
+# Faryo must not change a terminal UI's geometry by default.  A positive
+# --pane-width remains an explicit compatibility opt-in for terminal-only
+# capture, but Codex always follows its real tmux clients.
+DEFAULT_PANE_WIDTH = 0
 FALLBACK_OWNER_LABEL = "TMUX"
 MAX_SEND_CHARS = 120_000
 PASTE_READY_TIMEOUT = 1.2

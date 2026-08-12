@@ -25,6 +25,11 @@ Runtime configuration defaults to:
 Set `FARYO_PYTHON` in the private Owner env file to pin the service to a
 dedicated virtual environment instead of whichever `python3` is first on PATH.
 
+Owner does not resize tmux windows by default, so terminal UIs wrap at the
+dimensions selected by real tmux clients. The server's positive
+`--pane-width` option is an explicit compatibility opt-in for terminal-only
+capture; it is never applied to a running Codex TUI.
+
 The user-level timer template lives at:
 
 ```text

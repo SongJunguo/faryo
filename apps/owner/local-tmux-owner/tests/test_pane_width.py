@@ -15,6 +15,18 @@ class PaneWidthTest(unittest.TestCase):
     def setUp(self):
         self.config = server.Config("codex-test", "token", 500)
 
+    def test_default_width_never_touches_tmux_geometry(self):
+        config = server.Config("shell-test", "token", server.DEFAULT_PANE_WIDTH)
+        with (
+            mock.patch.object(server, "has_session") as has_session,
+            mock.patch.object(server, "tmux") as tmux,
+        ):
+            server.ensure_pane_width(config)
+
+        self.assertEqual(server.DEFAULT_PANE_WIDTH, 0)
+        has_session.assert_not_called()
+        tmux.assert_not_called()
+
     def test_codex_tui_is_never_forced_to_capture_width(self):
         with (
             mock.patch.object(server, "has_session", return_value=True),
@@ -27,7 +39,7 @@ class PaneWidthTest(unittest.TestCase):
         get_width.assert_not_called()
         tmux.assert_not_called()
 
-    def test_non_codex_background_pane_keeps_configured_capture_width(self):
+    def test_explicit_non_codex_capture_width_remains_opt_in(self):
         completed = mock.Mock(returncode=0, stderr="")
         with (
             mock.patch.object(server, "has_session", return_value=True),
