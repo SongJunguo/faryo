@@ -808,6 +808,13 @@ def get_pane_width(config: Config) -> int | None:
 def ensure_pane_width(config: Config) -> None:
     if config.pane_width <= 0 or not has_session(config):
         return
+    # Codex compact chat is sourced from App Server, so widening its live TUI
+    # no longer improves transcript fidelity.  More importantly,
+    # resize-window switches tmux to manual sizing: a narrower attached client
+    # would then view a wide Codex screen and lines would appear not to wrap.
+    # Leave Codex windows under tmux/client size control.
+    if codex_cli_in_pane(config):
+        return
     current_width = get_pane_width(config)
     if current_width is not None and current_width >= config.pane_width:
         return

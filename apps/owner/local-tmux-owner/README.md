@@ -39,6 +39,9 @@ For a bound Codex session, compact Chat reads the original message text through
 Codex App Server instead of reconstructing Markdown from the tmux screen. Raw
 view remains the terminal capture. Owner remembers the thread id observed for a
 live pane and falls back to tmux if structured history is unavailable.
+Because structured capture does not need a wide terminal, Owner also leaves
+Codex pane sizing to tmux and its attached client so TUI lines wrap at the
+visible terminal width.
 
 The tmux fallback still handles Codex terminal output, which removes the
 backslashes from `\(...\)` and `\[...\]`, by recognizing conservative
