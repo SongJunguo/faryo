@@ -1,6 +1,7 @@
 import sys
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 APP_DIR = Path(__file__).resolve().parents[1]
@@ -11,23 +12,34 @@ import server
 
 
 class CodexTranscriptTest(unittest.TestCase):
+    def test_configured_codex_executable_wins_over_service_path(self):
+        with mock.patch.dict(server.os.environ, {"FARYO_CODEX_BIN": "/opt/codex/bin/codex"}, clear=False):
+            with mock.patch.object(server.shutil, "which", return_value="/usr/bin/codex"):
+                self.assertEqual(server.agent_launch_executable("codex"), "/opt/codex/bin/codex")
+
+    def test_codex_executable_falls_back_to_service_path(self):
+        with mock.patch.dict(server.os.environ, {}, clear=False):
+            server.os.environ.pop("FARYO_CODEX_BIN", None)
+            with mock.patch.object(server.shutil, "which", return_value="/usr/bin/codex"):
+                self.assertEqual(server.agent_launch_executable("codex"), "/usr/bin/codex")
+
     def test_preserves_original_latex_from_agent_messages(self):
         formula = (
-            "Boundedness gives\n\n"
+            "A generic bound gives\n\n"
             "\\[\n"
-            "\\|d(t)\\|\\le M.\n"
+            "\\|w(s)\\|\\le C.\n"
             "\\]\n\n"
             "\\[\n"
-            "d(t)=\\begin{cases}\n"
-            "-1,&t<1,\\\\\n"
-            "1,&t\\ge1.\n"
+            "q(s)=\\begin{cases}\n"
+            "a,&0\\le s<s_0,\\\\\n"
+            "b,&s\\ge s_0.\n"
             "\\end{cases}\n"
             "\\]"
         )
         thread = {
             "turns": [{
                 "items": [
-                    {"type": "userMessage", "content": [{"type": "text", "text": "Explain bounded noise"}]},
+                    {"type": "userMessage", "content": [{"type": "text", "text": "Render generic notation"}]},
                     {"type": "agentMessage", "phase": "final_answer", "text": formula},
                 ]
             }]
@@ -35,9 +47,9 @@ class CodexTranscriptTest(unittest.TestCase):
 
         transcript = server.codex_thread_transcript(thread, 320)
 
-        self.assertIn("› Explain bounded noise", transcript)
-        self.assertIn("\\|d(t)\\|\\le M.", transcript)
-        self.assertIn("-1,&t<1,\\\\", transcript)
+        self.assertIn("› Render generic notation", transcript)
+        self.assertIn("\\|w(s)\\|\\le C.", transcript)
+        self.assertIn("a,&0\\le s<s_0,\\\\", transcript)
         self.assertIn("\\begin{cases}", transcript)
 
     def test_line_budget_keeps_the_latest_turn_intact(self):

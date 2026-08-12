@@ -173,6 +173,11 @@ JSON response:
 - Missing tmux session
 - Invalid or expired session state
 - Browser caching old session routes
+- A Codex compact view warning that structured history is unavailable usually
+  means the Owner service cannot find the Codex CLI installed by a version
+  manager. Set `FARYO_CODEX_BIN` in the private Owner environment file to the
+  absolute result of `command -v codex`, then restart Owner. Do not commit that
+  machine-specific path.
 
 ---
 

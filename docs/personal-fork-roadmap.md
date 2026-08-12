@@ -12,8 +12,6 @@
 
 把个人 Faryo fork 完善为可长期使用的本机 Codex Web 客户端：优先实现结构化消息实时同步与可靠输入提交，再完成安全 Markdown、离线 KaTeX、本机自启、端到端测试、文档和个人 GitHub 推送，同时保持 tmux TUI 可用且不修改原作者 upstream。
 
-对应工作 Goal：`019ff509-e143-7473-af25-0fbc57de0d20`。
-
 ## 当前架构边界
 
 当前网页有两条不同的数据路径，排查时不能混为一谈：
@@ -82,6 +80,15 @@
 
 ## 阶段 3：Markdown 与离线公式资源（已完成）
 
+### 渲染技术选择
+
+CommonMark 本身不定义 TeX 数学语法。成熟预览器通常组合 Markdown
+解析器、数学边界规则、KaTeX 或 MathJax，以及配套样式。Faryo 采用适合
+浏览器端部署的轻量组合：本地 `markdown-it` + 本地 KaTeX，并在普通
+Markdown 规则运行前保护数学块。Markdown Preview Enhanced 是完整的
+VS Code 扩展而非可直接嵌入的浏览器库，因此这里只借鉴其数学块优先解析
+原则，不引入与 Faryo 无关的编辑器、导出和执行功能。
+
 ### 工作项
 
 - 完成本地 `markdown-it` 与 KaTeX 资源打包，运行时不依赖 CDN。
@@ -133,7 +140,13 @@
 - 输入成功路径：真实 Owner HTTP 返回 `delivery=accepted`；同一 `clientMessageId` 第二次请求返回 `duplicate=true`，没有重复粘贴。
 - 输入失败路径：人为保留 TUI 草稿后，Chrome 收到冲突错误，输入框和 `sessionStorage` 草稿均未被清空。
 - 实时路径：独立 App Server 可在约 0.28 秒看到 TUI 新用户消息，但进行中的 shell turn 直到完成前没有结构化 item；因此采用“结构化最终内容 + 临时脱敏 tmux live 尾部”。Chrome 验证 live 面板自动出现并在完成后自动消失。
-- Markdown/公式：Node 单元测试、11 个 Owner Python 测试、13 个 Gateway 测试、包发布检查和 Owner smoke 全部通过。
-- 浏览器：Chrome 与 Edge 本地资源测试通过；`\\begin{cases}`、`\\|d(t)\\|\\le M` 和至少两行矩阵结构的精确 KaTeX 检查通过。
-- 部署：`faryo-owner-keepalive.timer` 已启用；主动停止 Owner 后，keepalive 成功用 `/home/sjg/miniconda3/envs/faryo/bin/python` 恢复服务。
+- Markdown/公式：Node 单元测试、13 个 Owner Python 测试、13 个 Gateway 测试、包发布检查和 Owner smoke 全部通过。
+- 浏览器：Chrome 与 Edge 本地资源测试通过；分段函数、范数和至少两行矩阵结构的精确 KaTeX 检查通过。
+- 部署：`faryo-owner-keepalive.timer` 已启用；主动停止 Owner 后，keepalive 成功使用专用 Conda 环境恢复服务。
 - 发布：功能提交 `1892a1d` 已推送到个人 `origin/katex-feature`；原作者 `upstream` 未修改。
+
+### 结构化来源加固
+
+- Owner 服务可通过私有运行时配置 `FARYO_CODEX_BIN` 定位 Codex CLI，避免版本管理器安装目录未进入服务 `PATH` 时静默退回终端屏幕文本。
+- 紧凑视图会标记实际 capture source；Codex 结构化历史不可用时显示明确警告，而不再把可能残缺的终端回退误认为完整 Markdown。
+- 通用回归样例覆盖行内/行间公式、分段函数、指示函数、平方根表达式和终端换行恢复；测试数据不包含真实对话、Token、域名或本机绝对路径。

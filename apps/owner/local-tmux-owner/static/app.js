@@ -803,12 +803,17 @@
     lastCapture = capture;
     const text = capture.text || 'No output yet';
     const rules = compactRulesForCapture(capture);
+    output.dataset.captureSource = String(capture.captureSource || '');
+    output.dataset.agentSource = String(capture.agentSource || '');
     needsConfirmUI = hasConfirmUI(text, rules);
     updateStatusLineAutoExpand();
     output.classList.toggle('compact-blocks', outputMode === 'compact');
     if (outputMode === 'compact') renderCompactOutput(text, rules, { terminal: capture.captureSource !== 'codex-app-server' });
     else if (capture.html) output.innerHTML = decorateMetaLines(capture.html, text);
     else renderPlainOutput(text, rules);
+    if (outputMode === 'compact' && capture.agentSource === 'codex-cli' && capture.captureSource !== 'codex-app-server') {
+      output.insertAdjacentHTML('afterbegin', '<section class="compact-capture-warning" role="status">Structured Codex history is unavailable. Showing a terminal fallback; Markdown and formulas may be incomplete.</section>');
+    }
     if (outputMode === 'compact' && capture.agentRunning && capture.liveText) {
       output.insertAdjacentHTML('beforeend', `<section class="compact-live-terminal"><div class="compact-live-title"><span class="live-dot"></span>Live from tmux</div><pre>${escapeHtml(String(capture.liveText))}</pre></section>`);
     }

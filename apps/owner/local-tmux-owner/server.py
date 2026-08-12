@@ -647,6 +647,10 @@ def codex_thread_by_id(thread_id: str) -> dict[str, Any] | None:
 
 
 def agent_launch_executable(command: str) -> str:
+    if command == "codex":
+        configured = os.environ.get("FARYO_CODEX_BIN", "").strip()
+        if configured:
+            return str(Path(configured).expanduser())
     if command == "claude" and CLAUDE_DEEPSEEK_LAUNCHER and CLAUDE_DEEPSEEK_LAUNCHER.is_file():
         return str(CLAUDE_DEEPSEEK_LAUNCHER)
     return shutil.which(command) or command
@@ -1416,7 +1420,7 @@ def _start_codex_app_server_locked(timeout: float) -> subprocess.Popen[str] | No
     _stop_codex_app_server_locked()
     try:
         process = subprocess.Popen(
-            ["codex", "app-server", "--listen", "stdio://"],
+            [agent_launch_executable("codex"), "app-server", "--listen", "stdio://"],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
@@ -1590,7 +1594,7 @@ def rate_limit_from_response(result: dict[str, Any]) -> dict[str, Any] | None:
 def fetch_weekly_rate_limit(timeout: float = 6.0) -> dict[str, Any] | None:
     try:
         process = subprocess.Popen(
-            ["codex", "app-server", "--listen", "stdio://"],
+            [agent_launch_executable("codex"), "app-server", "--listen", "stdio://"],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,

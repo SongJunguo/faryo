@@ -9,6 +9,10 @@ const expectSendFailure = process.env.FARYO_SMOKE_EXPECT_SEND_FAILURE === '1';
 const expectLive = process.env.FARYO_SMOKE_EXPECT_LIVE === '1';
 const expectLiveClears = process.env.FARYO_SMOKE_EXPECT_LIVE_CLEARS === '1';
 const skipRenderChecks = process.env.FARYO_SMOKE_SKIP_RENDER_CHECKS === '1';
+// Real-session smoke tests may contain private conversations. Keep DOM shape
+// and layout diagnostics while omitting rendered text/TeX from failure output.
+const privacySafe = process.env.FARYO_SMOKE_PRIVACY_SAFE === '1';
+const expectStructured = process.env.FARYO_SMOKE_EXPECT_STRUCTURED === '1';
 const debugLayout = process.env.FARYO_SMOKE_DEBUG_LAYOUT === '1';
 const screenshotPath = process.env.FARYO_SMOKE_SCREENSHOT || '';
 const expectedTex = JSON.parse(process.env.FARYO_SMOKE_EXPECT_TEX || '[]');
@@ -112,7 +116,20 @@ try {
         const outputWrap = document.getElementById('outputWrap');
         const katexCount = output?.querySelectorAll('.katex').length || 0;
         const displayCount = output?.querySelectorAll('.katex-display').length || 0;
+        const katexErrorCount = output?.querySelectorAll('.katex-error').length || 0;
         const markdownCount = output?.querySelectorAll('.markdown-body').length || 0;
+        let rawMathDelimiterCount = 0;
+        if (output) {
+          const walker = document.createTreeWalker(output, NodeFilter.SHOW_TEXT);
+          let node = walker.nextNode();
+          while (node) {
+            if (!node.parentElement?.closest('pre, code, .katex, .math-ignore')
+                && /(?:\\\\\[|\\\\\]|\\\\\(|\\\\\)|\$\$)/.test(String(node.nodeValue || ''))) {
+              rawMathDelimiterCount += 1;
+            }
+            node = walker.nextNode();
+          }
+        }
         const katexAssetUrls = performance.getEntriesByType('resource')
           .map((entry) => String(entry.name || ''))
           .filter((url) => /(?:\\/vendor\\/katex\\/|cdn\\.jsdelivr\\.net\\/npm\\/katex)/i.test(url));
@@ -146,8 +163,8 @@ try {
             };
           });
           return {
-            text: String(display.textContent || '').replace(/\\s+/g, ' ').trim().slice(0, 160),
-            tex: String(annotation?.textContent || ''),
+            text: ${JSON.stringify(privacySafe)} ? '' : String(display.textContent || '').replace(/\\s+/g, ' ').trim().slice(0, 160),
+            tex: ${JSON.stringify(privacySafe)} ? '' : String(annotation?.textContent || ''),
             matrixRows: mathml?.querySelectorAll('mtable > mtr').length || 0,
             displayWidth: Math.round(displayRect.width),
             displayHeight: Math.round(displayRect.height),
@@ -183,7 +200,11 @@ try {
           ready: katexCount >= 2 && displayCount >= 1 && markdownCount >= 1,
           katexCount,
           displayCount,
+          katexErrorCount,
+          rawMathDelimiterCount,
           markdownCount,
+          captureSource: String(output?.dataset.captureSource || ''),
+          captureWarningCount: output?.querySelectorAll('.compact-capture-warning').length || 0,
           viewport: { width: innerWidth, height: innerHeight },
           outputHorizontalOverflow: Boolean(outputWrap && outputWrap.scrollWidth > outputWrap.clientWidth + 1),
           katexStylesheetLoaded: [...document.styleSheets].some((sheet) => String(sheet.href || '').includes('/katex')),
@@ -192,8 +213,8 @@ try {
           markdownAssetUrls,
           markdownAssetsLocal: markdownAssetUrls.length >= 1 && markdownAssetUrls.every((url) => new URL(url).origin === location.origin),
           displayLayout,
-          outputText: String(output?.innerText || '').slice(-600),
-          outputHtml: String(output?.innerHTML || '').slice(-2400),
+          outputText: ${JSON.stringify(privacySafe)} ? '' : String(output?.innerText || '').slice(-600),
+          outputHtml: ${JSON.stringify(privacySafe)} ? '' : String(output?.innerHTML || '').slice(-2400),
           errorText: String(document.getElementById('errorBox')?.innerText || ''),
         };
       })()`,
@@ -213,6 +234,15 @@ try {
     }
     if (state.outputHorizontalOverflow) {
       throw new Error('Formula rendering caused page-level horizontal overflow');
+    }
+    if (state.katexErrorCount) {
+      throw new Error(`KaTeX left ${state.katexErrorCount} parse errors in the live Faryo DOM`);
+    }
+    if (state.rawMathDelimiterCount) {
+      throw new Error(`Math delimiters remained visible in ${state.rawMathDelimiterCount} text nodes`);
+    }
+    if (expectStructured && (state.captureSource !== 'codex-app-server' || state.captureWarningCount)) {
+      throw new Error(`Codex capture did not use structured history: source=${state.captureSource || 'missing'} warning=${state.captureWarningCount || 0}`);
     }
     if (!state.katexAssetsLocal) {
       throw new Error(`KaTeX loaded a missing or external asset: ${JSON.stringify(state.katexAssetUrls)}`);

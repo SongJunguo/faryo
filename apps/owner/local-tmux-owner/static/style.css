@@ -266,6 +266,11 @@ button.product-mark:active { transform: none; }
 .markdown-body .markdown-file-link { vertical-align: middle; }
 .markdown-body .chat-markdown-image { cursor: zoom-in; }
 
+/* A Codex terminal capture is intentionally a visible fallback: terminal
+   wrapping can discard TeX delimiters and is not safe to present as a
+   lossless structured transcript. */
+.compact-capture-warning { align-self: stretch; max-width: 100%; padding: 8px 10px; border: 1px solid color-mix(in srgb, #b7791f 48%, var(--line)); border-radius: 10px; background: color-mix(in srgb, #f6ad55 13%, var(--panel)); color: var(--muted); font-size: calc(12px + var(--font-step)); line-height: 1.4; }
+
 /* While the standalone Codex TUI owns a turn, structured thread/read data has
    no token deltas. Show a small, explicitly transient tmux tail until the
    finalized structured message replaces it. */

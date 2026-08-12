@@ -18,9 +18,9 @@ const mixed = markdown.render([
   '| bound | \\(M\\) |',
   '',
   '\\[',
-  'd(t)=\\begin{cases}',
-  '-1,&t<1,\\\\',
-  '1,&t\\ge1,',
+  'p(s)=\\begin{cases}',
+  'a,&0\\le s<s_0,\\\\',
+  'b,&s\\ge s_0,',
   '\\end{cases}',
   '\\]',
   '',
@@ -38,8 +38,49 @@ assert.match(mixed, /target="_blank"/);
 assert.match(mixed, /rel="noopener noreferrer"/);
 assert.match(mixed, /\\\(x_i\\\)/);
 assert.match(mixed, /\\begin\{cases\}/);
-assert.match(mixed, /-1,&amp;t&lt;1,\\\\/);
+assert.match(mixed, /a,&amp;0\\le s&lt;s_0,\\\\/);
 assert.match(mixed, /<code class="language-tex">\\\[not_math_inside_code\\\]/);
+
+const scientificMath = markdown.render([
+  'Generic mathematical notation:',
+  '',
+  '\\[',
+  'q(\\tau)=\\begin{cases}',
+  '\\alpha,&0\\le \\tau<\\tau_0,\\\\',
+  '\\beta,&\\tau\\ge\\tau_0,',
+  '\\end{cases}',
+  '\\]',
+  '',
+  'with \\(\\zeta_m\\in[-R,R]\\), an indicator expansion',
+  '',
+  '\\[',
+  'v(s)=\\alpha\\mathbf 1_{[0,1)}(s)+\\beta\\mathbf 1_{[1,2)}(s),',
+  '\\]',
+  '',
+  'and a square-root map',
+  '',
+  '\\[',
+  'j(r)=\\gamma\\,\\operatorname{sgn}(r)\\sqrt{|r|}.',
+  '\\]',
+].join('\n'));
+assert.match(scientificMath, /\\begin\{cases\}/);
+assert.match(scientificMath, /\\zeta_m\\in\[-R,R\]/);
+assert.match(scientificMath, /\\mathbf 1_\{\[0,1\)\}/);
+assert.match(scientificMath, /\\operatorname\{sgn\}\(r\)\\sqrt\{\|r\|\}/);
+
+// Protect block math before Markdown's Setext-heading rule sees an equals-only
+// row. Mature math previews enforce the same parser boundary.
+const setextSensitiveMath = markdown.render([
+  '$$',
+  '\\begin{aligned}',
+  'A',
+  '=',
+  'B,',
+  '\\end{aligned}',
+  '$$',
+].join('\n'));
+assert.doesNotMatch(setextSensitiveMath, /<h1>/);
+assert.match(setextSensitiveMath, /\$\$[\s\S]*\\begin\{aligned\}[\s\S]*\$\$/);
 
 const unsafe = markdown.render([
   '<img src=x onerror="globalThis.pwned=1">',

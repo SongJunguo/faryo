@@ -57,8 +57,12 @@ assert.equal(
   '\\[\n(a+b)^2=a^2+2ab+b^2\n\\]'
 );
 assert.equal(
-  math.normalizeTerminalMath('[\nd(t)=\\begin{cases}\n-1,&t<1,\\\n1,&t\\ge1.\n\\end{cases}\n]'),
-  '\\[\nd(t)=\\begin{cases}\n-1,&t<1,\\\\\n1,&t\\ge1.\n\\end{cases}\n\\]'
+  math.normalizeTerminalMath('[\np(s)=\\begin{cases}\na,&0\\le s<s_0,\\\nb,&s\\ge s_0.\n\\end{cases}\n]'),
+  '\\[\np(s)=\\begin{cases}\na,&0\\le s<s_0,\\\\\nb,&s\\ge s_0.\n\\end{cases}\n\\]'
+);
+assert.equal(
+  math.normalizeTerminalMath('[\nj(r)=\\gamma\\,\\operatorname{sgn}(r)\\sqrt{|r|}\n]'),
+  '\\[\nj(r)=\\gamma\\,\\operatorname{sgn}(r)\\sqrt{|r|}\n\\]'
 );
 
 assert.equal(math.ready(), false);
