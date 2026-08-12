@@ -8,6 +8,7 @@ const sendText = process.env.FARYO_SMOKE_SEND_TEXT || '';
 const expectSendFailure = process.env.FARYO_SMOKE_EXPECT_SEND_FAILURE === '1';
 const expectLive = process.env.FARYO_SMOKE_EXPECT_LIVE === '1';
 const expectLiveClears = process.env.FARYO_SMOKE_EXPECT_LIVE_CLEARS === '1';
+const checkLiveScroll = process.env.FARYO_SMOKE_CHECK_LIVE_SCROLL === '1';
 const skipRenderChecks = process.env.FARYO_SMOKE_SKIP_RENDER_CHECKS === '1';
 // Real-session smoke tests may contain private conversations. Keep DOM shape
 // and layout diagnostics while omitting rendered text/TeX from failure output.
@@ -289,6 +290,53 @@ try {
 
     console.log('faryo-browser-katex-smoke=PASS');
     if (debugLayout) console.log(`faryo-browser-katex-layout=${JSON.stringify(state)}`);
+  }
+
+  if (checkLiveScroll) {
+    let liveScrollState = {};
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      await delay(100);
+      const result = await send('Runtime.evaluate', {
+        expression: `(() => {
+          const pane = document.querySelector('.compact-live-terminal pre');
+          if (!pane || pane.scrollHeight <= pane.clientHeight) return { ready: false };
+          const maximum = pane.scrollHeight - pane.clientHeight;
+          const target = Math.max(1, Math.floor(maximum / 3));
+          const initialNearBottom = maximum - pane.scrollTop < 48;
+          pane.scrollTop = target;
+          pane.dataset.faryoSmokeScroll = 'waiting';
+          window.__faryoSmokeLiveScrollTarget = target;
+          return { ready: true, initialNearBottom };
+        })()`,
+        returnByValue: true,
+      });
+      liveScrollState = result.result?.value || {};
+      if (liveScrollState.ready) break;
+    }
+    if (!liveScrollState.ready) throw new Error('A scrollable Live from tmux pane did not appear');
+    if (!liveScrollState.initialNearBottom) throw new Error('A new Live from tmux pane did not start at the latest output');
+
+    let preserved = {};
+    for (let attempt = 0; attempt < 120; attempt += 1) {
+      await delay(100);
+      const result = await send('Runtime.evaluate', {
+        expression: `(() => {
+          const pane = document.querySelector('.compact-live-terminal pre');
+          const replaced = Boolean(pane && pane.dataset.faryoSmokeScroll !== 'waiting');
+          const target = Number(window.__faryoSmokeLiveScrollTarget || 0);
+          return {
+            replaced,
+            delta: pane ? Math.abs(pane.scrollTop - target) : -1,
+          };
+        })()`,
+        returnByValue: true,
+      });
+      preserved = result.result?.value || {};
+      if (preserved.replaced) break;
+    }
+    if (!preserved.replaced) throw new Error('Live from tmux did not refresh during the scroll test');
+    if (preserved.delta > 2 || preserved.delta < 0) throw new Error(`Live from tmux moved the reading position by ${preserved.delta}px`);
+    console.log('faryo-browser-live-scroll=PASS initial=latest manual=preserved');
   }
 
   if (screenshotPath) {

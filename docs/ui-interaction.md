@@ -87,6 +87,11 @@ Compact mode is agent-specific:
 Raw mode keeps the terminal evidence closer to its original form. It is useful
 when the user needs exact command output, logs, or terminal formatting.
 
+While an agent is working, the compact view may append a bounded `Live from
+tmux` pane. Its scroll position follows terminal conventions: a pane already at
+the bottom continues following new output, while a user who scrolls upward
+keeps that reading position across live refreshes.
+
 ## Input
 
 The composer sends text into the active tmux pane.

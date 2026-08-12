@@ -221,6 +221,16 @@
     }
   }
 
+  function liveTerminalScrollState() {
+    const pane = output.querySelector('.compact-live-terminal pre');
+    return window.FaryoLiveScroll?.snapshot(pane) || null;
+  }
+
+  function restoreLiveTerminalScroll(state) {
+    const pane = output.querySelector('.compact-live-terminal pre');
+    window.FaryoLiveScroll?.restore(pane, state);
+  }
+
   outputWrap.addEventListener('scroll', updateBottomButton, { passive: true });
   bottomBtn.addEventListener('click', () => { if (!applyDeferredCapture(true)) scrollBottom(true); });
   output.addEventListener('click', async (event) => {
@@ -800,6 +810,7 @@
   }
 
   function renderOutput(capture) {
+    const liveScroll = liveTerminalScrollState();
     lastCapture = capture;
     const text = capture.text || 'No output yet';
     const rules = compactRulesForCapture(capture);
@@ -817,6 +828,7 @@
     if (outputMode === 'compact' && capture.agentRunning && capture.liveText) {
       output.insertAdjacentHTML('beforeend', `<section class="compact-live-terminal"><div class="compact-live-title"><span class="live-dot"></span>Live from tmux</div><pre>${escapeHtml(String(capture.liveText))}</pre></section>`);
     }
+    restoreLiveTerminalScroll(liveScroll);
   }
 
   function resetRefreshState() {

@@ -152,7 +152,7 @@ self.addEventListener('activate',(event)=>{event.waitUntil(caches.keys().then((k
 self.addEventListener('fetch',()=>{});
 """
 
-OWNER_STATIC_FILES = {"appearance.css", "appearance.js", "app.js", "style.css", "index.html", "math-render.js", "markdown-render.js", "compact-rules-codex.js", "compact-rules-claude.js"}
+OWNER_STATIC_FILES = {"appearance.css", "appearance.js", "app.js", "style.css", "index.html", "math-render.js", "markdown-render.js", "live-scroll.js", "compact-rules-codex.js", "compact-rules-claude.js"}
 OWNER_STATIC_PREFIXES = ("icons/", "pet/", "vendor/katex/", "vendor/markdown-it/")
 GATEWAY_STATIC_FILES = {
     "projects.css": "text/css; charset=utf-8",

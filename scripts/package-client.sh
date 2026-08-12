@@ -56,6 +56,7 @@ release_checks() {
     "$ROOT/apps/owner/local-tmux-owner/static/compact-rules-claude.js" \
     "$ROOT/apps/owner/local-tmux-owner/static/math-render.js" \
     "$ROOT/apps/owner/local-tmux-owner/static/markdown-render.js" \
+    "$ROOT/apps/owner/local-tmux-owner/static/live-scroll.js" \
     "$ROOT/apps/shared/static/appearance.js" \
     "$ROOT/apps/owner/local-tmux-owner/static/app.js" \
     "$ROOT/apps/gateway/server/static/projects.js"
@@ -64,6 +65,7 @@ release_checks() {
   done
   node "$ROOT/apps/owner/local-tmux-owner/tests/math-render.test.js"
   node "$ROOT/apps/owner/local-tmux-owner/tests/markdown-render.test.js"
+  node "$ROOT/apps/owner/local-tmux-owner/tests/live-scroll.test.js"
   node "$ROOT/apps/owner/local-tmux-owner/tests/compact-rules-codex.test.js"
   python3 -m unittest discover -s "$ROOT/apps/owner/local-tmux-owner/tests" -p 'test_*.py'
   python3 - "$ROOT" <<'PY'
@@ -81,6 +83,8 @@ assert "math-render.js" in index, "index.html must load math-render.js"
 assert "math-render.js" in gateway, "gateway must allow math-render.js"
 assert "markdown-render.js" in index, "index.html must load markdown-render.js"
 assert "markdown-render.js" in gateway, "gateway must allow markdown-render.js"
+assert "live-scroll.js" in index, "index.html must load live-scroll.js"
+assert "live-scroll.js" in gateway, "gateway must allow live-scroll.js"
 assert "cdn.jsdelivr.net/npm/katex" not in index, "KaTeX must not require an external CDN"
 assert 'vendor/katex/katex.min.css?v=0.18.4' in index, "index.html must load local KaTeX CSS"
 assert 'vendor/katex/katex.min.js?v=0.18.4' in index, "index.html must load local KaTeX JS"
