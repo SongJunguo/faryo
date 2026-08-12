@@ -31,10 +31,10 @@
 | 结构化公式来源 | 已完成并提交 | 公式不再依赖有损的 tmux 屏幕文本 |
 | tmux 桌面换行 | 已完成并提交 | Owner 不再把 Codex 窗口强制扩到 500 列 |
 | 公式版式 | 已完成并提交 | 分段函数、范数和块公式已经过 Chrome/Edge 验证 |
-| KaTeX 本地化 | 已实现，待提交 | 本地 JS、CSS、字体和许可证已通过离线浏览器检查 |
-| 安全 Markdown | 已实现，待提交 | markdown-it、公式保护、XSS 用例和浏览器回归通过 |
-| 网页输入可靠提交 | **P0 已完成，待提交** | 消息 ID 幂等、粘贴/Enter 确认、失败草稿保留和 TUI 草稿冲突保护均通过 |
-| 结构化消息实时更新 | **P0 已完成，待提交** | 最终内容用结构化数据；运行中显示脱敏 tmux live 尾部，结束后自动收敛 |
+| KaTeX 本地化 | 已完成并推送 | 本地 JS、CSS、字体和许可证已通过离线浏览器检查 |
+| 安全 Markdown | 已完成并推送 | markdown-it、公式保护、XSS 用例和浏览器回归通过 |
+| 网页输入可靠提交 | **P0 已完成并推送** | 消息 ID 幂等、粘贴/Enter 确认、失败草稿保留和 TUI 草稿冲突保护均通过 |
+| 结构化消息实时更新 | **P0 已完成并推送** | 最终内容用结构化数据；运行中显示脱敏 tmux live 尾部，结束后自动收敛 |
 | 本机开机自启 | 已完成 | user timer 已启用，`Linger=yes`；停止 Owner 后的自动恢复测试通过 |
 | 手机/Gateway/隧道 | 后续阶段 | 不属于本机 P0 修复；本机稳定后再配置 |
 
@@ -126,7 +126,7 @@
 
 ## 下一步
 
-完成最终 diff/敏感信息审查，重新运行全量测试，将改动提交并只推送到个人 `origin/katex-feature`。手机 Gateway/隧道继续保留为后续独立阶段。
+本机阶段已经完成。继续观察实际长对话中的输入与 live 尾部；手机 Gateway/隧道保留为后续独立阶段。
 
 ## 2026-08-12 验证记录
 
@@ -136,3 +136,4 @@
 - Markdown/公式：Node 单元测试、11 个 Owner Python 测试、13 个 Gateway 测试、包发布检查和 Owner smoke 全部通过。
 - 浏览器：Chrome 与 Edge 本地资源测试通过；`\\begin{cases}`、`\\|d(t)\\|\\le M` 和至少两行矩阵结构的精确 KaTeX 检查通过。
 - 部署：`faryo-owner-keepalive.timer` 已启用；主动停止 Owner 后，keepalive 成功用 `/home/sjg/miniconda3/envs/faryo/bin/python` 恢复服务。
+- 发布：功能提交 `1892a1d` 已推送到个人 `origin/katex-feature`；原作者 `upstream` 未修改。
