@@ -1,0 +1,87 @@
+# Gateway Security Hardening
+
+Faryo Gateway is not an ordinary content site. It can send input to terminal
+sessions, approve supported actions, upload files, and start or resume coding
+agents. Treat it as a remote administration surface.
+
+## Threat model
+
+If an attacker obtains a valid Gateway session, the impact is bounded by the
+authority of the agent and operating-system user behind Owner. That may include
+source trees, SSH or Git credentials, browser profiles, session cookies, and
+other user-readable files. Browser password stores may have additional keyring
+protection, but they must not be assumed safe after host-user compromise.
+
+Faryo deliberately does not rewrite an operator's Codex or Claude permission
+policy. Operators who choose approval-free or unsandboxed agents keep that
+workflow, and must compensate with stronger identity and host isolation.
+
+## Required layers for public access
+
+1. Bind Owner and Gateway only to loopback or a private interface. Never expose
+   Owner directly.
+2. Publish Gateway through an outbound tunnel or hardened reverse proxy without
+   opening the local service port to the Internet.
+3. Protect the complete public hostname, including API and static paths, with an
+   identity-aware proxy such as Cloudflare Access. Allow only exact identities
+   or a small managed group, require MFA (prefer WebAuthn/passkeys or a security
+   key), use a short Access session, and configure no broad bypass.
+4. Keep Faryo's password login as a separate inner layer. Use a unique password
+   of at least 16 characters and remove any stale generated plaintext password
+   file after a successful password change.
+5. Apply login rate limiting at the edge. Gateway's local limiter is a fallback,
+   not protection against distributed attempts or process restarts.
+6. For the strongest blast-radius reduction, run Owner and its agents under a
+   dedicated OS account, VM, or container that cannot read personal browser and
+   SSH profiles.
+
+A Cloudflare Tunnel only carries traffic; it does not create an Access policy.
+A fresh public browser should encounter the identity-aware proxy before it can
+reach Faryo's sign-in form.
+
+## Application controls
+
+Gateway implements the following inner controls:
+
+- bcrypt password hashes and generic login failures;
+- an HMAC-signed `__Host-` session cookie with `Secure`, `HttpOnly`,
+  `SameSite=Strict`, no `Domain`, and a 12-hour server-enforced absolute limit;
+- password-change session invalidation;
+- session-bound CSRF headers for every browser state-changing API, including
+  requests proxied to Owner; the CSRF header is removed before proxying;
+- client-IP login limiting based on Cloudflare's single-value
+  `CF-Connecting-IP` only when Gateway's direct peer is loopback, never on the
+  user-controlled first entry of `X-Forwarded-For`;
+- a nonce-based Content Security Policy, framing denial, no referrer leakage,
+  restricted browser permissions, HSTS, and MIME sniffing protection;
+- server-side Owner-token injection, so public browser URLs do not contain Owner
+  tokens.
+
+## Residual risks
+
+- The built-in login limiter is in memory and resets with the Gateway process.
+- The Faryo cookie has an absolute timeout but no separate idle timeout.
+- CSP is defense in depth, not a substitute for output encoding and safe
+  Markdown handling.
+- A valid high-privilege session can intentionally perform high-impact actions.
+- Identity-aware access and MFA are external deployment controls and cannot be
+  inferred merely from a running tunnel.
+- Running agents as the same desktop user leaves personal data within their
+  potential read authority. Network authentication reduces likelihood; only OS
+  or VM/container isolation reduces that blast radius.
+
+## Verification checklist
+
+- Owner and Gateway listeners are loopback-only.
+- Public TLS certificate verification succeeds.
+- A fresh public browser receives the identity-aware proxy challenge before the
+  Faryo login form.
+- Access allows only intended identities, requires MFA, and has no bypass rule.
+- Faryo login produces a `__Host-` Secure/HttpOnly/Strict cookie and old sessions
+  stop working after a password change.
+- Browser write operations work, while the same authenticated POST without a
+  valid CSRF header returns `403`.
+- Content Security Policy is present and the browser console shows no blocked
+  first-party application assets.
+- Runtime config, password hashes, tunnel credentials, tokens, domains, session
+  identifiers, and private conversations are absent from Git and logs.

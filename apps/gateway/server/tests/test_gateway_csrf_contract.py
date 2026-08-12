@@ -9,6 +9,7 @@ import hmac
 import http.client
 import importlib.util
 import json
+import re
 import secrets
 import threading
 import time
@@ -152,8 +153,42 @@ class GatewayCsrfContractTest(unittest.TestCase):
                 "camera=(), microphone=(), geolocation=()",
             )
             self.assertEqual(resp.getheader("Strict-Transport-Security"), "max-age=31536000")
+            csp = resp.getheader("Content-Security-Policy") or ""
+            self.assertIn("default-src 'self'", csp)
+            self.assertIn("script-src-attr 'none'", csp)
+            self.assertIn("object-src 'none'", csp)
         finally:
             conn.close()
+
+    def test_html_page_csp_nonce_matches_inline_portal_assets(self) -> None:
+        conn = http.client.HTTPConnection(*self.base, timeout=5)
+        try:
+            conn.request("GET", "/", headers={"Cookie": self.cookie})
+            resp = conn.getresponse()
+            body = resp.read().decode("utf-8")
+            self.assertEqual(resp.status, HTTPStatus.OK)
+            csp = resp.getheader("Content-Security-Policy") or ""
+            match = re.search(r"script-src 'self' 'nonce-([^']+)'", csp)
+            self.assertIsNotNone(match)
+            nonce = match.group(1)
+            self.assertIn(f'<script nonce="{nonce}">', body)
+            self.assertIn(f'<style nonce="{nonce}">', body)
+            self.assertNotIn(gateway.CSP_NONCE_PLACEHOLDER, body)
+        finally:
+            conn.close()
+
+    def test_auth_cookie_is_short_lived_host_only_and_strict(self) -> None:
+        handler = object.__new__(gateway.GatewayHandler)
+        handler.server = self.server
+
+        cookie = handler.auth_cookie("tester")
+
+        self.assertTrue(cookie.startswith(f"{gateway.COOKIE_NAME}="))
+        self.assertIn("Max-Age=43200", cookie)
+        self.assertIn("HttpOnly", cookie)
+        self.assertIn("Secure", cookie)
+        self.assertIn("SameSite=Strict", cookie)
+        self.assertNotIn("Domain=", cookie)
 
     def test_gateway_state_change_requires_csrf(self) -> None:
         status, data = self.request("POST", "/api/bridge-packages", {"title": "blocked"})
@@ -168,13 +203,32 @@ class GatewayCsrfContractTest(unittest.TestCase):
         self.assertTrue(data.get("ok"))
         self.assertEqual(self.config.bridge_create_calls, 1)
 
-    def test_owner_proxy_post_is_not_blocked_by_gateway_csrf(self) -> None:
-        status, data = self.request("POST", f"/{self.route}/api/send", {"text": "hello"})
+    def test_owner_proxy_post_requires_gateway_csrf(self) -> None:
+        status, data = self.request("POST", f"/{self.route}/api/send", {"text": "blocked"})
+        self.assertEqual(status, HTTPStatus.FORBIDDEN)
+        self.assertEqual(data.get("error"), "csrf required")
+        self.assertEqual(OwnerHandler.requests, [])
+
+    def test_owner_proxy_post_accepts_gateway_csrf_and_strips_it_upstream(self) -> None:
+        csrf = self.csrf_token()
+        status, data = self.request("POST", f"/{self.route}/api/send", {"text": "hello"}, {gateway.CSRF_HEADER: csrf})
         self.assertEqual(status, HTTPStatus.OK)
         self.assertTrue(data.get("ok"))
         self.assertEqual(len(OwnerHandler.requests), 1)
         self.assertEqual(OwnerHandler.requests[0]["path"], "/api/send")
         self.assertNotIn(gateway.CSRF_HEADER, OwnerHandler.requests[0]["headers"])
+
+    def test_login_rate_key_ignores_spoofable_forwarded_for(self) -> None:
+        handler = object.__new__(gateway.GatewayHandler)
+        handler.client_address = ("127.0.0.1", 12345)
+        handler.headers = {
+            "CF-Connecting-IP": "203.0.113.7",
+            "X-Forwarded-For": "198.51.100.99",
+        }
+        self.assertEqual(handler.login_rate_key(), "203.0.113.7")
+
+        handler.client_address = ("198.51.100.10", 12345)
+        self.assertEqual(handler.login_rate_key(), "198.51.100.10")
 
     def test_dispatch_with_cookie_requires_csrf_not_guard_token(self) -> None:
         status, data = self.request("POST", "/api/faryo/dispatch", {})

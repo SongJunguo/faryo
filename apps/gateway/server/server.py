@@ -37,8 +37,10 @@ if str(SHARED_DIR) not in sys.path:
     sys.path.insert(0, str(SHARED_DIR))
 import pd_state
 
-COOKIE_NAME = "faryo_auth"
-COOKIE_MAX_AGE = 30 * 24 * 60 * 60
+COOKIE_NAME = "__Host-faryo_auth"
+LEGACY_COOKIE_NAME = "faryo_auth"
+COOKIE_MAX_AGE = 12 * 60 * 60
+COOKIE_SAME_SITE = "Strict"
 CSRF_HEADER = "X-Faryo-Csrf"
 LOGIN_RATE_WINDOW_SECONDS = 10 * 60
 LOGIN_RATE_BLOCK_SECONDS = 5 * 60
@@ -190,6 +192,7 @@ HOP_BY_HOP_HEADERS = {
 }
 LOGIN_RATE_STATE: dict[str, dict[str, Any]] = {}
 LOGIN_RATE_LOCK = threading.Lock()
+CSP_NONCE_PLACEHOLDER = "__FARYO_CSP_NONCE__"
 
 
 def read_env(path: Path) -> dict[str, str]:
@@ -679,6 +682,26 @@ class GatewayHandler(BaseHTTPRequestHandler):
         print("[%s] %s %s" % (time.strftime("%Y-%m-%dT%H:%M:%S%z"), self.command, safe_path), flush=True)
 
     def end_headers(self) -> None:
+        nonce = getattr(self, "_csp_nonce", "")
+        script_src = "'self'" + (f" 'nonce-{nonce}'" if nonce else "")
+        self.send_header(
+            "Content-Security-Policy",
+            "; ".join([
+                "default-src 'self'",
+                f"script-src {script_src}",
+                "script-src-attr 'none'",
+                "style-src 'self' 'unsafe-inline'",
+                "img-src 'self' data: blob:",
+                "font-src 'self'",
+                "connect-src 'self'",
+                "worker-src 'self'",
+                "manifest-src 'self'",
+                "object-src 'none'",
+                "base-uri 'none'",
+                "frame-ancestors 'none'",
+                "form-action 'self'",
+            ]),
+        )
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("X-Frame-Options", "DENY")
         self.send_header("Referrer-Policy", "no-referrer")
@@ -731,6 +754,7 @@ class GatewayHandler(BaseHTTPRequestHandler):
         if parsed.path == "/logout":
             self.send_response(HTTPStatus.SEE_OTHER)
             self.send_header("Set-Cookie", self.expired_cookie())
+            self.send_header("Set-Cookie", self.expired_cookie(LEGACY_COOKIE_NAME))
             self.send_header("Location", "/login")
             self.end_headers()
             return
@@ -818,6 +842,8 @@ class GatewayHandler(BaseHTTPRequestHandler):
             return
         route = self.route_for(parsed)
         if route:
+            if not self.require_csrf_header(username):
+                return
             self.proxy(parsed, route, username)
             return
         if parsed.path == "/password":
@@ -971,7 +997,18 @@ class GatewayHandler(BaseHTTPRequestHandler):
         return False
 
     def login_rate_key(self) -> str:
-        return self.headers.get("X-Forwarded-For", "").split(",", 1)[0].strip() or self.client_address[0]
+        peer = str(self.client_address[0])
+        try:
+            peer_is_loopback = ipaddress.ip_address(peer).is_loopback
+        except ValueError:
+            peer_is_loopback = False
+        if peer_is_loopback:
+            cloudflare_ip = self.headers.get("CF-Connecting-IP", "").strip()
+            try:
+                return ipaddress.ip_address(cloudflare_ip).compressed
+            except ValueError:
+                pass
+        return peer
 
     def login_rate_limited(self, key: str) -> bool:
         now = time.monotonic()
@@ -1008,6 +1045,7 @@ class GatewayHandler(BaseHTTPRequestHandler):
         self.clear_login_rate(rate_key)
         self.send_response(HTTPStatus.SEE_OTHER)
         self.send_header("Set-Cookie", self.auth_cookie(username))
+        self.send_header("Set-Cookie", self.expired_cookie(LEGACY_COOKIE_NAME))
         self.send_header("Location", self.safe_target(next_target))
         self.end_headers()
 
@@ -1024,8 +1062,8 @@ class GatewayHandler(BaseHTTPRequestHandler):
         if not bcrypt.checkpw(current.encode("utf-8"), self.config.password_hash(username)):
             self.write_password_page(error="Current password is incorrect")
             return
-        if len(new_password) < 12:
-            self.write_password_page(error="New password must be at least 12 characters")
+        if len(new_password) < 16:
+            self.write_password_page(error="New password must be at least 16 characters")
             return
         if new_password != confirm:
             self.write_password_page(error="New password confirmation does not match")
@@ -1033,6 +1071,7 @@ class GatewayHandler(BaseHTTPRequestHandler):
         self.config.set_password(username, new_password)
         self.send_response(HTTPStatus.SEE_OTHER)
         self.send_header("Set-Cookie", self.auth_cookie(username))
+        self.send_header("Set-Cookie", self.expired_cookie(LEGACY_COOKIE_NAME))
         self.send_header("Location", "/?password=changed")
         self.end_headers()
 
@@ -2716,10 +2755,10 @@ class GatewayHandler(BaseHTTPRequestHandler):
         payload = f"{username}|{int(time.time())}|{epoch}|{secrets.token_urlsafe(18)}"
         payload_b64 = base64.urlsafe_b64encode(payload.encode("utf-8")).decode("ascii")
         sig = hmac.new(self.config.cookie_secret, payload_b64.encode("ascii"), hashlib.sha256).hexdigest()
-        return f"{COOKIE_NAME}={payload_b64}.{sig}; Path=/; Max-Age={COOKIE_MAX_AGE}; HttpOnly; Secure; SameSite=Lax"
+        return f"{COOKIE_NAME}={payload_b64}.{sig}; Path=/; Max-Age={COOKIE_MAX_AGE}; HttpOnly; Secure; SameSite={COOKIE_SAME_SITE}"
 
-    def expired_cookie(self) -> str:
-        return f"{COOKIE_NAME}=; Path=/; Max-Age=0; HttpOnly; Secure; SameSite=Lax"
+    def expired_cookie(self, name: str = COOKIE_NAME) -> str:
+        return f"{name}=; Path=/; Max-Age=0; HttpOnly; Secure; SameSite={COOKIE_SAME_SITE}"
 
     def safe_next(self, parsed: Any) -> str:
         return self.safe_target(parse_qs(parsed.query).get("next", ["/"])[0])
@@ -2751,7 +2790,9 @@ class GatewayHandler(BaseHTTPRequestHandler):
         self.write_page(password_html(self.csrf_token(username) if username else "", error, self.config.icp_record))
 
     def write_page(self, html: str, status: HTTPStatus = HTTPStatus.OK) -> None:
-        body = html.encode("utf-8")
+        nonce = secrets.token_urlsafe(18)
+        self._csp_nonce = nonce
+        body = html.replace(CSP_NONCE_PLACEHOLDER, nonce).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.send_header("Cache-Control", "no-store")
@@ -2865,13 +2906,13 @@ def portal_html(username: str, routes: list[str]) -> str:
     portal_js = PORTAL_JS_TEMPLATE.replace("__LABELS_JS__", labels_js)
     return f'''<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"><title>Faryo</title><meta name="theme-color" content="#F7F0E5" media="(prefers-color-scheme: light)"><meta name="theme-color" content="#17130F" media="(prefers-color-scheme: dark)"><link rel="manifest" href="/manifest.json"><link rel="icon" href="/icons/favicon.png?v=faryo-ui-1" type="image/png"><link rel="apple-touch-icon" href="/icons/pwa-light-192.png"><script src="/appearance.js?v=unified-1"></script><link rel="stylesheet" href="/appearance.css?v=unified-1">
-<style>
+<style nonce="{CSP_NONCE_PLACEHOLDER}">
 {PORTAL_CSS}
 </style></head><body><div class="shell">
 <header><a class="brand" href="/projects" aria-label="Open project table"><img class="brand-logo" src="/icons/faryo-mark.png?v=faryo-ui-1" alt=""><div><h1>Faryo</h1><div class="subtitle">{safe_user} · Carry work forward</div></div></a><div class="settings" id="settings"><button class="settings-trigger" type="button" aria-label="Settings"><span class="settings-icon">⚙</span></button><div class="settings-menu" aria-label="Settings panel"><button id="installApp" class="settings-row install-row" type="button" hidden><span><strong>Install app</strong><small>Add Faryo to home screen</small></span><em>↗</em></button><div class="menu-title">Appearance</div><button id="themeBtn" class="settings-row appearance-btn" type="button"><span><strong>Theme</strong><small>System</small></span><em>↻</em></button><button id="fontBtn" class="settings-row appearance-btn" type="button"><span><strong>Font</strong><small>Default</small></span><em>↻</em></button><button id="sizeBtn" class="settings-row appearance-btn" type="button"><span><strong>Size</strong><small>Normal</small></span><em>↻</em></button><div class="menu-title">Account</div><a class="settings-row" href="/password"><span><strong>Change password</strong></span><em>›</em></a><a class="settings-row" href="/logout"><span><strong>Sign out</strong></span><em>›</em></a></div></div></header>
 <nav class="routes" aria-label="Endpoint status">{chips_html}</nav><div class="handoff-strip"><section class="handoff" id="handoffBox" aria-label="Handoff inbox"><div class="handoff-head"><h2>Handoff <span class="count" id="packageCount">Empty</span></h2><button class="mini-btn primary-btn" id="newPackage" type="button">Add files</button></div><input id="packageInput" type="file" accept="image/*,.pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx,.odt,.odp,.ods,.md,.txt,.csv,.json,.rtf" multiple hidden><input id="packageAssetInput" type="file" accept="image/*,.pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx,.odt,.odp,.ods,.md,.txt,.csv,.json,.rtf" multiple hidden><div class="package-list" id="packageList"><div class="empty-state">No handoff package</div></div></section><div class="new-session-slot" id="newSessionSlot"><div class="empty-state">Loading</div></div></div>
 <main><section class="session-section active-section" aria-labelledby="activeSessionsTitle"><div class="section-head"><h2 id="activeSessionsTitle">Active Sessions</h2><span class="count" id="activeSessionCount">Loading</span></div><section class="sessions" id="activeSessionList"><div class="empty-state">Loading active sessions...</div></section></section><section class="session-section history-section" aria-labelledby="sessionHistoryTitle"><div class="section-head"><h2 id="sessionHistoryTitle">Session History</h2><span class="count" id="historyCount">Loading</span></div><section class="sessions history-list" id="sessionList"><div class="empty-state">Loading history...</div></section><nav class="history-pager" aria-label="Session history pages"><button class="mini-btn" id="historyPrev" type="button">Prev</button><form class="history-jump" id="historyJump"><label for="historyPageInput">Page</label><input class="history-page-input" id="historyPageInput" type="number" min="1" max="1" step="1" inputmode="numeric" value="1" aria-label="History page"><span>of <span id="historyPageTotal">1</span></span><button class="mini-btn" type="submit">Go</button></form><button class="mini-btn" id="historyNext" type="button">Next</button></nav></section></main>
-</div><div class="modal" id="modal"><div class="sheet"><h3 id="modalTitle"></h3><p id="modalBody"></p><div class="choice-list" id="modalChoices"></div><div class="modal-actions" id="modalActions"></div></div></div><script>
+</div><div class="modal" id="modal"><div class="sheet"><h3 id="modalTitle"></h3><p id="modalBody"></p><div class="choice-list" id="modalChoices"></div><div class="modal-actions" id="modalActions"></div></div></div><script nonce="{CSP_NONCE_PLACEHOLDER}">
 {portal_js}
 </script></body></html>'''
 
@@ -2895,8 +2936,8 @@ def icp_footer(record: str) -> str:
 def auth_page(title: str, heading: str, intro: str, action: str, autocomplete: str, body: str, error: str, csrf: str = "", icp: str = "") -> str:
     csrf_input = f'<input type="hidden" name="csrf" value="{html_escape(csrf)}">' if csrf else ""
     return f"""<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"><title>{title}</title><meta name="theme-color" content="#F7F0E5" media="(prefers-color-scheme: light)"><meta name="theme-color" content="#17130F" media="(prefers-color-scheme: dark)"><link rel="icon" href="/icons/favicon.png?v=faryo-ui-1" type="image/png"><link rel="apple-touch-icon" href="/icons/pwa-light-192.png"><script src="/appearance.js?v=unified-1"></script><link rel="stylesheet" href="/appearance.css?v=unified-1"><style>{AUTH_CSS}</style></head>
-<body><main><div class="auth-brand"><img class="auth-logo" src="/icons/faryo-mark.png?v=faryo-ui-1" alt=""><div><h1>{heading}</h1><p>{intro}</p></div></div><form method="post" action="{action}" autocomplete="{autocomplete}">{csrf_input}{body}<div class="error">{html_escape(error)}</div></form>{icp_footer(icp)}</main><script>{AUTH_SCRIPT}</script></body></html>"""
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"><title>{title}</title><meta name="theme-color" content="#F7F0E5" media="(prefers-color-scheme: light)"><meta name="theme-color" content="#17130F" media="(prefers-color-scheme: dark)"><link rel="icon" href="/icons/favicon.png?v=faryo-ui-1" type="image/png"><link rel="apple-touch-icon" href="/icons/pwa-light-192.png"><script src="/appearance.js?v=unified-1"></script><link rel="stylesheet" href="/appearance.css?v=unified-1"><style nonce="{CSP_NONCE_PLACEHOLDER}">{AUTH_CSS}</style></head>
+<body><main><div class="auth-brand"><img class="auth-logo" src="/icons/faryo-mark.png?v=faryo-ui-1" alt=""><div><h1>{heading}</h1><p>{intro}</p></div></div><form method="post" action="{action}" autocomplete="{autocomplete}">{csrf_input}{body}<div class="error">{html_escape(error)}</div></form>{icp_footer(icp)}</main><script nonce="{CSP_NONCE_PLACEHOLDER}">{AUTH_SCRIPT}</script></body></html>"""
 
 
 def login_html(next_target: str, error: str = "", icp: str = "") -> str:
@@ -2912,8 +2953,8 @@ def login_html(next_target: str, error: str = "", icp: str = "") -> str:
 def password_html(csrf: str = "", error: str = "", icp: str = "") -> str:
     body = (
         password_field("current_password", "current_password", "Current password", "current-password")
-        + password_field("new_password", "new_password", "New password", "new-password", 12)
-        + password_field("confirm_password", "confirm_password", "Confirm new password", "new-password", 12)
+        + password_field("new_password", "new_password", "New password", "new-password", 16)
+        + password_field("confirm_password", "confirm_password", "Confirm new password", "new-password", 16)
         + '<button class="submit" type="submit">Save password</button><a class="secondary" href="/">Back to Faryo</a>'
     )
     return auth_page("Faryo Change Password", "Change password", "Update the gateway password. Changes take effect immediately.", "/password", "off", body, error, csrf, icp)

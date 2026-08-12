@@ -109,9 +109,12 @@ writes a timestamped private backup, and validates the candidate config before
 installing it. It does not create DNS or restart a tunnel service for you.
 
 Cloudflare Tunnel and Cloudflare Access are separate controls. The tunnel makes
-the service reachable; it does not automatically add an Access policy. Faryo's
-own form login remains required. If adding Access as defense in depth, use a
-specific identity or group policy rather than a broad `Everyone` allow rule.
+the service reachable; it does not automatically add an Access policy. Because
+Gateway can steer terminal-backed agents, an Internet-facing deployment must
+protect the entire hostname with an Access application (or equivalent), an
+exact identity or group allow rule, and MFA. Do not use a broad `Everyone` or
+`Bypass` policy. Keep Faryo's own form login as the independent application
+layer behind Access.
 
 ## First Login
 
@@ -125,6 +128,9 @@ Open `https://faryo.example.com/`, sign in as `faryo`, then change the password
 at `/password`. After confirming the new password works in a private browser
 window, delete the now-stale initial-password file. Gateway runtime uses the
 password hash in `gateway-auth.json`, not the plaintext file.
+
+Changing the password invalidates older Faryo sessions. Browser sessions are
+host-only, strict same-site cookies with a 12-hour absolute lifetime.
 
 ## Verification
 
@@ -143,10 +149,15 @@ Expected results:
 - Owner health succeeds and both local services listen only on `127.0.0.1`.
 - Gateway login returns `200`.
 - Public TLS verification is `0`, and an unauthenticated browser receives the
-  login page or login redirect instead of Owner content.
+  Access identity challenge before the Faryo login page. Seeing Faryo's login
+  page directly from a fresh public client means Access is not protecting the
+  hostname.
 - A logged-in route can render Markdown and KaTeX without CDN access, updates
   without a manual refresh, and submits each prompt exactly once.
 - Existing tunnel hostnames still route to their original services.
+- Public state-changing Owner requests without the Gateway CSRF header return
+  `403`, while the authenticated web client can still send, upload, interrupt,
+  and approve normally.
 
 If local DNS briefly reports that a newly created hostname does not exist,
 compare an external resolver before changing the tunnel. A local proxy or DNS

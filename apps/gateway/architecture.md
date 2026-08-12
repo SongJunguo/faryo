@@ -53,14 +53,18 @@ establish reverse tunnels to it.
 - Live agent limits are configured per route and are independent from the
   merged Session History display budget.
 - Login cookie: uses the Faryo cookie name.
+- Browser sessions use a host-only `__Host-` cookie with `Secure`, `HttpOnly`,
+  `SameSite=Strict`, and a 12-hour absolute lifetime.
 - Owner tokens: private runtime config, never committed to Git.
 - Route auth: private runtime config, never committed to Git.
 - Upstream control headers: use Faryo header names.
 - Browser responses deny framing and unnecessary camera, microphone, and
   geolocation permissions, disable referrer leakage, and advertise HSTS on the
   public HTTPS path.
-- Cloudflare Access is optional defense in depth. A tunnel by itself is routing,
-  not identity policy; Gateway login remains the application boundary.
+- A tunnel by itself is routing, not identity policy. For an Internet-facing
+  Gateway that can steer coding agents, protect the complete hostname with
+  Cloudflare Access (or an equivalent identity-aware proxy) and MFA. Gateway
+  login remains a separate application boundary behind it.
 
 ## 4. Verification
 

@@ -237,14 +237,18 @@ try {
           viewport: { width: innerWidth, height: innerHeight },
           outputHorizontalOverflow: Boolean(outputWrap && outputWrap.scrollWidth > outputWrap.clientWidth + 1),
           katexStylesheetLoaded: [...document.styleSheets].some((sheet) => String(sheet.href || '').includes('/katex')),
-          katexAssetUrls,
+          katexAssetUrls: ${JSON.stringify(privacySafe)}
+            ? katexAssetUrls.map((url) => new URL(url).pathname)
+            : katexAssetUrls,
           katexAssetsLocal: katexAssetUrls.length >= 3 && katexAssetUrls.every((url) => new URL(url).origin === location.origin),
-          markdownAssetUrls,
+          markdownAssetUrls: ${JSON.stringify(privacySafe)}
+            ? markdownAssetUrls.map((url) => new URL(url).pathname)
+            : markdownAssetUrls,
           markdownAssetsLocal: markdownAssetUrls.length >= 1 && markdownAssetUrls.every((url) => new URL(url).origin === location.origin),
           displayLayout,
           outputText: ${JSON.stringify(privacySafe)} ? '' : String(output?.innerText || '').slice(-600),
           outputHtml: ${JSON.stringify(privacySafe)} ? '' : String(output?.innerHTML || '').slice(-2400),
-          errorText: String(document.getElementById('errorBox')?.innerText || ''),
+          errorText: ${JSON.stringify(privacySafe)} ? '' : String(document.getElementById('errorBox')?.innerText || ''),
         };
       })()`,
       returnByValue: true,

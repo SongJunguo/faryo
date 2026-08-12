@@ -70,4 +70,6 @@ server-backed pagination with 10 records per page. Use Previous/Next or enter a
 page number and press Enter/Go to jump directly through long histories.
 
 See [runbook.md](runbook.md) for Cloudflare Tunnel, first login, verification,
-and rollback instructions.
+and rollback instructions. Internet-facing deployments that can steer agents
+must also follow the [Gateway security hardening](../../docs/gateway-security-hardening.md)
+checklist; a tunnel alone is not an authentication layer.

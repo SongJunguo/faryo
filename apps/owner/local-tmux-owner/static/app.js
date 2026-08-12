@@ -62,6 +62,7 @@
   const routeBase = routeMatch ? `/${routeMatch[1]}` : '';
   const params = new URLSearchParams(location.search);
   const ownerToken = params.get('token') || '';
+  let gatewayCsrfToken = '';
   let selectedSession = params.get('session') || '';
   let submitInFlight = false, pendingSubmission = null;
 
@@ -299,9 +300,26 @@
     console.debug('background refresh failed', err);
   }
 
+  async function gatewayCsrfHeaders() {
+    if (!routeBase || ownerToken) return {};
+    if (!gatewayCsrfToken) {
+      const res = await fetch('/api/csrf', { cache: 'no-store' });
+      const data = await res.json();
+      if (!res.ok || !data.csrf) {
+        const err = new Error(data.error || 'CSRF token unavailable');
+        err.status = res.status;
+        throw err;
+      }
+      gatewayCsrfToken = data.csrf;
+    }
+    return { 'X-Faryo-Csrf': gatewayCsrfToken };
+  }
+
   async function api(path, options = {}) {
     const headers = Object.assign({}, options.headers || {});
     if (ownerToken) headers['X-Owner-Token'] = ownerToken;
+    const method = String(options.method || 'GET').toUpperCase();
+    if (!['GET', 'HEAD', 'OPTIONS'].includes(method)) Object.assign(headers, await gatewayCsrfHeaders());
     if (options.body && !headers['Content-Type'] && !(options.body instanceof FormData)) headers['Content-Type'] = 'application/json';
     const requestPath = path.startsWith('/api/') ? `${routeBase}${path}` : path;
     const res = await fetch(requestPath, Object.assign({}, options, { headers, cache: 'no-store' }));
@@ -1027,6 +1045,7 @@
     item.status = 'uploading';
     item.progress = Math.max(1, item.progress || 1);
     renderAttachmentPreview();
+    const csrfHeaders = await gatewayCsrfHeaders();
     return new Promise((resolve, reject) => {
       const form = new FormData();
       form.append('file', upload.blob, upload.name);
@@ -1047,6 +1066,7 @@
       xhr.onabort = () => { const err = new Error('Upload canceled'); err.canceled = true; reject(err); };
       xhr.open('POST', `${routeBase}/api/attachment`);
       if (ownerToken) xhr.setRequestHeader('X-Owner-Token', ownerToken);
+      for (const [name, value] of Object.entries(csrfHeaders)) xhr.setRequestHeader(name, value);
       xhr.send(form);
     });
   }

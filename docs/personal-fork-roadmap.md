@@ -34,7 +34,7 @@
 | 网页输入可靠提交 | **P0 已完成并推送** | 消息 ID 幂等、粘贴/Enter 确认、失败草稿保留和 TUI 草稿冲突保护均通过 |
 | 结构化消息实时更新 | **P0 已完成并推送** | 最终内容用结构化数据；运行中显示脱敏 tmux live 尾部，结束后自动收敛 |
 | 本机开机自启 | 已完成 | user timer 已启用，`Linger=yes`；停止 Owner 后的自动恢复测试通过 |
-| 手机/Gateway/隧道 | 已部署并验证 | Gateway 与 Owner 均仅监听回环地址；现有命名隧道新增独立路由，公网登录、公式和输入提交通过 |
+| 手机/Gateway/隧道 | 已部署，身份层待加固 | Gateway 与 Owner 均仅监听回环地址；公网主路径已验证，但 Cloudflare Access + MFA 尚需配置 |
 
 已推送的个人 fork 提交：
 
@@ -136,8 +136,9 @@ VS Code 扩展而非可直接嵌入的浏览器库，因此这里只借鉴其数
 ## 下一步
 
 本机与手机公网主路径均已完成。继续观察实际长对话中的输入与 live
-尾部；Cloudflare Access 可作为可选的第二层身份策略，但不能替代 Faryo
-Gateway 自身登录。
+尾部。由于网页能够控制终端 Agent，Cloudflare Access + MFA（或仅可信设备
+可达的私网 VPN）是公网长期使用的必要外层身份策略，不能由 Tunnel 或
+Faryo 单密码替代。
 
 ## 2026-08-12 验证记录
 
@@ -156,7 +157,8 @@ Gateway 自身登录。
 - Gateway 用户级 systemd 服务已完成启用、重启与健康检查；登录 Cookie、CSRF、登录限速和浏览器安全头均有回归覆盖。
 - 现有命名 Cloudflare Tunnel 在保留原有路由的前提下增加独立 Faryo hostname；公网 TLS、登录、真实结构化 Markdown/KaTeX 和一次性测试会话输入提交均通过。
 - 公网验证只使用通用测试文本；仓库中不记录真实域名、Token、密码、会话名、对话内容或本机绝对路径。
-- Cloudflare Tunnel 负责连通，不等于 Cloudflare Access。当前安全边界是 Faryo Gateway 登录；如需第二层身份策略，应另行配置精确的 Access 用户或组规则。
+- Cloudflare Tunnel 负责连通，不等于 Cloudflare Access。公网入口必须另行配置覆盖完整 hostname 的精确 Access 用户/组规则与 MFA，并保留 Faryo 登录作为内层认证。
+- Gateway 代码加固包含：所有浏览器写请求（含 Owner 代理）使用会话绑定 CSRF、登录限速使用可信代理提供的单值客户端地址、`__Host-` 严格 Cookie 与 12 小时绝对期限、nonce CSP 及已有安全响应头。Agent 权限策略仍由操作者决定，Faryo 不强制降低 Codex/Claude 权限。
 - Gateway 首页已拆成两个独立区域：`Active Sessions` 始终显示所有实际运行 Codex/Claude 的 tmux（包括桌面直接启动的会话），`Session History` 排除活动项、独立滚动，并由服务端按 10 条一页提供 Previous/Next 和页码直达。只有 Faryo 管理的会话提供远程关闭，桌面 tmux 仅可打开查看，避免误关。
 - 运行会话上限与历史显示数量解耦；单机 TXY 默认允许 8 个存活 Agent TUI，并可通过私有 `FARYO_TXY_MAX_RUNNING` 在 1–32 范围内调整。
 

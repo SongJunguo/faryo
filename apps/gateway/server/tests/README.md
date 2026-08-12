@@ -8,7 +8,8 @@ PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s apps/gateway/server/te
 
 The suite checks the CSRF boundary, browser security headers, enabled-route
 validation, private runtime configuration, active/history separation,
-10-record history pagination, and Owner proxy POST behavior.
+10-record history pagination, CSP nonces, hardened session-cookie attributes,
+trusted-proxy login limiting, and CSRF-protected Owner proxy POST behavior.
 
 For an authenticated real-browser check, set the smoke URL and login inputs and
 run:
