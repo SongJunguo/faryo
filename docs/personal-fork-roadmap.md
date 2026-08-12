@@ -144,7 +144,7 @@ Gateway 自身登录。
 - 输入成功路径：真实 Owner HTTP 返回 `delivery=accepted`；同一 `clientMessageId` 第二次请求返回 `duplicate=true`，没有重复粘贴。
 - 输入失败路径：人为保留 TUI 草稿后，Chrome 收到冲突错误，输入框和 `sessionStorage` 草稿均未被清空。
 - 实时路径：独立 App Server 可在约 0.28 秒看到 TUI 新用户消息，但进行中的 shell turn 直到完成前没有结构化 item；因此采用“结构化最终内容 + 临时脱敏 tmux live 尾部”。Chrome 验证 live 面板自动出现并在完成后自动消失。
-- Markdown/公式：Node 单元测试、14 个 Owner Python 测试、23 个 Gateway 测试、包发布检查和 Owner smoke 全部通过。
+- Markdown/公式：Node 单元测试、14 个 Owner Python 测试、24 个 Gateway 测试、包发布检查和 Owner smoke 全部通过。
 - 浏览器：Chrome 与 Edge 本地资源测试通过；分段函数、范数和至少两行矩阵结构的精确 KaTeX 检查通过。
 - 部署：`faryo-owner-keepalive.timer` 已启用；主动停止 Owner 后，keepalive 成功使用专用 Conda 环境恢复服务。
 - 发布：功能提交 `1892a1d` 已推送到个人 `origin/katex-feature`；原作者 `upstream` 未修改。
@@ -157,6 +157,7 @@ Gateway 自身登录。
 - 现有命名 Cloudflare Tunnel 在保留原有路由的前提下增加独立 Faryo hostname；公网 TLS、登录、真实结构化 Markdown/KaTeX 和一次性测试会话输入提交均通过。
 - 公网验证只使用通用测试文本；仓库中不记录真实域名、Token、密码、会话名、对话内容或本机绝对路径。
 - Cloudflare Tunnel 负责连通，不等于 Cloudflare Access。当前安全边界是 Faryo Gateway 登录；如需第二层身份策略，应另行配置精确的 Access 用户或组规则。
+- Session History 不再为各路由预先分配固定小配额；各路由先取完整显示预算，再统一按更新时间排序并截取，因此单路由下 `Less`/`More` 分别显示最近 10/18 个会话。
 
 ### 结构化来源加固
 

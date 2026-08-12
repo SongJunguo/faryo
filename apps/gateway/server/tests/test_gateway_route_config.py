@@ -44,6 +44,28 @@ class GatewayRouteConfigTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "unsupported FARYO_GATEWAY_ROUTES"):
             gateway.load_backends({"FARYO_GATEWAY_ROUTES": "txy,unknown"})
 
+    def test_each_route_fetches_the_full_history_display_budget(self) -> None:
+        gateway.BACKENDS.clear()
+        gateway.BACKENDS["txy"] = ("127.0.0.1", 8765, "TXY")
+        handler = object.__new__(gateway.GatewayHandler)
+        handler.owner_json_request = mock.Mock(return_value={
+            "ok": True,
+            "activeCount": 0,
+            "sessions": [],
+        })
+
+        handler.owner_agent_sessions("txy", "tester", "less")
+        self.assertEqual(
+            handler.owner_json_request.call_args.args[1],
+            "/api/agent-sessions?limit=10",
+        )
+
+        handler.owner_agent_sessions("txy", "tester", "more")
+        self.assertEqual(
+            handler.owner_json_request.call_args.args[1],
+            "/api/agent-sessions?limit=18",
+        )
+
     def test_gateway_config_requires_token_for_enabled_route_only(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)

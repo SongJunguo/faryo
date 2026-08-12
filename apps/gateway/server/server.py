@@ -90,7 +90,6 @@ SESSION_POLICY = {"txy": (3, 2), "hp": (4, 4), "pc": (4, 2)}
 WORKORDER_RECEIPT_WATCH_INTERVAL_SECONDS = 20
 WORKORDER_RECEIPT_WATCH_ATTEMPTS = 90
 NEW_SESSION_COMMANDS = {"codex", "claude"}
-HISTORY_SESSION_LIMITS = {"less": {"txy": 3, "hp": 4, "pc": 4}, "more": {"txy": 5, "pc": 6, "hp": 7}}
 HISTORY_TOTAL_LIMITS = {"less": 10, "more": 18}
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 FARYO_PROFILE_SOURCE = Path(__file__).resolve().parent / "faryo_profile.md"
@@ -2464,8 +2463,12 @@ class GatewayHandler(BaseHTTPRequestHandler):
         return SESSION_POLICY[route][1]
 
     def owner_agent_sessions(self, route: str, username: str, history_mode: str = "less") -> dict[str, Any]:
-        history_mode = history_mode if history_mode in HISTORY_SESSION_LIMITS else "less"
-        history = HISTORY_SESSION_LIMITS[history_mode].get(route, SESSION_POLICY[route][0])
+        history_mode = history_mode if history_mode in HISTORY_TOTAL_LIMITS else "less"
+        # Fetch the full display budget from every route, then let
+        # workbench_payload merge, sort, and apply the global limit. Fixed
+        # per-route quotas left a single-route deployment showing only three
+        # sessions even though the UI promised the latest ten.
+        history = HISTORY_TOTAL_LIMITS[history_mode]
         max_running = self.max_running_for(username, route)
         result = self.owner_json_request(route, f"/api/agent-sessions?limit={history}", None, username, method="GET")
         sessions = []
@@ -2483,7 +2486,7 @@ class GatewayHandler(BaseHTTPRequestHandler):
         return {"sessions": sessions, "activeCount": active_count, "maxRunning": max_running, "canCreate": not limit_reached}
 
     def workbench_payload(self, username: str, history_mode: str = "less") -> dict[str, Any]:
-        history_mode = history_mode if history_mode in HISTORY_SESSION_LIMITS else "less"
+        history_mode = history_mode if history_mode in HISTORY_TOTAL_LIMITS else "less"
         routes = self.config.user_routes(username)
         route_payloads = {route: self.owner_agent_sessions(route, username, history_mode) for route in routes}
         sessions = [item for route in routes for item in route_payloads[route]["sessions"]]
