@@ -10,6 +10,7 @@ const loginPassword = passwordFile ? (await readFile(passwordFile, 'utf8')).trim
 const expectedActive = Number(process.env.FARYO_SMOKE_EXPECT_ACTIVE || 0);
 const expectedManaged = Number(process.env.FARYO_SMOKE_EXPECT_MANAGED || -1);
 const expectedDesktop = Number(process.env.FARYO_SMOKE_EXPECT_DESKTOP || -1);
+const expectedRouteLabel = process.env.FARYO_SMOKE_EXPECT_ROUTE_LABEL || '';
 const hostResolverRules = process.env.FARYO_SMOKE_HOST_RESOLVER_RULES || 'MAP * ~NOTFOUND, EXCLUDE 127.0.0.1';
 const chromeBin = process.env.CHROME_BIN || '/usr/bin/google-chrome';
 
@@ -137,6 +138,7 @@ try {
         noDuplicates: historyIds.every((id) => !activeIds.has(id)),
         previousDisabled: Boolean(document.getElementById('historyPrev')?.disabled),
         nextEnabled: !document.getElementById('historyNext')?.disabled,
+        routeLabelMatches: !${JSON.stringify(expectedRouteLabel)} || [...document.querySelectorAll('.route-chip strong')].some((item) => item.textContent.trim() === ${JSON.stringify(expectedRouteLabel)}),
         overflowY: style?.overflowY || '',
         scrollable: Boolean(historyList && historyList.scrollHeight > historyList.clientHeight),
       };
@@ -150,6 +152,7 @@ try {
   if (expectedDesktop >= 0 && first.desktopCount !== expectedDesktop) throw new Error(`Unexpected desktop session count: ${first.desktopCount}`);
   if (!first.sectionsSeparate || !first.noDuplicates) throw new Error('Active sessions leaked into Session History');
   if (!first.previousDisabled || !first.nextEnabled) throw new Error('First-page navigation state is incorrect');
+  if (!first.routeLabelMatches) throw new Error('Configured route label did not render');
   if (!['auto', 'scroll'].includes(first.overflowY) || !first.scrollable) throw new Error('Session History is not independently scrollable');
 
   await evaluate("document.getElementById('historyNext').click()");

@@ -15,6 +15,12 @@ class AgentSessionTest(unittest.TestCase):
     def setUp(self):
         self.config = server.Config("owner", "test-token", 145)
 
+    def test_percent_encoded_unicode_owner_label_is_restored_safely(self):
+        encoded = "Ubuntu%20%E5%B7%A5%E4%BD%9C%E7%AB%99"
+
+        self.assertEqual(server.clean_owner_label(encoded), "Ubuntu 工作站")
+        self.assertEqual(server.clean_owner_label("Safe%0D%0AInjected"), "SafeInjected")
+
     def test_split_keeps_every_active_session_outside_history_pagination(self):
         active = [
             {"id": "active-old", "tmuxSession": "desktop", "updatedTs": 1},

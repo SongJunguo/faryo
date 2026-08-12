@@ -27,7 +27,7 @@ from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Callable
-from urllib.parse import parse_qs, urlencode, urlparse
+from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
 import bcrypt
 
@@ -56,6 +56,11 @@ def backend_from_values(route: str, default_port: int, default_label: str, value
     port = int(values.get(f"{prefix}_PORT", str(default_port)))
     label = str(values.get(f"{prefix}_LABEL", default_label)).strip() or default_label
     return host, port, label
+
+
+def owner_label_header_value(label: str) -> str:
+    """Encode a user-facing Unicode label into an HTTP/1.1-safe header value."""
+    return quote(label.strip()[:32], safe="-._~")
 
 
 def configured_routes(values: Any) -> list[str]:
@@ -1285,7 +1290,7 @@ class GatewayHandler(BaseHTTPRequestHandler):
         return False
 
     def project_sync_owner_route(self) -> str:
-        owner_label = self.headers.get("X-Faryo-Owner-Label", "").strip().lower()
+        owner_label = unquote(self.headers.get("X-Faryo-Owner-Label", "")).strip().lower()
         owner_route = owner_label if owner_label in self.config.owner_tokens else ""
         owner_token = self.headers.get("X-Owner-Token", "")
         if owner_route and hmac.compare_digest(owner_token, self.config.owner_token(owner_route)):
@@ -2437,7 +2442,7 @@ class GatewayHandler(BaseHTTPRequestHandler):
         self.mark_faryo_session(session, username, thread_id)
 
     def owner_headers(self, route: str, username: str) -> dict[str, str]:
-        host, port, label = BACKENDS[route]; headers = {"Host": f"{host}:{port}", "X-Faryo-Owner-Label": label, "X-Owner-Token": self.config.owner_token(route), "X-Faryo-User": username}
+        host, port, label = BACKENDS[route]; headers = {"Host": f"{host}:{port}", "X-Faryo-Owner-Label": owner_label_header_value(label), "X-Owner-Token": self.config.owner_token(route), "X-Faryo-User": username}
         if username != self.config.mcp_user: headers["X-Faryo-History-Scope"] = "workspace"
         if file_root := self.config.file_inbox_root(username, route): headers["X-Faryo-File-Inbox-Root"] = file_root
         if workspace_root := self.config.workspace_root(username, route): headers["X-Faryo-Workspace-Root"] = workspace_root
@@ -2450,7 +2455,7 @@ class GatewayHandler(BaseHTTPRequestHandler):
         if payload is not None: body = json.dumps(payload, ensure_ascii=False).encode("utf-8"); headers.update({"Content-Type": "application/json; charset=utf-8", "Content-Length": str(len(body))})
         conn = http.client.HTTPConnection(host, port, timeout=timeout)
         try: conn.request(method, path, body=body, headers=headers); resp = conn.getresponse(); data = resp.read()
-        except OSError as exc: return {"ok": False, "error": str(exc)}
+        except (OSError, UnicodeError) as exc: return {"ok": False, "error": str(exc)}
         finally: conn.close()
         try: result = json.loads(data.decode("utf-8"))
         except Exception: result = {"ok": False, "error": f"owner returned HTTP {resp.status}"}
@@ -2605,7 +2610,7 @@ class GatewayHandler(BaseHTTPRequestHandler):
         blocked_headers = {"host", "content-length", "x-owner-token", "x-faryo-owner-label", "x-faryo-user", "x-faryo-history-scope", "x-faryo-file-inbox-root", "x-faryo-workspace-root", "x-faryo-csrf"}
         headers = {key: value for key, value in self.headers.items() if key.lower() not in HOP_BY_HOP_HEADERS and key.lower() not in blocked_headers}
         headers["Host"] = f"{host}:{port}"
-        headers["X-Faryo-Owner-Label"] = label
+        headers["X-Faryo-Owner-Label"] = owner_label_header_value(label)
         headers["X-Owner-Token"] = self.config.owner_token(route_name)
         headers["X-Faryo-User"] = username
         if username != self.config.mcp_user: headers["X-Faryo-History-Scope"] = "workspace"
@@ -2622,7 +2627,7 @@ class GatewayHandler(BaseHTTPRequestHandler):
             conn = http.client.HTTPConnection(host, port, timeout=20)
             conn.request(self.command, upstream_path, body=body, headers=headers)
             resp = conn.getresponse()
-        except OSError:
+        except (OSError, UnicodeError):
             if conn:
                 conn.close()
             if is_api:

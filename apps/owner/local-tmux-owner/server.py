@@ -48,7 +48,7 @@ import pd_state
 import workbench_state as wb_state
 import urllib.error
 import urllib.request
-from urllib.parse import parse_qs, quote, urlencode, urlparse
+from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
 try:
     from rich.console import Console as RichConsole
@@ -376,8 +376,9 @@ def owner_label() -> str:
 def clean_owner_label(label: str | None) -> str | None:
     if not label:
         return None
-    cleaned = re.sub(r"[^A-Za-z0-9_-]", "", label.strip())
-    return cleaned[:16] or None
+    decoded = unquote(label)
+    cleaned = re.sub(r"[\x00-\x1f\x7f-\x9f]", "", decoded).strip()
+    return cleaned[:32] or None
 
 
 def now_iso() -> str:
@@ -2685,7 +2686,7 @@ def gateway_json_request(config: Config, gateway_url: str, path: str, payload: d
         headers={
             "Content-Type": "application/json; charset=utf-8",
             "X-Owner-Token": config.token,
-            "X-Faryo-Owner-Label": owner_label(),
+            "X-Faryo-Owner-Label": quote(owner_label().strip()[:32], safe="-._~"),
         },
     )
     try:

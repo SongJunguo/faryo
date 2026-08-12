@@ -44,6 +44,13 @@ class GatewayRouteConfigTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "unsupported FARYO_GATEWAY_ROUTES"):
             gateway.load_backends({"FARYO_GATEWAY_ROUTES": "txy,unknown"})
 
+    def test_unicode_owner_label_is_http_header_safe(self) -> None:
+        encoded = gateway.owner_label_header_value("Ubuntu 工作站")
+
+        self.assertEqual(gateway.unquote(encoded), "Ubuntu 工作站")
+        self.assertTrue(encoded.isascii())
+        self.assertNotIn(" ", encoded)
+
     def test_each_route_fetches_enough_history_for_the_requested_page(self) -> None:
         gateway.BACKENDS.clear()
         gateway.BACKENDS["txy"] = ("127.0.0.1", 8765, "TXY")
