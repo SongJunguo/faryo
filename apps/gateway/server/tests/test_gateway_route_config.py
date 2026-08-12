@@ -44,28 +44,93 @@ class GatewayRouteConfigTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "unsupported FARYO_GATEWAY_ROUTES"):
             gateway.load_backends({"FARYO_GATEWAY_ROUTES": "txy,unknown"})
 
-    def test_each_route_fetches_the_full_history_display_budget(self) -> None:
+    def test_each_route_fetches_enough_history_for_the_requested_page(self) -> None:
         gateway.BACKENDS.clear()
         gateway.BACKENDS["txy"] = ("127.0.0.1", 8765, "TXY")
         handler = object.__new__(gateway.GatewayHandler)
         handler.owner_json_request = mock.Mock(return_value={
             "ok": True,
             "activeCount": 0,
+            "activeSessions": [],
             "sessions": [],
+            "historyTotal": 0,
         })
         handler.max_running_for = mock.Mock(return_value=8)
 
-        handler.owner_agent_sessions("txy", "tester", "less")
+        handler.owner_agent_sessions("txy", "tester", 1)
         self.assertEqual(
             handler.owner_json_request.call_args.args[1],
-            "/api/agent-sessions?limit=10",
+            "/api/agent-sessions?view=split&limit=10&offset=0",
         )
 
-        handler.owner_agent_sessions("txy", "tester", "more")
+        handler.owner_agent_sessions("txy", "tester", 2)
         self.assertEqual(
             handler.owner_json_request.call_args.args[1],
-            "/api/agent-sessions?limit=18",
+            "/api/agent-sessions?view=split&limit=20&offset=0",
         )
+
+    def test_workbench_keeps_active_sessions_above_ten_item_history_pages(self) -> None:
+        gateway.BACKENDS.clear()
+        gateway.BACKENDS.update({
+            "txy": ("127.0.0.1", 8765, "TXY"),
+            "hp": ("127.0.0.1", 8766, "HP"),
+        })
+        handler = object.__new__(gateway.GatewayHandler)
+        histories = {
+            "txy": [{"id": f"txy-{index}", "updatedTs": 40 - index} for index in range(20)],
+            "hp": [{"id": f"hp-{index}", "updatedTs": 39.5 - index} for index in range(20)],
+        }
+
+        def route_payload(route: str, _username: str, page: int) -> dict:
+            return {
+                "activeSessions": [{"id": f"active-{route}", "tmuxSession": f"live-{route}", "updatedTs": 100}],
+                "sessions": histories[route][:page * gateway.HISTORY_PAGE_SIZE],
+                "historyTotal": len(histories[route]),
+                "activeCount": 1,
+                "maxRunning": 8,
+                "canCreate": True,
+            }
+
+        handler.owner_agent_sessions = mock.Mock(side_effect=route_payload)
+        config = mock.Mock()
+        config.user_routes.return_value = ["txy", "hp"]
+        config.list_bridge_packages.return_value = []
+        config.mcp_user = "mcp-user"
+        handler.server = mock.Mock(config=config)
+
+        with mock.patch.object(gateway, "backend_status", side_effect=lambda route: {"id": route}):
+            first = handler.workbench_payload("tester", 1)
+            second = handler.workbench_payload("tester", 2)
+
+        self.assertEqual(len(first["activeSessions"]), 2)
+        self.assertEqual(len(first["sessions"]), 10)
+        self.assertEqual(first["history"], {
+            "page": 1,
+            "pageSize": 10,
+            "total": 40,
+            "totalPages": 4,
+            "hasPrevious": False,
+            "hasNext": True,
+        })
+        self.assertEqual(len(second["activeSessions"]), 2)
+        self.assertEqual(len(second["sessions"]), 10)
+        self.assertEqual(second["history"]["page"], 2)
+        self.assertTrue(set(item["id"] for item in first["sessions"]).isdisjoint(
+            item["id"] for item in second["sessions"]
+        ))
+
+    def test_portal_has_separate_active_and_paginated_history_regions(self) -> None:
+        gateway.BACKENDS.clear()
+        gateway.BACKENDS["txy"] = ("127.0.0.1", 8765, "TXY")
+
+        page = gateway.portal_html("tester", ["txy"])
+
+        self.assertIn('id="activeSessionList"', page)
+        self.assertIn('id="sessionList"', page)
+        self.assertIn('id="historyPrev"', page)
+        self.assertIn('id="historyNext"', page)
+        self.assertIn('/api/workbench?page=', page)
+        self.assertIn("active&&managed?", page)
 
     def test_gateway_config_requires_token_for_enabled_route_only(self) -> None:
         with tempfile.TemporaryDirectory() as temp:

@@ -109,6 +109,15 @@ of a chat; it is a pointer back to terminal-backed state.
 Codex cards converge through Codex history and the active tmux process. Claude
 cards converge through Claude history and Faryo tmux metadata.
 
+The Gateway home page presents two distinct session regions:
+
+- `Active Sessions` always stays above history and lists all tmux panes with a
+  recognized live Codex or Claude process. Desktop-created panes are marked as
+  such and do not expose the Faryo-managed close action.
+- `Session History` contains only inactive, resumable conversations. It has its
+  own vertical scroll area and server-backed Previous/Next pages of 10 records,
+  so active panes cannot disappear behind a history display limit.
+
 ## Handoff Packages
 
 Handoff packages carry work material into a target session.

@@ -92,6 +92,7 @@ CODEX_TRANSCRIPT_CACHE_TTL = 0.6
 THREAD_COLUMNS = "id, title, rollout_path, tokens_used, model, reasoning_effort, cwd, updated_at, source, thread_source"
 INTERACTIVE_CODEX_THREAD_SOURCES = {"cli", "vscode"}
 AGENT_SESSION_LIST_LIMIT = 20
+AGENT_SESSION_QUERY_LIMIT = 1000
 EMPTY_MANAGED_SESSION_TTL_SECONDS = 60
 MAX_MANAGED_AGENT_IDLE_SECONDS = 24 * 60 * 60
 RUNTIME_LOCK = threading.RLock()
@@ -435,12 +436,13 @@ def active_codex_thread_state(config: Config) -> tuple[dict[str, str], set[str]]
     active: dict[str, str] = {}
     superseded: set[str] = set()
     for name in tmux_sessions(config):
-        if not managed_session(config, name):
+        target = target_config(config, name)
+        if agent_profile_in_pane(target) is not CODEX_PROFILE:
             continue
         # The live fd scan wins over the id recorded at dispatch: /new inside
         # a resumed session rotates the thread id, and the frozen id would
         # keep the Running badge on a transcript the pane no longer writes.
-        target = target_config(config, name); cwd = get_pane_cwd(target)
+        cwd = get_pane_cwd(target)
         threads = active_agent_threads(target, cwd)
         if threads:
             thread_id = str(threads[0].get("id") or "")
@@ -500,9 +502,8 @@ def active_claude_session_map(config: Config) -> dict[str, str]:
     active: dict[str, str] = {}
     relaunched: list[tuple[str, str, str]] = []
     for name in tmux_sessions(config):
-        if not (managed_session(config, name) and tmux_session_option(config, name, "@faryo_agent_source") == "claude-code"): continue
         target = Config(name, config.token, config.pane_width)
-        if not agent_in_pane(target): continue
+        if agent_profile_in_pane(target) is not CLAUDE_PROFILE: continue
         stamped = tmux_session_option(config, name, "@faryo_agent_session_id") or tmux_session_option(config, name, "@faryo_agent_id")
         live = live_claude_transcript_id(target)
         if live and live != stamped: relaunched.append((name, live, stamped))
@@ -569,7 +570,7 @@ def claude_command_text(text: str) -> bool:
 
 def claude_history_items(history_root: str | None = None) -> list[dict[str, Any]]:
     if not CLAUDE_PROJECTS_ROOT.exists(): return []
-    try: paths = sorted((path for path in CLAUDE_PROJECTS_ROOT.glob("**/*.jsonl") if path.is_file() and not path.name.startswith("agent-")), key=lambda path: path.stat().st_mtime, reverse=True)[:AGENT_SESSION_LIST_LIMIT]
+    try: paths = sorted((path for path in CLAUDE_PROJECTS_ROOT.glob("**/*.jsonl") if path.is_file() and not path.name.startswith("agent-")), key=lambda path: path.stat().st_mtime, reverse=True)
     except OSError: return []
     items = []; git_labels: dict[str, str] = {}
     for path in paths:
@@ -603,12 +604,12 @@ def claude_history_items(history_root: str | None = None) -> list[dict[str, Any]
         if not (title or last_prompt): continue
         if history_root is not None and not path_under_root(cwd, history_root): continue
         updated_at = _dt.datetime.fromtimestamp(stat.st_mtime, _dt.timezone.utc).astimezone().isoformat(timespec="seconds")
-        items.append({"id": session_id, "title": session_title_topic(title or last_prompt, short_path(cwd) or session_id or "Untitled session"), "gitLabel": session_git_label(cwd, git_labels, False), "cwd": short_path(cwd), "createdAt": "", "updatedAt": updated_at, "updatedTs": stat.st_mtime, "historyPath": path.as_posix(), "rolloutPath": "", "model": "", "reasoningEffort": "", "source": "claude-code", "tmuxSession": "", "active": False})
+        items.append({"id": session_id, "title": session_title_topic(title or last_prompt, short_path(cwd) or session_id or "Untitled session"), "gitLabel": session_git_label(cwd, git_labels, False), "cwd": short_path(cwd), "createdAt": "", "updatedAt": updated_at, "updatedTs": stat.st_mtime, "historyPath": path.as_posix(), "rolloutPath": "", "model": "", "reasoningEffort": "", "source": "claude-code", "tmuxSession": "", "active": False, "managed": False})
     return items
 
 def codex_history_items(config: Config, history_root: str | None = None) -> list[dict[str, Any]]:
     active, superseded = active_codex_thread_state(config); index_titles = codex_session_index_titles(); items = []; git_labels: dict[str, str] = {}
-    for item in codex_rows("source IN ('cli', 'vscode') AND thread_source = 'user' AND COALESCE(archived, 0) = 0", (), AGENT_SESSION_LIST_LIMIT):
+    for item in codex_rows("source IN ('cli', 'vscode') AND thread_source = 'user' AND COALESCE(archived, 0) = 0", ()):
         cwd = str(item.get("cwd") or "")
         if history_root is not None and not path_under_root(cwd, history_root): continue
         thread_id = str(item.get("id") or ""); tmux_session = active.get(thread_id, "")
@@ -618,7 +619,7 @@ def codex_history_items(config: Config, history_root: str | None = None) -> list
         title = codex_thread_title(item, fallback, index_titles)
         if tmux_session:
             title = tmux_session_option(config, tmux_session, "@faryo_session_title") or title
-        items.append({"id": thread_id, "title": title, "gitLabel": session_git_label(session_git_cwd(config, tmux_session, cwd), git_labels, bool(tmux_session)), "cwd": short_path(cwd), "createdAt": item.get("created_at") or "", "updatedAt": item.get("updated_at") or "", "updatedTs": updated_ts, "rolloutPath": item.get("rollout_path") or "", "model": item.get("model") or "", "reasoningEffort": item.get("reasoning_effort") or "", "source": "codex-cli", "tmuxSession": tmux_session, "active": bool(tmux_session), "agentRunning": agent_session_running(config, tmux_session)})
+        items.append({"id": thread_id, "title": title, "gitLabel": session_git_label(session_git_cwd(config, tmux_session, cwd), git_labels, bool(tmux_session)), "cwd": short_path(cwd), "createdAt": item.get("created_at") or "", "updatedAt": item.get("updated_at") or "", "updatedTs": updated_ts, "rolloutPath": item.get("rollout_path") or "", "model": item.get("model") or "", "reasoningEffort": item.get("reasoning_effort") or "", "source": "codex-cli", "tmuxSession": tmux_session, "active": bool(tmux_session), "managed": bool(tmux_session and managed_session(config, tmux_session)), "agentRunning": agent_session_running(config, tmux_session)})
     return items
 
 
@@ -627,18 +628,35 @@ def agent_session_items(config: Config, history_root: str | None = None) -> list
     seen_tmux = {item.get("tmuxSession") for item in items if item.get("tmuxSession")}
     active = active_claude_session_map(config)
     for item in claude_history_items(history_root):
-        if tmux_session := active.get(str(item.get("id") or "")): item.update({"tmuxSession": tmux_session, "active": True, "agentRunning": agent_session_running(config, tmux_session)}); seen_tmux.add(tmux_session)
+        if tmux_session := active.get(str(item.get("id") or "")): item.update({"tmuxSession": tmux_session, "active": True, "managed": managed_session(config, tmux_session), "agentRunning": agent_session_running(config, tmux_session)}); seen_tmux.add(tmux_session)
         items.append(item)
     git_labels: dict[str, str] = {}
     for name in tmux_sessions(config):
-        if not managed_session(config, name) or name in seen_tmux: continue
+        if name in seen_tmux: continue
         target = target_config(config, name)
-        if not agent_in_pane(target): continue
-        cwd = get_pane_cwd(target); thread = active_agent_thread(target, cwd) or {}; thread_id = str(thread.get("id") or name)
+        profile = agent_profile_in_pane(target)
+        if not profile: continue
+        cwd = get_pane_cwd(target)
+        if history_root is not None and not path_under_root(cwd, history_root): continue
+        thread = active_agent_thread(target, cwd) or {}; thread_id = str(thread.get("id") or name)
         updated_ts = session_created_ts(target); updated_at = iso_from_ts(updated_ts) if updated_ts else ""
         title = tmux_session_option(config, name, "@faryo_session_title") or (codex_thread_title(thread, short_path(cwd) or name) if thread else short_path(cwd) or name)
-        items.append({"id": thread_id, "title": title, "gitLabel": session_git_label(session_git_cwd(config, name, cwd), git_labels), "cwd": short_path(cwd), "createdAt": "", "updatedAt": updated_at, "updatedTs": updated_ts, "rolloutPath": "", "model": "", "reasoningEffort": "", "source": tmux_session_option(config, name, "@faryo_agent_source") or "runtime", "tmuxSession": name, "active": True, "agentRunning": agent_session_running(config, name)})
+        items.append({"id": thread_id, "title": title, "gitLabel": session_git_label(session_git_cwd(config, name, cwd), git_labels), "cwd": short_path(cwd), "createdAt": "", "updatedAt": updated_at, "updatedTs": updated_ts, "rolloutPath": "", "model": "", "reasoningEffort": "", "source": profile.source, "tmuxSession": name, "active": True, "managed": managed_session(config, name), "agentRunning": agent_session_running(config, name)})
     return sorted(items, key=lambda item: float(item.get("updatedTs") or 0), reverse=True)
+
+
+def split_agent_session_items(items: list[dict[str, Any]], limit: int, offset: int = 0) -> dict[str, Any]:
+    active = [item for item in items if item.get("tmuxSession")]
+    history = [item for item in items if not item.get("tmuxSession")]
+    page_limit = max(1, limit)
+    start = max(0, offset)
+    return {
+        "activeSessions": active,
+        "sessions": history[start:start + page_limit],
+        "historyTotal": len(history),
+        "historyOffset": start,
+        "historyLimit": page_limit,
+    }
 
 
 def codex_thread_by_id(thread_id: str) -> dict[str, Any] | None:
@@ -673,7 +691,7 @@ def start_agent_runtime(config: Config, cwd: Path, command: str, args: list[str]
         # scrollback keeps accumulating for capture.
         env_args = ["-e", "CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN=1"]
     with RUNTIME_LOCK:
-        if max_running and managed_agent_count(config) >= max_running: raise OwnerError("running agent limit reached", HTTPStatus.CONFLICT)
+        if max_running and active_agent_count(config) >= max_running: raise OwnerError("running agent limit reached", HTTPStatus.CONFLICT)
         name = f"faryo-{_dt.datetime.now():%m%d-%H%M%S}-{secrets.token_hex(2)}"; executable = agent_launch_executable(command)
         shell = shutil.which("zsh") or "/usr/bin/zsh"; launch = f"{shlex.join([executable, *args])}; exec {shlex.quote(shell)} -l"
         res = tmux(config, ["new-session", "-d", "-s", name, "-c", str(cwd), *env_args, shell, "-lc", launch], timeout=5)
@@ -763,9 +781,9 @@ def cleanup_managed_sessions(config: Config, agent_idle_seconds: int = 0) -> Non
             tmux(config, ["kill-session", "-t", name], timeout=3)
 
 
-def managed_agent_count(config: Config) -> int:
+def active_agent_count(config: Config) -> int:
     cleanup_managed_sessions(config)
-    return sum(1 for name in tmux_sessions(config) if managed_session(config, name) and agent_in_pane(Config(name, config.token, config.pane_width)))
+    return sum(1 for name in tmux_sessions(config) if agent_in_pane(Config(name, config.token, config.pane_width)))
 
 
 def bounded_max_running(payload: dict[str, Any]) -> int:
@@ -2939,8 +2957,18 @@ class Handler(SimpleHTTPRequestHandler):
                 return
             if parsed.path == "/api/agent-sessions":
                 self.require_token(parsed)
-                query = parse_qs(parsed.query); limit = max(1, min(int(query.get("limit", [str(AGENT_SESSION_LIST_LIMIT)])[0]), AGENT_SESSION_LIST_LIMIT))
-                self.write_json({"ok": True, "sessions": self.agent_session_items(limit), "activeCount": managed_agent_count(self.config), "updatedAt": now_iso()})
+                query = parse_qs(parsed.query)
+                try:
+                    limit = max(1, min(int(query.get("limit", [str(AGENT_SESSION_LIST_LIMIT)])[0]), AGENT_SESSION_QUERY_LIMIT))
+                    offset = max(0, int(query.get("offset", ["0"])[0]))
+                except ValueError as exc:
+                    raise OwnerError("invalid agent session pagination") from exc
+                items = self.agent_session_items()
+                if query.get("view", [""])[0] == "split":
+                    payload = split_agent_session_items(items, limit, offset)
+                else:
+                    payload = {"sessions": items[offset:offset + limit]}
+                self.write_json({"ok": True, **payload, "activeCount": active_agent_count(self.config), "updatedAt": now_iso()})
                 return
             if parsed.path == "/api/capture":
                 self.require_token(parsed)
@@ -3213,8 +3241,8 @@ class Handler(SimpleHTTPRequestHandler):
         session = str(payload.get("session") or "")
         return target_config(self.config, session)
 
-    def agent_session_items(self, limit: int = AGENT_SESSION_LIST_LIMIT) -> list[dict[str, Any]]:
-        return agent_session_items(self.config, self.history_root())[:limit]
+    def agent_session_items(self) -> list[dict[str, Any]]:
+        return agent_session_items(self.config, self.history_root())
 
     def read_multipart_form(self) -> dict[str, Any]:
         content_type = self.headers.get("Content-Type", "")

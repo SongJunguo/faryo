@@ -152,14 +152,16 @@ Codex is the most mature integration:
 
 - reads the Codex local session database
 - filters internal and subagent branches from normal history
-- maps the active tmux process back to the current Codex thread
+- maps every active Codex tmux process, including desktop-started panes, back to
+  the current Codex thread
 - resumes sessions through `codex resume`
 - applies Codex-specific compact output rules
 
 Claude is supported with a different path:
 
 - reads Claude project JSONL history
-- tracks managed Claude tmux sessions with Faryo tmux metadata
+- combines Faryo tmux metadata with live-process/transcript discovery so
+  desktop-started Claude panes can also appear as active
 - resumes sessions through Claude session IDs
 - applies Claude-specific compact output rules
 
@@ -179,8 +181,9 @@ near the top are redacted examples.
 
 Core interactions:
 
-- Workbench first: Gateway opens to route status, project cards, active
-  sessions, recent history, and pending handoff packages.
+- Workbench first: Gateway opens to route status, project cards, all recognized
+  active agent tmux panes, a separate 10-record paginated history, and pending
+  handoff packages.
 - Project deck: project cards keep decisions, action items, watch items,
   stage goals, and owner review close to the session that can execute them.
 - Run queue: approved project actions can be dispatched back to the live Faryo

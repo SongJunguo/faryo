@@ -60,5 +60,13 @@ enabled route with `FARYO_TXY_MAX_RUNNING`, `FARYO_HP_MAX_RUNNING`, or
 `FARYO_PC_MAX_RUNNING` (valid range `1`–`32`). Defaults are 8 for TXY and 4 for
 HP/PC.
 
+The workbench keeps live agents and resumable history separate. `Active
+Sessions` includes every tmux pane currently running a recognized Codex or
+Claude process, including panes started directly on the endpoint. Only sessions
+created and stamped by Faryo expose the remote `Close` action; externally
+started desktop tmux sessions remain openable but protected from remote close.
+`Session History` excludes those live sessions, scrolls independently, and uses
+server-backed Previous/Next pagination with 10 records per page.
+
 See [runbook.md](runbook.md) for Cloudflare Tunnel, first login, verification,
 and rollback instructions.
