@@ -13,7 +13,7 @@ load_env() {
   fi
   # shellcheck disable=SC1090
   source "$ENV_FILE"
-  : "${FARYO_TXY_OWNER_TOKEN:?missing FARYO_TXY_OWNER_TOKEN}"
-  : "${FARYO_HP_OWNER_TOKEN:?missing FARYO_HP_OWNER_TOKEN}"
-  : "${FARYO_PC_OWNER_TOKEN:?missing FARYO_PC_OWNER_TOKEN}"
+  # The Python config loader validates tokens for enabled routes only. Keeping
+  # that validation in one place avoids requiring placeholder secrets for
+  # disabled routes.
 }

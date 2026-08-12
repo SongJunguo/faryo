@@ -73,6 +73,8 @@ curl --noproxy '*' http://127.0.0.1:8765/health
 
 Owner should bind to `127.0.0.1`. Public access should go through Gateway, which
 injects Owner tokens server-side so browsers do not receive raw Owner tokens.
+For a locally managed Cloudflare Tunnel deployment, see the
+[Gateway runbook](apps/gateway/runbook.md).
 
 ## How It Works
 
@@ -256,7 +258,7 @@ Gateway:
 
 - Python 3.11 or newer
 - `bcrypt`
-- a reverse proxy such as Caddy or nginx for public HTTPS
+- a public HTTPS edge such as Cloudflare Tunnel, Caddy, or nginx
 
 ## Packaging
 
@@ -304,6 +306,8 @@ Faryo is designed for a trusted operator running their own endpoints.
 
 - Owner should bind only to `127.0.0.1`.
 - Public access should go through Gateway.
+- Gateway itself should also bind to loopback when reached through a local
+  reverse proxy or outbound tunnel.
 - Tokens, password hashes, cookie secrets, and runtime env files are private
   runtime state.
 - File preview and attachment APIs are token-protected and constrained by

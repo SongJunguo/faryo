@@ -3,13 +3,22 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
 from pathlib import Path
 
 import bcrypt
 
 ROOT = Path(__file__).resolve().parents[1]
-ENV_FILE = ROOT / "config" / "faryo.env"
-AUTH_FILE = ROOT / "config" / "gateway-auth.json"
+FARYO_HOME = Path(os.environ.get("FARYO_HOME", str(Path.home() / ".faryo"))).expanduser()
+ENV_FILE = Path(
+    os.environ.get("FARYO_GATEWAY_ENV")
+    or os.environ.get("FARYO_ENV_FILE")
+    or FARYO_HOME / "gateway" / "config" / "faryo.env"
+).expanduser()
+AUTH_FILE = Path(
+    os.environ.get("GATEWAY_AUTH_CONFIG")
+    or FARYO_HOME / "gateway" / "config" / "gateway-auth.json"
+).expanduser()
 ROUTES = ("hp", "txy", "pc")
 
 
@@ -18,8 +27,12 @@ def read_env(path: Path) -> dict[str, str]:
     for line in path.read_text(encoding="utf-8").splitlines():
         if not line or line.lstrip().startswith("#") or "=" not in line:
             continue
-        key, value = line.split("=", 1)
-        values[key] = value
+        key, raw = line.split("=", 1)
+        try:
+            parsed = shlex.split(raw, posix=True)
+        except ValueError as exc:
+            raise ValueError(f"invalid shell value for {key}") from exc
+        values[key] = parsed[0] if len(parsed) == 1 else raw.strip()
     return values
 
 
@@ -31,16 +44,39 @@ def path_value(value: str) -> str:
     return str(Path(os.path.expandvars(value)).expanduser())
 
 
+def gateway_password(values: dict[str, str]) -> str:
+    value = values.get("FARYO_GATEWAY_PASSWORD", "")
+    if value:
+        return value
+    password_file = values.get("FARYO_GATEWAY_PASSWORD_FILE", "")
+    if password_file:
+        password = Path(path_value(password_file)).read_text(encoding="utf-8").strip()
+        if password:
+            return password
+    raise ValueError("missing FARYO_GATEWAY_PASSWORD or FARYO_GATEWAY_PASSWORD_FILE")
+
+
 def configured_routes(values: dict[str, str]) -> list[str]:
     raw = values.get("FARYO_GATEWAY_ROUTES", ",".join(ROUTES))
-    routes = [item.strip().lower() for item in raw.split(",") if item.strip()]
-    return [route for route in ROUTES if route in routes]
+    routes: list[str] = []
+    unknown: list[str] = []
+    for item in raw.split(","):
+        route = item.strip().lower()
+        if not route:
+            continue
+        if route not in ROUTES:
+            unknown.append(route)
+        elif route not in routes:
+            routes.append(route)
+    if unknown:
+        raise ValueError("unsupported FARYO_GATEWAY_ROUTES: " + ", ".join(unknown))
+    return routes
 
 
 def main() -> None:
     values = read_env(ENV_FILE)
     username = values["FARYO_GATEWAY_USER"]
-    password = values["FARYO_GATEWAY_PASSWORD"].encode("utf-8")
+    password = gateway_password(values).encode("utf-8")
     routes = configured_routes(values)
     if not routes:
         raise ValueError("FARYO_GATEWAY_ROUTES has no valid route")
@@ -58,6 +94,7 @@ def main() -> None:
             }
         }
     }
+    AUTH_FILE.parent.mkdir(parents=True, exist_ok=True)
     AUTH_FILE.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     AUTH_FILE.chmod(0o600)
     print(f"wrote {AUTH_FILE}")

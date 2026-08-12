@@ -1294,6 +1294,7 @@
   if (headerStatusVisible()) refreshStatus().catch((err) => setError(userErrorMessage(err)));
   refreshCapture(currentCaptureLines()).catch((err) => setError(userErrorMessage(err)));
   startEventStream();
+  document.documentElement.dataset.faryoAppReady = '1';
   window.addEventListener('pageshow', handlePageShow);
   window.addEventListener('pagehide', () => { cancelActiveRefreshes(); closeEventStream(); setCaptureFallback(false); setStatusRefresh(false); setFullRefresh(false); });
   document.addEventListener('visibilitychange', () => {

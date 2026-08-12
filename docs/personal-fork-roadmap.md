@@ -34,13 +34,15 @@
 | 网页输入可靠提交 | **P0 已完成并推送** | 消息 ID 幂等、粘贴/Enter 确认、失败草稿保留和 TUI 草稿冲突保护均通过 |
 | 结构化消息实时更新 | **P0 已完成并推送** | 最终内容用结构化数据；运行中显示脱敏 tmux live 尾部，结束后自动收敛 |
 | 本机开机自启 | 已完成 | user timer 已启用，`Linger=yes`；停止 Owner 后的自动恢复测试通过 |
-| 手机/Gateway/隧道 | 后续阶段 | 不属于本机 P0 修复；本机稳定后再配置 |
+| 手机/Gateway/隧道 | 已部署并验证 | Gateway 与 Owner 均仅监听回环地址；现有命名隧道新增独立路由，公网登录、公式和输入提交通过 |
 
 已推送的个人 fork 提交：
 
 - `fd2b4d6`：KaTeX 渲染与 Owner 认证修复。
 - `23d78bf`：从 Codex 结构化 transcript 渲染公式。
 - `56a4109`：保持真实 tmux 客户端宽度。
+- `1892a1d`：可靠输入、实时更新、安全 Markdown 与离线 KaTeX。
+- `76d5097`：加固结构化 Codex 公式来源与通用公式回归样例。
 
 ## 阶段 1：可靠输入提交（P0，已完成）
 
@@ -133,17 +135,28 @@ VS Code 扩展而非可直接嵌入的浏览器库，因此这里只借鉴其数
 
 ## 下一步
 
-本机阶段已经完成。继续观察实际长对话中的输入与 live 尾部；手机 Gateway/隧道保留为后续独立阶段。
+本机与手机公网主路径均已完成。继续观察实际长对话中的输入与 live
+尾部；Cloudflare Access 可作为可选的第二层身份策略，但不能替代 Faryo
+Gateway 自身登录。
 
 ## 2026-08-12 验证记录
 
 - 输入成功路径：真实 Owner HTTP 返回 `delivery=accepted`；同一 `clientMessageId` 第二次请求返回 `duplicate=true`，没有重复粘贴。
 - 输入失败路径：人为保留 TUI 草稿后，Chrome 收到冲突错误，输入框和 `sessionStorage` 草稿均未被清空。
 - 实时路径：独立 App Server 可在约 0.28 秒看到 TUI 新用户消息，但进行中的 shell turn 直到完成前没有结构化 item；因此采用“结构化最终内容 + 临时脱敏 tmux live 尾部”。Chrome 验证 live 面板自动出现并在完成后自动消失。
-- Markdown/公式：Node 单元测试、13 个 Owner Python 测试、13 个 Gateway 测试、包发布检查和 Owner smoke 全部通过。
+- Markdown/公式：Node 单元测试、14 个 Owner Python 测试、23 个 Gateway 测试、包发布检查和 Owner smoke 全部通过。
 - 浏览器：Chrome 与 Edge 本地资源测试通过；分段函数、范数和至少两行矩阵结构的精确 KaTeX 检查通过。
 - 部署：`faryo-owner-keepalive.timer` 已启用；主动停止 Owner 后，keepalive 成功使用专用 Conda 环境恢复服务。
 - 发布：功能提交 `1892a1d` 已推送到个人 `origin/katex-feature`；原作者 `upstream` 未修改。
+
+### Gateway 与手机公网路径
+
+- Gateway 只加载 `FARYO_GATEWAY_ROUTES` 中启用的路由；单路由部署不再要求为 HP、PC 等禁用路由填写伪 Token。
+- Gateway 和 Owner 都仅监听 `127.0.0.1`，Owner Token 只保存在权限为 `600` 的私有运行时配置中，由 Gateway 服务端注入。
+- Gateway 用户级 systemd 服务已完成启用、重启与健康检查；登录 Cookie、CSRF、登录限速和浏览器安全头均有回归覆盖。
+- 现有命名 Cloudflare Tunnel 在保留原有路由的前提下增加独立 Faryo hostname；公网 TLS、登录、真实结构化 Markdown/KaTeX 和一次性测试会话输入提交均通过。
+- 公网验证只使用通用测试文本；仓库中不记录真实域名、Token、密码、会话名、对话内容或本机绝对路径。
+- Cloudflare Tunnel 负责连通，不等于 Cloudflare Access。当前安全边界是 Faryo Gateway 登录；如需第二层身份策略，应另行配置精确的 Access 用户或组规则。
 
 ### 结构化来源加固
 

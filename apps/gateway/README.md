@@ -9,6 +9,15 @@ local execution surfaces.
 Gateway does not own the local tmux execution surface. It only routes to owner
 components through configured loopback ports or reverse tunnels.
 
+For a single-machine deployment, both services stay on loopback:
+
+```text
+public HTTPS edge -> 127.0.0.1:8780 Gateway -> 127.0.0.1:8765 Owner
+```
+
+Gateway performs browser login and injects the Owner token while proxying. The
+Owner token must never be placed in a public URL or browser configuration.
+
 Runtime configuration defaults to:
 
 ```text
@@ -28,3 +37,23 @@ The user-level service template lives at:
 ```text
 deploy/user-systemd/faryo-gateway.service
 ```
+
+For a private, single-route installation from the repository root:
+
+```bash
+FARYO_PYTHON=/absolute/path/to/python \
+FARYO_GATEWAY_ROUTE=txy \
+./apps/gateway/scripts/init-local-gateway.sh
+
+./apps/gateway/scripts/install-user-service.sh
+curl --noproxy '*' -fsS http://127.0.0.1:8780/login >/dev/null
+```
+
+The selected Python must provide `bcrypt`. The initializer reads the existing
+private Owner token, writes mode-`600` Gateway files below `~/.faryo`, and only
+requires a token for the enabled route. Re-running it preserves an existing
+login config. Set `FARYO_GATEWAY_RESET_AUTH=1` only when intentionally rotating
+the Gateway login.
+
+See [runbook.md](runbook.md) for Cloudflare Tunnel, first login, verification,
+and rollback instructions.

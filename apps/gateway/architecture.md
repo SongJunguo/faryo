@@ -9,7 +9,7 @@ controlled headers injected into local execution endpoints.
 ```text
 phone browser
   -> https://<your-faryo-domain>/
-  -> Caddy
+  -> HTTPS edge (for example Cloudflare Tunnel or a reverse proxy)
   -> Faryo Gateway 127.0.0.1:8780
   -> Faryo workbench
   -> /txy/?session=... /hp/?session=... /pc/?session=...
@@ -22,10 +22,10 @@ endpoints should use independent owner tokens.
 
 ## 2. Gateway Host Responsibilities
 
-Gateway VM: the host that terminates public HTTPS and forwards to Faryo Gateway.
+Gateway host: the machine reached by the public HTTPS edge.
 
-- Caddy listens on public 80/443.
-- Caddy proxies the public domain to Gateway at `127.0.0.1:8780`.
+- A reverse proxy may listen on public 80/443, or an outbound Cloudflare Tunnel
+  may route a hostname directly to `127.0.0.1:8780`.
 - Gateway provides form login, auth cookies, the unified workbench, account
   tools, and restricted path proxying.
 - Gateway private route config controls visible endpoints, workspace roots,
@@ -48,10 +48,17 @@ establish reverse tunnels to it.
 ## 3. Governance Parameters
 
 - Gateway bind: `127.0.0.1:8780`.
+- Only routes listed in `FARYO_GATEWAY_ROUTES` are loaded; only those routes
+  require Owner tokens.
 - Login cookie: uses the Faryo cookie name.
 - Owner tokens: private runtime config, never committed to Git.
 - Route auth: private runtime config, never committed to Git.
 - Upstream control headers: use Faryo header names.
+- Browser responses deny framing and unnecessary camera, microphone, and
+  geolocation permissions, disable referrer leakage, and advertise HSTS on the
+  public HTTPS path.
+- Cloudflare Access is optional defense in depth. A tunnel by itself is routing,
+  not identity policy; Gateway login remains the application boundary.
 
 ## 4. Verification
 

@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -16,8 +16,13 @@ const expectStructured = process.env.FARYO_SMOKE_EXPECT_STRUCTURED === '1';
 const debugLayout = process.env.FARYO_SMOKE_DEBUG_LAYOUT === '1';
 const screenshotPath = process.env.FARYO_SMOKE_SCREENSHOT || '';
 const expectedTex = JSON.parse(process.env.FARYO_SMOKE_EXPECT_TEX || '[]');
+const expectedOutput = process.env.FARYO_SMOKE_EXPECT_OUTPUT || '';
 const minMatrixRows = Number(process.env.FARYO_SMOKE_MIN_MATRIX_ROWS || 0);
 const screenshotTex = process.env.FARYO_SMOKE_SCREENSHOT_TEX || expectedTex.at(-1) || '';
+const loginUser = process.env.FARYO_SMOKE_LOGIN_USER || '';
+const loginPasswordFile = process.env.FARYO_SMOKE_LOGIN_PASSWORD_FILE || '';
+const loginPassword = loginPasswordFile ? (await readFile(loginPasswordFile, 'utf8')).trim() : '';
+const hostResolverRules = process.env.FARYO_SMOKE_HOST_RESOLVER_RULES || 'MAP * ~NOTFOUND, EXCLUDE 127.0.0.1';
 const chromeBin = process.env.CHROME_BIN || '/usr/bin/google-chrome';
 if (!targetUrl) {
   throw new Error('FARYO_SMOKE_URL is required');
@@ -39,7 +44,7 @@ try {
     '--disable-sync',
     '--no-first-run',
     '--no-proxy-server',
-    '--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE 127.0.0.1',
+    `--host-resolver-rules=${hostResolverRules}`,
     `--user-data-dir=${profile}`,
     '--remote-debugging-port=0',
     'about:blank',
@@ -106,6 +111,29 @@ try {
   await send('Page.enable');
   await send('Runtime.enable');
   await send('Page.navigate', { url: targetUrl });
+
+  if (loginUser && loginPassword) {
+    let loginReady = false;
+    for (let attempt = 0; attempt < 80; attempt += 1) {
+      await delay(100);
+      const result = await send('Runtime.evaluate', {
+        expression: `Boolean(document.querySelector('input[name="username"]') && document.querySelector('input[name="password"]'))`,
+        returnByValue: true,
+      });
+      loginReady = Boolean(result.result?.value);
+      if (loginReady) break;
+    }
+    if (!loginReady) throw new Error('Faryo Gateway login form did not appear');
+    await send('Runtime.evaluate', {
+      expression: `(() => {
+        const username = document.querySelector('input[name="username"]');
+        const password = document.querySelector('input[name="password"]');
+        username.value = ${JSON.stringify(loginUser)};
+        password.value = ${JSON.stringify(loginPassword)};
+        username.form.requestSubmit();
+      })()`,
+    });
+  }
 
   let state = {};
   for (let attempt = 0; attempt < 80; attempt += 1) {
@@ -196,7 +224,7 @@ try {
           };
         });
         return {
-          domReady: Boolean(output && document.getElementById('promptInput')),
+          domReady: Boolean(output && document.getElementById('promptInput') && document.documentElement.dataset.faryoAppReady === '1'),
           ready: katexCount >= 2 && displayCount >= 1 && markdownCount >= 1,
           katexCount,
           displayCount,
@@ -389,6 +417,21 @@ try {
         if (liveState.found) throw new Error('Faryo live tmux panel did not clear after turn completion');
         console.log('faryo-browser-live-finalized=PASS');
       }
+    }
+
+    if (expectedOutput && !expectSendFailure) {
+      let outputFound = false;
+      for (let attempt = 0; attempt < 120; attempt += 1) {
+        await delay(100);
+        const result = await send('Runtime.evaluate', {
+          expression: `String(document.getElementById('output')?.innerText || '').includes(${JSON.stringify(expectedOutput)})`,
+          returnByValue: true,
+        });
+        outputFound = Boolean(result.result?.value);
+        if (outputFound) break;
+      }
+      if (!outputFound) throw new Error('Expected output marker did not appear without a page reload');
+      console.log('faryo-browser-auto-update-smoke=PASS');
     }
   }
 } finally {

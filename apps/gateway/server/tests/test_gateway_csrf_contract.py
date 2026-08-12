@@ -137,6 +137,24 @@ class GatewayCsrfContractTest(unittest.TestCase):
         self.assertEqual(status, HTTPStatus.OK)
         return str(data["csrf"])
 
+    def test_gateway_responses_include_browser_security_headers(self) -> None:
+        conn = http.client.HTTPConnection(*self.base, timeout=5)
+        try:
+            conn.request("GET", "/api/csrf", headers={"Cookie": self.cookie})
+            resp = conn.getresponse()
+            resp.read()
+            self.assertEqual(resp.status, HTTPStatus.OK)
+            self.assertEqual(resp.getheader("X-Content-Type-Options"), "nosniff")
+            self.assertEqual(resp.getheader("X-Frame-Options"), "DENY")
+            self.assertEqual(resp.getheader("Referrer-Policy"), "no-referrer")
+            self.assertEqual(
+                resp.getheader("Permissions-Policy"),
+                "camera=(), microphone=(), geolocation=()",
+            )
+            self.assertEqual(resp.getheader("Strict-Transport-Security"), "max-age=31536000")
+        finally:
+            conn.close()
+
     def test_gateway_state_change_requires_csrf(self) -> None:
         status, data = self.request("POST", "/api/bridge-packages", {"title": "blocked"})
         self.assertEqual(status, HTTPStatus.FORBIDDEN)

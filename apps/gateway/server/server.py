@@ -43,6 +43,11 @@ CSRF_HEADER = "X-Faryo-Csrf"
 LOGIN_RATE_WINDOW_SECONDS = 10 * 60
 LOGIN_RATE_BLOCK_SECONDS = 5 * 60
 LOGIN_RATE_MAX_FAILURES = 8
+ROUTE_DEFAULTS = {
+    "hp": (18766, "HP"),
+    "txy": (8765, "TXY"),
+    "pc": (18765, "PC"),
+}
 
 
 def backend_from_values(route: str, default_port: int, default_label: str, values: Any) -> tuple[str, int, str]:
@@ -53,12 +58,31 @@ def backend_from_values(route: str, default_port: int, default_label: str, value
     return host, port, label
 
 
+def configured_routes(values: Any) -> list[str]:
+    raw = str(values.get("FARYO_GATEWAY_ROUTES", ",".join(ROUTE_DEFAULTS)))
+    requested: list[str] = []
+    unknown: list[str] = []
+    for item in raw.split(","):
+        route = item.strip().lower()
+        if not route:
+            continue
+        if route not in ROUTE_DEFAULTS:
+            unknown.append(route)
+        elif route not in requested:
+            requested.append(route)
+    if unknown:
+        raise ValueError("unsupported FARYO_GATEWAY_ROUTES: " + ", ".join(unknown))
+    if not requested:
+        raise ValueError("FARYO_GATEWAY_ROUTES has no valid route")
+    return requested
+
+
 def load_backends(values: Any) -> dict[str, tuple[str, int, str]]:
-    return {
-        "hp": backend_from_values("hp", 18766, "HP", values),
-        "pc": backend_from_values("pc", 18765, "PC", values),
-        "txy": backend_from_values("txy", 8765, "TXY", values),
-    }
+    backends: dict[str, tuple[str, int, str]] = {}
+    for route in configured_routes(values):
+        default_port, default_label = ROUTE_DEFAULTS[route]
+        backends[route] = backend_from_values(route, default_port, default_label, values)
+    return backends
 
 
 BACKENDS = load_backends(os.environ)
@@ -167,8 +191,12 @@ def read_env(path: Path) -> dict[str, str]:
     for line in path.read_text(encoding="utf-8").splitlines():
         if not line or line.lstrip().startswith("#") or "=" not in line:
             continue
-        key, value = line.split("=", 1)
-        values[key] = value
+        key, raw = line.split("=", 1)
+        try:
+            parsed = shlex.split(raw, posix=True)
+        except ValueError as exc:
+            raise ValueError(f"invalid shell value for {key}") from exc
+        values[key] = parsed[0] if len(parsed) == 1 else raw.strip()
     return values
 
 
@@ -480,7 +508,15 @@ class GatewayConfig:
             name = str(username).strip()
             if not name:
                 continue
-            routes = [route for route in payload.get("routes", list(BACKENDS)) if route in BACKENDS] or list(BACKENDS)
+            configured = payload.get("routes")
+            if configured is None:
+                routes = list(BACKENDS)
+            elif isinstance(configured, list):
+                routes = [route for route in configured if route in BACKENDS]
+            else:
+                raise ValueError(f"gateway user {name!r} routes must be a list")
+            if not routes:
+                raise ValueError(f"gateway user {name!r} has no enabled routes")
             default_route = str(payload.get("default_route") or (routes[0] if routes else "txy"))
             if default_route not in routes and routes:
                 default_route = routes[0]
@@ -617,6 +653,14 @@ class GatewayHandler(BaseHTTPRequestHandler):
     def log_message(self, fmt: str, *args: Any) -> None:
         safe_path = self.path.split("?", 1)[0]
         print("[%s] %s %s" % (time.strftime("%Y-%m-%dT%H:%M:%S%z"), self.command, safe_path), flush=True)
+
+    def end_headers(self) -> None:
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("X-Frame-Options", "DENY")
+        self.send_header("Referrer-Policy", "no-referrer")
+        self.send_header("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+        self.send_header("Strict-Transport-Security", "max-age=31536000")
+        super().end_headers()
 
     def do_OPTIONS(self) -> None:
         parsed = urlparse(self.path)
@@ -1220,7 +1264,7 @@ class GatewayHandler(BaseHTTPRequestHandler):
 
     def project_sync_owner_route(self) -> str:
         owner_label = self.headers.get("X-Faryo-Owner-Label", "").strip().lower()
-        owner_route = owner_label if owner_label in BACKENDS else ""
+        owner_route = owner_label if owner_label in self.config.owner_tokens else ""
         owner_token = self.headers.get("X-Owner-Token", "")
         if owner_route and hmac.compare_digest(owner_token, self.config.owner_token(owner_route)):
             return owner_route

@@ -11,8 +11,9 @@ GATEWAY_PORT="${GATEWAY_PORT:-8780}"
 GATEWAY_AUTH_CONFIG="${GATEWAY_AUTH_CONFIG:-$FARYO_HOME/gateway/config/gateway-auth.json}"
 GATEWAY_SECRET_FILE="${GATEWAY_SECRET_FILE:-$FARYO_HOME/gateway/state/gateway-cookie-secret}"
 PORTAL_DIR="${PORTAL_DIR:-$FARYO_HOME/gateway/portal}"
+FARYO_PYTHON="${FARYO_PYTHON:-python3}"
 
-exec python3 "$FARYO_GATEWAY_ROOT/server/server.py" \
+exec "$FARYO_PYTHON" "$FARYO_GATEWAY_ROOT/server/server.py" \
   --host "$GATEWAY_HOST" \
   --port "$GATEWAY_PORT" \
   --auth-config "$GATEWAY_AUTH_CONFIG" \
