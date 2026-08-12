@@ -21,5 +21,5 @@ node apps/gateway/server/tests/browser-workbench-smoke.mjs
 ```
 
 The browser smoke checks the two session regions, protected desktop tmux cards,
-independent history scrolling, and distinct first/second pages without printing
-session titles or identifiers.
+independent history scrolling, distinct first/second pages, and a direct jump to
+page three without printing session titles or identifiers.

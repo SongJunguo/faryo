@@ -129,7 +129,7 @@ try {
       const style = historyList ? getComputedStyle(historyList) : null;
       window.__faryoHistoryPageOne = historySignature;
       return {
-        ready: activeList && historyList && history.length === 10 && document.getElementById('historyPageLabel')?.textContent.includes('Page 1 of '),
+        ready: activeList && historyList && history.length === 10 && document.getElementById('historyPageInput')?.value === '1' && Number(document.getElementById('historyPageTotal')?.textContent) > 2,
         activeCount: active.length,
         historyCount: history.length,
         managedCount: active.filter((item) => item.querySelector('.close-session')).length,
@@ -162,10 +162,13 @@ try {
     second = await evaluate(`(() => {
       const history = [...document.querySelectorAll('#sessionList .session-card')];
       const signature = history.map((item) => item.dataset.agentSessionId).filter(Boolean).join('|');
+      const page = document.getElementById('historyPageInput')?.value;
+      const changed = Boolean(signature && signature !== window.__faryoHistoryPageOne);
+      if (page === '2' && changed) window.__faryoHistoryPageTwo = signature;
       return {
-        ready: document.getElementById('historyPageLabel')?.textContent.includes('Page 2 of '),
+        ready: page === '2' && changed,
         historyCount: history.length,
-        changed: Boolean(signature && signature !== window.__faryoHistoryPageOne),
+        changed,
         activeCount: document.querySelectorAll('#activeSessionList .session-card').length,
         previousEnabled: !document.getElementById('historyPrev')?.disabled,
       };
@@ -177,8 +180,31 @@ try {
   if (second.activeCount !== first.activeCount) throw new Error('Active sessions changed while paging history');
   if (!second.previousEnabled) throw new Error('Previous remained disabled on page two');
 
+  await evaluate(`(() => {
+    const input = document.getElementById('historyPageInput');
+    input.value = '3';
+    document.getElementById('historyJump').requestSubmit();
+  })()`);
+  let third = {};
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    await delay(150);
+    third = await evaluate(`(() => {
+      const history = [...document.querySelectorAll('#sessionList .session-card')];
+      const signature = history.map((item) => item.dataset.agentSessionId).filter(Boolean).join('|');
+      const changed = Boolean(signature && signature !== window.__faryoHistoryPageTwo);
+      return {
+        ready: document.getElementById('historyPageInput')?.value === '3' && changed,
+        historyCount: history.length,
+        changed,
+      };
+    })()`);
+    if (third?.ready) break;
+  }
+
+  if (!third?.ready || third.historyCount !== 10 || !third.changed) throw new Error('Direct page jump did not render a distinct ten-item third page');
+
   console.log(`faryo-browser-workbench-smoke=PASS active=${first.activeCount} managed=${first.managedCount} desktop=${first.desktopCount}`);
-  console.log(`faryo-browser-workbench-history=PASS page1=${first.historyCount} page2=${second.historyCount} scrollable=yes`);
+  console.log(`faryo-browser-workbench-history=PASS page1=${first.historyCount} page2=${second.historyCount} page3=${third.historyCount} direct-jump=yes scrollable=yes`);
 } finally {
   if (socket?.readyState === WebSocket.OPEN) socket.close();
   if (chrome && chrome.exitCode === null) {

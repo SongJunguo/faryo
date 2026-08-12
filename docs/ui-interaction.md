@@ -120,8 +120,9 @@ The Gateway home page presents two distinct session regions:
   recognized live Codex or Claude process. Desktop-created panes are marked as
   such and do not expose the Faryo-managed close action.
 - `Session History` contains only inactive, resumable conversations. It has its
-  own vertical scroll area and server-backed Previous/Next pages of 10 records,
-  so active panes cannot disappear behind a history display limit.
+  own vertical scroll area and server-backed pages of 10 records. Previous/Next
+  move one page, while the page input accepts Enter or Go for a direct jump, so
+  active panes cannot disappear behind a long history display limit.
 
 ## Handoff Packages
 

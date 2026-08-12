@@ -66,7 +66,8 @@ Claude process, including panes started directly on the endpoint. Only sessions
 created and stamped by Faryo expose the remote `Close` action; externally
 started desktop tmux sessions remain openable but protected from remote close.
 `Session History` excludes those live sessions, scrolls independently, and uses
-server-backed Previous/Next pagination with 10 records per page.
+server-backed pagination with 10 records per page. Use Previous/Next or enter a
+page number and press Enter/Go to jump directly through long histories.
 
 See [runbook.md](runbook.md) for Cloudflare Tunnel, first login, verification,
 and rollback instructions.
