@@ -142,7 +142,22 @@ curl --noproxy '*' -fsS http://127.0.0.1:8765/health
 curl --noproxy '*' -sS -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8780/login
 curl -sS -o /dev/null -w '%{http_code} %{ssl_verify_result}\n' https://faryo.example.com/
 ss -ltn | grep -E '127\.0\.0\.1:(8765|8780)'
+
+./apps/gateway/scripts/verify-public-access.sh \
+  https://faryo.example.com/
 ```
+
+The public verifier sends no password, Cookie, Owner token, or Gateway token. It
+does not print the hostname. `access=PASS origin-login=BLOCKED` means a fresh
+request was redirected to Cloudflare Access before reaching Faryo. An
+`access=MISSING origin-login=EXPOSED` result exits with status `3` and means the
+public request reached Faryo's own login boundary directly. An inconclusive
+response is never treated as a pass.
+
+This check proves the unauthenticated outer gate is present. It cannot prove
+which identities are allowed, that MFA is required, or that no `Bypass` policy
+exists; verify those policy settings in the dashboard and complete one real
+private-browser login before declaring the Access layer ready.
 
 Expected results:
 

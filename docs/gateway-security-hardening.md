@@ -76,6 +76,9 @@ Gateway implements the following inner controls:
 - Public TLS certificate verification succeeds.
 - A fresh public browser receives the identity-aware proxy challenge before the
   Faryo login form.
+- `apps/gateway/scripts/verify-public-access.sh https://faryo.example.com/`
+  reports `access=PASS origin-login=BLOCKED`; it never accepts an unknown
+  response as proof of Access.
 - Access allows only intended identities, requires MFA, and has no bypass rule.
 - Faryo login produces a `__Host-` Secure/HttpOnly/Strict cookie and old sessions
   stop working after a password change.

@@ -158,6 +158,7 @@ Faryo 单密码替代。
 - 现有命名 Cloudflare Tunnel 在保留原有路由的前提下增加独立 Faryo hostname；公网 TLS、登录、真实结构化 Markdown/KaTeX 和一次性测试会话输入提交均通过。
 - 公网验证只使用通用测试文本；仓库中不记录真实域名、Token、密码、会话名、对话内容或本机绝对路径。
 - Cloudflare Tunnel 负责连通，不等于 Cloudflare Access。公网入口必须另行配置覆盖完整 hostname 的精确 Access 用户/组规则与 MFA，并保留 Faryo 登录作为内层认证。
+- 已增加隐私安全的公网验收脚本：它不接收或打印密码、Cookie、Token 与 hostname；只有确认请求先进入 Access 登录流程才返回通过，直接到达 Faryo 登录或无法判定都不会误报为安全。
 - Gateway 代码加固包含：所有浏览器写请求（含 Owner 代理）使用会话绑定 CSRF、登录限速使用可信代理提供的单值客户端地址、`__Host-` 严格 Cookie 与 12 小时绝对期限、nonce CSP 及已有安全响应头。Agent 权限策略仍由操作者决定，Faryo 不强制降低 Codex/Claude 权限。
 - Gateway 首页已拆成两个独立区域：`Active Sessions` 始终显示所有实际运行 Codex/Claude 的 tmux（包括桌面直接启动的会话），`Session History` 排除活动项、独立滚动，并由服务端按 10 条一页提供 Previous/Next 和页码直达。只有 Faryo 管理的会话提供远程关闭，桌面 tmux 仅可打开查看，避免误关。
 - 运行会话上限与历史显示数量解耦；单机 TXY 默认允许 8 个存活 Agent TUI，并可通过私有 `FARYO_TXY_MAX_RUNNING` 在 1–32 范围内调整。
