@@ -30,7 +30,7 @@
 | tmux 桌面换行 | 已完成并提交 | Owner 默认宽度为 0，不执行尺寸调整；Codex 窗口始终由真实 tmux 客户端决定 |
 | 公式版式 | 已完成并提交 | 分段函数、范数和块公式已经过 Chrome/Edge 验证 |
 | KaTeX 本地化 | 已完成 | KaTeX 0.18.4 已打入 AST bundle；CSS、字体和许可证继续离线提供 |
-| 安全 Markdown | AST v2 已实现，发布回归中 | 单一 micromark/mdast/GFM/math 管线、Shiki 按需高亮和稳定块 DOM 对账已接入；旧实现已移除 |
+| 安全 Markdown | AST v2 已实现，最终验收中 | 单一 micromark/mdast/GFM/math 管线、Shiki 按需高亮和稳定块 DOM 对账已接入；旧实现已移除 |
 | 网页输入可靠提交 | **P0 已完成并推送** | 消息 ID 幂等、粘贴/Enter 确认、失败草稿保留和 TUI 草稿冲突保护均通过 |
 | 结构化消息实时更新 | **P0 已完成并推送** | 最终内容用结构化数据；运行中显示脱敏 tmux live 尾部，结束后自动收敛 |
 | 本机开机自启 | 已完成 | user timer 已启用，`Linger=yes`；停止 Owner 后的自动恢复测试通过 |
@@ -141,10 +141,10 @@ Node 运行时或 CDN。
 
 ## 下一步
 
-完成本功能分支的 Gateway 重启、代理静态资源、认证、隐私和更多视口回归，再推送
-个人 `origin`。继续观察实际长对话中的输入与 live 尾部。由于网页能够控制终端
-Agent，公网长期使用必须保留受限 Cloudflare Access（或仅可信设备可达的私网 VPN）
-作为外层身份策略，不能由 Tunnel 或 Faryo 单密码替代。
+完成最终差异和隐私审计，提交本轮可靠交互覆盖并推送个人 `origin`；随后进行用户实际
+长对话观感验收。由于网页能够控制终端 Agent，公网长期使用必须保留受限 Cloudflare
+Access（或仅可信设备可达的私网 VPN）作为外层身份策略，不能由 Tunnel 或 Faryo
+单密码替代。
 
 ## 2026-08-12 验证记录
 
@@ -157,14 +157,20 @@ Agent，公网长期使用必须保留受限 Cloudflare Access（或仅可信设
 
 - AST 源码测试 9/9；稳定块单元测试覆盖 200 块历史追加时复用 200、仅创建 1。
 - Owner Python 20/20、Gateway Python 37/37、发布检查和 Owner HTTP/tmux smoke 通过。
+- 新增可重复的匿名终端交付矩阵：20 条短文本、中文、多行、Markdown/TeX 都以内容
+  SHA-256 ACK 验证一次提交；ACK 总数严格匹配，无截断、无重复、无需刷新。
+- 隔离临时 inbox 的真实浏览器附件上传与引用提交通过；断网和页面后台期间的输出在恢复
+  后自动补齐，缺失会话的失败发送保留输入框与 `sessionStorage` 草稿。
+- 同一完整矩阵在已部署 Owner 的 390x844 和 1440x900 视口通过；Owner/Gateway 重启
+  前后 4 个既有 Agent tmux 窗口尺寸完全不变。
 - Chrome 390x844 深色与 1440x900 浅色匿名夹具通过 GFM、分段公式、五行公式表、
   CJK 粗体、代码隔离、Shiki TypeScript/Python/LaTeX/Lean/MATLAB、本地资源、XSS
   和内部横向滚动检查。
 - 匿名网页发送成功/失败草稿、SSE 自动更新、手机/桌面 Live 滚动和既有 tmux 尺寸
   不变均通过；未向真实会话注入测试消息。
 - Gateway 重启后六个计划视口均通过登录代理回归；活动/历史分区、10 条分页和页码跳转
-  通过；Edge 另通过 390x844 和 1440x900。未登录本地请求与公网 Cloudflare Access
-  边界均正确拦截。
+  通过；本轮再次以精确 390x844 和 1440x900 DOM 视口验证无横向溢出，Edge 另通过
+  390x844 和 1440x900。未登录本地请求与公网 Cloudflare Access 边界均正确拦截。
 - 匿名手机/桌面截图只在 `/tmp` 目检并已删除；公开仓库隐私与密钥模式扫描无命中。
 - 浏览器：Chrome 与 Edge 本地资源测试通过；分段函数、范数和至少两行矩阵结构的精确 KaTeX 检查通过。
 - 部署：`faryo-owner-keepalive.timer` 已启用；主动停止 Owner 后，keepalive 成功使用专用 Conda 环境恢复服务。

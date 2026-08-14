@@ -45,6 +45,7 @@ release_checks() {
     "$ROOT/scripts/package-client.sh" \
     "$ROOT"/scripts/*.sh \
     "$ROOT"/apps/owner/scripts/*.sh \
+    "$ROOT"/apps/owner/local-tmux-owner/tests/*.sh \
     "$ROOT"/apps/gateway/scripts/*.sh
   python3 -m py_compile \
     "$ROOT/apps/shared/pd_state.py" \
@@ -66,10 +67,13 @@ release_checks() {
   while IFS= read -r js_file; do
     node --check "$js_file"
   done < <(find "$ROOT/apps/owner/local-tmux-owner/static/vendor/markdown-ast/highlight" -type f -name '*.js' -print | sort)
+  node --check "$ROOT/apps/owner/local-tmux-owner/tests/browser-katex-smoke.mjs"
+  node --check "$ROOT/apps/gateway/server/tests/browser-workbench-smoke.mjs"
   node "$ROOT/apps/owner/local-tmux-owner/tests/markdown-ast-bundle.test.js"
   node "$ROOT/apps/owner/local-tmux-owner/tests/stable-blocks.test.js"
   node "$ROOT/apps/owner/local-tmux-owner/tests/live-scroll.test.js"
   node "$ROOT/apps/owner/local-tmux-owner/tests/compact-rules-codex.test.js"
+  node --test "$ROOT/apps/owner/local-tmux-owner/tests/terminal-delivery-receiver.test.mjs"
   python3 -m unittest discover -s "$ROOT/apps/owner/local-tmux-owner/tests" -p 'test_*.py'
   python3 - "$ROOT" <<'PY'
 from pathlib import Path

@@ -1,0 +1,22 @@
+[
+  { "text": "short delivery 01" },
+  { "text": "短消息提交检查 02" },
+  { "text": "first line 03\nsecond line 03" },
+  { "text": "公式 04：\\(x_i^2+y_i^2\\)" },
+  { "text": "**Markdown 05** and `inline code`" },
+  { "text": "short delivery 06" },
+  { "text": "中文内容一次提交 07" },
+  { "text": "alpha 08\nbeta 08\ngamma 08" },
+  { "text": "\\[d(t)=\\begin{cases}-1,&t<1,\\\\1,&t\\ge 1.\\end{cases}\\]" },
+  { "text": "- list item 10a\n- list item 10b" },
+  { "text": "short delivery 11" },
+  { "text": "中英文 mixed 提交 12" },
+  { "text": "row one 13\n\nrow three 13" },
+  { "text": "矩阵 14：\\[A=\\begin{bmatrix}1&2\\\\3&4\\end{bmatrix}\\]" },
+  { "text": "| A | B |\n|---|---|\n| 15 | ok |" },
+  { "text": "short delivery 16" },
+  { "text": "标点与空格，保持完整。17" },
+  { "text": "line 18a\nline 18b\nline 18c\nline 18d" },
+  { "text": "集合 19：\\(\\xi_k\\in[-1,1]\\)，且 \\(t\\in[kT_s,(k+1)T_s)\\)" },
+  { "text": "### Heading 20\n\n最终匿名提交检查。" }
+]

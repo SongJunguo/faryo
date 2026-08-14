@@ -2,7 +2,7 @@
 
 更新时间：2026-08-15
 
-状态：执行中
+状态：发布验收中
 
 开发分支：`feature/deepseek-inspired-ui`
 
@@ -28,7 +28,9 @@
   分支、备份分支和固定标签承担回滚，迁移完成后生产代码不长期保留旧同功能实现。
 - 阶段 D 的实现已进入发布回归：单一 AST 渲染核心、Shiki 按需高亮、稳定块 DOM
   对账和 256 项有界内存缓存已接入，旧 Markdown/数学双实现已从运行时代码删除。
-- 当前优先收口阶段 E/G：Gateway 重新部署、认证与隐私检查、更多视口和公网路径回归。
+- 阶段 E/F/G 的自动化证据已补齐：匿名精确内容提交矩阵、附件上传、断网/后台恢复、
+  Gateway 手机/桌面分页回归、认证边界与公网 Access 均通过；当前进入最终差异、隐私和
+  用户观感验收。
 
 ## 1. 目标
 
@@ -320,13 +322,18 @@ AST 管线，而不是继续以正则修补现有渲染器：
 
 2026-08-15 当前证据：
 
-- 一次性匿名 tmux 会话中，手机 Chrome 网页单击发送后输入框清空，目标 pane 接收一次，
-  固定 ACK 通过 SSE 自动出现，无需刷新。
-- 不存在的目标会话返回失败时，输入框和 `sessionStorage` 都保留草稿。
+- 可重复的匿名终端接收器在真实 Chrome -> Owner HTTP -> tmux -> SSE -> DOM 链路中
+  连续接收 20 条短文本、中文、多行、Markdown 和 TeX；每条 ACK 都绑定消息 SHA-256
+  摘要，ACK 总数严格等于 20，证明内容未截断且一次点击没有重复 turn。
+- 同一矩阵在已部署 Owner 的 390x844 与 1440x900 视口分别通过，全部 ACK 无刷新出现。
+- 隔离 Owner 使用临时 inbox 完成真实 Markdown 附件上传、附件引用提交和第 21 个 ACK；
+  临时上传、浏览器 profile、tmux 与 Owner 进程在测试后自动清理。
+- 网络离线和页面进入后台期间分别产生新 tmux 输出；网络/页面恢复后都自动补齐精确
+  ACK，无需刷新。不存在的目标会话返回失败时，输入框和 `sessionStorage` 都保留草稿。
 - 持续变化的真实 Codex live 尾部在 390x844 与 1440x900 下均通过：初次展开位于
   最新输出，手动上翻后跨真实刷新保持坐标；修复了程序化 `toggle` 覆盖阅读位置的竞态。
-- Owner smoke 前后比较全部既有 tmux 窗口尺寸，结果完全相同；代码仍以 pane width 0
-  表示“不调整 TUI”。
+- 实际 Owner/Gateway 重启和 Owner HTTP/tmux smoke 后，4 个既有 Agent 窗口尺寸全部
+  不变；代码仍以 pane width 0 表示“不调整 TUI”。
 
 ### 阶段 F：Gateway 视觉统一（P1）
 
@@ -352,14 +359,18 @@ Sessions、Session History 和 Projects。Gateway 的服务端分页、活动会
 
 2026-08-15 当前证据：
 
+- AST 源码 9/9、Owner Python 20/20、Gateway Python 37/37、终端协议 3/3、发布检查、
+  Owner HTTP/tmux smoke 和 npm 冷安装重建全部通过；npm 审计为 0 漏洞。
 - 本地 Gateway 重启后，匿名登录浏览器通过活动会话/历史分区、每页 10 条、第二页和
-  直接跳到第三页；Owner 代理能够同源加载 AST、KaTeX、Shiki 入口和 Python chunk。
+  直接跳到第三页；本轮又以精确 390x844 和 1440x900 DOM 视口确认独立滚动与无页面级
+  横向溢出。Owner 代理能够同源加载 AST、KaTeX、Shiki 入口和 Python chunk。
 - 360x800、390x844、412x915、768x1024、1024x768、1440x900 六个计划视口完成
   亮/暗主题布局与匿名 Markdown/TeX/代码夹具回归；手机顶栏经匿名截图目检后改为
   “工作站 / 会话”双层标题，不再显示半截会话名。
 - Microsoft Edge 也完成 390x844 与 1440x900 两组 Gateway/AST 夹具回归。
 - Gateway 未登录页面/静态资源返回 303，未登录 POST 返回 401；公网 tunnel 未登录
-  请求由 Cloudflare Access 302 到 Access 登录入口。
+  请求由 Cloudflare Access 302 到 Access 登录入口。Owner 未认证 GET/POST 均为 401，
+  Owner/Gateway 仅监听回环，私有配置与 Cookie secret 权限均为 600。
 - 已执行已知邮箱、域名、历史 Token、私有主目录、会话名、私钥和常见云密钥模式扫描；
   未发现命中，匿名临时截图已经删除。
 

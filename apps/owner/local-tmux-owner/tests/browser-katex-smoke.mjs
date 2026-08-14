@@ -1,10 +1,30 @@
 import { spawn } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
 const targetUrl = process.env.FARYO_SMOKE_URL;
 const sendText = process.env.FARYO_SMOKE_SEND_TEXT || '';
+const sendMatrixFile = process.env.FARYO_SMOKE_SEND_MATRIX_FILE || '';
+const rawSendMatrix = sendMatrixFile ? JSON.parse(await readFile(sendMatrixFile, 'utf8')) : [];
+const sendMatrix = Array.isArray(rawSendMatrix) ? rawSendMatrix.map((item, index) => {
+  const digest = typeof item?.text === 'string'
+    ? createHash('sha256').update(item.text, 'utf8').digest('hex').slice(0, 16)
+    : '';
+  return {
+    ...item,
+    expectedOutput: item?.expectedOutput
+      || `FARYO_DELIVERY_ACK_${String(index + 1).padStart(2, '0')} sha256=${digest}`,
+  };
+}) : rawSendMatrix;
+const attachmentName = process.env.FARYO_SMOKE_ATTACHMENT_NAME || '';
+const attachmentContent = process.env.FARYO_SMOKE_ATTACHMENT_CONTENT || '';
+const attachmentPrompt = process.env.FARYO_SMOKE_ATTACHMENT_PROMPT || '';
+const attachmentExpectedOutput = process.env.FARYO_SMOKE_ATTACHMENT_EXPECT_OUTPUT || '';
+const checkRecovery = process.env.FARYO_SMOKE_CHECK_RECOVERY === '1';
+const recoveryTmuxSession = process.env.FARYO_SMOKE_TMUX_SESSION || '';
+const recoveryStartIndex = Number(process.env.FARYO_SMOKE_RECOVERY_START_INDEX || 0);
 const expectSendFailure = process.env.FARYO_SMOKE_EXPECT_SEND_FAILURE === '1';
 const expectLive = process.env.FARYO_SMOKE_EXPECT_LIVE === '1';
 const expectLiveClears = process.env.FARYO_SMOKE_EXPECT_LIVE_CLEARS === '1';
@@ -91,8 +111,43 @@ const astFixtureSource = [
 if (!targetUrl) {
   throw new Error('FARYO_SMOKE_URL is required');
 }
+if (!Array.isArray(sendMatrix) || sendMatrix.some((item) => (
+  !item || typeof item.text !== 'string' || !item.text.trim()
+  || typeof item.expectedOutput !== 'string' || !item.expectedOutput
+))) {
+  throw new Error('FARYO_SMOKE_SEND_MATRIX_FILE must contain text/expectedOutput objects');
+}
+if (sendText && sendMatrix.length) {
+  throw new Error('Use either FARYO_SMOKE_SEND_TEXT or FARYO_SMOKE_SEND_MATRIX_FILE');
+}
+if ([attachmentName, attachmentContent, attachmentPrompt, attachmentExpectedOutput].some(Boolean)
+    && ![attachmentName, attachmentContent, attachmentPrompt, attachmentExpectedOutput].every(Boolean)) {
+  throw new Error('Attachment smoke requires name, content, prompt, and expected output');
+}
+if (checkRecovery && (!recoveryTmuxSession || recoveryStartIndex < 1)) {
+  throw new Error('Recovery smoke requires a tmux session and positive start index');
+}
 
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const runCommand = (command, args) => new Promise((resolve, reject) => {
+  const child = spawn(command, args, { stdio: ['ignore', 'ignore', 'pipe'] });
+  let stderr = '';
+  child.stderr.setEncoding('utf8');
+  child.stderr.on('data', (chunk) => { stderr += chunk; });
+  child.once('error', reject);
+  child.once('exit', (code) => {
+    if (code === 0) resolve();
+    else reject(new Error(`${command} failed (${code}): ${stderr.trim()}`));
+  });
+});
+const receiverAck = (index, text) => {
+  const digest = createHash('sha256').update(text, 'utf8').digest('hex').slice(0, 16);
+  return `FARYO_DELIVERY_ACK_${String(index).padStart(2, '0')} sha256=${digest}`;
+};
+const injectReceiverTurn = async (session, text) => {
+  await runCommand('tmux', ['send-keys', '-t', session, '-l', `\u001b[200~${text}\u001b[201~`]);
+  await runCommand('tmux', ['send-keys', '-t', session, 'C-m']);
+};
 const profile = await mkdtemp(path.join(os.tmpdir(), 'faryo-katex-chrome-'));
 let chrome;
 let socket;
@@ -838,6 +893,203 @@ try {
     });
     await writeFile(uiScreenshotPath, Buffer.from(screenshot.data, 'base64'));
     console.log(`faryo-browser-ui-screenshot=${uiScreenshotPath}`);
+  }
+
+  if (sendMatrix.length) {
+    for (let index = 0; index < sendMatrix.length; index += 1) {
+      const item = sendMatrix[index];
+      await send('Runtime.evaluate', {
+        expression: `(() => {
+          const input = document.getElementById('promptInput');
+          input.value = ${JSON.stringify(item.text)};
+          input.dispatchEvent(new Event('input', { bubbles: true }));
+          document.getElementById('sendBtn').click();
+        })()`,
+      });
+
+      let sendState = {};
+      for (let attempt = 0; attempt < 100; attempt += 1) {
+        await delay(100);
+        const result = await send('Runtime.evaluate', {
+          expression: `(() => ({
+            inputValue: document.getElementById('promptInput')?.value || '',
+            errorText: document.getElementById('errorBox')?.innerText || '',
+            storedDrafts: Object.entries(sessionStorage).filter(([key]) => key.startsWith('faryoPromptDraft:')).map(([, value]) => value),
+          }))()`,
+          returnByValue: true,
+        });
+        sendState = result.result?.value || {};
+        if (sendState.errorText || !sendState.inputValue) break;
+      }
+      if (sendState.errorText || sendState.inputValue || sendState.storedDrafts?.includes(item.text)) {
+        const detail = privacySafe ? `case=${index + 1}` : JSON.stringify(sendState);
+        throw new Error(`Faryo browser matrix send failed: ${detail}`);
+      }
+
+      let outputFound = false;
+      for (let attempt = 0; attempt < 120; attempt += 1) {
+        await delay(100);
+        const result = await send('Runtime.evaluate', {
+          expression: `String(document.getElementById('output')?.innerText || '').includes(${JSON.stringify(item.expectedOutput)})`,
+          returnByValue: true,
+        });
+        outputFound = Boolean(result.result?.value);
+        if (outputFound) break;
+      }
+      if (!outputFound) throw new Error(`Faryo browser matrix ACK missing: case=${index + 1}`);
+      await delay(25);
+    }
+    console.log(`faryo-browser-send-matrix=PASS count=${sendMatrix.length}`);
+    console.log('faryo-browser-auto-update-matrix=PASS reloads=0');
+  }
+
+  if (attachmentName) {
+    await send('Runtime.evaluate', {
+      expression: `(() => {
+        const input = document.getElementById('attachmentInput');
+        const transfer = new DataTransfer();
+        transfer.items.add(new File(
+          [${JSON.stringify(attachmentContent)}],
+          ${JSON.stringify(attachmentName)},
+          { type: 'text/markdown' },
+        ));
+        input.files = transfer.files;
+        input.dispatchEvent(new Event('change', { bubbles: true }));
+      })()`,
+    });
+
+    let uploadState = {};
+    for (let attempt = 0; attempt < 120; attempt += 1) {
+      await delay(100);
+      const result = await send('Runtime.evaluate', {
+        expression: `(() => {
+          const thumb = document.querySelector('#attachmentPreview .attachment-thumb');
+          return {
+            found: Boolean(thumb),
+            ready: Boolean(thumb?.classList.contains('ready')),
+            failed: Boolean(thumb?.classList.contains('error')),
+            errorText: document.getElementById('errorBox')?.innerText || '',
+          };
+        })()`,
+        returnByValue: true,
+      });
+      uploadState = result.result?.value || {};
+      if (uploadState.ready || uploadState.failed || uploadState.errorText) break;
+    }
+    if (!uploadState.found || !uploadState.ready || uploadState.failed || uploadState.errorText) {
+      throw new Error(`Faryo browser attachment upload failed: ${JSON.stringify(uploadState)}`);
+    }
+
+    await send('Runtime.evaluate', {
+      expression: `(() => {
+        const input = document.getElementById('promptInput');
+        input.value = ${JSON.stringify(attachmentPrompt)};
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+        document.getElementById('sendBtn').click();
+      })()`,
+    });
+
+    let attachmentSendState = {};
+    for (let attempt = 0; attempt < 120; attempt += 1) {
+      await delay(100);
+      const result = await send('Runtime.evaluate', {
+        expression: `(() => ({
+          inputValue: document.getElementById('promptInput')?.value || '',
+          previewCount: document.querySelectorAll('#attachmentPreview .attachment-thumb').length,
+          errorText: document.getElementById('errorBox')?.innerText || '',
+        }))()`,
+        returnByValue: true,
+      });
+      attachmentSendState = result.result?.value || {};
+      if (attachmentSendState.errorText || (!attachmentSendState.inputValue && attachmentSendState.previewCount === 0)) break;
+    }
+    if (attachmentSendState.errorText || attachmentSendState.inputValue || attachmentSendState.previewCount !== 0) {
+      const detail = privacySafe ? 'anonymous attachment case' : JSON.stringify(attachmentSendState);
+      throw new Error(`Faryo browser attachment send failed: ${detail}`);
+    }
+
+    let attachmentAckFound = false;
+    for (let attempt = 0; attempt < 120; attempt += 1) {
+      await delay(100);
+      const result = await send('Runtime.evaluate', {
+        expression: `String(document.getElementById('output')?.innerText || '').includes(${JSON.stringify(attachmentExpectedOutput)})`,
+        returnByValue: true,
+      });
+      attachmentAckFound = Boolean(result.result?.value);
+      if (attachmentAckFound) break;
+    }
+    if (!attachmentAckFound) throw new Error('Faryo browser attachment ACK did not appear without reload');
+    console.log('faryo-browser-attachment-upload=PASS kind=markdown');
+    console.log('faryo-browser-attachment-send=PASS reloads=0');
+  }
+
+  if (checkRecovery) {
+    const offlineText = 'anonymous offline recovery';
+    const offlineMarker = receiverAck(recoveryStartIndex, offlineText);
+    await send('Network.enable');
+    await send('Network.emulateNetworkConditions', {
+      offline: true,
+      latency: 0,
+      downloadThroughput: 0,
+      uploadThroughput: 0,
+    });
+    await delay(350);
+    await injectReceiverTurn(recoveryTmuxSession, offlineText);
+    await delay(250);
+    await send('Network.emulateNetworkConditions', {
+      offline: false,
+      latency: 0,
+      downloadThroughput: -1,
+      uploadThroughput: -1,
+    });
+    await send('Runtime.evaluate', { expression: `window.dispatchEvent(new Event('online'))` });
+
+    let offlineRecovered = false;
+    for (let attempt = 0; attempt < 160; attempt += 1) {
+      await delay(100);
+      const result = await send('Runtime.evaluate', {
+        expression: `String(document.getElementById('output')?.innerText || '').includes(${JSON.stringify(offlineMarker)})`,
+        returnByValue: true,
+      });
+      offlineRecovered = Boolean(result.result?.value);
+      if (offlineRecovered) break;
+    }
+    if (!offlineRecovered) throw new Error('Faryo did not recover missed output after network restoration');
+    console.log('faryo-browser-network-recovery=PASS reloads=0');
+
+    const hiddenText = 'anonymous background recovery';
+    const hiddenMarker = receiverAck(recoveryStartIndex + 1, hiddenText);
+    const hiddenResult = await send('Runtime.evaluate', {
+      expression: `(() => {
+        Object.defineProperty(document, 'hidden', { configurable: true, value: true });
+        document.dispatchEvent(new Event('visibilitychange'));
+        return document.hidden;
+      })()`,
+      returnByValue: true,
+    });
+    if (!hiddenResult.result?.value) throw new Error('Could not simulate a hidden Faryo page');
+    await delay(250);
+    await injectReceiverTurn(recoveryTmuxSession, hiddenText);
+    await delay(250);
+    await send('Runtime.evaluate', {
+      expression: `(() => {
+        delete document.hidden;
+        document.dispatchEvent(new Event('visibilitychange'));
+      })()`,
+    });
+
+    let hiddenRecovered = false;
+    for (let attempt = 0; attempt < 120; attempt += 1) {
+      await delay(100);
+      const result = await send('Runtime.evaluate', {
+        expression: `String(document.getElementById('output')?.innerText || '').includes(${JSON.stringify(hiddenMarker)})`,
+        returnByValue: true,
+      });
+      hiddenRecovered = Boolean(result.result?.value);
+      if (hiddenRecovered) break;
+    }
+    if (!hiddenRecovered) throw new Error('Faryo did not catch up after the page returned from background');
+    console.log('faryo-browser-background-recovery=PASS reloads=0');
   }
 
   if (sendText) {

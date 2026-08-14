@@ -11,6 +11,8 @@ const expectedActive = Number(process.env.FARYO_SMOKE_EXPECT_ACTIVE || 0);
 const expectedManaged = Number(process.env.FARYO_SMOKE_EXPECT_MANAGED || -1);
 const expectedDesktop = Number(process.env.FARYO_SMOKE_EXPECT_DESKTOP || -1);
 const expectedRouteLabel = process.env.FARYO_SMOKE_EXPECT_ROUTE_LABEL || '';
+const viewportWidth = Number(process.env.FARYO_SMOKE_VIEWPORT_WIDTH || 430);
+const viewportHeight = Number(process.env.FARYO_SMOKE_VIEWPORT_HEIGHT || 820);
 const hostResolverRules = process.env.FARYO_SMOKE_HOST_RESOLVER_RULES || 'MAP * ~NOTFOUND, EXCLUDE 127.0.0.1';
 const chromeBin = process.env.CHROME_BIN || '/usr/bin/google-chrome';
 
@@ -32,7 +34,7 @@ try {
     '--disable-sync',
     '--no-first-run',
     '--no-proxy-server',
-    '--window-size=430,820',
+    `--window-size=${viewportWidth},${viewportHeight}`,
     `--host-resolver-rules=${hostResolverRules}`,
     `--user-data-dir=${profile}`,
     '--remote-debugging-port=0',
@@ -96,6 +98,12 @@ try {
 
   await send('Page.enable');
   await send('Runtime.enable');
+  await send('Emulation.setDeviceMetricsOverride', {
+    width: viewportWidth,
+    height: viewportHeight,
+    deviceScaleFactor: 1,
+    mobile: viewportWidth < 720,
+  });
   await send('Page.navigate', { url: targetUrl });
 
   if (loginUser && loginPassword) {
@@ -141,6 +149,8 @@ try {
         routeLabelMatches: !${JSON.stringify(expectedRouteLabel)} || [...document.querySelectorAll('.route-chip strong')].some((item) => item.textContent.trim() === ${JSON.stringify(expectedRouteLabel)}),
         overflowY: style?.overflowY || '',
         scrollable: Boolean(historyList && historyList.scrollHeight > historyList.clientHeight),
+        viewport: { width: innerWidth, height: innerHeight },
+        pageHorizontalOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth + 1,
       };
     })()`);
     if (first?.ready) break;
@@ -154,6 +164,7 @@ try {
   if (!first.previousDisabled || !first.nextEnabled) throw new Error('First-page navigation state is incorrect');
   if (!first.routeLabelMatches) throw new Error('Configured route label did not render');
   if (!['auto', 'scroll'].includes(first.overflowY) || !first.scrollable) throw new Error('Session History is not independently scrollable');
+  if (first.pageHorizontalOverflow) throw new Error(`Gateway workbench overflowed horizontally: ${JSON.stringify(first.viewport)}`);
 
   await evaluate("document.getElementById('historyNext').click()");
   let second = {};
@@ -203,7 +214,7 @@ try {
 
   if (!third?.ready || third.historyCount !== 10 || !third.changed) throw new Error('Direct page jump did not render a distinct ten-item third page');
 
-  console.log(`faryo-browser-workbench-smoke=PASS active=${first.activeCount} managed=${first.managedCount} desktop=${first.desktopCount}`);
+  console.log(`faryo-browser-workbench-smoke=PASS viewport=${first.viewport.width}x${first.viewport.height} active=${first.activeCount} managed=${first.managedCount} desktop=${first.desktopCount}`);
   console.log(`faryo-browser-workbench-history=PASS page1=${first.historyCount} page2=${second.historyCount} page3=${third.historyCount} direct-jump=yes scrollable=yes`);
 } finally {
   if (socket?.readyState === WebSocket.OPEN) socket.close();

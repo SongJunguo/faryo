@@ -97,6 +97,20 @@ FARYO_SMOKE_URL='http://127.0.0.1:8765/?token=<token>&session=<session>' \
   node apps/owner/local-tmux-owner/tests/browser-katex-smoke.mjs
 ```
 
+The anonymous delivery matrix starts an isolated loopback Owner and temporary
+tmux receiver, sends 20 exact-content short/Chinese/multiline/Markdown/TeX
+messages, uploads one Markdown attachment, verifies network/background catch-up
+without reload, checks failed-draft preservation, and removes all test state:
+
+```bash
+FARYO_DELIVERY_PYTHON=/path/to/project/python \
+  apps/owner/local-tmux-owner/tests/browser-delivery-matrix.sh
+```
+
+Set `FARYO_DELIVERY_URL_TEMPLATE` with a literal `{session}` placeholder to run
+the same non-attachment matrix against an already deployed Owner. The URL is
+consumed as private runtime input and is never printed.
+
 ## Security Boundary
 
 - Does not expose arbitrary shell execution.
