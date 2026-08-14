@@ -45,6 +45,7 @@ const smokeTheme = process.env.FARYO_SMOKE_THEME || '';
 const screenshotPath = process.env.FARYO_SMOKE_SCREENSHOT || '';
 const uiScreenshotPath = process.env.FARYO_SMOKE_UI_SCREENSHOT || '';
 const uiScreenshotPanel = process.env.FARYO_SMOKE_UI_PANEL || '';
+const uiScreenshotFocus = process.env.FARYO_SMOKE_UI_FOCUS || '';
 const expectedTex = JSON.parse(process.env.FARYO_SMOKE_EXPECT_TEX || '[]');
 const expectedOutput = process.env.FARYO_SMOKE_EXPECT_OUTPUT || '';
 const minMatrixRows = Number(process.env.FARYO_SMOKE_MIN_MATRIX_ROWS || 0);
@@ -112,12 +113,17 @@ const astFixtureSource = [
 const uiFixtureSource = [
   '## 结论',
   '',
-  '公式、表格和正文由同一个 AST 管线渲染。',
+  '公式、表格、列表、引用和代码由同一个 AST 管线渲染；长内容应在自己的容器内滚动，而不是挤压整页。',
   '',
   '| 算子 | 建议 |',
   '| --- | --- |',
   '| \\(\\Psi_i=\\eta_i\\) | 精确恢复基准结构 |',
   '| \\(\\Psi_i=e_i\\) | 标准误差积分 |',
+  '| \\(\\Psi_i=\\vartheta_{i,\\nu_i}(k_i)e_i\\) | 保留带下标的调度项，并允许这一列横向滚动 |',
+  '| \\(\\Psi_i=\\delta_i\\tanh(e_i/\\gamma_i)\\) | 非线性积分增益 |',
+  '| \\(\\Psi_i=e_i-\\sigma_i z_i\\) | 泄漏修正机制 |',
+  '',
+  '> 宽公式保持单一数学布局，不拆成逐字符竖排文本。',
   '',
   '\\[',
   'd(t)=\\begin{cases}',
@@ -125,12 +131,35 @@ const uiFixtureSource = [
   '1,&t\\ge 1.',
   '\\end{cases}',
   '\\]',
+  '',
+  '\\[',
+  '\\dot{x}_2=F_2(x_1,x_2)+C\\,\\operatorname{sgn}(d(t))\\sqrt{|d(t)|}+u.',
+  '\\]',
+  '',
+  '\\[',
+  'A=\\begin{bmatrix}1&2&3\\\\4&5&6\\end{bmatrix}.',
+  '\\]',
+  '',
+  '### 实现检查',
+  '',
+  '- 行内代码 `render(markdown)` 不应触发公式解析。',
+  '- 围栏代码保持原始换行，并按需加载高亮语言。',
+  '',
+  astFence + 'ts',
+  'const renderState = {',
+  "  mode: 'structured',",
+  '  stableBlocks: true,',
+  '};',
+  astFence,
 ].join('\n');
 if (!targetUrl) {
   throw new Error('FARYO_SMOKE_URL is required');
 }
 if (!['hidden', 'visible'].includes(expectedKeyNavState)) {
   throw new Error('FARYO_SMOKE_EXPECT_KEY_NAV must be hidden or visible');
+}
+if (!['', 'table', 'math', 'code'].includes(uiScreenshotFocus)) {
+  throw new Error('FARYO_SMOKE_UI_FOCUS must be table, math, code, or empty');
 }
 if (!Array.isArray(sendMatrix) || sendMatrix.some((item) => (
   !item || typeof item.text !== 'string' || !item.text.trim()
@@ -933,23 +962,90 @@ try {
         }
         if (output?.isConnected) output.replaceWith(output.cloneNode(true));
         const renderedOutput = document.getElementById('output');
-        const display = renderedOutput?.querySelector('.katex-display');
+        const displays = [...(renderedOutput?.querySelectorAll('.katex-display') || [])];
+        const tableScroll = renderedOutput?.querySelector('.markdown-table-scroll');
+        const codeBlock = renderedOutput?.querySelector('.markdown-code-block');
+        const focus = ${JSON.stringify(uiScreenshotFocus)};
+        const focusTarget = focus === 'table'
+          ? tableScroll
+          : focus === 'math'
+            ? (displays[1] || displays[0])
+            : focus === 'code'
+              ? codeBlock
+              : null;
+        focusTarget?.scrollIntoView({ block: 'center', inline: 'nearest' });
+        const focusRect = focusTarget?.getBoundingClientRect();
+        const outputWidth = renderedOutput?.getBoundingClientRect().width || 0;
+        const matrixRows = displays.map((display) => (
+          display.querySelectorAll('.katex-mathml mtable > mtr').length
+        ));
         return {
           katexCount: renderedOutput?.querySelectorAll('.katex').length || 0,
+          displayCount: displays.length,
           tableCount: renderedOutput?.querySelectorAll('.markdown-table-scroll table').length || 0,
-          displayContained: Boolean(display && display.getBoundingClientRect().width <= renderedOutput.getBoundingClientRect().width + 1),
+          tableScrollable: Boolean(tableScroll && tableScroll.scrollWidth > tableScroll.clientWidth + 1),
+          codeBlockCount: renderedOutput?.querySelectorAll('.markdown-code-block').length || 0,
+          highlightedCodeCount: renderedOutput?.querySelectorAll('.markdown-code-block pre.shiki').length || 0,
+          matrixRows: Math.max(0, ...matrixRows),
+          displaysContained: displays.length > 0 && displays.every((display) => (
+            display.getBoundingClientRect().width <= outputWidth + 1
+          )),
+          focusVisible: !focus || Boolean(focusRect
+            && focusRect.bottom > 60
+            && focusRect.top < innerHeight - 96),
           pageHorizontalOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth + 1,
         };
       })()`,
       returnByValue: true,
     });
     const uiFixtureState = uiFixtureResult.result?.value || {};
-    if (uiFixtureState.katexCount < 3 || uiFixtureState.tableCount !== 1
-      || !uiFixtureState.displayContained || uiFixtureState.pageHorizontalOverflow) {
+    if (uiFixtureState.katexCount < 8 || uiFixtureState.displayCount !== 3
+      || uiFixtureState.tableCount !== 1 || uiFixtureState.codeBlockCount !== 1
+      || uiFixtureState.highlightedCodeCount !== 1 || uiFixtureState.matrixRows < 2
+      || !uiFixtureState.displaysContained || !uiFixtureState.focusVisible
+      || (viewportWidth > 0 && viewportWidth < 720 && !uiFixtureState.tableScrollable)
+      || uiFixtureState.pageHorizontalOverflow) {
       throw new Error(`Faryo rich UI screenshot fixture failed: ${JSON.stringify(uiFixtureState)}`);
     }
     await send('Runtime.evaluate', { expression: 'document.fonts.ready', awaitPromise: true });
     await delay(uiScreenshotPanel ? 240 : 120);
+    const jumpGeometryResult = await send('Runtime.evaluate', {
+      expression: `(() => {
+        const button = document.getElementById('bottomBtn');
+        const visible = Boolean(button && button.getClientRects().length);
+        if (!visible) return { visible: false, rightAligned: true, overlapsFocus: false };
+        const rect = button.getBoundingClientRect();
+        const promptRect = document.querySelector('.prompt-shell')?.getBoundingClientRect();
+        const displays = [...document.querySelectorAll('#output .katex-display')];
+        const focus = ${JSON.stringify(uiScreenshotFocus)};
+        const target = focus === 'table'
+          ? document.querySelector('#output .markdown-table-scroll')
+          : focus === 'math'
+            ? (displays[1] || displays[0])
+            : focus === 'code'
+              ? document.querySelector('#output .markdown-code-block')
+              : null;
+        const targetRect = target?.getBoundingClientRect();
+        const overlapsFocus = Boolean(targetRect
+          && rect.left < targetRect.right
+          && rect.right > targetRect.left
+          && rect.top < targetRect.bottom
+          && rect.bottom > targetRect.top);
+        return {
+          visible: true,
+          rightAligned: rect.left + rect.width / 2 >= (promptRect
+            ? promptRect.left + promptRect.width * 0.78
+            : innerWidth * 0.75)
+            && rect.right <= innerWidth - 6,
+          overlapsFocus,
+        };
+      })()`,
+      returnByValue: true,
+    });
+    const jumpGeometry = jumpGeometryResult.result?.value || {};
+    if (!jumpGeometry.rightAligned || jumpGeometry.overlapsFocus) {
+      throw new Error(`Scroll-to-latest control obscured rich output: ${JSON.stringify(jumpGeometry)}`);
+    }
     const screenshot = await send('Page.captureScreenshot', {
       format: 'png',
       fromSurface: true,

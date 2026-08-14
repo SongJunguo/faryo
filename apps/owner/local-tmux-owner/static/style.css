@@ -557,8 +557,8 @@ html[data-faryo-ui="workbench-v2"] .copy-output-block {
 }
 
 html[data-faryo-ui="workbench-v2"] .bottom-btn {
-  left: 50%;
-  right: auto;
+  left: auto;
+  right: max(18px, calc((100vw - 920px) / 2 + 18px));
   bottom: calc(env(safe-area-inset-bottom) + 136px);
   width: 38px;
   min-width: 38px;
@@ -570,7 +570,7 @@ html[data-faryo-ui="workbench-v2"] .bottom-btn {
   color: var(--muted);
   opacity: .9;
   box-shadow: 0 10px 32px rgba(0, 0, 0, .16);
-  transform: translateX(-50%);
+  transform: none;
   backdrop-filter: blur(14px);
 }
 

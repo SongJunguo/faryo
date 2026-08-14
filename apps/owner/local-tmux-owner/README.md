@@ -97,6 +97,12 @@ FARYO_SMOKE_URL='http://127.0.0.1:8765/?token=<token>&session=<session>' \
   node apps/owner/local-tmux-owner/tests/browser-katex-smoke.mjs
 ```
 
+For an anonymous visual audit, set `FARYO_SMOKE_UI_SCREENSHOT` to a temporary
+PNG path and choose `FARYO_SMOKE_UI_FOCUS=table`, `math`, or `code`. The fixture
+replaces conversation text with generic Markdown before capture, checks that
+wide content stays inside its own scroll container, and rejects a visible
+scroll-to-latest control that overlaps the focused rich-output element.
+
 The anonymous delivery matrix starts an isolated loopback Owner and temporary
 tmux receiver, sends 20 exact-content short/Chinese/multiline/Markdown/TeX
 messages, uploads one Markdown attachment, verifies network/background catch-up
