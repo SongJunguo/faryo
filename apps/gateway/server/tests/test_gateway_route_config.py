@@ -44,6 +44,17 @@ class GatewayRouteConfigTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "unsupported FARYO_GATEWAY_ROUTES"):
             gateway.load_backends({"FARYO_GATEWAY_ROUTES": "txy,unknown"})
 
+    def test_gateway_session_lifetime_is_configurable_and_bounded(self) -> None:
+        self.assertEqual(gateway.gateway_session_max_age({}), 12 * 60 * 60)
+        self.assertEqual(
+            gateway.gateway_session_max_age({"FARYO_GATEWAY_SESSION_HOURS": "24"}),
+            24 * 60 * 60,
+        )
+        for value in ("0", "169", "invalid"):
+            with self.subTest(value=value):
+                with self.assertRaisesRegex(ValueError, "integer from 1 to 168"):
+                    gateway.gateway_session_max_age({"FARYO_GATEWAY_SESSION_HOURS": value})
+
     def test_unicode_owner_label_is_http_header_safe(self) -> None:
         encoded = gateway.owner_label_header_value("Ubuntu 工作站")
 
@@ -322,6 +333,40 @@ class GatewayRouteConfigTest(unittest.TestCase):
 
             self.assertEqual(result.returncode, 0, result.stderr)
 
+    def test_gateway_runner_exports_private_session_lifetime(self) -> None:
+        script = REPO_ROOT / "apps" / "gateway" / "scripts" / "run-gateway.sh"
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            env_file = root / "faryo.env"
+            python_stub = root / "python-stub"
+            python_stub.write_text(
+                "#!/usr/bin/env bash\n"
+                "printf '%s\\n' \"${FARYO_GATEWAY_SESSION_HOURS:-missing}\"\n",
+                encoding="utf-8",
+            )
+            python_stub.chmod(0o700)
+            env_file.write_text(
+                f"FARYO_PYTHON={python_stub}\n"
+                "FARYO_GATEWAY_SESSION_HOURS=24\n",
+                encoding="utf-8",
+            )
+            process_env = {
+                "HOME": str(root),
+                "PATH": os.environ.get("PATH", ""),
+                "FARYO_GATEWAY_ENV": str(env_file),
+            }
+
+            result = subprocess.run(
+                ["bash", str(script)],
+                env=process_env,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout.strip(), "24")
+
     def test_auth_generator_reads_mode_separated_password_file(self) -> None:
         module_path = REPO_ROOT / "apps" / "gateway" / "scripts" / "generate-gateway-auth-config.py"
         generator_spec = importlib.util.spec_from_file_location("faryo_gateway_password_generator", module_path)
@@ -378,6 +423,7 @@ class GatewayRouteConfigTest(unittest.TestCase):
             self.assertEqual(auth.stat().st_mode & 0o777, 0o600)
             self.assertEqual(gateway_env.stat().st_mode & 0o777, 0o600)
             self.assertIn("FARYO_TXY_MAX_RUNNING=8\n", gateway_env.read_text(encoding="utf-8"))
+            self.assertIn("FARYO_GATEWAY_SESSION_HOURS=12\n", gateway_env.read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":

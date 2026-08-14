@@ -24,8 +24,12 @@ workflow, and must compensate with stronger identity and host isolation.
    opening the local service port to the Internet.
 3. Protect the complete public hostname, including API and static paths, with an
    identity-aware proxy such as Cloudflare Access. Allow only exact identities
-   or a small managed group, require MFA (prefer WebAuthn/passkeys or a security
-   key), use a short Access session, and configure no broad bypass.
+   or a small managed group, choose the Access session lifetime and MFA posture
+   explicitly, and configure no broad bypass. WebAuthn/passkeys remain the
+   preferred higher-assurance option, but independent MFA is an operator choice
+   rather than a Faryo runtime requirement. A lower-friction deployment may use
+   a 24-hour Access session with independent MFA disabled only while retaining
+   the exact identity allowlist and the separate Faryo password layer.
 4. Keep Faryo's password login as a separate inner layer. Use a unique password
    of at least 16 characters and remove any stale generated plaintext password
    file after a successful password change.
@@ -45,7 +49,9 @@ Gateway implements the following inner controls:
 
 - bcrypt password hashes and generic login failures;
 - an HMAC-signed `__Host-` session cookie with `Secure`, `HttpOnly`,
-  `SameSite=Strict`, no `Domain`, and a 12-hour server-enforced absolute limit;
+  `SameSite=Strict`, no `Domain`, and a server-enforced absolute limit; the
+  default is 12 hours and private `FARYO_GATEWAY_SESSION_HOURS` configuration is
+  bounded to `1`–`168`;
 - password-change session invalidation;
 - session-bound CSRF headers for every browser state-changing API, including
   requests proxied to Owner; the CSRF header is removed before proxying;
@@ -64,8 +70,12 @@ Gateway implements the following inner controls:
 - CSP is defense in depth, not a substitute for output encoding and safe
   Markdown handling.
 - A valid high-privilege session can intentionally perform high-impact actions.
-- Identity-aware access and MFA are external deployment controls and cannot be
-  inferred merely from a running tunnel.
+- Identity-aware access, its allowlist, session lifetime, and MFA posture are
+  external deployment controls and cannot be inferred merely from a running
+  tunnel.
+- Disabling independent MFA reduces login friction but makes the exact Access
+  allowlist, protected identity-provider account, inner Faryo password, and
+  host isolation more important.
 - Running agents as the same desktop user leaves personal data within their
   potential read authority. Network authentication reduces likelihood; only OS
   or VM/container isolation reduces that blast radius.
@@ -79,7 +89,8 @@ Gateway implements the following inner controls:
 - `apps/gateway/scripts/verify-public-access.sh https://faryo.example.com/`
   reports `access=PASS origin-login=BLOCKED`; it never accepts an unknown
   response as proof of Access.
-- Access allows only intended identities, requires MFA, and has no bypass rule.
+- Access allows only intended identities, uses the deliberately selected
+  session lifetime and MFA posture, and has no `Everyone` or `Bypass` rule.
 - Faryo login produces a `__Host-` Secure/HttpOnly/Strict cookie and old sessions
   stop working after a password change.
 - Browser write operations work, while the same authenticated POST without a

@@ -37,9 +37,21 @@ if str(SHARED_DIR) not in sys.path:
     sys.path.insert(0, str(SHARED_DIR))
 import pd_state
 
+
+def gateway_session_max_age(values: Any) -> int:
+    raw = str(values.get("FARYO_GATEWAY_SESSION_HOURS", "12")).strip()
+    try:
+        hours = int(raw)
+    except ValueError as exc:
+        raise ValueError("FARYO_GATEWAY_SESSION_HOURS must be an integer from 1 to 168") from exc
+    if not 1 <= hours <= 168:
+        raise ValueError("FARYO_GATEWAY_SESSION_HOURS must be an integer from 1 to 168")
+    return hours * 60 * 60
+
+
 COOKIE_NAME = "__Host-faryo_auth"
 LEGACY_COOKIE_NAME = "faryo_auth"
-COOKIE_MAX_AGE = 12 * 60 * 60
+COOKIE_MAX_AGE = gateway_session_max_age(os.environ)
 COOKIE_SAME_SITE = "Strict"
 CSRF_HEADER = "X-Faryo-Csrf"
 LOGIN_RATE_WINDOW_SECONDS = 10 * 60

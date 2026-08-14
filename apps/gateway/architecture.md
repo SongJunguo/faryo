@@ -54,7 +54,8 @@ establish reverse tunnels to it.
   merged Session History display budget.
 - Login cookie: uses the Faryo cookie name.
 - Browser sessions use a host-only `__Host-` cookie with `Secure`, `HttpOnly`,
-  `SameSite=Strict`, and a 12-hour absolute lifetime.
+  `SameSite=Strict`, and a server-enforced absolute lifetime. The default is 12
+  hours; private `FARYO_GATEWAY_SESSION_HOURS` configuration accepts `1`–`168`.
 - Owner tokens: private runtime config, never committed to Git.
 - Route auth: private runtime config, never committed to Git.
 - Upstream control headers: use Faryo header names.
@@ -63,8 +64,10 @@ establish reverse tunnels to it.
   public HTTPS path.
 - A tunnel by itself is routing, not identity policy. For an Internet-facing
   Gateway that can steer coding agents, protect the complete hostname with
-  Cloudflare Access (or an equivalent identity-aware proxy) and MFA. Gateway
-  login remains a separate application boundary behind it.
+  Cloudflare Access (or an equivalent identity-aware proxy), an exact identity
+  allowlist, an explicit session lifetime, and no broad bypass. Independent MFA
+  is a risk-based deployment choice; Gateway login remains a separate
+  application boundary behind it.
 
 ## 4. Verification
 

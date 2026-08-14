@@ -55,6 +55,12 @@ requires a token for the enabled route. Re-running it preserves an existing
 login config. Set `FARYO_GATEWAY_RESET_AUTH=1` only when intentionally rotating
 the Gateway login.
 
+The inner Faryo login defaults to a 12-hour absolute session. Set
+`FARYO_GATEWAY_SESSION_HOURS` in the private Gateway environment to an integer
+from 1 through 168 when a different operator-selected lifetime is required.
+Changing it does not alter Cloudflare Access sessions; the two layers are
+configured independently.
+
 Running-session limits are independent from history display. Configure them per
 enabled route with `FARYO_TXY_MAX_RUNNING`, `FARYO_HP_MAX_RUNNING`, or
 `FARYO_PC_MAX_RUNNING` (valid range `1`–`32`). Defaults are 8 for TXY and 4 for

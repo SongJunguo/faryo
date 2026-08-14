@@ -86,8 +86,16 @@ workspace = (
 inbox = owner.get("FARYO_OWNER_INBOX_DIR") or str(Path.home() / ".faryo" / "owner" / "data" / "inbox")
 route_upper = route.upper()
 max_running_defaults = {"txy": "8", "hp": "4", "pc": "4"}
+session_hours = existing.get("FARYO_GATEWAY_SESSION_HOURS") or "12"
+try:
+    parsed_session_hours = int(session_hours)
+except ValueError as exc:
+    raise ValueError("FARYO_GATEWAY_SESSION_HOURS must be an integer from 1 to 168") from exc
+if not 1 <= parsed_session_hours <= 168:
+    raise ValueError("FARYO_GATEWAY_SESSION_HOURS must be an integer from 1 to 168")
 values = {
     "FARYO_GATEWAY_USER": existing.get("FARYO_GATEWAY_USER") or "faryo",
+    "FARYO_GATEWAY_SESSION_HOURS": str(parsed_session_hours),
     "FARYO_PYTHON": os.environ["FARYO_PYTHON"],
     "FARYO_GATEWAY_ROUTES": route,
     f"FARYO_{route_upper}_OWNER_TOKEN": owner_token,
@@ -109,6 +117,7 @@ for key in ("FARYO_MCP_TOKEN", "FARYO_MCP_USER", "FARYO_MCP_CORS_ORIGIN", "FARYO
 order = [
     "FARYO_GATEWAY_USER",
     "FARYO_GATEWAY_PASSWORD_FILE",
+    "FARYO_GATEWAY_SESSION_HOURS",
     "FARYO_PYTHON",
     "FARYO_GATEWAY_ROUTES",
     f"FARYO_{route_upper}_OWNER_TOKEN",

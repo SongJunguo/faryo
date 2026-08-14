@@ -79,7 +79,7 @@ DeepSeek Harness 启发的现代 Agent 工作台：桌面端具有清晰、安�
 | Markdown/TeX | 本地离线加载；禁用原始 HTML；危险协议、路径越界和 XSS 继续被拒绝 |
 | 手机输入 | 保留 `visualViewport`、安全区、草稿恢复和输入框失焦后尺寸稳定 |
 | tmux/TUI | `FARYO_OWNER_PANE_WIDTH=0` 的语义保持不变，不执行 `resize-window` |
-| Gateway | CSRF、严格 Cookie、登录限速、CSP 和 Cloudflare Access 外层边界不弱化 |
+| Gateway | CSRF、严格 Cookie、登录限速、CSP 和 Cloudflare Access 精确身份/无 Bypass 外层边界不弱化；部署选定的 24 小时会话与关闭独立 MFA 保持不变 |
 
 ## 4. 目标信息架构
 
@@ -330,6 +330,9 @@ AST 管线，而不是继续以正则修补现有渲染器：
   临时上传、浏览器 profile、tmux 与 Owner 进程在测试后自动清理。
 - 网络离线和页面进入后台期间分别产生新 tmux 输出；网络/页面恢复后都自动补齐精确
   ACK，无需刷新。不存在的目标会话返回失败时，输入框和 `sessionStorage` 都保留草稿。
+- 手机与桌面匿名富文本截图使用真实 AST 表格和分段函数完成目检：公式保持横向数学
+  排版、表格不撑宽页面。普通聊天默认收起方向键/Confirm；真实终端审批提示出现时自动
+  展开，审批能力和 tmux 按键语义不变。
 - 持续变化的真实 Codex live 尾部在 390x844 与 1440x900 下均通过：初次展开位于
   最新输出，手动上翻后跨真实刷新保持坐标；修复了程序化 `toggle` 覆盖阅读位置的竞态。
 - 实际 Owner/Gateway 重启和 Owner HTTP/tmux smoke 后，4 个既有 Agent 窗口尺寸全部
@@ -371,6 +374,14 @@ Sessions、Session History 和 Projects。Gateway 的服务端分页、活动会
 - Gateway 未登录页面/静态资源返回 303，未登录 POST 返回 401；公网 tunnel 未登录
   请求由 Cloudflare Access 302 到 Access 登录入口。Owner 未认证 GET/POST 均为 401，
   Owner/Gateway 仅监听回环，私有配置与 Cookie secret 权限均为 600。
+- Cloudflare API 匿名化复核确认：Tunnel 健康且只回源 Gateway 回环端口；Access 仅有
+  两个精确邮箱 Allow 规则，无 `Everyone`、无 `Bypass`，应用会话为 24 小时，应用级
+  独立 MFA 已关闭；Email One-time PIN、Google 与 GitHub 均可选且不自动跳转到单一
+  提供商。该低摩擦策略是当前部署选择；Faryo 内层登录新增 `1`–`168` 小时的私有配置边界，
+  当前部署同样设为 24 小时，Owner Token 继续保留。
+- Gateway user service 重启后进程环境确认使用 24 小时；一次真实本地登录返回 303，
+  `__Host-` Cookie 的 `Max-Age=86400`，同时保持 `Secure`、`HttpOnly` 与
+  `SameSite=Strict`。重启前后 5 个既有 tmux 窗口尺寸均未变化。
 - 已执行已知邮箱、域名、历史 Token、私有主目录、会话名、私钥和常见云密钥模式扫描；
   未发现命中，匿名临时截图已经删除。
 

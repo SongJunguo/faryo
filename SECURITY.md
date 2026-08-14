@@ -14,9 +14,13 @@ Security fixes target the latest released version.
 
 - Bind Owner endpoints to `127.0.0.1`.
 - Expose public traffic through Gateway, not directly through Owner.
-- Put an identity-aware access proxy with MFA in front of the entire public
-  Gateway hostname. Cloudflare Tunnel alone provides connectivity, not user
-  authentication. Avoid broad `Everyone` or `Bypass` policies.
+- Put an identity-aware access proxy in front of the entire public Gateway
+  hostname. Cloudflare Tunnel alone provides connectivity, not user
+  authentication. Allow only exact identities or a small managed group, choose
+  the session lifetime deliberately, and avoid broad `Everyone` or `Bypass`
+  policies. MFA is strongly recommended for higher-risk deployments, but Faryo
+  does not require independent MFA; deployments that disable it should retain
+  the exact allowlist and the independent Faryo password layer.
 - Keep the Faryo password as an independent application layer behind the access
   proxy. Use a unique password of at least 16 characters.
 - Rate-limit public Gateway login at the edge, for example with Caddy,

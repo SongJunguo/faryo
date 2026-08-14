@@ -34,7 +34,7 @@
 | 网页输入可靠提交 | **P0 已完成并推送** | 消息 ID 幂等、粘贴/Enter 确认、失败草稿保留和 TUI 草稿冲突保护均通过 |
 | 结构化消息实时更新 | **P0 已完成并推送** | 最终内容用结构化数据；运行中显示脱敏 tmux live 尾部，结束后自动收敛 |
 | 本机开机自启 | 已完成 | user timer 已启用，`Linger=yes`；停止 Owner 后的自动恢复测试通过 |
-| 手机/Gateway/隧道 | 已部署 | Gateway 与 Owner 均仅监听回环地址；公网主路径位于受限 Cloudflare Access 外层，仓库不保存允许身份或域名 |
+| 手机/Gateway/隧道 | 已部署 | Gateway 与 Owner 均仅监听回环地址；公网主路径位于精确身份限制的 Cloudflare Access 外层，采用 24 小时会话且关闭独立 MFA；仓库不保存允许身份或域名 |
 
 已推送的个人 fork 提交：
 
@@ -44,6 +44,10 @@
 - `1892a1d`：可靠输入、实时更新、安全 Markdown 与离线 KaTeX。
 - `76d5097`：加固结构化 Codex 公式来源与通用公式回归样例。
 - `89eb9aa`：以 AST/KaTeX/Shiki 和稳定块对账替换旧 Markdown/数学双实现。
+- `d8681d7`：完成手机优先工作台、桌面阅读主轴和发布浏览器检查。
+- `2a47821`：补齐研究常用语言的按需 Shiki 浏览器高亮。
+- `50a118e`：增加匿名精确投递、附件、恢复与 TUI 尺寸浏览器矩阵。
+- `e50d899`：普通聊天收起低频终端按键，真实审批提示按需展开。
 
 ## 阶段 1：可靠输入提交（P0，已完成）
 
@@ -161,6 +165,8 @@ Access（或仅可信设备可达的私网 VPN）作为外层身份策略，不�
   SHA-256 ACK 验证一次提交；ACK 总数严格匹配，无截断、无重复、无需刷新。
 - 隔离临时 inbox 的真实浏览器附件上传与引用提交通过；断网和页面后台期间的输出在恢复
   后自动补齐，缺失会话的失败发送保留输入框与 `sessionStorage` 草稿。
+- 匿名手机/桌面富文本截图以真实 AST 公式表格和分段函数完成目检；普通聊天收起低频
+  终端按键，真实审批提示自动展开方向键与 Confirm，并纳入可重复浏览器矩阵。
 - 同一完整矩阵在已部署 Owner 的 390x844 和 1440x900 视口通过；Owner/Gateway 重启
   前后 4 个既有 Agent tmux 窗口尺寸完全不变。
 - Chrome 390x844 深色与 1440x900 浅色匿名夹具通过 GFM、分段公式、五行公式表、
@@ -183,9 +189,10 @@ Access（或仅可信设备可达的私网 VPN）作为外层身份策略，不�
 - Gateway 用户级 systemd 服务已完成启用、重启与健康检查；登录 Cookie、CSRF、登录限速和浏览器安全头均有回归覆盖。
 - 现有命名 Cloudflare Tunnel 在保留原有路由的前提下增加独立 Faryo hostname；公网 TLS、登录、真实结构化 Markdown/KaTeX 和一次性测试会话输入提交均通过。
 - 公网验证只使用通用测试文本；仓库中不记录真实域名、Token、密码、会话名、对话内容或本机绝对路径。
-- Cloudflare Tunnel 负责连通，不等于 Cloudflare Access。公网入口必须另行配置覆盖完整 hostname 的精确 Access 用户/组规则与 MFA，并保留 Faryo 登录作为内层认证。
+- Cloudflare Tunnel 负责连通，不等于 Cloudflare Access。当前公网入口以覆盖完整 hostname 的两个精确邮箱规则限制身份，Access 应用会话为 24 小时，应用级独立 MFA 按低摩擦使用需求关闭；Email One-time PIN、Google 和 GitHub 登录入口均可选且不强制跳转到单一提供商。无 `Everyone`、无 `Bypass`，并保留 Faryo 登录作为内层认证。真实邮箱和域名只存在于私有 Cloudflare 配置中。
 - 已增加隐私安全的公网验收脚本：它不接收或打印密码、Cookie、Token 与 hostname；只有确认请求先进入 Access 登录流程才返回通过，直接到达 Faryo 登录或无法判定都不会误报为安全。
-- Gateway 代码加固包含：所有浏览器写请求（含 Owner 代理）使用会话绑定 CSRF、登录限速使用可信代理提供的单值客户端地址、`__Host-` 严格 Cookie 与 12 小时绝对期限、nonce CSP 及已有安全响应头。Agent 权限策略仍由操作者决定，Faryo 不强制降低 Codex/Claude 权限。
+- Gateway 代码加固包含：所有浏览器写请求（含 Owner 代理）使用会话绑定 CSRF、登录限速使用可信代理提供的单值客户端地址、`__Host-` 严格 Cookie、nonce CSP 及已有安全响应头。内层登录期限现可由私有 `FARYO_GATEWAY_SESSION_HOURS` 在 `1`–`168` 小时内配置，默认 12 小时；当前个人部署与 Access 一致设为 24 小时。Agent 权限策略仍由操作者决定，Faryo 不强制降低 Codex/Claude 权限。
+- Gateway user service 已以私有 24 小时配置重启；真实本地登录响应验证 `Max-Age=86400`，且 `Secure`、`HttpOnly`、`SameSite=Strict` 属性保持不变。该重启未改变任何既有 tmux 窗口尺寸。
 - Gateway 首页已拆成两个独立区域：`Active Sessions` 始终显示所有实际运行 Codex/Claude 的 tmux（包括桌面直接启动的会话），`Session History` 排除活动项、独立滚动，并由服务端按 10 条一页提供 Previous/Next 和页码直达。只有 Faryo 管理的会话提供远程关闭，桌面 tmux 仅可打开查看，避免误关。
 - 运行会话上限与历史显示数量解耦；单机 TXY 默认允许 8 个存活 Agent TUI，并可通过私有 `FARYO_TXY_MAX_RUNNING` 在 1–32 范围内调整。
 

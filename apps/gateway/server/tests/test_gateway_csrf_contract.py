@@ -18,6 +18,7 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
+from unittest import mock
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
 SERVER_PATH = REPO_ROOT / "apps" / "gateway" / "server" / "server.py"
@@ -177,7 +178,7 @@ class GatewayCsrfContractTest(unittest.TestCase):
         finally:
             conn.close()
 
-    def test_auth_cookie_is_short_lived_host_only_and_strict(self) -> None:
+    def test_auth_cookie_defaults_to_twelve_hours_host_only_and_strict(self) -> None:
         handler = object.__new__(gateway.GatewayHandler)
         handler.server = self.server
 
@@ -189,6 +190,15 @@ class GatewayCsrfContractTest(unittest.TestCase):
         self.assertIn("Secure", cookie)
         self.assertIn("SameSite=Strict", cookie)
         self.assertNotIn("Domain=", cookie)
+
+    def test_auth_cookie_honors_configured_twenty_four_hour_lifetime(self) -> None:
+        handler = object.__new__(gateway.GatewayHandler)
+        handler.server = self.server
+
+        with mock.patch.object(gateway, "COOKIE_MAX_AGE", 24 * 60 * 60):
+            cookie = handler.auth_cookie("tester")
+
+        self.assertIn("Max-Age=86400", cookie)
 
     def test_gateway_state_change_requires_csrf(self) -> None:
         status, data = self.request("POST", "/api/bridge-packages", {"title": "blocked"})

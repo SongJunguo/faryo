@@ -112,9 +112,12 @@ Cloudflare Tunnel and Cloudflare Access are separate controls. The tunnel makes
 the service reachable; it does not automatically add an Access policy. Because
 Gateway can steer terminal-backed agents, an Internet-facing deployment must
 protect the entire hostname with an Access application (or equivalent), an
-exact identity or group allow rule, and MFA. Do not use a broad `Everyone` or
-`Bypass` policy. Keep Faryo's own form login as the independent application
-layer behind Access.
+exact identity or group allow rule, an explicitly chosen session lifetime, and
+no broad `Everyone` or `Bypass` policy. MFA is recommended when the threat model
+requires higher assurance, but it is not a Faryo runtime requirement. If
+independent MFA is disabled for lower login friction, retain the exact allowlist
+and keep Faryo's own form login as the independent application layer behind
+Access.
 
 ## First Login
 
@@ -130,7 +133,10 @@ window, delete the now-stale initial-password file. Gateway runtime uses the
 password hash in `gateway-auth.json`, not the plaintext file.
 
 Changing the password invalidates older Faryo sessions. Browser sessions are
-host-only, strict same-site cookies with a 12-hour absolute lifetime.
+host-only, strict same-site cookies with a 12-hour default absolute lifetime.
+Set `FARYO_GATEWAY_SESSION_HOURS` to an integer from 1 through 168 in the private
+Gateway environment to choose another lifetime. This deployment option is
+independent from the Cloudflare Access application session duration.
 
 ## Verification
 
@@ -155,9 +161,10 @@ public request reached Faryo's own login boundary directly. An inconclusive
 response is never treated as a pass.
 
 This check proves the unauthenticated outer gate is present. It cannot prove
-which identities are allowed, that MFA is required, or that no `Bypass` policy
-exists; verify those policy settings in the dashboard and complete one real
-private-browser login before declaring the Access layer ready.
+which identities are allowed, the configured session lifetime or MFA posture,
+or that no `Bypass` policy exists; verify those policy settings in the dashboard
+and complete one real private-browser login before declaring the Access layer
+ready.
 
 Expected results:
 
