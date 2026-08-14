@@ -1,8 +1,8 @@
 # Faryo 个人 Fork 完善路线图
 
-更新时间：2026-08-12
+更新时间：2026-08-15
 
-当前分支：`katex-feature`
+当前分支：`feature/deepseek-inspired-ui`
 
 个人仓库：`origin`（`SongJunguo/faryo`）
 
@@ -29,12 +29,12 @@
 | 结构化公式来源 | 已完成并提交 | 公式不再依赖有损的 tmux 屏幕文本 |
 | tmux 桌面换行 | 已完成并提交 | Owner 默认宽度为 0，不执行尺寸调整；Codex 窗口始终由真实 tmux 客户端决定 |
 | 公式版式 | 已完成并提交 | 分段函数、范数和块公式已经过 Chrome/Edge 验证 |
-| KaTeX 本地化 | 已完成并推送 | 本地 JS、CSS、字体和许可证已通过离线浏览器检查 |
-| 安全 Markdown | 已完成并推送 | markdown-it、公式保护、XSS 用例和浏览器回归通过 |
+| KaTeX 本地化 | 已完成 | KaTeX 0.18.4 已打入 AST bundle；CSS、字体和许可证继续离线提供 |
+| 安全 Markdown | AST v2 已实现，发布回归中 | 单一 micromark/mdast/GFM/math 管线、Shiki 按需高亮和稳定块 DOM 对账已接入；旧实现已移除 |
 | 网页输入可靠提交 | **P0 已完成并推送** | 消息 ID 幂等、粘贴/Enter 确认、失败草稿保留和 TUI 草稿冲突保护均通过 |
 | 结构化消息实时更新 | **P0 已完成并推送** | 最终内容用结构化数据；运行中显示脱敏 tmux live 尾部，结束后自动收敛 |
 | 本机开机自启 | 已完成 | user timer 已启用，`Linger=yes`；停止 Owner 后的自动恢复测试通过 |
-| 手机/Gateway/隧道 | 已部署，身份层待加固 | Gateway 与 Owner 均仅监听回环地址；公网主路径已验证，但 Cloudflare Access + MFA 尚需配置 |
+| 手机/Gateway/隧道 | 已部署 | Gateway 与 Owner 均仅监听回环地址；公网主路径位于受限 Cloudflare Access 外层，仓库不保存允许身份或域名 |
 
 已推送的个人 fork 提交：
 
@@ -80,23 +80,28 @@
 - 页面断网/休眠后恢复能够自动补齐，不重复、不漏消息。
 - 结构化视图与 Raw/tmux 对同一 turn 的最终内容一致。
 
-## 阶段 3：Markdown 与离线公式资源（已完成）
+## 阶段 3：Markdown、离线公式与增量稳定块（AST v2 已实现，发布回归中）
 
 ### 渲染技术选择
 
-CommonMark 本身不定义 TeX 数学语法。成熟预览器通常组合 Markdown
-解析器、数学边界规则、KaTeX 或 MathJax，以及配套样式。Faryo 采用适合
-浏览器端部署的轻量组合：本地 `markdown-it` + 本地 KaTeX，并在普通
-Markdown 规则运行前保护数学块。Markdown Preview Enhanced 是完整的
-VS Code 扩展而非可直接嵌入的浏览器库，因此这里只借鉴其数学块优先解析
-原则，不引入与 Faryo 无关的编辑器、导出和执行功能。
+CommonMark 本身不定义 TeX 数学语法。旧实现用 Markdown 解析前保护公式、
+解析后再扫描 DOM，复杂表格、受损定界符和流式半成品会穿过多层启发式。
+当前功能分支已经改为与 DeepSeek Harness 同类的单一 AST 管线：
+`micromark -> mdast -> GFM/math nodes -> safe HTML -> KaTeX`。流式阶段
+只启用 GFM，最终结构化消息再启用 math；表格、代码、正文与公式因此由
+语法节点而不是正则猜测区分。生产端仍只加载仓库内预构建 bundle，不需要
+Node 运行时或 CDN。
 
 ### 工作项
 
-- 完成本地 `markdown-it` 与 KaTeX 资源打包，运行时不依赖 CDN。
+- 锁定 micromark/mdast/GFM/math/KaTeX 依赖、构建命令和完整许可证，运行时不依赖 CDN。
 - 支持标题、列表、强调、引用、代码、表格、链接、图片以及块级/行内公式。
 - 禁止原始 HTML 执行，拦截危险协议，并继续复用 Owner 的本地文件访问边界。
+- 最终验收后删除旧解析器、auto-render 和终端公式猜测链；回滚只依赖 Git 标签和备份分支。
 - 保持代码块中的 `$`、`\\(` 等内容为原文，不误渲染成公式。
+- 使用 Shiki JavaScript regex engine，高频语言预热、研究/系统语言按需加载，失败时
+  保持纯文本代码回退。
+- 只重建变化的 Compact Chat 块；稳定历史节点原样复用，内存渲染缓存最多 256 项。
 
 ### 验收标准
 
@@ -135,10 +140,10 @@ VS Code 扩展而非可直接嵌入的浏览器库，因此这里只借鉴其数
 
 ## 下一步
 
-本机与手机公网主路径均已完成。继续观察实际长对话中的输入与 live
-尾部。由于网页能够控制终端 Agent，Cloudflare Access + MFA（或仅可信设备
-可达的私网 VPN）是公网长期使用的必要外层身份策略，不能由 Tunnel 或
-Faryo 单密码替代。
+完成本功能分支的 Gateway 重启、代理静态资源、认证、隐私和更多视口回归，再推送
+个人 `origin`。继续观察实际长对话中的输入与 live 尾部。由于网页能够控制终端
+Agent，公网长期使用必须保留受限 Cloudflare Access（或仅可信设备可达的私网 VPN）
+作为外层身份策略，不能由 Tunnel 或 Faryo 单密码替代。
 
 ## 2026-08-12 验证记录
 
@@ -146,6 +151,15 @@ Faryo 单密码替代。
 - 输入失败路径：人为保留 TUI 草稿后，Chrome 收到冲突错误，输入框和 `sessionStorage` 草稿均未被清空。
 - 实时路径：独立 App Server 可在约 0.28 秒看到 TUI 新用户消息，但进行中的 shell turn 直到完成前没有结构化 item；因此采用“结构化最终内容 + 临时脱敏 tmux live 尾部”。Chrome 验证 live 面板自动出现并在完成后自动消失。
 - Markdown/公式：Node 单元测试、14 个 Owner Python 测试、26 个 Gateway 测试、包发布检查和 Owner smoke 全部通过。
+
+## 2026-08-15 AST v2 验证记录
+
+- AST 源码测试 9/9；稳定块单元测试覆盖 200 块历史追加时复用 200、仅创建 1。
+- Owner Python 20/20、Gateway Python 37/37、发布检查和 Owner HTTP/tmux smoke 通过。
+- Chrome 390x844 深色与 1440x900 浅色匿名夹具通过 GFM、分段公式、五行公式表、
+  CJK 粗体、代码隔离、Shiki TypeScript/Python、本地资源、XSS 和内部横向滚动检查。
+- 匿名网页发送成功/失败草稿、SSE 自动更新、手机/桌面 Live 滚动和既有 tmux 尺寸
+  不变均通过；未向真实会话注入测试消息。
 - 浏览器：Chrome 与 Edge 本地资源测试通过；分段函数、范数和至少两行矩阵结构的精确 KaTeX 检查通过。
 - 部署：`faryo-owner-keepalive.timer` 已启用；主动停止 Owner 后，keepalive 成功使用专用 Conda 环境恢复服务。
 - 发布：功能提交 `1892a1d` 已推送到个人 `origin/katex-feature`；原作者 `upstream` 未修改。

@@ -15,3 +15,4 @@ apps/*/config/.token*
 **/00-system/workorders/
 .faryo/
 dist/
+node_modules/

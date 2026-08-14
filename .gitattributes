@@ -1,0 +1,4 @@
+# Generated Shiki grammars contain significant literal tabs/form-feeds inside
+# JavaScript template strings. Trimming them would change tokenization data.
+apps/owner/local-tmux-owner/static/vendor/markdown-ast/highlight/*.js whitespace=-blank-at-eol
+apps/owner/local-tmux-owner/static/vendor/markdown-ast/highlight/chunks/*.js whitespace=-blank-at-eol

@@ -19,8 +19,8 @@
   const metaLineRe = /^\s*(gpt|o\d|claude)[\w.\- ]*·\s+/;
   const codexCompactRules = window.FaryoCodexCompactRules || {};
   const claudeCompactRules = window.FaryoClaudeCompactRules || {};
-  const mathRenderer = window.FaryoMath || {};
-  const markdownRenderer = window.FaryoMarkdown || {};
+  const markdownRenderer = window.FaryoMarkdownAst || {};
+  const stableBlocks = window.FaryoStableBlocks || {};
   const runtimeCompactRules = {
     userPromptRe: /^\s*›\s+/,
     compactBlocks: (text) => [{ kind: 'output', text: text || 'No output yet' }],
@@ -59,6 +59,8 @@
   let outputActivity = 0, outputActivityTimer = null, lastCaptureSignature = '', lastCapture = null;
   let outputMode = 'compact', fullLocked = false, fullRefreshTimer = null, preserveErrorUntil = 0, seenInitialPageShow = false, needsConfirmUI = false, errorTimer = null, currentPromptTip = '';
   let compactOutputSources = [];
+  let markdownRenderRevision = 0, highlighterRenderFrame = 0;
+  const markdownHtmlCache = new Map();
   let pendingAttachments = [];
   const routeMatch = location.pathname.match(/^\/(hp|pc|txy)(?:\/|$)/);
   const routeBase = routeMatch ? `/${routeMatch[1]}` : '';
@@ -68,6 +70,7 @@
   let selectedSession = params.get('session') || '';
   let submitInFlight = false, pendingSubmission = null;
   let activeSurfacePanel = null, panelReturnFocus = null;
+  const restoringLivePanels = new WeakSet();
 
   function setWorkbenchInert(inert) {
     for (const element of [document.querySelector('header'), outputWrap, document.querySelector('footer')]) {
@@ -181,10 +184,6 @@
   window.visualViewport?.addEventListener('scroll', syncKeyboardState);
   window.addEventListener('resize', syncKeyboardState);
   syncKeyboardState();
-  window.addEventListener('faryo-math-ready', () => {
-    if (lastCapture && outputMode === 'compact') renderOutput(lastCapture);
-  });
-
   function fitPromptTip(text) { return Array.from(text || '').length > 22 ? Array.from(text).slice(0, 21).join('') + '...' : text; }
   function setPromptTip(tip) { currentPromptTip = tip || PROMPT_TIPS[0]; promptInput.placeholder = fitPromptTip(currentPromptTip); promptInput.title = currentPromptTip; }
 
@@ -318,9 +317,17 @@
     const panel = output.querySelector('.compact-live-terminal');
     if (!panel) return;
     const expanded = resolvedLivePanelExpanded(state, selectedSession);
+    restoringLivePanels.add(panel);
     panel.open = expanded;
-    if (!expanded) return;
-    requestAnimationFrame(() => window.FaryoLiveScroll?.restore(panel.querySelector('pre'), state?.session === selectedSession ? state.scroll : null));
+    requestAnimationFrame(() => {
+      if (expanded) {
+        window.FaryoLiveScroll?.restore(
+          panel.querySelector('pre'),
+          state?.session === selectedSession ? state.scroll : null,
+        );
+      }
+      setTimeout(() => restoringLivePanels.delete(panel), 0);
+    });
   }
 
   outputWrap.addEventListener('scroll', updateBottomButton, { passive: true });
@@ -328,10 +335,31 @@
   output.addEventListener('toggle', (event) => {
     const panel = event.target.closest?.('.compact-live-terminal');
     if (!panel) return;
+    if (restoringLivePanels.has(panel)) {
+      restoringLivePanels.delete(panel);
+      return;
+    }
     persistLivePanelPreference(panel.dataset.session || selectedSession, panel.open);
     if (panel.open) requestAnimationFrame(() => window.FaryoLiveScroll?.restore(panel.querySelector('pre'), null));
   }, true);
   output.addEventListener('click', async (event) => {
+    const codeCopy = event.target.closest('.markdown-code-copy');
+    if (codeCopy) {
+      const text = codeCopy.closest('.markdown-code-block')?.querySelector('pre')?.textContent || '';
+      try {
+        await navigator.clipboard.writeText(text);
+        codeCopy.textContent = 'Copied';
+        codeCopy.setAttribute('aria-label', 'Code copied');
+        setTimeout(() => {
+          if (!codeCopy.isConnected) return;
+          codeCopy.textContent = 'Copy';
+          codeCopy.setAttribute('aria-label', 'Copy code');
+        }, 1000);
+      } catch (_error) {
+        setError('Copy failed');
+      }
+      return;
+    }
     const copy = event.target.closest('.copy-output-block');
     if (copy) {
       const block = copy.closest('.compact-block.output');
@@ -354,6 +382,17 @@
       showImageLightbox(markdownImage.currentSrc || markdownImage.src || '', markdownImage.alt || 'Image preview');
       return;
     }
+  });
+  window.addEventListener('faryo-markdown-highlighter-ready', () => {
+    markdownRenderRevision += 1;
+    clearMarkdownRenderCache();
+    if (!lastCapture || outputMode !== 'compact' || highlighterRenderFrame) return;
+    highlighterRenderFrame = requestAnimationFrame(() => {
+      highlighterRenderFrame = 0;
+      const keepBottom = isNearBottom();
+      renderOutput(lastCapture);
+      if (keepBottom) scrollBottom(true);
+    });
   });
   document.addEventListener('keydown', (event) => {
     if (event.key !== 'Escape') return;
@@ -738,7 +777,7 @@
     restorePromptDraft();
     autosize();
     updateSendVisibility();
-    history.replaceState(null, '', `${next.pathname}${next.search}${location.hash}`); sessionMenu.classList.add('hidden'); resetRefreshState(); closeEventStream(); lastCaptureSignature = ''; refreshStatus({ silent: true }).catch(handleBackgroundError); refreshCapture(currentCaptureLines(), { silent: true }).catch(handleBackgroundError); if (outputMode === 'compact') startEventStream();
+    history.replaceState(null, '', `${next.pathname}${next.search}${location.hash}`); sessionMenu.classList.add('hidden'); resetRefreshState(); clearMarkdownRenderCache(); closeEventStream(); lastCaptureSignature = ''; refreshStatus({ silent: true }).catch(handleBackgroundError); refreshCapture(currentCaptureLines(), { silent: true }).catch(handleBackgroundError); if (outputMode === 'compact') startEventStream();
   }
 
   function cachedWorkbench() {
@@ -803,6 +842,38 @@
     return ownerToken ? scoped + (scoped.includes('?') ? '&' : '?') + `token=${encodeURIComponent(ownerToken)}` : scoped;
   }
 
+  function clearMarkdownRenderCache() {
+    markdownHtmlCache.clear();
+  }
+
+  function renderMarkdownSegment(source, mode) {
+    const text = String(source || '');
+    const cacheable = typeof stableBlocks.fingerprint === 'function';
+    const cacheKey = cacheable
+      ? `${markdownRenderRevision}:${mode}:${text.length}:${stableBlocks.fingerprint(text)}`
+      : '';
+    const cached = cacheKey ? markdownHtmlCache.get(cacheKey) : null;
+    if (cached?.source === text) {
+      markdownHtmlCache.delete(cacheKey);
+      markdownHtmlCache.set(cacheKey, cached);
+      return cached.html;
+    }
+    const html = markdownRenderer.render(text, {
+      localFileHref: (path, line = 0, column = 0) => {
+        const location = `/api/local-file/view?path=${encodeURIComponent(path)}${line ? `&line=${line}` : ''}${column ? `&column=${column}` : ''}`;
+        return routeBase + authenticatedApiPath(location);
+      },
+      localImageHref: (path) => routeBase + authenticatedApiPath(`/api/local-image?path=${encodeURIComponent(path)}`),
+    }, { mode });
+    if (cacheKey) {
+      markdownHtmlCache.set(cacheKey, { source: text, html });
+      while (markdownHtmlCache.size > 256) {
+        markdownHtmlCache.delete(markdownHtmlCache.keys().next().value);
+      }
+    }
+    return html;
+  }
+
   const imagePathRe = /\.(?:jpe?g|png|webp|gif|heic|heif)$/i;
   const filePathRe = /\.(?:md|txt|json|csv|rtf|pdf|docx?|xlsx?|pptx?|odt|odp|ods|bash|c|cc|cfg|cpp|css|go|h|hpp|html|ini|java|js|jsx|lean|log|py|rs|sh|sql|tex|toml|ts|tsx|xml|ya?ml|zsh)$/i;
 
@@ -848,23 +919,16 @@
     return `<a class="file-link" href="${escapeHtml(href)}">File ${escapeHtml(label)}</a>`;
   }
 
-  function renderTextWithFiles(text, mathOptions = {}) {
+  function renderTextWithFiles(text, renderOptions = {}) {
     const originalLines = String(text || '').split('\n');
-    const prepared = typeof mathRenderer.prepareText === 'function' ? mathRenderer.prepareText(text, mathOptions) : String(text || '');
-    const preparedLines = prepared.split('\n');
     if (typeof markdownRenderer.render === 'function' && markdownRenderer.ready?.()) {
       const rendered = [];
       let markdownLines = [];
       let fenceChar = '';
       const flushMarkdown = () => {
         if (!markdownLines.length) return;
-        rendered.push(`<div class="markdown-body">${markdownRenderer.render(markdownLines.join('\n'), {
-          localFileHref: (path, line = 0, column = 0) => {
-            const location = `/api/local-file/view?path=${encodeURIComponent(path)}${line ? `&line=${line}` : ''}${column ? `&column=${column}` : ''}`;
-            return routeBase + authenticatedApiPath(location);
-          },
-          localImageHref: (path) => routeBase + authenticatedApiPath(`/api/local-image?path=${encodeURIComponent(path)}`),
-        })}</div>`);
+        const mode = renderOptions.mode === 'streaming' ? 'streaming' : 'settled';
+        rendered.push(`<div class="markdown-body">${renderMarkdownSegment(markdownLines.join('\n'), mode)}</div>`);
         markdownLines = [];
       };
       originalLines.forEach((line, index) => {
@@ -875,7 +939,7 @@
           flushMarkdown();
           rendered.push(special);
         } else {
-          markdownLines.push(preparedLines[index] ?? line);
+          markdownLines.push(line);
         }
         if (fenceMatch) {
           const char = fenceMatch[1][0];
@@ -886,7 +950,7 @@
       flushMarkdown();
       return rendered.join('');
     }
-    return originalLines.map((line, index) => renderImageLine(line) || renderFileLine(line) || escapeHtml(preparedLines[index] ?? line)).join('\n');
+    return originalLines.map((line) => renderImageLine(line) || renderFileLine(line) || escapeHtml(line)).join('\n');
   }
 
   function compactRulesForCapture(capture) {
@@ -900,19 +964,82 @@
     };
   }
 
-  function renderCompactOutput(text, rules, mathOptions = {}) {
+  function renderCompactOutput(text, rules, renderOptions = {}) {
+    const mode = renderOptions.mode === 'streaming' ? 'streaming' : 'settled';
+    const rawBlocks = rules.compactBlocks(text);
+    if (!rawBlocks.length) rawBlocks.push({ kind: 'output', text: 'No output yet' });
+    const models = typeof stableBlocks.plan === 'function'
+      ? stableBlocks.plan(rawBlocks, { mode, revision: markdownRenderRevision, tailCount: 2 })
+      : rawBlocks.map((block, index) => ({
+        ...block,
+        kind: String(block.kind || 'output'),
+        text: String(block.text ?? ''),
+        key: `fallback-${index}`,
+        signature: `fallback-${index}-${String(block.text ?? '')}`,
+        stable: false,
+      }));
     compactOutputSources = [];
-    output.innerHTML = rules.compactBlocks(text).map((block) => {
-      if (block.kind === 'process') return `<section class="compact-process-line">${escapeHtml(rules.processSummaryCard(block.text))}</section>`;
-      if (block.kind === 'status') return `<section class="compact-status-line">${escapeHtml(block.text)}</section>`;
-      if (block.kind === 'plan') return renderPlanBlock(block.text);
-      const sourceIndex = block.kind === 'output' ? compactOutputSources.push(block.text) - 1 : -1;
-      const sourceAttr = sourceIndex >= 0 ? ` data-source-index="${sourceIndex}"` : '';
-      return `<section class="compact-block ${block.kind}"${sourceAttr}>${renderTextWithFiles(block.text, mathOptions)}</section>`;
-    }).join('') || '<section class="compact-block output">No output yet</section>';
+    for (const model of models) {
+      model.sourceIndex = model.kind === 'output' ? compactOutputSources.push(model.text) - 1 : -1;
+    }
+    const createNode = (model) => {
+      if (model.kind === 'process') {
+        const node = document.createElement('section');
+        node.className = 'compact-process-line';
+        node.textContent = rules.processSummaryCard(model.text);
+        return node;
+      }
+      if (model.kind === 'status') {
+        const node = document.createElement('section');
+        node.className = 'compact-status-line';
+        node.textContent = model.text;
+        return node;
+      }
+      if (model.kind === 'plan') {
+        const template = document.createElement('template');
+        template.innerHTML = renderPlanBlock(model.text);
+        return template.content.firstElementChild;
+      }
+      const node = document.createElement('section');
+      const kindClass = /^[A-Za-z0-9_-]+$/.test(model.kind) ? model.kind : 'output';
+      node.className = `compact-block ${kindClass}`;
+      node.innerHTML = renderTextWithFiles(model.text, renderOptions);
+      return node;
+    };
+    let metrics;
+    if (typeof stableBlocks.reconcile === 'function') {
+      metrics = stableBlocks.reconcile(output, models, createNode);
+    } else {
+      const fragment = document.createDocumentFragment();
+      for (const model of models) fragment.appendChild(createNode(model));
+      output.replaceChildren(fragment);
+      metrics = { created: models.length, reused: 0, removed: 0, stable: 0 };
+    }
+    models.forEach((model, index) => {
+      const node = output.children[index];
+      if (!node) return;
+      if (model.sourceIndex >= 0) node.dataset.sourceIndex = String(model.sourceIndex);
+      else delete node.dataset.sourceIndex;
+    });
     const blocks = output.querySelectorAll('.compact-block.output');
-    blocks[blocks.length - 1]?.insertAdjacentHTML('beforeend', '<button class="copy-output-block" type="button" aria-label="Copy this output" title="Copy this output">⧉</button>');
-    mathRenderer.renderOutput?.(output);
+    blocks.forEach((block, index) => {
+      const existing = block.querySelector(':scope > .copy-output-block');
+      if (index !== blocks.length - 1) {
+        existing?.remove();
+        return;
+      }
+      if (existing) return;
+      const button = document.createElement('button');
+      button.className = 'copy-output-block';
+      button.type = 'button';
+      button.setAttribute('aria-label', 'Copy this output');
+      button.title = 'Copy this output';
+      button.textContent = '⧉';
+      block.appendChild(button);
+    });
+    output.dataset.compactCreated = String(metrics.created);
+    output.dataset.compactReused = String(metrics.reused);
+    output.dataset.compactStable = String(metrics.stable);
   }
 
   function renderPlainOutput(text, rules) {
@@ -942,15 +1069,18 @@
     needsConfirmUI = hasConfirmUI(text, rules);
     updateStatusLineAutoExpand();
     output.classList.toggle('compact-blocks', outputMode === 'compact');
-    if (outputMode === 'compact') renderCompactOutput(text, rules, { terminal: capture.captureSource !== 'codex-app-server' });
+    if (outputMode === 'compact') {
+      renderCompactOutput(text, rules, {
+        mode: capture.captureSource === 'codex-app-server' ? 'settled' : 'streaming',
+      });
+    }
     else if (capture.html) output.innerHTML = decorateMetaLines(capture.html, text);
     else renderPlainOutput(text, rules);
     if (outputMode === 'compact' && capture.agentSource === 'codex-cli' && capture.captureSource !== 'codex-app-server') {
       output.insertAdjacentHTML('afterbegin', '<section class="compact-capture-warning" role="status">Structured Codex history is unavailable. Showing a terminal fallback; Markdown and formulas may be incomplete.</section>');
     }
     if (outputMode === 'compact' && capture.agentRunning && capture.liveText) {
-      const liveOpen = resolvedLivePanelExpanded(liveStateSnapshot, selectedSession) ? ' open' : '';
-      output.insertAdjacentHTML('beforeend', `<details class="compact-live-terminal" data-session="${escapeHtml(selectedSession || 'default')}"${liveOpen}><summary class="compact-live-title"><span class="live-dot"></span><span>Live from tmux</span><span class="compact-live-state">Agent working</span></summary><pre>${escapeHtml(String(capture.liveText))}</pre></details>`);
+      output.insertAdjacentHTML('beforeend', `<details class="compact-live-terminal" data-session="${escapeHtml(selectedSession || 'default')}"><summary class="compact-live-title"><span class="live-dot"></span><span>Live from tmux</span><span class="compact-live-state">Agent working</span></summary><pre>${escapeHtml(String(capture.liveText))}</pre></details>`);
     }
     restoreLiveTerminalState(liveStateSnapshot);
   }

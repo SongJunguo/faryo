@@ -16,6 +16,7 @@ const privacySafe = process.env.FARYO_SMOKE_PRIVACY_SAFE === '1';
 const expectStructured = process.env.FARYO_SMOKE_EXPECT_STRUCTURED === '1';
 const debugLayout = process.env.FARYO_SMOKE_DEBUG_LAYOUT === '1';
 const checkOwnerLayout = process.env.FARYO_SMOKE_CHECK_OWNER_LAYOUT === '1';
+const checkAstFixture = process.env.FARYO_SMOKE_CHECK_AST_FIXTURE === '1';
 const expectedLivePanelState = process.env.FARYO_SMOKE_EXPECT_LIVE_PANEL_STATE || '';
 const viewportWidth = Number(process.env.FARYO_SMOKE_VIEWPORT_WIDTH || 0);
 const viewportHeight = Number(process.env.FARYO_SMOKE_VIEWPORT_HEIGHT || 0);
@@ -37,6 +38,42 @@ const loginPasswordFile = process.env.FARYO_SMOKE_LOGIN_PASSWORD_FILE || '';
 const loginPassword = loginPasswordFile ? (await readFile(loginPasswordFile, 'utf8')).trim() : '';
 const hostResolverRules = process.env.FARYO_SMOKE_HOST_RESOLVER_RULES || 'MAP * ~NOTFOUND, EXCLUDE 127.0.0.1';
 const chromeBin = process.env.CHROME_BIN || '/usr/bin/google-chrome';
+const astFence = String.fromCharCode(96).repeat(3);
+const astFixtureSource = [
+  '# Generic control example',
+  '',
+  '**注意：**内容继续。',
+  '',
+  '| Operator | Recommendation |',
+  '| --- | --- |',
+  '| \\(\\Psi_i=\\eta_i\\) | exact recovery with a deliberately long explanation |',
+  '| \\(\\Psi_i=e_i\\) | standard integral action |',
+  '| \\(\\Psi_i=\\vartheta_{i,\\nu_i}(k_i)e_i\\) | bounded scheduling |',
+  '| \\(\\Psi_i=\\delta_i\\tanh(e_i/\\gamma_i)\\) | nonlinear gain |',
+  '| \\(\\Psi_i=e_i-\\sigma_i z_i\\) | leakage mechanism |',
+  '',
+  '\\[',
+  'p(s)=\\begin{cases}',
+  'a,&0\\le s<s_0,\\\\',
+  'b,&s\\ge s_0,',
+  '\\end{cases}',
+  '\\]',
+  '',
+  astFence + 'ts',
+  'const answer: number = 42',
+  astFence,
+  '',
+  astFence + 'python',
+  'def square(value):',
+  '    return value ** 2',
+  astFence,
+  '',
+  astFence + 'text',
+  '$HOME and \\(not_math\\)',
+  astFence,
+  '',
+  '<img src=x onerror="globalThis.pwned=1">',
+].join('\n');
 if (!targetUrl) {
   throw new Error('FARYO_SMOKE_URL is required');
 }
@@ -203,7 +240,7 @@ try {
           .filter((url) => /(?:\\/vendor\\/katex\\/|cdn\\.jsdelivr\\.net\\/npm\\/katex)/i.test(url));
         const markdownAssetUrls = performance.getEntriesByType('resource')
           .map((entry) => String(entry.name || ''))
-          .filter((url) => /(?:\\/vendor\\/markdown-it\\/|cdn\\.jsdelivr\\.net\\/npm\\/markdown-it)/i.test(url));
+          .filter((url) => /(?:\\/vendor\\/markdown-ast\\/|cdn\\.jsdelivr\\.net\\/npm\\/(?:micromark|mdast|katex))/i.test(url));
         const displayLayout = [...(output?.querySelectorAll('.katex-display') || [])].map((display) => {
           const formula = display.querySelector(':scope > .katex');
           const block = display.closest('.compact-block');
@@ -276,6 +313,13 @@ try {
           tableKatexCount,
           captureSource: String(output?.dataset.captureSource || ''),
           captureWarningCount: output?.querySelectorAll('.compact-capture-warning').length || 0,
+          stableBlockState: {
+            apiReady: typeof window.FaryoStableBlocks?.reconcile === 'function',
+            keyedCount: output?.querySelectorAll('[data-faryo-block-key]').length || 0,
+            created: Number(output?.dataset.compactCreated || -1),
+            reused: Number(output?.dataset.compactReused || -1),
+            stable: Number(output?.dataset.compactStable || -1),
+          },
           viewport: { width: innerWidth, height: innerHeight },
           pageHorizontalOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth + 1,
           outputHorizontalOverflow: Boolean(outputWrap && outputWrap.scrollWidth > outputWrap.clientWidth + 1),
@@ -309,10 +353,14 @@ try {
       returnByValue: true,
     });
     state = result.result?.value || {};
-    if (skipRenderChecks ? state.domReady : state.ready) break;
+    if (skipRenderChecks
+      ? state.domReady && (!checkOwnerLayout || state.stableBlockState?.keyedCount >= 1)
+      : state.ready) break;
   }
 
-  if (!(skipRenderChecks ? state.domReady : state.ready)) {
+  if (!(skipRenderChecks
+    ? state.domReady && (!checkOwnerLayout || state.stableBlockState?.keyedCount >= 1)
+    : state.ready)) {
     throw new Error(`KaTeX did not appear in the live Faryo DOM: ${JSON.stringify(state)}`);
   }
   if (checkOwnerLayout) {
@@ -330,6 +378,9 @@ try {
     }
     if (prompt.height < 82) throw new Error(`Owner composer is unexpectedly short: ${JSON.stringify(prompt)}`);
     if (layout.outputWidth > 752) throw new Error(`Owner reading column is too wide: ${JSON.stringify(layout)}`);
+    if (!state.stableBlockState?.apiReady || state.stableBlockState.keyedCount < 1 || state.stableBlockState.created < 0) {
+      throw new Error(`Owner did not use stable Compact Chat blocks: ${JSON.stringify(state.stableBlockState)}`);
+    }
     if (expectedLivePanelState) {
       const expectedOpen = expectedLivePanelState === 'open';
       if (!layout.livePanel || layout.livePanel.open !== expectedOpen) {
@@ -454,7 +505,7 @@ try {
       throw new Error(`KaTeX loaded a missing or external asset: ${JSON.stringify(state.katexAssetUrls)}`);
     }
     if (!state.markdownAssetsLocal) {
-      throw new Error(`markdown-it loaded a missing or external asset: ${JSON.stringify(state.markdownAssetUrls)}`);
+      throw new Error(`AST Markdown loaded a missing or external asset: ${JSON.stringify(state.markdownAssetUrls)}`);
     }
     for (const expected of expectedTex) {
       if (!state.displayLayout.some((item) => item.tex.includes(expected))) {
@@ -469,13 +520,131 @@ try {
     if (debugLayout) console.log(`faryo-browser-katex-layout=${JSON.stringify(state)}`);
   }
 
+  if (checkAstFixture) {
+    let fixtureState = {};
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      await delay(100);
+      const result = await send('Runtime.evaluate', {
+        expression: `(() => {
+          document.getElementById('faryo-ast-smoke-fixture')?.remove();
+          const fixture = document.createElement('section');
+          fixture.id = 'faryo-ast-smoke-fixture';
+          fixture.className = 'compact-block output markdown-body';
+          Object.assign(fixture.style, {
+            position: 'fixed',
+            left: '-200vw',
+            top: '0',
+            width: Math.min(740, Math.max(320, innerWidth - 20)) + 'px',
+            visibility: 'hidden',
+          });
+          fixture.innerHTML = window.FaryoMarkdownAst.render(${JSON.stringify(astFixtureSource)});
+          document.body.appendChild(fixture);
+          const table = fixture.querySelector('table');
+          const tableScroll = fixture.querySelector('.markdown-table-scroll');
+          const formulaCells = [...fixture.querySelectorAll('tbody tr td:first-child')];
+          const highlightedLanguages = [...fixture.querySelectorAll('.markdown-code-block')]
+            .filter((block) => block.querySelector('pre.shiki'))
+            .map((block) => block.querySelector('.markdown-code-language')?.textContent || '');
+          const assetUrls = performance.getEntriesByType('resource')
+            .map((entry) => String(entry.name || ''))
+            .filter((url) => /\\/vendor\\/markdown-ast\\/highlight\\//i.test(url));
+          const stableContainer = document.createElement('div');
+          const stableInitial = window.FaryoStableBlocks.plan([
+            { kind: 'user', text: 'one' },
+            { kind: 'output', text: 'two' },
+            { kind: 'user', text: 'three' },
+            { kind: 'output', text: 'four' },
+          ], { mode: 'settled', revision: 0, tailCount: 2 });
+          const makeStableNode = (model) => {
+            const node = document.createElement('section');
+            node.textContent = model.text;
+            return node;
+          };
+          const stableFirst = window.FaryoStableBlocks.reconcile(stableContainer, stableInitial, makeStableNode);
+          const stableOriginalNodes = [...stableContainer.children];
+          const stableAppended = window.FaryoStableBlocks.plan([
+            { kind: 'user', text: 'one' },
+            { kind: 'output', text: 'two' },
+            { kind: 'user', text: 'three' },
+            { kind: 'output', text: 'four' },
+            { kind: 'status', text: 'five' },
+          ], { mode: 'settled', revision: 0, tailCount: 2 });
+          const stableSecond = window.FaryoStableBlocks.reconcile(stableContainer, stableAppended, makeStableNode);
+          const state = {
+            ready: highlightedLanguages.includes('ts') && highlightedLanguages.includes('python'),
+            katexCount: fixture.querySelectorAll('.katex').length,
+            displayCount: fixture.querySelectorAll('.katex-display').length,
+            errorCount: fixture.querySelectorAll('.katex-error').length,
+            formulaCellCount: formulaCells.filter((cell) => cell.querySelectorAll('.katex').length === 1).length,
+            tableRows: fixture.querySelectorAll('tbody tr').length,
+            tableScrollable: Boolean(tableScroll && tableScroll.scrollWidth > tableScroll.clientWidth),
+            tableDisplay: table ? getComputedStyle(table).display : '',
+            codeBlockCount: fixture.querySelectorAll('.markdown-code-block').length,
+            highlightedLanguages,
+            codeMathCount: fixture.querySelectorAll('pre .katex').length,
+            cjkStrong: fixture.querySelector('strong')?.textContent || '',
+            rawHtmlExecuted: Boolean(fixture.querySelector('img[src="x"]') || globalThis.pwned),
+            pageHorizontalOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth + 1,
+            assetsLocal: assetUrls.length >= 2 && assetUrls.every((url) => new URL(url).origin === location.origin),
+            stableBlocks: {
+              first: stableFirst,
+              second: stableSecond,
+              identityPreserved: stableOriginalNodes.every((node, index) => stableContainer.children[index] === node),
+              frozenCount: stableContainer.querySelectorAll('[data-faryo-block-stable="true"]').length,
+            },
+          };
+          fixture.remove();
+          return state;
+        })()`,
+        returnByValue: true,
+      });
+      if (result.exceptionDetails) {
+        const message = result.exceptionDetails.exception?.description
+          || result.exceptionDetails.text
+          || 'unknown fixture evaluation error';
+        throw new Error('AST fixture evaluation failed: ' + message);
+      }
+      fixtureState = result.result?.value || {};
+      if (fixtureState.ready) break;
+    }
+    if (!fixtureState.ready) throw new Error('AST fixture highlighters did not become ready: ' + JSON.stringify(fixtureState));
+    if (fixtureState.katexCount !== 6 || fixtureState.displayCount !== 1 || fixtureState.errorCount !== 0) {
+      throw new Error('AST fixture math nodes were incorrect: ' + JSON.stringify(fixtureState));
+    }
+    if (fixtureState.tableRows !== 5 || fixtureState.formulaCellCount !== 5 || fixtureState.tableDisplay !== 'table') {
+      throw new Error('AST fixture table structure was incorrect: ' + JSON.stringify(fixtureState));
+    }
+    if (fixtureState.codeBlockCount !== 3 || fixtureState.codeMathCount !== 0 || fixtureState.cjkStrong !== '注意：') {
+      throw new Error('AST fixture Markdown structure was incorrect: ' + JSON.stringify(fixtureState));
+    }
+    if (fixtureState.rawHtmlExecuted || fixtureState.pageHorizontalOverflow || !fixtureState.assetsLocal) {
+      throw new Error('AST fixture crossed a security or layout boundary: ' + JSON.stringify(fixtureState));
+    }
+    if (fixtureState.stableBlocks?.first?.created !== 4
+      || fixtureState.stableBlocks?.second?.created !== 1
+      || fixtureState.stableBlocks?.second?.reused !== 4
+      || !fixtureState.stableBlocks?.identityPreserved
+      || fixtureState.stableBlocks?.frozenCount !== 3) {
+      throw new Error('Stable block fixture did not preserve finalized DOM: ' + JSON.stringify(fixtureState.stableBlocks));
+    }
+    if (viewportWidth > 0 && viewportWidth < 720 && !fixtureState.tableScrollable) {
+      throw new Error('AST fixture table did not scroll inside its mobile container: ' + JSON.stringify(fixtureState));
+    }
+    console.log('faryo-browser-ast-fixture=PASS markdown=GFM math=KaTeX highlight=Shiki');
+  }
+
   if (checkLiveScroll) {
     let liveScrollState = {};
     for (let attempt = 0; attempt < 100; attempt += 1) {
       await delay(100);
       const result = await send('Runtime.evaluate', {
         expression: `(() => {
-          const pane = document.querySelector('.compact-live-terminal pre');
+          const panel = document.querySelector('.compact-live-terminal');
+          if (panel && !panel.open) {
+            panel.open = true;
+            return { ready: false, opening: true };
+          }
+          const pane = panel?.querySelector('pre');
           if (!pane || pane.scrollHeight <= pane.clientHeight) return { ready: false };
           const maximum = pane.scrollHeight - pane.clientHeight;
           const target = Math.max(1, Math.floor(maximum / 3));
@@ -497,22 +666,32 @@ try {
     for (let attempt = 0; attempt < 120; attempt += 1) {
       await delay(100);
       const result = await send('Runtime.evaluate', {
-        expression: `(() => {
-          const pane = document.querySelector('.compact-live-terminal pre');
+        expression: `(async () => {
+          let pane = document.querySelector('.compact-live-terminal pre');
           const replaced = Boolean(pane && pane.dataset.faryoSmokeScroll !== 'waiting');
+          if (replaced) {
+            await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+            pane = document.querySelector('.compact-live-terminal pre');
+          }
           const target = Number(window.__faryoSmokeLiveScrollTarget || 0);
           return {
             replaced,
+            scrollTop: pane ? pane.scrollTop : -1,
+            maximum: pane ? Math.max(0, pane.scrollHeight - pane.clientHeight) : -1,
+            scrollHeight: pane ? pane.scrollHeight : -1,
+            clientHeight: pane ? pane.clientHeight : -1,
+            target,
             delta: pane ? Math.abs(pane.scrollTop - target) : -1,
           };
         })()`,
+        awaitPromise: true,
         returnByValue: true,
       });
       preserved = result.result?.value || {};
       if (preserved.replaced) break;
     }
     if (!preserved.replaced) throw new Error('Live from tmux did not refresh during the scroll test');
-    if (preserved.delta > 2 || preserved.delta < 0) throw new Error(`Live from tmux moved the reading position by ${preserved.delta}px`);
+    if (preserved.delta > 2 || preserved.delta < 0) throw new Error(`Live from tmux moved the reading position: ${JSON.stringify(preserved)}`);
     console.log('faryo-browser-live-scroll=PASS initial=latest manual=preserved');
   }
 

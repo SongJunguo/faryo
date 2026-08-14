@@ -54,8 +54,8 @@ release_checks() {
   for js_file in \
     "$ROOT/apps/owner/local-tmux-owner/static/compact-rules-codex.js" \
     "$ROOT/apps/owner/local-tmux-owner/static/compact-rules-claude.js" \
-    "$ROOT/apps/owner/local-tmux-owner/static/math-render.js" \
-    "$ROOT/apps/owner/local-tmux-owner/static/markdown-render.js" \
+    "$ROOT/apps/owner/local-tmux-owner/static/stable-blocks.js" \
+    "$ROOT/apps/owner/local-tmux-owner/static/vendor/markdown-ast/markdown-ast.min.js" \
     "$ROOT/apps/owner/local-tmux-owner/static/live-scroll.js" \
     "$ROOT/apps/shared/static/appearance.js" \
     "$ROOT/apps/owner/local-tmux-owner/static/app.js" \
@@ -63,14 +63,19 @@ release_checks() {
   do
     node --check "$js_file"
   done
-  node "$ROOT/apps/owner/local-tmux-owner/tests/math-render.test.js"
-  node "$ROOT/apps/owner/local-tmux-owner/tests/markdown-render.test.js"
+  while IFS= read -r js_file; do
+    node --check "$js_file"
+  done < <(find "$ROOT/apps/owner/local-tmux-owner/static/vendor/markdown-ast/highlight" -type f -name '*.js' -print | sort)
+  node "$ROOT/apps/owner/local-tmux-owner/tests/markdown-ast-bundle.test.js"
+  node "$ROOT/apps/owner/local-tmux-owner/tests/stable-blocks.test.js"
   node "$ROOT/apps/owner/local-tmux-owner/tests/live-scroll.test.js"
   node "$ROOT/apps/owner/local-tmux-owner/tests/compact-rules-codex.test.js"
   python3 -m unittest discover -s "$ROOT/apps/owner/local-tmux-owner/tests" -p 'test_*.py'
   python3 - "$ROOT" <<'PY'
 from pathlib import Path
+import json
 import plistlib
+import re
 import sys
 root = Path(sys.argv[1])
 index = (root / "apps/owner/local-tmux-owner/static/index.html").read_text(encoding="utf-8")
@@ -79,31 +84,42 @@ assert "compact-rules-codex.js" in index, "index.html must load compact-rules-co
 assert "compact-rules-claude.js" in index, "index.html must load compact-rules-claude.js"
 assert "compact-rules-codex.js" in gateway, "gateway must allow compact-rules-codex.js"
 assert "compact-rules-claude.js" in gateway, "gateway must allow compact-rules-claude.js"
-assert "math-render.js" in index, "index.html must load math-render.js"
-assert "math-render.js" in gateway, "gateway must allow math-render.js"
-assert "markdown-render.js" in index, "index.html must load markdown-render.js"
-assert "markdown-render.js" in gateway, "gateway must allow markdown-render.js"
+assert "stable-blocks.js" in index, "index.html must load stable-blocks.js"
+assert "stable-blocks.js" in gateway, "gateway must allow stable-blocks.js"
+assert "vendor/markdown-ast/markdown-ast.min.js" in index, "index.html must load the AST Markdown bundle"
+assert re.search(r'<script\s+type="module"\s+src="vendor/markdown-ast/highlight/highlight\.js\?', index), "index.html must load the Shiki module locally"
+assert '"vendor/markdown-ast/"' in gateway, "gateway must proxy AST Markdown assets"
 assert "live-scroll.js" in index, "index.html must load live-scroll.js"
 assert "live-scroll.js" in gateway, "gateway must allow live-scroll.js"
 assert "cdn.jsdelivr.net/npm/katex" not in index, "KaTeX must not require an external CDN"
 assert 'vendor/katex/katex.min.css?v=0.18.4' in index, "index.html must load local KaTeX CSS"
-assert 'vendor/katex/katex.min.js?v=0.18.4' in index, "index.html must load local KaTeX JS"
-assert 'vendor/katex/contrib/auto-render.min.js?v=0.18.4' in index, "index.html must load local KaTeX auto-render"
 assert '"vendor/katex/"' in gateway, "gateway must proxy local KaTeX assets"
 for relative in (
     "katex.min.css",
-    "katex.min.js",
-    "contrib/auto-render.min.js",
     "fonts/KaTeX_Main-Regular.woff2",
     "LICENSE",
 ):
     assert (root / "apps/owner/local-tmux-owner/static/vendor/katex" / relative).is_file(), f"missing vendored KaTeX asset: {relative}"
-assert "cdn.jsdelivr.net/npm/markdown-it" not in index, "Markdown must not require an external CDN"
-assert 'vendor/markdown-it/markdown-it.min.js?v=14.3.0' in index, "index.html must load local markdown-it"
-assert '"vendor/markdown-it/"' in gateway, "gateway must proxy local markdown-it assets"
-for relative in ("markdown-it.min.js", "LICENSE"):
-    assert (root / "apps/owner/local-tmux-owner/static/vendor/markdown-it" / relative).is_file(), f"missing vendored markdown-it asset: {relative}"
+assert "cdn.jsdelivr.net" not in index, "Markdown and math must not require an external CDN"
+assert "vendor/markdown-it/" not in index, "legacy markdown-it must not remain in the production page"
+assert "math-render.js" not in index, "legacy math DOM post-processing must not remain in the production page"
+for relative in ("markdown-ast.min.js", "THIRD_PARTY_NOTICES.md", "THIRD_PARTY_LICENSES.txt", "highlight/highlight.js", "highlight/manifest.json"):
+    assert (root / "apps/owner/local-tmux-owner/static/vendor/markdown-ast" / relative).is_file(), f"missing AST Markdown asset: {relative}"
+asset_root = root / "apps/owner/local-tmux-owner/static/vendor/markdown-ast"
+manifest = json.loads((asset_root / "highlight/manifest.json").read_text(encoding="utf-8"))
+assert manifest.get("schemaVersion") == 1, "unsupported Shiki asset manifest"
+assert manifest.get("entry") == "highlight/highlight.js", "unexpected Shiki entry"
+manifest_paths = [item.get("path", "") for item in manifest.get("files", [])]
+assert len(manifest_paths) == len(set(manifest_paths)) and manifest_paths, "Shiki manifest paths must be non-empty and unique"
+for relative in manifest_paths:
+    path = Path(relative)
+    assert path.parts and path.parts[0] == "highlight" and ".." not in path.parts and not path.is_absolute(), f"unsafe Shiki manifest path: {relative}"
+    assert (asset_root / path).is_file(), f"missing Shiki chunk: {relative}"
+for grammar in ("python", "latex", "lean", "matlab", "markdown", "yaml", "html", "css", "cpp", "c", "rust", "go", "java", "sql"):
+    assert any(Path(relative).name.startswith(grammar + "-") for relative in manifest_paths), f"missing lazy Shiki grammar: {grammar}"
+assert (root / "tools/markdown-engine/package-lock.json").is_file(), "AST Markdown build must have a lockfile"
 app = (root / "apps/owner/local-tmux-owner/static/app.js").read_text(encoding="utf-8")
+assert "stableBlocks.reconcile(output, models, createNode)" in app, "Compact Chat must reconcile stable DOM blocks"
 assert "headers['X-Owner-Token'] = ownerToken" in app, "Owner API calls must include the token header"
 assert "next.searchParams.set('token', ownerToken)" in app, "session switches must preserve direct Owner auth"
 with (root / "deploy/launchd/dev.faryo.owner.keepalive.plist").open("rb") as fh:

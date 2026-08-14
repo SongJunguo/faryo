@@ -1,0 +1,82 @@
+{
+  "schemaVersion": 1,
+  "entry": "highlight/highlight.js",
+  "files": [
+    {
+      "path": "highlight/chunks/c-Q3KGRNPY.js",
+      "bytes": 158
+    },
+    {
+      "path": "highlight/chunks/chunk-36MAVRY7.js",
+      "bytes": 803
+    },
+    {
+      "path": "highlight/chunks/chunk-AJO3WAUS.js",
+      "bytes": 49106
+    },
+    {
+      "path": "highlight/chunks/chunk-DEZJTDMJ.js",
+      "bytes": 23493
+    },
+    {
+      "path": "highlight/chunks/chunk-L6LTB5YO.js",
+      "bytes": 72178
+    },
+    {
+      "path": "highlight/chunks/cpp-UHLODA6V.js",
+      "bytes": 637680
+    },
+    {
+      "path": "highlight/chunks/css-HA3F423M.js",
+      "bytes": 158
+    },
+    {
+      "path": "highlight/chunks/go-B6KWWILT.js",
+      "bytes": 46917
+    },
+    {
+      "path": "highlight/chunks/html-7SAHR2YQ.js",
+      "bytes": 232522
+    },
+    {
+      "path": "highlight/chunks/java-CBDMFXZC.js",
+      "bytes": 27318
+    },
+    {
+      "path": "highlight/chunks/latex-FSWDVUAP.js",
+      "bytes": 89075
+    },
+    {
+      "path": "highlight/chunks/lean-W4S7WJLZ.js",
+      "bytes": 5912
+    },
+    {
+      "path": "highlight/chunks/markdown-UBJVWOUO.js",
+      "bytes": 59434
+    },
+    {
+      "path": "highlight/chunks/matlab-K7NZJJDN.js",
+      "bytes": 16185
+    },
+    {
+      "path": "highlight/chunks/python-LNCONMEX.js",
+      "bytes": 70051
+    },
+    {
+      "path": "highlight/chunks/rust-DMLDI4FH.js",
+      "bytes": 15168
+    },
+    {
+      "path": "highlight/chunks/sql-CLTWJ22S.js",
+      "bytes": 158
+    },
+    {
+      "path": "highlight/chunks/yaml-SWVWSJYD.js",
+      "bytes": 10605
+    },
+    {
+      "path": "highlight/highlight.js",
+      "bytes": 397176
+    }
+  ]
+}

@@ -21,10 +21,12 @@
 - `adee062`：手机全宽会话抽屉、详情面板、焦点与背景滚动管理。
 - `e7b3fe8`：按会话保存的可折叠 Live tmux；真实刷新下保持内层滚动。
 - `0be7a69`：确定以 AST 取代正则修补的 Markdown/TeX 技术路线。
+- `065ac45`：固定 Harness 审查结论、效果优先边界和大范围迁移策略。
 - 用户已授权在本功能分支进行大范围重构，并明确“效果和长期可维护性第一”；稳定
   分支、备份分支和固定标签承担回滚，迁移完成后生产代码不长期保留旧同功能实现。
-- 正在执行 Harness 技术审查与阶段 D：先建立单一成熟渲染核心，再处理流式稳定块、
-  按需代码高亮和长历史性能。
+- 阶段 D 的实现已进入发布回归：单一 AST 渲染核心、Shiki 按需高亮、稳定块 DOM
+  对账和 256 项有界内存缓存已接入，旧 Markdown/数学双实现已从运行时代码删除。
+- 当前优先收口阶段 E/G：Gateway 重新部署、认证与隐私检查、更多视口和公网路径回归。
 
 ## 1. 目标
 
@@ -253,13 +255,14 @@ AST 管线，而不是继续以正则修补现有渲染器：
 
 ### 阶段 D：成熟 Markdown/TeX 管线（P0）
 
-范围：`markdown-render.js`、`math-render.js`、本地依赖、渲染测试和许可证文件。
+范围：`tools/markdown-engine`、`vendor/markdown-ast`、`stable-blocks.js`、`app.js`、
+渲染测试、发布清单和许可证文件。
 
 工作项：
 
 - 以锁定依赖构建浏览器端 `micromark + mdast + GFM + math` bundle，并记录许可证、
   构建命令和 bundle 校验方式。
-- 新旧引擎在独立夹具中短期 A/B；新实现通过验收后删除旧生产脚本、依赖和分支逻辑。
+- 新旧引擎在独立夹具中完成短期对照；新实现通过验收后删除旧生产脚本、依赖和分支逻辑。
 - 建立明确的 `streaming` 与 `settled` 两种渲染模式。
 - `streaming` 对未闭合 Markdown、代码围栏和数学定界符采取保守显示，不闪现错误公式。
 - `settled` 完整解析 GFM、表格、链接、图片、代码块和 TeX。
@@ -269,10 +272,25 @@ AST 管线，而不是继续以正则修补现有渲染器：
   中文标点。
 - 复用 DeepSeek Harness 已验证的数学兼容思路，使 `\(...\)`、`\[...\]` 与标准
   remark-math 美元定界符进入同一种数学 AST 节点，不再依赖 DOM 后处理猜测。
-- 保留少量、显式标注的终端损伤修复，仅用于 Raw/tmux fallback；结构化 App Server
-  消息不得再经过宽泛的终端公式猜测。
-- A/B 比较现有 `markdown-it` 与新 AST 引擎的复杂样例、DOM、截图、包体和耗时；
-  正确性和视觉效果优先，包体只作为手机首屏优化指标。
+- Raw/tmux fallback 保守显示原始受损文本并给出来源提示，不再猜测缺失的公式边界；
+  结构化 App Server 消息不得经过终端公式修复。
+- 对照旧 `markdown-it` 与新 AST 引擎的复杂样例、DOM、包体和耗时；正确性和视觉
+  效果优先，包体只作为手机首屏优化指标。
+
+2026-08-15 实施结果：
+
+- `micromark/mdast + GFM + mathCompatibility + KaTeX 0.18.4` 已成为唯一生产管线；
+  raw HTML 文本化、URL 协议允许列表、本地文件回调和 `KaTeX trust:false` 均在 AST
+  renderer 内统一处理。
+- Shiki 使用 JavaScript regex engine；TypeScript、Shell、JSON 随入口加载，Python、
+  LaTeX、Lean、MATLAB、Markdown、YAML、HTML、CSS、C/C++、Rust、Go、Java、SQL
+  按需加载。失败时保留转义的纯代码，不影响正文。
+- AST 主 bundle 为 369,973 bytes，高亮入口为 397,176 bytes，其余语言按需拆分；
+  `highlight/manifest.json` 和发布检查保证安装包不漏 chunk，连续两次构建哈希一致。
+- Compact Chat 使用内容稳定键对账 DOM，冻结除末尾两块以外的顶层块；200 块匿名测试
+  在追加一块时复用原有 200 个节点，只创建 1 个新节点。
+- 已删除 `markdown-render.js`、`math-render.js`、markdown-it、KaTeX auto-render 和独立
+  KaTeX JS；回滚依靠固定标签/备份分支，不再维护同功能旧代码。
 
 验收：
 
@@ -297,6 +315,16 @@ AST 管线，而不是继续以正则修补现有渲染器：
 - 正常本机条件下新内容无需手动刷新，最终结构化内容在既定 2 秒目标内出现。
 - 发送成功时 TUI 已接受 turn；失败时网页草稿仍在。
 - 同一客户端消息 ID 重试不产生重复 turn。
+
+2026-08-15 当前证据：
+
+- 一次性匿名 tmux 会话中，手机 Chrome 网页单击发送后输入框清空，目标 pane 接收一次，
+  固定 ACK 通过 SSE 自动出现，无需刷新。
+- 不存在的目标会话返回失败时，输入框和 `sessionStorage` 都保留草稿。
+- 持续变化的真实 Codex live 尾部在 390x844 与 1440x900 下均通过：初次展开位于
+  最新输出，手动上翻后跨真实刷新保持坐标；修复了程序化 `toggle` 覆盖阅读位置的竞态。
+- Owner smoke 前后比较全部既有 tmux 窗口尺寸，结果完全相同；代码仍以 pane width 0
+  表示“不调整 TUI”。
 
 ### 阶段 F：Gateway 视觉统一（P1）
 
