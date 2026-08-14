@@ -53,6 +53,8 @@ const minKatex = Number(process.env.FARYO_SMOKE_MIN_KATEX ?? 2);
 const minDisplay = Number(process.env.FARYO_SMOKE_MIN_DISPLAY ?? 1);
 const minTables = Number(process.env.FARYO_SMOKE_MIN_TABLES || 0);
 const minTableKatex = Number(process.env.FARYO_SMOKE_MIN_TABLE_KATEX || 0);
+const minProtectedLinks = Number(process.env.FARYO_SMOKE_MIN_PROTECTED_LINKS || 0);
+const minProtectedImages = Number(process.env.FARYO_SMOKE_MIN_PROTECTED_IMAGES || 0);
 const maxBareTex = Number(process.env.FARYO_SMOKE_MAX_BARE_TEX ?? -1);
 const screenshotTex = process.env.FARYO_SMOKE_SCREENSHOT_TEX || expectedTex.at(-1) || '';
 const loginUser = process.env.FARYO_SMOKE_LOGIN_USER || '';
@@ -155,6 +157,7 @@ const uiFixtureSource = [
 if (!targetUrl) {
   throw new Error('FARYO_SMOKE_URL is required');
 }
+const smokeOwnerToken = new URL(targetUrl).searchParams.get('token') || '';
 if (!['hidden', 'visible'].includes(expectedKeyNavState)) {
   throw new Error('FARYO_SMOKE_EXPECT_KEY_NAV must be hidden or visible');
 }
@@ -342,6 +345,18 @@ try {
         const markdownCount = output?.querySelectorAll('.markdown-body').length || 0;
         const tableCount = output?.querySelectorAll('.markdown-body table').length || 0;
         const tableKatexCount = output?.querySelectorAll('.markdown-body table .katex').length || 0;
+        const protectedLinkCount = output?.querySelectorAll('a[data-faryo-fetch-href]').length || 0;
+        const protectedImageCount = output?.querySelectorAll('img[src^="blob:"]').length || 0;
+        const protectedImagePendingCount = output?.querySelectorAll('img[data-faryo-fetch-src]').length || 0;
+        const ownerTokenNeedle = ${JSON.stringify(smokeOwnerToken)};
+        let ownerTokenDomCount = 0;
+        if (ownerTokenNeedle) {
+          for (const element of document.querySelectorAll('*')) {
+            for (const attribute of element.attributes || []) {
+              if (String(attribute.value || '').includes(ownerTokenNeedle)) ownerTokenDomCount += 1;
+            }
+          }
+        }
         let rawMathDelimiterCount = 0;
         let bareTexParenthesisCount = 0;
         if (output) {
@@ -432,6 +447,10 @@ try {
           markdownCount,
           tableCount,
           tableKatexCount,
+          protectedLinkCount,
+          protectedImageCount,
+          protectedImagePendingCount,
+          ownerTokenDomCount,
           captureSource: String(output?.dataset.captureSource || ''),
           captureWarningCount: output?.querySelectorAll('.compact-capture-warning').length || 0,
           stableBlockState: {
@@ -478,15 +497,24 @@ try {
       returnByValue: true,
     });
     state = result.result?.value || {};
+    const protectedResourcesReady = state.protectedLinkCount >= minProtectedLinks
+      && state.protectedImageCount >= minProtectedImages
+      && state.protectedImagePendingCount === 0;
     if (skipRenderChecks
-      ? state.domReady && (!checkOwnerLayout || state.stableBlockState?.keyedCount >= 1)
-      : state.ready) break;
+      ? state.domReady && (!checkOwnerLayout || state.stableBlockState?.keyedCount >= 1) && protectedResourcesReady
+      : state.ready && protectedResourcesReady) break;
   }
 
+  const protectedResourcesReady = state.protectedLinkCount >= minProtectedLinks
+    && state.protectedImageCount >= minProtectedImages
+    && state.protectedImagePendingCount === 0;
   if (!(skipRenderChecks
-    ? state.domReady && (!checkOwnerLayout || state.stableBlockState?.keyedCount >= 1)
-    : state.ready)) {
+    ? state.domReady && (!checkOwnerLayout || state.stableBlockState?.keyedCount >= 1) && protectedResourcesReady
+    : state.ready && protectedResourcesReady)) {
     throw new Error(`KaTeX did not appear in the live Faryo DOM: ${JSON.stringify(state)}`);
+  }
+  if (state.ownerTokenDomCount) {
+    throw new Error(`Owner token appeared in ${state.ownerTokenDomCount} DOM attributes`);
   }
   if (checkOwnerLayout) {
     const layout = state.ownerLayout || {};
@@ -623,6 +651,47 @@ try {
       throw new Error(`Owner details panel did not close on Escape: ${JSON.stringify(detailsClosedState)}`);
     }
     console.log(`faryo-browser-owner-layout=PASS viewport=${state.viewport.width}x${state.viewport.height}`);
+  }
+  if (minProtectedLinks > 0) {
+    const startResult = await send('Runtime.evaluate', {
+      expression: `(() => {
+        const link = document.querySelector('#output a[data-faryo-fetch-href]');
+        if (!link) return { started: false };
+        const originalOpen = window.open;
+        const result = { started: true, replaced: '', closed: false };
+        const popup = {
+          opener: window,
+          document: { title: '' },
+          location: { replace: (value) => { result.replaced = String(value || ''); } },
+          close: () => { result.closed = true; },
+        };
+        window.__faryoProtectedOpenSmoke = result;
+        window.open = () => popup;
+        link.click();
+        window.open = originalOpen;
+        return result;
+      })()`,
+      returnByValue: true,
+    });
+    if (!startResult.result?.value?.started) throw new Error('Protected local file link was not available');
+    let protectedOpenState = {};
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      await delay(100);
+      const result = await send('Runtime.evaluate', {
+        expression: `(() => ({
+          replaced: String(window.__faryoProtectedOpenSmoke?.replaced || ''),
+          closed: Boolean(window.__faryoProtectedOpenSmoke?.closed),
+          errorVisible: Boolean(document.getElementById('errorBox')?.innerText),
+        }))()`,
+        returnByValue: true,
+      });
+      protectedOpenState = result.result?.value || {};
+      if (protectedOpenState.replaced || protectedOpenState.closed || protectedOpenState.errorVisible) break;
+    }
+    if (!protectedOpenState.replaced.startsWith('blob:') || protectedOpenState.closed || protectedOpenState.errorVisible) {
+      throw new Error(`Protected local file did not open through an authenticated blob: ${JSON.stringify(protectedOpenState)}`);
+    }
+    console.log('faryo-browser-protected-file-open=PASS transport=auth-header target=blob');
   }
   if (!skipRenderChecks) {
     const brokenDisplayLayout = state.displayLayout.filter((item) => item.html?.whiteSpace !== 'nowrap');

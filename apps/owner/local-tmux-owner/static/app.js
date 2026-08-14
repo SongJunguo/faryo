@@ -343,6 +343,12 @@
     if (panel.open) requestAnimationFrame(() => window.FaryoLiveScroll?.restore(panel.querySelector('pre'), null));
   }, true);
   output.addEventListener('click', async (event) => {
+    const protectedLink = event.target.closest('a[data-faryo-fetch-href]');
+    if (protectedLink) {
+      event.preventDefault();
+      await openProtectedResource(protectedLink);
+      return;
+    }
     const codeCopy = event.target.closest('.markdown-code-copy');
     if (codeCopy) {
       const text = codeCopy.closest('.markdown-code-block')?.querySelector('pre')?.textContent || '';
@@ -374,7 +380,8 @@
     }
     const image = event.target.closest('.chat-image-thumb');
     if (image) {
-      showImageLightbox(image.dataset.src || '', image.dataset.label || '');
+      const source = image.querySelector('img');
+      showImageLightbox(source?.currentSrc || source?.src || '', image.dataset.label || '');
       return;
     }
     const markdownImage = event.target.closest('.chat-markdown-image');
@@ -397,6 +404,10 @@
   document.addEventListener('keydown', (event) => {
     if (event.key !== 'Escape') return;
     document.getElementById('imageLightbox')?.classList.add('hidden');
+  });
+  window.addEventListener('pagehide', () => {
+    for (const url of protectedImageUrls.values()) URL.revokeObjectURL(url);
+    protectedImageUrls.clear();
   });
 
   function setError(message, options = {}) {
@@ -477,6 +488,22 @@
 
   function apiPath(path) {
     return selectedSession && path.startsWith('/api/') ? path + (path.includes('?') ? '&' : '?') + `session=${encodeURIComponent(selectedSession)}` : path;
+  }
+
+  function localResourcePath(path) {
+    return routeBase + apiPath(path);
+  }
+
+  function localFileTarget(path, line = 0, column = 0) {
+    const endpoint = ownerToken ? '/api/local-file' : '/api/local-file/view';
+    const resourcePath = `${endpoint}?path=${encodeURIComponent(path)}${line ? `&line=${line}` : ''}${column ? `&column=${column}` : ''}`;
+    const href = localResourcePath(resourcePath);
+    return ownerToken ? { href, fetchHref: href } : href;
+  }
+
+  function localImageTarget(path) {
+    const href = localResourcePath(`/api/local-image?path=${encodeURIComponent(path)}`);
+    return ownerToken ? { href: '', fetchHref: href } : href;
   }
 
   function setLiveState(state) {
@@ -837,11 +864,6 @@
     return `<section class="compact-block plan"><div class="compact-plan-title">Plan updated</div>${items.length ? `<div class="compact-plan-list">${items.map((item) => `<div class="compact-plan-item">${escapeHtml(item)}</div>`).join('')}</div>` : ''}</section>`;
   }
 
-  function authenticatedApiPath(path) {
-    const scoped = apiPath(path);
-    return ownerToken ? scoped + (scoped.includes('?') ? '&' : '?') + `token=${encodeURIComponent(ownerToken)}` : scoped;
-  }
-
   function clearMarkdownRenderCache() {
     markdownHtmlCache.clear();
   }
@@ -859,11 +881,8 @@
       return cached.html;
     }
     const html = markdownRenderer.render(text, {
-      localFileHref: (path, line = 0, column = 0) => {
-        const location = `/api/local-file/view?path=${encodeURIComponent(path)}${line ? `&line=${line}` : ''}${column ? `&column=${column}` : ''}`;
-        return routeBase + authenticatedApiPath(location);
-      },
-      localImageHref: (path) => routeBase + authenticatedApiPath(`/api/local-image?path=${encodeURIComponent(path)}`),
+      localFileHref: localFileTarget,
+      localImageHref: localImageTarget,
     }, { mode });
     if (cacheKey) {
       markdownHtmlCache.set(cacheKey, { source: text, html });
@@ -888,9 +907,99 @@
     const match = String(line || '').match(/^\s*Image\s*:\s*(.+?)\s*$/i);
     const path = match && cleanTypedPath(match[1], imagePathRe);
     if (!path) return '';
-    const src = routeBase + authenticatedApiPath(`/api/local-image?path=${encodeURIComponent(path)}`);
+    const target = localImageTarget(path);
+    const src = typeof target === 'string' ? target : '';
+    const fetchSrc = typeof target === 'object' ? target.fetchHref : '';
     const label = path.split(/[\\/]/).pop() || 'image';
-    return `<button class="chat-image-thumb" type="button" data-src="${escapeHtml(src)}" data-label="${escapeHtml(label)}"><img class="chat-image" src="${escapeHtml(src)}" alt="${escapeHtml(label)}" loading="lazy"></button>`;
+    const sourceAttributes = src
+      ? ` src="${escapeHtml(src)}"`
+      : ` data-faryo-fetch-src="${escapeHtml(fetchSrc)}" aria-busy="true"`;
+    return `<button class="chat-image-thumb" type="button" data-label="${escapeHtml(label)}"><img class="chat-image"${sourceAttributes} alt="${escapeHtml(label)}" loading="lazy"></button>`;
+  }
+
+  const protectedImageUrls = new Map();
+
+  function releaseDetachedProtectedImages() {
+    for (const [image, url] of protectedImageUrls) {
+      if (image.isConnected) continue;
+      URL.revokeObjectURL(url);
+      protectedImageUrls.delete(image);
+    }
+  }
+
+  async function fetchProtectedResource(href) {
+    const target = new URL(String(href || ''), location.href);
+    const localApiPaths = new Set([
+      `${routeBase}/api/local-image`,
+      `${routeBase}/api/local-file`,
+      `${routeBase}/api/local-file/view`,
+    ]);
+    if (target.origin !== location.origin || !localApiPaths.has(target.pathname)) {
+      throw new Error('Local resource URL was rejected');
+    }
+    target.searchParams.delete('token');
+    const headers = ownerToken ? { 'X-Owner-Token': ownerToken } : {};
+    const response = await fetch(target.pathname + target.search, {
+      headers,
+      cache: 'no-store',
+      credentials: 'same-origin',
+    });
+    if (!response.ok) {
+      const error = new Error(`Local resource failed ${response.status}`);
+      error.status = response.status;
+      throw error;
+    }
+    return response;
+  }
+
+  async function hydrateProtectedImages(root) {
+    releaseDetachedProtectedImages();
+    const images = [...(root?.querySelectorAll('img[data-faryo-fetch-src]') || [])];
+    await Promise.all(images.map(async (image) => {
+      if (image.dataset.faryoFetching === '1') return;
+      image.dataset.faryoFetching = '1';
+      try {
+        const response = await fetchProtectedResource(image.dataset.faryoFetchSrc);
+        const blob = await response.blob();
+        if (!image.isConnected) return;
+        const previous = protectedImageUrls.get(image);
+        if (previous) URL.revokeObjectURL(previous);
+        const url = URL.createObjectURL(blob);
+        protectedImageUrls.set(image, url);
+        image.src = url;
+        image.removeAttribute('data-faryo-fetch-src');
+        image.removeAttribute('aria-busy');
+      } catch (_error) {
+        image.removeAttribute('aria-busy');
+        image.classList.add('resource-load-error');
+      } finally {
+        delete image.dataset.faryoFetching;
+      }
+    }));
+  }
+
+  async function openProtectedResource(link) {
+    const popup = window.open('about:blank', '_blank');
+    if (popup) {
+      popup.opener = null;
+      popup.document.title = 'Loading local file';
+    }
+    try {
+      const response = await fetchProtectedResource(link.dataset.faryoFetchHref);
+      const url = URL.createObjectURL(await response.blob());
+      if (popup) popup.location.replace(url);
+      else {
+        const fallback = document.createElement('a');
+        fallback.href = url;
+        fallback.target = '_blank';
+        fallback.rel = 'noopener noreferrer';
+        fallback.click();
+      }
+      window.setTimeout(() => URL.revokeObjectURL(url), 60000);
+    } catch (error) {
+      popup?.close();
+      setError(userErrorMessage(error));
+    }
   }
 
   function showImageLightbox(src, label) {
@@ -914,9 +1023,12 @@
     const match = String(line || '').match(/^\s*(?:(File|Attachment)\s*:\s*)?(.+?)\s*$/i);
     const path = match && cleanTypedPath(match[2], filePathRe);
     if (!path || (!match[1] && !/^(?:\/|~\/|\.{1,2}\/|[\w.-]+\/|[\w.-]+\.[A-Za-z0-9]{1,8}$)/.test(path))) return '';
-    const href = routeBase + authenticatedApiPath(`/api/local-file/view?path=${encodeURIComponent(path)}`);
+    const target = localFileTarget(path);
+    const href = typeof target === 'string' ? target : target.href;
+    const fetchHref = typeof target === 'object' ? target.fetchHref : '';
     const label = path.split(/[\\/]/).pop() || 'file';
-    return `<a class="file-link" href="${escapeHtml(href)}">File ${escapeHtml(label)}</a>`;
+    const fetchAttribute = fetchHref ? ` data-faryo-fetch-href="${escapeHtml(fetchHref)}"` : '';
+    return `<a class="file-link" href="${escapeHtml(href)}"${fetchAttribute}>File ${escapeHtml(label)}</a>`;
   }
 
   function renderTextWithFiles(text, renderOptions = {}) {
@@ -1083,6 +1195,7 @@
       output.insertAdjacentHTML('beforeend', `<details class="compact-live-terminal" data-session="${escapeHtml(selectedSession || 'default')}"><summary class="compact-live-title"><span class="live-dot"></span><span>Live from tmux</span><span class="compact-live-state">Agent working</span></summary><pre>${escapeHtml(String(capture.liveText))}</pre></details>`);
     }
     restoreLiveTerminalState(liveStateSnapshot);
+    void hydrateProtectedImages(output);
   }
 
   function resetRefreshState() {

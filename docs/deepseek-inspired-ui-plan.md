@@ -31,6 +31,8 @@
 - 阶段 E/F/G 的自动化证据已补齐：匿名精确内容提交矩阵、附件上传、断网/后台恢复、
   Gateway 手机/桌面分页回归、认证边界与公网 Access 均通过；当前进入最终差异、隐私和
   用户观感验收。
+- 最终安全审计补充了直连 Owner 本地资源的认证请求头/Blob 路径，资源 DOM 不再包含
+  Owner Token，并加入隔离的真实浏览器回归和发布断言。
 
 ## 1. 目标
 
@@ -289,12 +291,15 @@ AST 管线，而不是继续以正则修补现有渲染器：
 - Shiki 使用 JavaScript regex engine；TypeScript、Shell、JSON 随入口加载，Python、
   LaTeX、Lean、MATLAB、Markdown、YAML、HTML、CSS、C/C++、Rust、Go、Java、SQL
   按需加载。失败时保留转义的纯代码，不影响正文。
-- AST 主 bundle 为 369,973 bytes，高亮入口为 397,176 bytes，其余语言按需拆分；
+- AST 主 bundle 为 370,444 bytes，高亮入口为 397,176 bytes，其余语言按需拆分；
   `highlight/manifest.json` 和发布检查保证安装包不漏 chunk，连续两次构建哈希一致。
 - Compact Chat 使用内容稳定键对账 DOM，冻结除末尾两块以外的顶层块；200 块匿名测试
   在追加一块时复用原有 200 个节点，只创建 1 个新节点。
 - 已删除 `markdown-render.js`、`math-render.js`、markdown-it、KaTeX auto-render 和独立
   KaTeX JS；回滚依靠固定标签/备份分支，不再维护同功能旧代码。
+- 直连 Owner 的本地文件与图片改为同源 `X-Owner-Token` 请求后生成临时 Blob URL；
+  Token 不再进入资源 DOM 属性。Gateway 仍由服务端注入 Owner Token，不改变公网认证
+  边界。
 
 验收：
 
@@ -362,7 +367,7 @@ Sessions、Session History 和 Projects。Gateway 的服务端分页、活动会
 
 2026-08-15 当前证据：
 
-- AST 源码 9/9、Owner Python 20/20、Gateway Python 40/40、终端协议 3/3、发布检查、
+- AST 源码 10/10、Owner Python 20/20、Gateway Python 40/40、终端协议 3/3、发布检查、
   Owner HTTP/tmux smoke 和 npm 冷安装重建全部通过；npm 审计为 0 漏洞。
 - 本地 Gateway 重启后，匿名登录浏览器通过活动会话/历史分区、每页 10 条、第二页和
   直接跳到第三页；本轮又以精确 390x844 和 1440x900 DOM 视口确认独立滚动与无页面级
@@ -393,6 +398,9 @@ Sessions、Session History 和 Projects。Gateway 的服务端分页、活动会
   先前遗留且无进程占用的两个匿名 Chrome 测试 profile 已清理。
 - 已执行已知邮箱、域名、历史 Token、私有主目录、会话名、私钥和常见云密钥模式扫描；
   未发现命中，匿名临时截图已经删除。
+- 新增隔离的受保护资源浏览器回归：匿名文件链接和图片均通过认证请求头加载为 Blob，
+  DOM 中未出现运行时 Token，测试前后临时 tmux 的 200x40 尺寸不变，临时服务、会话与
+  浏览器状态均自动清理。
 
 ## 7. 浏览器回归矩阵
 

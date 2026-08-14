@@ -91,11 +91,23 @@ function safeExternalUrl(value, allowedProtocols) {
   }
 }
 
+function callbackTarget(value) {
+  if (value && typeof value === 'object') {
+    return {
+      href: String(value.href ?? ''),
+      fetchHref: String(value.fetchHref ?? ''),
+    };
+  }
+  return { href: String(value ?? ''), fetchHref: '' };
+}
+
 function linkTarget(value, environment) {
   const local = localReference(value);
   if (local && typeof environment.localFileHref === 'function') {
+    const target = callbackTarget(environment.localFileHref(local.path, local.line, local.column));
     return {
-      href: environment.localFileHref(local.path, local.line, local.column),
+      href: target.href || target.fetchHref,
+      fetchHref: target.fetchHref,
       className: 'file-link markdown-file-link',
       external: false,
     };
@@ -103,6 +115,7 @@ function linkTarget(value, environment) {
   const href = safeExternalUrl(value, new Set(['http:', 'https:', 'mailto:']));
   return {
     href,
+    fetchHref: '',
     className: '',
     external: /^https?:/iu.test(href),
   };
@@ -111,9 +124,13 @@ function linkTarget(value, environment) {
 function imageTarget(value, environment) {
   const local = localReference(value);
   if (local && typeof environment.localImageHref === 'function') {
-    return environment.localImageHref(local.path);
+    const target = callbackTarget(environment.localImageHref(local.path));
+    return { src: target.href, fetchSrc: target.fetchHref };
   }
-  return safeExternalUrl(value, new Set(['http:', 'https:']));
+  return {
+    src: safeExternalUrl(value, new Set(['http:', 'https:'])),
+    fetchSrc: '',
+  };
 }
 
 function renderMath(value, displayMode) {
@@ -152,6 +169,9 @@ function renderLink(url, title, content, context) {
   ];
   if (title) attributes.push('title="' + escapeHtml(title) + '"');
   if (target.className) attributes.push('class="' + target.className + '"');
+  if (target.fetchHref) {
+    attributes.push('data-faryo-fetch-href="' + escapeHtml(target.fetchHref) + '"');
+  }
   if (target.external) {
     attributes.push('target="_blank"');
     attributes.push('rel="noopener noreferrer"');
@@ -160,16 +180,22 @@ function renderLink(url, title, content, context) {
 }
 
 function renderImage(url, title, alt, context) {
-  const source = imageTarget(url, context.environment);
-  if (!source) return '<span class="markdown-image-alt">' + escapeHtml(alt) + '</span>';
+  const target = imageTarget(url, context.environment);
+  if (!target.src && !target.fetchSrc) {
+    return '<span class="markdown-image-alt">' + escapeHtml(alt) + '</span>';
+  }
   const attributes = [
     'class="chat-image chat-markdown-image"',
-    'src="' + escapeHtml(source) + '"',
     'alt="' + escapeHtml(alt) + '"',
     'loading="lazy"',
     'decoding="async"',
     'referrerpolicy="no-referrer"',
   ];
+  if (target.src) attributes.push('src="' + escapeHtml(target.src) + '"');
+  if (target.fetchSrc) {
+    attributes.push('data-faryo-fetch-src="' + escapeHtml(target.fetchSrc) + '"');
+    attributes.push('aria-busy="true"');
+  }
   if (title) attributes.push('title="' + escapeHtml(title) + '"');
   return '<img ' + attributes.join(' ') + '>';
 }

@@ -97,6 +97,20 @@ FARYO_SMOKE_URL='http://127.0.0.1:8765/?token=<token>&session=<session>' \
   node apps/owner/local-tmux-owner/tests/browser-katex-smoke.mjs
 ```
 
+Direct Owner local files and images are fetched with `X-Owner-Token` and opened
+through temporary Blob URLs; the credential is not copied into resource DOM
+attributes. The isolated browser regression exercises both a file and an image,
+checks the DOM for the runtime token, and confirms that Owner leaves tmux sizing
+unchanged:
+
+```bash
+FARYO_RESOURCE_PYTHON=/path/to/project/python \
+  apps/owner/local-tmux-owner/tests/browser-protected-resources.sh
+```
+
+Gateway resources keep using the authenticated same-origin route; Gateway
+injects the Owner token server-side.
+
 For an anonymous visual audit, set `FARYO_SMOKE_UI_SCREENSHOT` to a temporary
 PNG path and choose `FARYO_SMOKE_UI_FOCUS=table`, `math`, or `code`. The fixture
 replaces conversation text with generic Markdown before capture, checks that

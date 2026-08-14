@@ -131,6 +131,26 @@ test('routes explicit local links and images through owner callbacks', () => {
   assert.match(html, /src="\/image\?path=%2Fhome%2Fuser%2Fplot\.png"/u);
 });
 
+test('supports deferred authenticated local resources without putting credentials in HTML', () => {
+  const html = render(
+    '[paper](/home/user/paper.tex) ![plot](/home/user/plot.png)',
+    {
+      localFileHref: (path) => ({
+        href: '/api/local-file?path=' + encodeURIComponent(path),
+        fetchHref: '/api/local-file?path=' + encodeURIComponent(path),
+      }),
+      localImageHref: (path) => ({
+        href: '',
+        fetchHref: '/api/local-image?path=' + encodeURIComponent(path),
+      }),
+    },
+  );
+
+  assert.match(html, /data-faryo-fetch-href="\/api\/local-file\?path=%2Fhome%2Fuser%2Fpaper\.tex"/u);
+  assert.match(html, /data-faryo-fetch-src="\/api\/local-image\?path=%2Fhome%2Fuser%2Fplot\.png"/u);
+  assert.doesNotMatch(html, /token=/u);
+});
+
 test('streaming grammar leaves incomplete and complete TeX literal', () => {
   for (const source of ['partial \\(x_i', 'complete \\(x_i\\)', '$$x^2$$']) {
     const html = render(source, {}, { mode: 'streaming' });

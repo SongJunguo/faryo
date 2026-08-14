@@ -74,6 +74,23 @@ assert.doesNotMatch(unsafe, /<img src=x/iu);
 assert.doesNotMatch(unsafe, /href="javascript:/iu);
 assert.doesNotMatch(unsafe, /src="data:/iu);
 
+const deferred = markdown.render(
+  '[paper](/tmp/faryo-test.tex) ![plot](/tmp/faryo-test.png)',
+  {
+    localFileHref: (file) => ({
+      href: '/api/local-file?path=' + encodeURIComponent(file),
+      fetchHref: '/api/local-file?path=' + encodeURIComponent(file),
+    }),
+    localImageHref: (file) => ({
+      href: '',
+      fetchHref: '/api/local-image?path=' + encodeURIComponent(file),
+    }),
+  },
+);
+assert.match(deferred, /data-faryo-fetch-href=/u);
+assert.match(deferred, /data-faryo-fetch-src=/u);
+assert.doesNotMatch(deferred, /token=/u);
+
 const streaming = markdown.render('partial \\(x_i', {}, { mode: 'streaming' });
 assert.doesNotMatch(streaming, /class="katex"/u);
 

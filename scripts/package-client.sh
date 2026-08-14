@@ -126,6 +126,11 @@ app = (root / "apps/owner/local-tmux-owner/static/app.js").read_text(encoding="u
 assert "stableBlocks.reconcile(output, models, createNode)" in app, "Compact Chat must reconcile stable DOM blocks"
 assert "headers['X-Owner-Token'] = ownerToken" in app, "Owner API calls must include the token header"
 assert "next.searchParams.set('token', ownerToken)" in app, "session switches must preserve direct Owner auth"
+assert "authenticatedApiPath" not in app, "local resource DOM URLs must not append the Owner token"
+assert "fetchProtectedResource" in app, "direct Owner resources must use authenticated fetches"
+assert "data-faryo-fetch-href" in app, "protected file links must use deferred authenticated fetches"
+assert "data-faryo-fetch-src" in app, "protected images must use deferred authenticated fetches"
+assert "target.searchParams.delete('token')" in app, "protected resource fetches must strip query tokens"
 with (root / "deploy/launchd/dev.faryo.owner.keepalive.plist").open("rb") as fh:
     plistlib.load(fh)
 PY
