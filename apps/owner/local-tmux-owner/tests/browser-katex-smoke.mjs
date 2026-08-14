@@ -1020,7 +1020,6 @@ try {
             '<details class="compact-live-terminal" data-session="example" open><summary class="compact-live-title"><span class="live-dot"></span><span>Live from tmux</span><span class="compact-live-state">Agent working</span></summary><pre>Reviewing references…\\nRunning focused checks…\\nWaiting for the next structured update…</pre></details>',
           ].join('');
         }
-        document.getElementById('bottomBtn')?.classList.add('hidden');
         document.getElementById('errorBox')?.classList.add('hidden');
         const panel = ${JSON.stringify(uiScreenshotPanel)};
         if (panel === 'details') document.getElementById('detailsBtn')?.click();
@@ -1043,6 +1042,7 @@ try {
               ? codeBlock
               : null;
         focusTarget?.scrollIntoView({ block: 'center', inline: 'nearest' });
+        document.getElementById('bottomBtn')?.classList.remove('hidden');
         const focusRect = focusTarget?.getBoundingClientRect();
         const outputWidth = renderedOutput?.getBoundingClientRect().width || 0;
         const matrixRows = displays.map((display) => (
@@ -1081,6 +1081,7 @@ try {
     const jumpGeometryResult = await send('Runtime.evaluate', {
       expression: `(() => {
         const button = document.getElementById('bottomBtn');
+        button?.classList.remove('hidden');
         const visible = Boolean(button && button.getClientRects().length);
         if (!visible) return { visible: false, rightAligned: true, overlapsFocus: false };
         const rect = button.getBoundingClientRect();
@@ -1112,9 +1113,10 @@ try {
       returnByValue: true,
     });
     const jumpGeometry = jumpGeometryResult.result?.value || {};
-    if (!jumpGeometry.rightAligned || jumpGeometry.overlapsFocus) {
+    if (!jumpGeometry.visible || !jumpGeometry.rightAligned || jumpGeometry.overlapsFocus) {
       throw new Error(`Scroll-to-latest control obscured rich output: ${JSON.stringify(jumpGeometry)}`);
     }
+    console.log(`faryo-browser-latest-control=PASS visible=true focus=${uiScreenshotFocus || 'none'}`);
     const screenshot = await send('Page.captureScreenshot', {
       format: 'png',
       fromSurface: true,
