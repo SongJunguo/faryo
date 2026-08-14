@@ -339,7 +339,8 @@ try {
           katexAssetUrls: ${JSON.stringify(privacySafe)}
             ? katexAssetUrls.map((url) => new URL(url).pathname)
             : katexAssetUrls,
-          katexAssetsLocal: katexAssetUrls.length >= 3 && katexAssetUrls.every((url) => new URL(url).origin === location.origin),
+          katexAssetsLocal: katexAssetUrls.some((url) => new URL(url).pathname.endsWith('/vendor/katex/katex.min.css'))
+            && katexAssetUrls.every((url) => new URL(url).origin === location.origin),
           markdownAssetUrls: ${JSON.stringify(privacySafe)}
             ? markdownAssetUrls.map((url) => new URL(url).pathname)
             : markdownAssetUrls,

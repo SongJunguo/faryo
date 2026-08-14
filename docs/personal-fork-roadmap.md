@@ -161,6 +161,10 @@ Agent，公网长期使用必须保留受限 Cloudflare Access（或仅可信设
   CJK 粗体、代码隔离、Shiki TypeScript/Python、本地资源、XSS 和内部横向滚动检查。
 - 匿名网页发送成功/失败草稿、SSE 自动更新、手机/桌面 Live 滚动和既有 tmux 尺寸
   不变均通过；未向真实会话注入测试消息。
+- Gateway 重启后六个计划视口均通过登录代理回归；活动/历史分区、10 条分页和页码跳转
+  通过；Edge 另通过 390x844 和 1440x900。未登录本地请求与公网 Cloudflare Access
+  边界均正确拦截。
+- 匿名手机/桌面截图只在 `/tmp` 目检并已删除；公开仓库隐私与密钥模式扫描无命中。
 - 浏览器：Chrome 与 Edge 本地资源测试通过；分段函数、范数和至少两行矩阵结构的精确 KaTeX 检查通过。
 - 部署：`faryo-owner-keepalive.timer` 已启用；主动停止 Owner 后，keepalive 成功使用专用 Conda 环境恢复服务。
 - 发布：功能提交 `1892a1d` 已推送到个人 `origin/katex-feature`；原作者 `upstream` 未修改。

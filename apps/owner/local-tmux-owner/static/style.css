@@ -706,8 +706,46 @@ html[data-faryo-ui="workbench-v2"] :is(button, a, textarea):focus-visible {
     padding-right: 12px;
   }
 
+  html[data-faryo-ui="workbench-v2"] .brand-title {
+    display: grid !important;
+    grid-template-columns: 22px minmax(0, 1fr);
+    grid-template-rows: auto auto;
+    column-gap: 7px;
+    row-gap: 0;
+    line-height: 1.15;
+  }
+
+  html[data-faryo-ui="workbench-v2"] .brand-logo {
+    grid-row: 1 / span 2;
+    align-self: center;
+  }
+
+  html[data-faryo-ui="workbench-v2"] #ownerText,
   html[data-faryo-ui="workbench-v2"] #topicText {
-    max-width: 36vw;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  html[data-faryo-ui="workbench-v2"] #ownerText {
+    color: var(--text);
+    font-size: calc(13px + var(--font-step));
+  }
+
+  html[data-faryo-ui="workbench-v2"] #topicText {
+    color: var(--muted);
+    font-size: calc(11px + var(--font-step));
+    font-weight: 550;
+  }
+
+  html[data-faryo-ui="workbench-v2"] header.collapsed .brand-title {
+    display: inline-flex !important;
+    line-height: normal;
+  }
+
+  html[data-faryo-ui="workbench-v2"] header.collapsed .brand-logo {
+    grid-row: auto;
   }
 
   html[data-faryo-ui="workbench-v2"] #draftState {

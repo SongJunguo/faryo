@@ -350,6 +350,19 @@ Sessions、Session History 和 Projects。Gateway 的服务端分页、活动会
 - 离线资源、CSP、CSRF、认证、日志脱敏和 Git secrets/隐私扫描。
 - 确认 `git diff` 不包含生成缓存、截图中的真实对话或运行时配置。
 
+2026-08-15 当前证据：
+
+- 本地 Gateway 重启后，匿名登录浏览器通过活动会话/历史分区、每页 10 条、第二页和
+  直接跳到第三页；Owner 代理能够同源加载 AST、KaTeX、Shiki 入口和 Python chunk。
+- 360x800、390x844、412x915、768x1024、1024x768、1440x900 六个计划视口完成
+  亮/暗主题布局与匿名 Markdown/TeX/代码夹具回归；手机顶栏经匿名截图目检后改为
+  “工作站 / 会话”双层标题，不再显示半截会话名。
+- Microsoft Edge 也完成 390x844 与 1440x900 两组 Gateway/AST 夹具回归。
+- Gateway 未登录页面/静态资源返回 303，未登录 POST 返回 401；公网 tunnel 未登录
+  请求由 Cloudflare Access 302 到 Access 登录入口。
+- 已执行已知邮箱、域名、历史 Token、私有主目录、会话名、私钥和常见云密钥模式扫描；
+  未发现命中，匿名临时截图已经删除。
+
 ## 7. 浏览器回归矩阵
 
 | 视口 | 用途 | 重点 |
