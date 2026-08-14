@@ -362,7 +362,7 @@ Sessions、Session History 和 Projects。Gateway 的服务端分页、活动会
 
 2026-08-15 当前证据：
 
-- AST 源码 9/9、Owner Python 20/20、Gateway Python 37/37、终端协议 3/3、发布检查、
+- AST 源码 9/9、Owner Python 20/20、Gateway Python 40/40、终端协议 3/3、发布检查、
   Owner HTTP/tmux smoke 和 npm 冷安装重建全部通过；npm 审计为 0 漏洞。
 - 本地 Gateway 重启后，匿名登录浏览器通过活动会话/历史分区、每页 10 条、第二页和
   直接跳到第三页；本轮又以精确 390x844 和 1440x900 DOM 视口确认独立滚动与无页面级
@@ -382,6 +382,8 @@ Sessions、Session History 和 Projects。Gateway 的服务端分页、活动会
 - Gateway user service 重启后进程环境确认使用 24 小时；一次真实本地登录返回 303，
   `__Host-` Cookie 的 `Max-Age=86400`，同时保持 `Secure`、`HttpOnly` 与
   `SameSite=Strict`。重启前后 5 个既有 tmux 窗口尺寸均未变化。
+- 对 4 个真实 Agent 会话逐一执行 Owner 状态与 capture 读取，受控前后宽高完全不变；
+  先前遗留且无进程占用的两个匿名 Chrome 测试 profile 已清理。
 - 已执行已知邮箱、域名、历史 Token、私有主目录、会话名、私钥和常见云密钥模式扫描；
   未发现命中，匿名临时截图已经删除。
 

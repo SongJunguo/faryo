@@ -161,7 +161,7 @@ Access（或仅可信设备可达的私网 VPN）作为外层身份策略，不�
 ## 2026-08-15 AST v2 验证记录
 
 - AST 源码测试 9/9；稳定块单元测试覆盖 200 块历史追加时复用 200、仅创建 1。
-- Owner Python 20/20、Gateway Python 37/37、发布检查和 Owner HTTP/tmux smoke 通过。
+- Owner Python 20/20、Gateway Python 40/40、发布检查和 Owner HTTP/tmux smoke 通过。
 - 新增可重复的匿名终端交付矩阵：20 条短文本、中文、多行、Markdown/TeX 都以内容
   SHA-256 ACK 验证一次提交；ACK 总数严格匹配，无截断、无重复、无需刷新。
 - 隔离临时 inbox 的真实浏览器附件上传与引用提交通过；断网和页面后台期间的输出在恢复
@@ -194,6 +194,7 @@ Access（或仅可信设备可达的私网 VPN）作为外层身份策略，不�
 - 已增加隐私安全的公网验收脚本：它不接收或打印密码、Cookie、Token 与 hostname；只有确认请求先进入 Access 登录流程才返回通过，直接到达 Faryo 登录或无法判定都不会误报为安全。
 - Gateway 代码加固包含：所有浏览器写请求（含 Owner 代理）使用会话绑定 CSRF、登录限速使用可信代理提供的单值客户端地址、`__Host-` 严格 Cookie、nonce CSP 及已有安全响应头。内层登录期限现可由私有 `FARYO_GATEWAY_SESSION_HOURS` 在 `1`–`168` 小时内配置，默认 12 小时；当前个人部署与 Access 一致设为 24 小时。Agent 权限策略仍由操作者决定，Faryo 不强制降低 Codex/Claude 权限。
 - Gateway user service 已以私有 24 小时配置重启；真实本地登录响应验证 `Max-Age=86400`，且 `Secure`、`HttpOnly`、`SameSite=Strict` 属性保持不变。该重启未改变任何既有 tmux 窗口尺寸。
+- 对 4 个真实 Agent 会话逐一执行 Owner 状态与 capture 读取，受控前后宽高完全不变；两个无进程占用的旧匿名 Chrome 测试 profile 已清理。
 - Gateway 首页已拆成两个独立区域：`Active Sessions` 始终显示所有实际运行 Codex/Claude 的 tmux（包括桌面直接启动的会话），`Session History` 排除活动项、独立滚动，并由服务端按 10 条一页提供 Previous/Next 和页码直达。只有 Faryo 管理的会话提供远程关闭，桌面 tmux 仅可打开查看，避免误关。
 - 运行会话上限与历史显示数量解耦；单机 TXY 默认允许 8 个存活 Agent TUI，并可通过私有 `FARYO_TXY_MAX_RUNNING` 在 1–32 范围内调整。
 
