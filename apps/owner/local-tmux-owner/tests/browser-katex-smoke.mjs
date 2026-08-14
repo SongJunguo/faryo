@@ -38,6 +38,7 @@ const debugLayout = process.env.FARYO_SMOKE_DEBUG_LAYOUT === '1';
 const checkOwnerLayout = process.env.FARYO_SMOKE_CHECK_OWNER_LAYOUT === '1';
 const checkAstFixture = process.env.FARYO_SMOKE_CHECK_AST_FIXTURE === '1';
 const expectedLivePanelState = process.env.FARYO_SMOKE_EXPECT_LIVE_PANEL_STATE || '';
+const expectedKeyNavState = process.env.FARYO_SMOKE_EXPECT_KEY_NAV || 'hidden';
 const viewportWidth = Number(process.env.FARYO_SMOKE_VIEWPORT_WIDTH || 0);
 const viewportHeight = Number(process.env.FARYO_SMOKE_VIEWPORT_HEIGHT || 0);
 const smokeTheme = process.env.FARYO_SMOKE_THEME || '';
@@ -108,8 +109,28 @@ const astFixtureSource = [
   '',
   '<img src=x onerror="globalThis.pwned=1">',
 ].join('\n');
+const uiFixtureSource = [
+  '## 结论',
+  '',
+  '公式、表格和正文由同一个 AST 管线渲染。',
+  '',
+  '| 算子 | 建议 |',
+  '| --- | --- |',
+  '| \\(\\Psi_i=\\eta_i\\) | 精确恢复基准结构 |',
+  '| \\(\\Psi_i=e_i\\) | 标准误差积分 |',
+  '',
+  '\\[',
+  'd(t)=\\begin{cases}',
+  '-1,&t<1,\\\\',
+  '1,&t\\ge 1.',
+  '\\end{cases}',
+  '\\]',
+].join('\n');
 if (!targetUrl) {
   throw new Error('FARYO_SMOKE_URL is required');
+}
+if (!['hidden', 'visible'].includes(expectedKeyNavState)) {
+  throw new Error('FARYO_SMOKE_EXPECT_KEY_NAV must be hidden or visible');
 }
 if (!Array.isArray(sendMatrix) || sendMatrix.some((item) => (
   !item || typeof item.text !== 'string' || !item.text.trim()
@@ -276,6 +297,8 @@ try {
         const outputWrap = document.getElementById('outputWrap');
         const promptShell = document.querySelector('.prompt-shell');
         const livePanel = output?.querySelector('.compact-live-terminal');
+        const statusLine = document.querySelector('.status-line');
+        const keyNav = document.querySelector('.key-nav');
         const promptRect = promptShell?.getBoundingClientRect();
         const visibleComposerControls = ['petControl', 'dockPlusBtn', 'sendBtn']
           .map((id) => document.getElementById(id))
@@ -402,6 +425,9 @@ try {
               height: Math.round(promptRect.height),
             } : null,
             visibleComposerControls,
+            statusCollapsed: Boolean(statusLine?.classList.contains('collapsed')),
+            statusAutoExpanded: Boolean(statusLine?.classList.contains('auto-expanded')),
+            keyNavVisible: Boolean(keyNav && keyNav.getClientRects().length),
             livePanel: livePanel ? { open: Boolean(livePanel.open), session: String(livePanel.dataset.session || '') } : null,
           },
           katexStylesheetLoaded: [...document.styleSheets].some((sheet) => String(sheet.href || '').includes('/katex')),
@@ -459,6 +485,30 @@ try {
     }
     const undersizedControls = (layout.visibleComposerControls || []).filter((item) => item.width < 42 || item.height < 42);
     if (undersizedControls.length) throw new Error(`Owner composer controls are too small: ${JSON.stringify(undersizedControls)}`);
+    const expectKeyNavVisible = expectedKeyNavState === 'visible';
+    if (!layout.statusCollapsed || layout.keyNavVisible !== expectKeyNavVisible
+      || (expectKeyNavVisible && !layout.statusAutoExpanded)) {
+      throw new Error(`Owner terminal control visibility is wrong: ${JSON.stringify({ expectedKeyNavState, layout })}`);
+    }
+    const keyNavResult = await send('Runtime.evaluate', {
+      expression: `(() => {
+        const line = document.querySelector('.status-line');
+        const footer = document.querySelector('footer');
+        const nav = document.querySelector('.key-nav');
+        const wasAutoExpanded = Boolean(line?.classList.contains('auto-expanded'));
+        line?.classList.add('auto-expanded');
+        footer?.classList.add('auto-expanded');
+        const expandedVisible = Boolean(nav && nav.getClientRects().length);
+        line?.classList.toggle('auto-expanded', wasAutoExpanded);
+        footer?.classList.toggle('auto-expanded', wasAutoExpanded);
+        return { expandedVisible, restoredVisible: Boolean(nav && nav.getClientRects().length) };
+      })()`,
+      returnByValue: true,
+    });
+    const keyNavState = keyNavResult.result?.value || {};
+    if (!keyNavState.expandedVisible || keyNavState.restoredVisible !== expectKeyNavVisible) {
+      throw new Error(`Owner terminal controls did not follow the approval expansion state: ${JSON.stringify(keyNavState)}`);
+    }
 
     const measurePrompt = async (action = '') => {
       const result = await send('Runtime.evaluate', {
@@ -829,7 +879,7 @@ try {
   }
 
   if (uiScreenshotPath) {
-    await send('Runtime.evaluate', {
+    const uiFixtureResult = await send('Runtime.evaluate', {
       expression: `(() => {
         const text = (id, value) => { const element = document.getElementById(id); if (element) element.textContent = value; };
         text('ownerText', 'Ubuntu Workstation');
@@ -862,12 +912,13 @@ try {
         }
         const output = document.getElementById('output');
         if (output) {
+          const richOutput = window.FaryoMarkdownAst.render(${JSON.stringify(uiFixtureSource)});
           output.className = 'output compact-blocks';
           output.innerHTML = [
             '<section class="compact-block user">请检查这一节的推导，并给出修改建议。</section>',
             '<section class="compact-process-line">Read manuscript and compared the assumptions</section>',
             '<section class="compact-block plan"><div class="compact-plan-title">Plan</div><div class="compact-plan-list"><div class="compact-plan-item">1. Verify the regularity assumptions</div><div class="compact-plan-item">2. Tighten the theorem wording</div></div></section>',
-            '<section class="compact-block output"><div class="markdown-body"><h2>结论</h2><p>这段证明的主线成立，但需要明确区分连续性、局部 Lipschitz 条件与解的存在性。</p><ul><li>保留当前控制目标。</li><li>补充证明实际使用的有界条件。</li><li>避免超出定理范围的结论。</li></ul><blockquote>修改后不会改变现有控制器结构。</blockquote></div><button class="copy-output-block" type="button">⧉</button></section>',
+            '<section class="compact-block output"><div class="markdown-body">' + richOutput + '</div><button class="copy-output-block" type="button">⧉</button></section>',
             '<details class="compact-live-terminal" data-session="example" open><summary class="compact-live-title"><span class="live-dot"></span><span>Live from tmux</span><span class="compact-live-state">Agent working</span></summary><pre>Reviewing references…\\nRunning focused checks…\\nWaiting for the next structured update…</pre></details>',
           ].join('');
         }
@@ -881,10 +932,22 @@ try {
           if (sessionMenu) sessionMenu.innerHTML = '<div class="surface-panel-heading"><div><span class="surface-panel-eyebrow">Workspace</span><strong id="sessionPanelTitle">Running sessions</strong></div><button class="panel-close" type="button" data-close-panel aria-label="Close running sessions">×</button></div><button type="button" class="active"><span><strong>Research session</strong><small>Ubuntu Workstation · Project Alpha</small></span><em>Now</em></button><button type="button"><span><strong>Implementation review</strong><small>Ubuntu Workstation · Project Beta</small></span><em>Open</em></button><button type="button"><span><strong>Experiment monitor</strong><small>Ubuntu Workstation · Project Gamma</small></span><em>Open</em></button>';
         }
         if (output?.isConnected) output.replaceWith(output.cloneNode(true));
-        return true;
+        const renderedOutput = document.getElementById('output');
+        const display = renderedOutput?.querySelector('.katex-display');
+        return {
+          katexCount: renderedOutput?.querySelectorAll('.katex').length || 0,
+          tableCount: renderedOutput?.querySelectorAll('.markdown-table-scroll table').length || 0,
+          displayContained: Boolean(display && display.getBoundingClientRect().width <= renderedOutput.getBoundingClientRect().width + 1),
+          pageHorizontalOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth + 1,
+        };
       })()`,
       returnByValue: true,
     });
+    const uiFixtureState = uiFixtureResult.result?.value || {};
+    if (uiFixtureState.katexCount < 3 || uiFixtureState.tableCount !== 1
+      || !uiFixtureState.displayContained || uiFixtureState.pageHorizontalOverflow) {
+      throw new Error(`Faryo rich UI screenshot fixture failed: ${JSON.stringify(uiFixtureState)}`);
+    }
     await send('Runtime.evaluate', { expression: 'document.fonts.ready', awaitPromise: true });
     await delay(uiScreenshotPanel ? 240 : 120);
     const screenshot = await send('Page.captureScreenshot', {
@@ -922,7 +985,12 @@ try {
         if (sendState.errorText || !sendState.inputValue) break;
       }
       if (sendState.errorText || sendState.inputValue || sendState.storedDrafts?.includes(item.text)) {
-        const detail = privacySafe ? `case=${index + 1}` : JSON.stringify(sendState);
+        const detail = privacySafe ? JSON.stringify({
+          case: index + 1,
+          errorVisible: Boolean(sendState.errorText),
+          inputRetained: Boolean(sendState.inputValue),
+          draftRetained: Boolean(sendState.storedDrafts?.includes(item.text)),
+        }) : JSON.stringify(sendState);
         throw new Error(`Faryo browser matrix send failed: ${detail}`);
       }
 

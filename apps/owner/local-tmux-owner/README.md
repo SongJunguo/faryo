@@ -100,7 +100,8 @@ FARYO_SMOKE_URL='http://127.0.0.1:8765/?token=<token>&session=<session>' \
 The anonymous delivery matrix starts an isolated loopback Owner and temporary
 tmux receiver, sends 20 exact-content short/Chinese/multiline/Markdown/TeX
 messages, uploads one Markdown attachment, verifies network/background catch-up
-without reload, checks failed-draft preservation, and removes all test state:
+without reload, checks failed-draft preservation and approval-control expansion,
+and removes all test state:
 
 ```bash
 FARYO_DELIVERY_PYTHON=/path/to/project/python \

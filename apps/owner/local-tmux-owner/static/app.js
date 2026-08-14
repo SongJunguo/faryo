@@ -1559,8 +1559,16 @@
     try { await postAction('/api/approve'); refreshCapture(currentCaptureLines(), { silent: true }).catch(handleBackgroundError); setTimeout(() => refreshCapture(currentCaptureLines(), { silent: true }).catch(handleBackgroundError), 500); } catch (err) { setError(userErrorMessage(err)); }
   }
   $('approveSmallBtn').addEventListener('click', approve);
-  toggleClassState('.status-line', 'collapsed', 'rdStatusCollapsed'); toggleClassState('footer', 'status-collapsed', 'rdStatusCollapsed');
-  $('versionToggle').addEventListener('click', () => { const on = !document.querySelector('.status-line').classList.contains('collapsed'); toggleClassState('.status-line', 'collapsed', 'rdStatusCollapsed', on); toggleClassState('footer', 'status-collapsed', 'rdStatusCollapsed', on); });
+  const statusCollapseKey = 'rdStatusCollapsedV2';
+  const storedStatusCollapse = localStorage.getItem(statusCollapseKey);
+  const initialStatusCollapsed = storedStatusCollapse === null ? true : storedStatusCollapse === '1';
+  toggleClassState('.status-line', 'collapsed', statusCollapseKey, initialStatusCollapsed);
+  toggleClassState('footer', 'status-collapsed', statusCollapseKey, initialStatusCollapsed);
+  $('versionToggle').addEventListener('click', () => {
+    const on = !document.querySelector('.status-line').classList.contains('collapsed');
+    toggleClassState('.status-line', 'collapsed', statusCollapseKey, on);
+    toggleClassState('footer', 'status-collapsed', statusCollapseKey, on);
+  });
 
   $('attachmentBtn').addEventListener('click', () => {
     if (pendingAttachments.length >= MAX_ATTACHMENTS) { setError(`Attach up to ${MAX_ATTACHMENTS} files`); return; }
