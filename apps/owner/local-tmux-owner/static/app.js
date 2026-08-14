@@ -12,6 +12,8 @@
   const bottomBtn = $('bottomBtn');
   const dockMenu = $('dockMenu');
   const sessionMenu = $('sessionMenu');
+  const detailsPanel = $('detailsPanel');
+  const panelBackdrop = $('panelBackdrop');
   const commandSuggest = $('commandSuggest');
   const promptShell = document.querySelector('.prompt-shell');
   const metaLineRe = /^\s*(gpt|o\d|claude)[\w.\- ]*·\s+/;
@@ -65,6 +67,62 @@
   let gatewayCsrfToken = '';
   let selectedSession = params.get('session') || '';
   let submitInFlight = false, pendingSubmission = null;
+  let activeSurfacePanel = null, panelReturnFocus = null;
+
+  function setWorkbenchInert(inert) {
+    for (const element of [document.querySelector('header'), outputWrap, document.querySelector('footer')]) {
+      if (element) element.inert = inert;
+    }
+  }
+
+  function panelFocusable(panel) {
+    if (!panel) return [];
+    return [...panel.querySelectorAll('button:not([disabled]), a[href], input:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])')]
+      .filter((element) => element.getClientRects().length > 0);
+  }
+
+  function closeSurfacePanels({ restoreFocus = true } = {}) {
+    const returnFocus = panelReturnFocus;
+    for (const panel of [sessionMenu, detailsPanel]) panel?.classList.add('hidden');
+    panelBackdrop?.classList.add('hidden');
+    panelBackdrop?.setAttribute('aria-hidden', 'true');
+    document.documentElement.classList.remove('panel-open');
+    $('draftState')?.setAttribute('aria-expanded', 'false');
+    $('detailsBtn')?.setAttribute('aria-expanded', 'false');
+    setWorkbenchInert(false);
+    activeSurfacePanel = null;
+    panelReturnFocus = null;
+    if (restoreFocus && returnFocus?.isConnected) requestAnimationFrame(() => returnFocus.focus());
+  }
+
+  function openSurfacePanel(panel, trigger) {
+    if (!panel) return;
+    if (activeSurfacePanel === panel && !panel.classList.contains('hidden')) {
+      closeSurfacePanels();
+      return;
+    }
+    if (activeSurfacePanel) closeSurfacePanels({ restoreFocus: false });
+    closeDockMenu();
+    activeSurfacePanel = panel;
+    panelReturnFocus = trigger || document.activeElement;
+    panel.classList.remove('hidden');
+    panelBackdrop?.classList.remove('hidden');
+    panelBackdrop?.setAttribute('aria-hidden', 'false');
+    document.documentElement.classList.add('panel-open');
+    $('draftState')?.setAttribute('aria-expanded', panel === sessionMenu ? 'true' : 'false');
+    $('detailsBtn')?.setAttribute('aria-expanded', panel === detailsPanel ? 'true' : 'false');
+    setWorkbenchInert(true);
+    requestAnimationFrame(() => (panel.querySelector('[data-close-panel]') || panelFocusable(panel)[0])?.focus());
+  }
+
+  function trapSurfacePanelFocus(event) {
+    if (event.key !== 'Tab' || !activeSurfacePanel) return;
+    const focusable = panelFocusable(activeSurfacePanel);
+    if (!focusable.length) { event.preventDefault(); return; }
+    const first = focusable[0], last = focusable[focusable.length - 1];
+    if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+    else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+  }
 
   function promptDraftKey(session = selectedSession) { return `faryoPromptDraft:${routeBase || 'owner'}:${session || 'default'}`; }
   function pendingSubmissionKey(session = selectedSession) { return `${promptDraftKey(session)}:pending`; }
@@ -289,7 +347,7 @@
   }
 
   function setBusy(isBusy) {
-    for (const id of ['sendBtn', 'refreshBtn', 'dockFullBtn', 'dockPlusBtn', 'approveSmallBtn', 'attachmentBtn', 'upBtn', 'downBtn']) {
+    for (const id of ['sendBtn', 'refreshBtn', 'dockFullBtn', 'detailsChatBtn', 'detailsRawBtn', 'detailsRefreshBtn', 'dockPlusBtn', 'approveSmallBtn', 'attachmentBtn', 'upBtn', 'downBtn']) {
       const el = $(id);
       if (el) el.disabled = isBusy;
     }
@@ -345,6 +403,7 @@
 
   function setLiveState(state) {
     liveState = state;
+    if ($('detailsConnection')) $('detailsConnection').textContent = state;
     updatePetControl();
   }
 
@@ -618,6 +677,11 @@
     selectedSession = data.session || selectedSession;
     updateFolderLabel(data);
     updateStatusPill(data.gitStatus);
+    if ($('detailsSession')) $('detailsSession').textContent = sessionLabel;
+    if ($('detailsOwner')) $('detailsOwner').textContent = ownerLabel;
+    if ($('detailsModel')) $('detailsModel').textContent = modelLabel;
+    if ($('detailsContext')) $('detailsContext').textContent = contextText;
+    if ($('detailsGit')) $('detailsGit').textContent = phasePill.textContent || 'git --';
     agentRunning = Boolean(data.agentRunning);
     updatePetControl();
   }
@@ -630,6 +694,7 @@
     persistPromptDraft();
     persistPendingSubmission();
     selectedSession = session;
+    closeSurfacePanels({ restoreFocus: false });
     pendingSubmission = null;
     restorePromptDraft();
     autosize();
@@ -648,7 +713,7 @@
     const list = (data?.sessions || []).filter((item) => item.active && item.tmuxSession).map((item) => { const route = String(item.route || '').trim(), session = String(item.tmuxSession), where = item.cwdLabel || compactPathLabel(item.cwd || ''), meta = escapeHtml(`${item.routeLabel || route || 'Owner'}${where ? ` · ${where}` : ''}${item.updatedAt ? ` · ${item.updatedAt}` : ''}`), active = routeBase === `/${route}` && session === selectedSession; return `<button type="button" class="${active ? 'active' : ''}" data-route="${escapeHtml(route)}" data-session="${escapeHtml(session)}"><span><strong>${escapeHtml(String(item.title || item.id || session))}</strong><small>${meta}</small></span><em>${active ? 'Now' : 'Open'}</em></button>`; }).join('');
     const current = routeBase && selectedSession ? `<button type="button" class="active" data-route="${escapeHtml(routeBase.replace('/', ''))}" data-session="${escapeHtml(selectedSession)}"><span><strong>${escapeHtml($('topicText').textContent || selectedSession)}</strong><small>${escapeHtml($('draftState').title || $('draftState').textContent || 'Current session')}</small></span><em>Now</em></button>` : '';
     const refresh = needsRefresh ? '<button type="button" data-refresh="workbench"><span><strong>Refresh</strong><small>Load latest gateway sessions</small></span><em>↻</em></button>' : '';
-    sessionMenu.innerHTML = `<div class="session-menu-title">Running sessions</div>${list || current || '<div class="session-empty">No cached sessions</div>'}${refresh}`;
+    sessionMenu.innerHTML = `<div class="surface-panel-heading"><div><span class="surface-panel-eyebrow">Workspace</span><strong id="sessionPanelTitle">Running sessions</strong></div><button class="panel-close" type="button" data-close-panel aria-label="Close running sessions">×</button></div>${list || current || '<div class="session-empty">No cached sessions</div>'}${refresh}`;
   }
 
   async function refreshSessionMenu() {
@@ -834,6 +899,7 @@
     const rules = compactRulesForCapture(capture);
     output.dataset.captureSource = String(capture.captureSource || '');
     output.dataset.agentSource = String(capture.agentSource || '');
+    if ($('detailsSource')) $('detailsSource').textContent = String(capture.captureSource || capture.source || 'unknown');
     needsConfirmUI = hasConfirmUI(text, rules);
     updateStatusLineAutoExpand();
     output.classList.toggle('compact-blocks', outputMode === 'compact');
@@ -882,13 +948,16 @@
   function currentCaptureLines() { return outputMode === 'compact' ? COMPACT_CAPTURE_LINES : FULL_CAPTURE_LINES; }
 
   function renderOutputModeButton() {
-    const compactBtn = $('refreshBtn');
-    const fullBtn = $('dockFullBtn');
-    if (compactBtn) {
+    for (const compactBtn of [$('refreshBtn'), $('detailsChatBtn')]) {
+      if (!compactBtn) continue;
       compactBtn.textContent = 'Chat';
       compactBtn.classList.toggle('mode-active', outputMode === 'compact');
     }
-    if (fullBtn) { fullBtn.textContent = outputMode === 'full' && fullLocked ? 'Locked' : 'Raw'; fullBtn.classList.toggle('mode-active', outputMode === 'full'); }
+    for (const fullBtn of [$('dockFullBtn'), $('detailsRawBtn')]) {
+      if (!fullBtn) continue;
+      fullBtn.textContent = outputMode === 'full' && fullLocked ? 'Locked' : 'Raw';
+      fullBtn.classList.toggle('mode-active', outputMode === 'full');
+    }
     if (promptShell) promptShell.style.borderColor = outputMode === 'full' && fullLocked ? 'var(--accent)' : '';
   }
 
@@ -1195,26 +1264,35 @@
   renderOutputModeButton();
   toggleClassState('header', 'collapsed', 'rdHeaderCollapsed'); toggleClassState('.app', 'header-collapsed', 'rdHeaderCollapsed'); syncStatusRefresh(false);
   $('sessionTitle').addEventListener('click', () => { const on = !document.querySelector('header').classList.contains('collapsed'); toggleClassState('header', 'collapsed', 'rdHeaderCollapsed', on); toggleClassState('.app', 'header-collapsed', 'rdHeaderCollapsed', on); syncStatusRefresh(!on); });
-  sessionMenu.addEventListener('click', (event) => { const item = event.target.closest('button')?.dataset; if (item?.refresh) { refreshSessionMenu().catch((err) => setError(userErrorMessage(err))); return; } if (item?.route && item?.session) switchSession(item.route, item.session); });
+  sessionMenu.addEventListener('click', (event) => {
+    const button = event.target.closest('button');
+    if (button?.hasAttribute('data-close-panel')) { closeSurfacePanels(); return; }
+    const item = button?.dataset;
+    if (item?.refresh) { refreshSessionMenu().catch((err) => setError(userErrorMessage(err))); return; }
+    if (item?.route && item?.session) switchSession(item.route, item.session);
+  });
   $('draftState').addEventListener('click', async (event) => {
     event.stopPropagation();
-    if (!sessionMenu.classList.contains('hidden')) { sessionMenu.classList.add('hidden'); return; }
+    if (!sessionMenu.classList.contains('hidden')) { closeSurfacePanels(); return; }
     const cache = cachedWorkbench();
     renderSessionMenu(cache, !cache);
-    sessionMenu.classList.remove('hidden');
+    openSurfacePanel(sessionMenu, $('draftState'));
   });
+  $('detailsBtn').addEventListener('click', (event) => { event.stopPropagation(); openSurfacePanel(detailsPanel, $('detailsBtn')); });
+  detailsPanel.addEventListener('click', (event) => { if (event.target.closest('[data-close-panel]')) closeSurfacePanels(); });
+  panelBackdrop.addEventListener('click', () => closeSurfacePanels());
   $('dockPlusBtn').addEventListener('click', (event) => {
     event.stopPropagation();
     toggleDockMenu();
   });
   document.addEventListener('click', (event) => {
-    if (!event.target.closest('#sessionMenu,#draftState')) sessionMenu.classList.add('hidden');
     if (dockMenu.classList.contains('hidden')) return;
     if (event.target.closest('.composer')) return;
     closeDockMenu();
   });
   document.addEventListener('keydown', (event) => {
-    if (event.key === 'Escape') { closeDockMenu(); sessionMenu.classList.add('hidden'); }
+    trapSurfacePanelFocus(event);
+    if (event.key === 'Escape') { closeDockMenu(); closeSurfacePanels(); }
   });
   $('refreshBtn').addEventListener('click', async () => {
     try {
@@ -1225,6 +1303,16 @@
   });
   $('dockFullBtn').addEventListener('click', async () => {
     try { await setOutputMode('full'); } catch (err) { setError(userErrorMessage(err)); }
+  });
+  $('detailsChatBtn').addEventListener('click', async () => {
+    try { await setOutputMode('compact'); closeSurfacePanels(); } catch (err) { setError(userErrorMessage(err)); }
+  });
+  $('detailsRawBtn').addEventListener('click', async () => {
+    try { await setOutputMode('full'); closeSurfacePanels(); } catch (err) { setError(userErrorMessage(err)); }
+  });
+  $('detailsRefreshBtn').addEventListener('click', async () => {
+    try { await Promise.all([refreshStatus({ silent: true }), refreshCapture(currentCaptureLines(), { silent: true })]); }
+    catch (err) { setError(userErrorMessage(err)); }
   });
 
   async function submitPrompt() {

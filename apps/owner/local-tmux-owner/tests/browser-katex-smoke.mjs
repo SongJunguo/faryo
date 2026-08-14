@@ -21,6 +21,7 @@ const viewportHeight = Number(process.env.FARYO_SMOKE_VIEWPORT_HEIGHT || 0);
 const smokeTheme = process.env.FARYO_SMOKE_THEME || '';
 const screenshotPath = process.env.FARYO_SMOKE_SCREENSHOT || '';
 const uiScreenshotPath = process.env.FARYO_SMOKE_UI_SCREENSHOT || '';
+const uiScreenshotPanel = process.env.FARYO_SMOKE_UI_PANEL || '';
 const expectedTex = JSON.parse(process.env.FARYO_SMOKE_EXPECT_TEX || '[]');
 const expectedOutput = process.env.FARYO_SMOKE_EXPECT_OUTPUT || '';
 const minMatrixRows = Number(process.env.FARYO_SMOKE_MIN_MATRIX_ROWS || 0);
@@ -353,6 +354,65 @@ try {
     if (!beforeFocus || geometries.some((item) => Math.abs(item.width - beforeFocus.width) > 1 || Math.abs(item.height - beforeFocus.height) > 1)) {
       throw new Error(`Owner composer changed geometry across focus/blur: ${JSON.stringify({ beforeFocus, focused, blurred })}`);
     }
+
+    const inspectPanel = async (action) => {
+      const result = await send('Runtime.evaluate', {
+        expression: `(() => {
+          const action = ${JSON.stringify(action)};
+          if (action === 'open-session') document.getElementById('draftState')?.click();
+          if (action === 'close-current') document.querySelector('.surface-panel:not(.hidden) [data-close-panel]')?.click();
+          if (action === 'open-details') document.getElementById('detailsBtn')?.click();
+          if (action === 'escape') document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+          const panel = document.querySelector('.surface-panel:not(.hidden)');
+          const rect = panel?.getBoundingClientRect();
+          return {
+            panelId: panel?.id || '',
+            panelRect: rect ? { left: Math.round(rect.left), right: Math.round(rect.right), width: Math.round(rect.width) } : null,
+            panelOpen: document.documentElement.classList.contains('panel-open'),
+            backdropVisible: !document.getElementById('panelBackdrop')?.classList.contains('hidden'),
+            sessionExpanded: document.getElementById('draftState')?.getAttribute('aria-expanded'),
+            detailsExpanded: document.getElementById('detailsBtn')?.getAttribute('aria-expanded'),
+            activeId: document.activeElement?.id || '',
+            activeClosesPanel: Boolean(document.activeElement?.hasAttribute?.('data-close-panel')),
+            backgroundInert: Boolean(document.getElementById('outputWrap')?.inert && document.querySelector('footer')?.inert),
+          };
+        })()`,
+        returnByValue: true,
+      });
+      return result.result?.value || {};
+    };
+
+    await inspectPanel('open-session');
+    await delay(80);
+    const sessionPanelState = await inspectPanel('inspect');
+    if (sessionPanelState.panelId !== 'sessionMenu' || !sessionPanelState.panelOpen || !sessionPanelState.backdropVisible || !sessionPanelState.backgroundInert || sessionPanelState.sessionExpanded !== 'true' || !sessionPanelState.activeClosesPanel) {
+      throw new Error(`Owner session panel did not open accessibly: ${JSON.stringify(sessionPanelState)}`);
+    }
+    if (state.viewport.width < 720 && sessionPanelState.panelRect?.width !== state.viewport.width) {
+      throw new Error(`Mobile session panel is not full width: ${JSON.stringify(sessionPanelState)}`);
+    }
+    await inspectPanel('close-current');
+    await delay(80);
+    const sessionClosedState = await inspectPanel('inspect');
+    if (sessionClosedState.panelOpen || sessionClosedState.backdropVisible || sessionClosedState.activeId !== 'draftState') {
+      throw new Error(`Owner session panel did not restore focus: ${JSON.stringify(sessionClosedState)}`);
+    }
+
+    await inspectPanel('open-details');
+    await delay(80);
+    const detailsPanelState = await inspectPanel('inspect');
+    if (detailsPanelState.panelId !== 'detailsPanel' || !detailsPanelState.panelOpen || !detailsPanelState.backgroundInert || detailsPanelState.detailsExpanded !== 'true' || !detailsPanelState.activeClosesPanel) {
+      throw new Error(`Owner details panel did not open accessibly: ${JSON.stringify(detailsPanelState)}`);
+    }
+    if (state.viewport.width < 720 && detailsPanelState.panelRect?.width !== state.viewport.width) {
+      throw new Error(`Mobile details panel is not full width: ${JSON.stringify(detailsPanelState)}`);
+    }
+    await inspectPanel('escape');
+    await delay(80);
+    const detailsClosedState = await inspectPanel('inspect');
+    if (detailsClosedState.panelOpen || detailsClosedState.backdropVisible || detailsClosedState.activeId !== 'detailsBtn') {
+      throw new Error(`Owner details panel did not close on Escape: ${JSON.stringify(detailsClosedState)}`);
+    }
     console.log(`faryo-browser-owner-layout=PASS viewport=${state.viewport.width}x${state.viewport.height}`);
   }
   if (!skipRenderChecks) {
@@ -519,6 +579,28 @@ try {
         text('ctxText', 'Ctx 42%');
         text('modelText', 'Agent ready');
         text('phasePill', 'git clean');
+        text('detailsSession', 'Research session');
+        text('detailsOwner', 'Ubuntu Workstation');
+        text('detailsModel', 'Agent model');
+        text('detailsContext', 'Ctx 42%');
+        text('detailsGit', 'git clean');
+        text('detailsSource', 'structured history');
+        text('detailsConnection', 'live');
+        const smokeSafeText = {
+          ownerText: 'Ubuntu Workstation', topicText: 'Research session', draftState: 'Project workspace',
+          ctxText: 'Ctx 42%', modelText: 'Agent ready', phasePill: 'git clean',
+          detailsSession: 'Research session', detailsOwner: 'Ubuntu Workstation', detailsModel: 'Agent model',
+          detailsContext: 'Ctx 42%', detailsGit: 'git clean', detailsSource: 'structured history', detailsConnection: 'live',
+        };
+        const safeStyle = document.createElement('style');
+        safeStyle.textContent = '.faryo-smoke-safe-text{font-size:0!important;color:transparent!important}.faryo-smoke-safe-text::after{content:attr(data-faryo-smoke-text);font-size:12px;color:var(--text)}#ownerText.faryo-smoke-safe-text::after,#topicText.faryo-smoke-safe-text::after{font-size:14px}.details-list dd.faryo-smoke-safe-text::after{font-size:12px}';
+        document.head.appendChild(safeStyle);
+        for (const [id, value] of Object.entries(smokeSafeText)) {
+          const element = document.getElementById(id);
+          if (!element) continue;
+          element.dataset.faryoSmokeText = value;
+          element.classList.add('faryo-smoke-safe-text');
+        }
         const output = document.getElementById('output');
         if (output) {
           output.className = 'output compact-blocks';
@@ -532,12 +614,20 @@ try {
         }
         document.getElementById('bottomBtn')?.classList.add('hidden');
         document.getElementById('errorBox')?.classList.add('hidden');
+        const panel = ${JSON.stringify(uiScreenshotPanel)};
+        if (panel === 'details') document.getElementById('detailsBtn')?.click();
+        if (panel === 'session') {
+          document.getElementById('draftState')?.click();
+          const sessionMenu = document.getElementById('sessionMenu');
+          if (sessionMenu) sessionMenu.innerHTML = '<div class="surface-panel-heading"><div><span class="surface-panel-eyebrow">Workspace</span><strong id="sessionPanelTitle">Running sessions</strong></div><button class="panel-close" type="button" data-close-panel aria-label="Close running sessions">×</button></div><button type="button" class="active"><span><strong>Research session</strong><small>Ubuntu Workstation · Project Alpha</small></span><em>Now</em></button><button type="button"><span><strong>Implementation review</strong><small>Ubuntu Workstation · Project Beta</small></span><em>Open</em></button><button type="button"><span><strong>Experiment monitor</strong><small>Ubuntu Workstation · Project Gamma</small></span><em>Open</em></button>';
+        }
+        if (output?.isConnected) output.replaceWith(output.cloneNode(true));
         return true;
       })()`,
       returnByValue: true,
     });
     await send('Runtime.evaluate', { expression: 'document.fonts.ready', awaitPromise: true });
-    await delay(120);
+    await delay(uiScreenshotPanel ? 240 : 120);
     const screenshot = await send('Page.captureScreenshot', {
       format: 'png',
       fromSurface: true,

@@ -8,7 +8,7 @@
   <meta name="theme-color" content="#0F1115" media="(prefers-color-scheme: dark)" />
   <script src="appearance.js?v=faryo-appearance-2"></script>
   <link rel="stylesheet" href="appearance.css?v=faryo-appearance-1" />
-  <link rel="stylesheet" href="style.css?v=faryo-owner-workbench-1" />
+  <link rel="stylesheet" href="style.css?v=faryo-owner-workbench-2" />
   <link rel="stylesheet" href="vendor/katex/katex.min.css?v=0.18.4" />
 </head>
 <body>
@@ -22,7 +22,12 @@
             <span id="topicText">session unknown</span>
           </strong>
         </div>
-        <button id="draftState" type="button">folder</button>
+        <div class="topbar-actions">
+          <button id="detailsBtn" class="topbar-icon" type="button" aria-label="Open session details" aria-expanded="false" aria-controls="detailsPanel">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h10M18 7h2M4 12h3M11 12h9M4 17h7M15 17h5"/><circle cx="16" cy="7" r="2"/><circle cx="9" cy="12" r="2"/><circle cx="13" cy="17" r="2"/></svg>
+          </button>
+          <button id="draftState" type="button" aria-label="Open running sessions" aria-expanded="false" aria-controls="sessionMenu">folder</button>
+        </div>
       </div>
       <div class="meta-row">
         <div id="subTitle" class="subtitle meta-main">
@@ -38,7 +43,38 @@
         <span id="phasePill" class="pill git-pill">git --</span>
       </div>
     </header>
-    <div id="sessionMenu" class="session-menu hidden" role="menu" aria-label="Switch session"></div>
+    <div id="panelBackdrop" class="panel-backdrop hidden" aria-hidden="true"></div>
+    <aside id="sessionMenu" class="session-menu surface-panel surface-panel-left hidden" role="dialog" aria-modal="true" aria-labelledby="sessionPanelTitle"></aside>
+    <aside id="detailsPanel" class="details-panel surface-panel surface-panel-right hidden" role="dialog" aria-modal="true" aria-labelledby="detailsPanelTitle">
+      <div class="surface-panel-heading">
+        <div>
+          <span class="surface-panel-eyebrow">Session</span>
+          <strong id="detailsPanelTitle">Details</strong>
+        </div>
+        <button class="panel-close" type="button" data-close-panel aria-label="Close session details">×</button>
+      </div>
+      <section class="details-section" aria-label="Output view">
+        <div class="details-section-title">View</div>
+        <div class="details-mode-rail">
+          <button id="detailsChatBtn" type="button">Chat</button>
+          <button id="detailsRawBtn" type="button">Raw</button>
+          <button id="detailsRefreshBtn" type="button">Refresh</button>
+        </div>
+      </section>
+      <section class="details-section" aria-label="Session information">
+        <div class="details-section-title">Runtime</div>
+        <dl class="details-list">
+          <div><dt>Session</dt><dd id="detailsSession">unknown</dd></div>
+          <div><dt>Owner</dt><dd id="detailsOwner">unknown</dd></div>
+          <div><dt>Model</dt><dd id="detailsModel">unknown</dd></div>
+          <div><dt>Context</dt><dd id="detailsContext">unknown</dd></div>
+          <div><dt>Git</dt><dd id="detailsGit">unknown</dd></div>
+          <div><dt>Source</dt><dd id="detailsSource">unknown</dd></div>
+          <div><dt>Connection</dt><dd id="detailsConnection">connecting</dd></div>
+        </dl>
+      </section>
+      <p class="details-note">Chat uses structured history when available. Raw keeps the terminal evidence. Opening this panel never changes tmux dimensions.</p>
+    </aside>
 
     <main id="outputWrap">
       <pre id="output" class="output">Waiting for output...</pre>
@@ -93,6 +129,6 @@
   <script src="compact-rules-codex.js?v=faryo-owner-plan-2"></script>
   <script src="compact-rules-claude.js?v=faryo-owner-compact-claude-8"></script>
   <script src="live-scroll.js?v=faryo-owner-live-scroll-1"></script>
-  <script src="app.js?v=faryo-owner-live-scroll-1"></script>
+  <script src="app.js?v=faryo-owner-panels-1"></script>
 </body>
 </html>
