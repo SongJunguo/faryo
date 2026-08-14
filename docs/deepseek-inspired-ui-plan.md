@@ -14,6 +14,14 @@
 - 固定标签：`pre-deepseek-ui-20260815`
 - 原有开发分支：`katex-feature`
 
+当前进度：
+
+- `e4f3cc4`：计划与回滚边界。
+- `d6130a8`：Workbench v2 设计令牌、居中对话主轴和稳定大输入器。
+- `adee062`：手机全宽会话抽屉、详情面板、焦点与背景滚动管理。
+- `e7b3fe8`：按会话保存的可折叠 Live tmux；真实刷新下保持内层滚动。
+- 正在执行阶段 D：以效果为第一优先级迁移 Markdown/TeX 解析引擎。
+
 ## 1. 目标
 
 在不改变 Faryo 运行架构和安全边界的前提下，把 Owner 会话页完善为受
@@ -115,10 +123,42 @@ DeepSeek Harness 启发的现代 Agent 工作台：桌面端具有清晰、安�
 - Python Owner/Gateway 服务和现有 API 路径不变。
 - 结构化会话读取、SSE 刷新、tmux 输入与 Raw 路径不变。
 - 继续使用渐进增强的原生 HTML/CSS/JavaScript，不引入 Node 生产运行时。
-- 继续使用仓库内 KaTeX、markdown-it 和字体资源，直到渲染阶段的替换方案通过
-  等价测试。
+- 继续使用仓库内 KaTeX 和字体资源。`markdown-it` 在新引擎完成验收前作为明确的
+  回退引擎保留，不再作为效果上限。
 
-### 5.2 前端隔离策略
+### 5.2 Markdown/TeX 引擎决策（2026-08-15 更新）
+
+用户明确选择“渲染效果第一位”。阶段 D 因此采用与 DeepSeek Harness 同类的
+AST 管线，而不是继续以正则修补现有渲染器：
+
+```text
+原始结构化消息
+  -> micromark（CommonMark tokenization）
+  -> mdast（Markdown AST）
+  -> GFM 扩展（表格、任务列表、删除线、自动链接）
+  -> math 扩展与兼容层（$、$$、\(...\)、\[...\]）
+  -> 安全 HTML renderer
+  -> KaTeX 数学节点
+  -> 可选代码高亮
+```
+
+实施约束：
+
+- 依赖版本和生成命令锁定；浏览器只加载仓库内的预构建 bundle，不要求生产机
+  安装 Node 或联网。
+- 新引擎使用独立全局名和适配器；可通过一处配置切回现有 `markdown-it`，便于
+  A/B 对照和故障回退。
+- 借鉴或复用 DeepSeek Harness 的 math compatibility 源码时，固定上游提交、保留
+  MIT 归属，并在仓库许可证说明中记录；不复制其品牌资源。
+- AST 到 HTML 的过程使用允许列表；原始 HTML、危险协议、事件属性和任意文件 URL
+  不因换引擎而放开。
+- 流式阶段只渲染已经闭合且语法稳定的块；最终阶段启用完整 GFM 与数学解析，避免
+  未完成的 TeX/代码围栏造成闪烁或吞掉后续正文。
+- 代码高亮作为同一阶段的第二步评估。优先复用 DeepSeek 使用的 Shiki 方案；若其
+  浏览器包体明显影响手机首屏，则保留 AST 语义结构并采用按需语言包，而不是退回
+  无结构的文本解析。
+
+### 5.3 前端隔离策略
 
 - 在页面根节点加入明确的新版 UI 标识，新增设计令牌只在 Owner 会话页生效。
 - 先新增布局容器和语义化控制，不删除旧 ID；现有 JavaScript 查询和 API 行为因此
@@ -191,6 +231,10 @@ DeepSeek Harness 启发的现代 Agent 工作台：桌面端具有清晰、安�
 
 工作项：
 
+- 以锁定依赖构建浏览器端 `micromark + mdast + GFM + math` bundle，并记录许可证、
+  构建命令和 bundle 校验方式。
+- 新旧引擎通过适配器暴露同一 `render(text, options)` 契约；开发阶段可以 A/B，
+  发布时仍保留一键回退。
 - 建立明确的 `streaming` 与 `settled` 两种渲染模式。
 - `streaming` 对未闭合 Markdown、代码围栏和数学定界符采取保守显示，不闪现错误公式。
 - `settled` 完整解析 GFM、表格、链接、图片、代码块和 TeX。
@@ -198,8 +242,12 @@ DeepSeek Harness 启发的现代 Agent 工作台：桌面端具有清晰、安�
   不互相冲突的优先级。
 - 覆盖分段函数、矩阵、范数、指示函数、对齐环境、长公式、表格内公式以及公式后的
   中文标点。
-- 比较继续增强 markdown-it 与引入 micromark/mdast 子集的体积、安全性和维护成本；
-  只有新方案显著减少启发式修复且能完全离线时才替换。
+- 复用 DeepSeek Harness 已验证的数学兼容思路，使 `\(...\)`、`\[...\]` 与标准
+  remark-math 美元定界符进入同一种数学 AST 节点，不再依赖 DOM 后处理猜测。
+- 保留少量、显式标注的终端损伤修复，仅用于 Raw/tmux fallback；结构化 App Server
+  消息不得再经过宽泛的终端公式猜测。
+- A/B 比较现有 `markdown-it` 与新 AST 引擎的复杂样例、DOM、截图、包体和耗时；
+  正确性和视觉效果优先，包体只作为手机首屏优化指标。
 
 验收：
 
