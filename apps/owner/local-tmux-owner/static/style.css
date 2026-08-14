@@ -274,7 +274,12 @@ button.product-mark:active { transform: none; }
    no token deltas. Show a small, explicitly transient tmux tail until the
    finalized structured message replaces it. */
 .compact-live-terminal { align-self: stretch; max-width: 100%; padding: 8px 10px; border: 1px dashed color-mix(in srgb, var(--accent) 38%, var(--line)); border-radius: 11px; background: color-mix(in srgb, var(--panel2) 82%, transparent); }
-.compact-live-title { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; color: var(--muted); font-size: calc(11px + var(--font-step)); font-weight: 700; letter-spacing: .02em; }
+.compact-live-title { display: flex; align-items: center; gap: 6px; margin-bottom: 0; color: var(--muted); font-size: calc(11px + var(--font-step)); font-weight: 700; letter-spacing: .02em; cursor: pointer; list-style: none; user-select: none; }
+.compact-live-title::-webkit-details-marker { display: none; }
+.compact-live-title::after { content: "›"; margin-left: 2px; color: var(--muted); font-size: 16px; line-height: 1; transform: rotate(0); transition: transform .16s ease; }
+.compact-live-terminal[open] .compact-live-title { margin-bottom: 6px; }
+.compact-live-terminal[open] .compact-live-title::after { transform: rotate(90deg); }
+.compact-live-state { margin-left: auto; color: var(--muted); font-size: calc(10px + var(--font-step)); font-weight: 600; opacity: .76; }
 .compact-live-title .live-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 17%, transparent); animation: live-pulse 1.3s ease-in-out infinite; }
 .compact-live-terminal pre { max-height: min(42vh, 360px); margin: 0; overflow: auto; color: var(--muted); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; font-size: calc(12px + var(--font-step)); line-height: 1.42; white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; }
 @keyframes live-pulse { 0%, 100% { opacity: .45; } 50% { opacity: 1; } }

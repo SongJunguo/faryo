@@ -16,6 +16,7 @@ const privacySafe = process.env.FARYO_SMOKE_PRIVACY_SAFE === '1';
 const expectStructured = process.env.FARYO_SMOKE_EXPECT_STRUCTURED === '1';
 const debugLayout = process.env.FARYO_SMOKE_DEBUG_LAYOUT === '1';
 const checkOwnerLayout = process.env.FARYO_SMOKE_CHECK_OWNER_LAYOUT === '1';
+const expectedLivePanelState = process.env.FARYO_SMOKE_EXPECT_LIVE_PANEL_STATE || '';
 const viewportWidth = Number(process.env.FARYO_SMOKE_VIEWPORT_WIDTH || 0);
 const viewportHeight = Number(process.env.FARYO_SMOKE_VIEWPORT_HEIGHT || 0);
 const smokeTheme = process.env.FARYO_SMOKE_THEME || '';
@@ -168,6 +169,7 @@ try {
         const output = document.getElementById('output');
         const outputWrap = document.getElementById('outputWrap');
         const promptShell = document.querySelector('.prompt-shell');
+        const livePanel = output?.querySelector('.compact-live-terminal');
         const promptRect = promptShell?.getBoundingClientRect();
         const visibleComposerControls = ['petControl', 'dockPlusBtn', 'sendBtn']
           .map((id) => document.getElementById(id))
@@ -287,6 +289,7 @@ try {
               height: Math.round(promptRect.height),
             } : null,
             visibleComposerControls,
+            livePanel: livePanel ? { open: Boolean(livePanel.open), session: String(livePanel.dataset.session || '') } : null,
           },
           katexStylesheetLoaded: [...document.styleSheets].some((sheet) => String(sheet.href || '').includes('/katex')),
           katexAssetUrls: ${JSON.stringify(privacySafe)}
@@ -327,6 +330,12 @@ try {
     }
     if (prompt.height < 82) throw new Error(`Owner composer is unexpectedly short: ${JSON.stringify(prompt)}`);
     if (layout.outputWidth > 752) throw new Error(`Owner reading column is too wide: ${JSON.stringify(layout)}`);
+    if (expectedLivePanelState) {
+      const expectedOpen = expectedLivePanelState === 'open';
+      if (!layout.livePanel || layout.livePanel.open !== expectedOpen) {
+        throw new Error(`Owner Live from tmux panel state is wrong: ${JSON.stringify({ expectedLivePanelState, livePanel: layout.livePanel })}`);
+      }
+    }
     const undersizedControls = (layout.visibleComposerControls || []).filter((item) => item.width < 42 || item.height < 42);
     if (undersizedControls.length) throw new Error(`Owner composer controls are too small: ${JSON.stringify(undersizedControls)}`);
 
@@ -609,7 +618,7 @@ try {
             '<section class="compact-process-line">Read manuscript and compared the assumptions</section>',
             '<section class="compact-block plan"><div class="compact-plan-title">Plan</div><div class="compact-plan-list"><div class="compact-plan-item">1. Verify the regularity assumptions</div><div class="compact-plan-item">2. Tighten the theorem wording</div></div></section>',
             '<section class="compact-block output"><div class="markdown-body"><h2>结论</h2><p>这段证明的主线成立，但需要明确区分连续性、局部 Lipschitz 条件与解的存在性。</p><ul><li>保留当前控制目标。</li><li>补充证明实际使用的有界条件。</li><li>避免超出定理范围的结论。</li></ul><blockquote>修改后不会改变现有控制器结构。</blockquote></div><button class="copy-output-block" type="button">⧉</button></section>',
-            '<section class="compact-live-terminal"><div class="compact-live-title"><span class="live-dot"></span>Live from tmux</div><pre>Reviewing references…\\nRunning focused checks…\\nWaiting for the next structured update…</pre></section>',
+            '<details class="compact-live-terminal" data-session="example" open><summary class="compact-live-title"><span class="live-dot"></span><span>Live from tmux</span><span class="compact-live-state">Agent working</span></summary><pre>Reviewing references…\\nRunning focused checks…\\nWaiting for the next structured update…</pre></details>',
           ].join('');
         }
         document.getElementById('bottomBtn')?.classList.add('hidden');

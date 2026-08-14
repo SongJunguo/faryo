@@ -36,4 +36,19 @@ const shortened = pane(350, 300, 120);
 liveScroll.restore(shortened, { scrollTop: 120, followLatest: false });
 assert.equal(shortened.scrollTop, 50, 'preserved positions should clamp to the new scroll range');
 
+assert.equal(liveScroll.defaultExpanded(390), false, 'a phone live panel should start collapsed');
+assert.equal(liveScroll.defaultExpanded(720), true, 'a tablet or desktop live panel should start expanded');
+assert.equal(
+  liveScroll.resolveExpanded('codex-a', { session: 'codex-a', expanded: false }, '1', 1200),
+  false,
+  'the currently rendered session state should survive a live refresh',
+);
+assert.equal(
+  liveScroll.resolveExpanded('codex-b', { session: 'codex-a', expanded: true }, '0', 1200),
+  false,
+  'a different session should use only its own stored preference',
+);
+assert.equal(liveScroll.resolveExpanded('codex-c', null, null, 390), false);
+assert.equal(liveScroll.resolveExpanded('codex-c', null, null, 1200), true);
+
 console.log('live-scroll tests passed');

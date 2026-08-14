@@ -26,5 +26,16 @@
       : Math.max(0, Math.min(Number(state.scrollTop || 0), maximum));
   }
 
-  return { snapshot, restore };
+  function defaultExpanded(viewportWidth) {
+    return Number(viewportWidth || 0) >= 720;
+  }
+
+  function resolveExpanded(session, state, storedValue, viewportWidth) {
+    if (state && state.session === session && typeof state.expanded === 'boolean') return state.expanded;
+    if (storedValue === '1') return true;
+    if (storedValue === '0') return false;
+    return defaultExpanded(viewportWidth);
+  }
+
+  return { snapshot, restore, defaultExpanded, resolveExpanded };
 });

@@ -280,18 +280,57 @@
     }
   }
 
-  function liveTerminalScrollState() {
-    const pane = output.querySelector('.compact-live-terminal pre');
-    return window.FaryoLiveScroll?.snapshot(pane) || null;
+  function livePanelStorageKey(session = selectedSession) {
+    return `faryoLiveExpanded:${routeBase || 'owner'}:${session || 'default'}`;
   }
 
-  function restoreLiveTerminalScroll(state) {
-    const pane = output.querySelector('.compact-live-terminal pre');
-    window.FaryoLiveScroll?.restore(pane, state);
+  function storedLivePanelPreference(session = selectedSession) {
+    try { return sessionStorage.getItem(livePanelStorageKey(session)); }
+    catch (_err) { return null; }
+  }
+
+  function persistLivePanelPreference(session, expanded) {
+    try { sessionStorage.setItem(livePanelStorageKey(session), expanded ? '1' : '0'); }
+    catch (_err) {}
+  }
+
+  function liveTerminalState() {
+    const panel = output.querySelector('.compact-live-terminal');
+    if (!panel) return null;
+    const expanded = panel.open === true;
+    return {
+      session: panel.dataset.session || selectedSession,
+      expanded,
+      scroll: expanded ? (window.FaryoLiveScroll?.snapshot(panel.querySelector('pre')) || null) : null,
+    };
+  }
+
+  function resolvedLivePanelExpanded(state, session = selectedSession) {
+    if (typeof window.FaryoLiveScroll?.resolveExpanded === 'function') {
+      return window.FaryoLiveScroll.resolveExpanded(session, state, storedLivePanelPreference(session), window.innerWidth);
+    }
+    if (state?.session === session && typeof state.expanded === 'boolean') return state.expanded;
+    const stored = storedLivePanelPreference(session);
+    return stored === '1' || (stored !== '0' && window.innerWidth >= 720);
+  }
+
+  function restoreLiveTerminalState(state) {
+    const panel = output.querySelector('.compact-live-terminal');
+    if (!panel) return;
+    const expanded = resolvedLivePanelExpanded(state, selectedSession);
+    panel.open = expanded;
+    if (!expanded) return;
+    requestAnimationFrame(() => window.FaryoLiveScroll?.restore(panel.querySelector('pre'), state?.session === selectedSession ? state.scroll : null));
   }
 
   outputWrap.addEventListener('scroll', updateBottomButton, { passive: true });
   bottomBtn.addEventListener('click', () => { if (!applyDeferredCapture(true)) scrollBottom(true); });
+  output.addEventListener('toggle', (event) => {
+    const panel = event.target.closest?.('.compact-live-terminal');
+    if (!panel) return;
+    persistLivePanelPreference(panel.dataset.session || selectedSession, panel.open);
+    if (panel.open) requestAnimationFrame(() => window.FaryoLiveScroll?.restore(panel.querySelector('pre'), null));
+  }, true);
   output.addEventListener('click', async (event) => {
     const copy = event.target.closest('.copy-output-block');
     if (copy) {
@@ -893,7 +932,7 @@
   }
 
   function renderOutput(capture) {
-    const liveScroll = liveTerminalScrollState();
+    const liveStateSnapshot = liveTerminalState();
     lastCapture = capture;
     const text = capture.text || 'No output yet';
     const rules = compactRulesForCapture(capture);
@@ -910,9 +949,10 @@
       output.insertAdjacentHTML('afterbegin', '<section class="compact-capture-warning" role="status">Structured Codex history is unavailable. Showing a terminal fallback; Markdown and formulas may be incomplete.</section>');
     }
     if (outputMode === 'compact' && capture.agentRunning && capture.liveText) {
-      output.insertAdjacentHTML('beforeend', `<section class="compact-live-terminal"><div class="compact-live-title"><span class="live-dot"></span>Live from tmux</div><pre>${escapeHtml(String(capture.liveText))}</pre></section>`);
+      const liveOpen = resolvedLivePanelExpanded(liveStateSnapshot, selectedSession) ? ' open' : '';
+      output.insertAdjacentHTML('beforeend', `<details class="compact-live-terminal" data-session="${escapeHtml(selectedSession || 'default')}"${liveOpen}><summary class="compact-live-title"><span class="live-dot"></span><span>Live from tmux</span><span class="compact-live-state">Agent working</span></summary><pre>${escapeHtml(String(capture.liveText))}</pre></details>`);
     }
-    restoreLiveTerminalScroll(liveScroll);
+    restoreLiveTerminalState(liveStateSnapshot);
   }
 
   function resetRefreshState() {
