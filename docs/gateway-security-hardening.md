@@ -76,6 +76,9 @@ Gateway implements the following inner controls:
 - Disabling independent MFA reduces login friction but makes the exact Access
   allowlist, protected identity-provider account, inner Faryo password, and
   host isolation more important.
+- Deployment checks must verify the operator-selected MFA posture; they must not
+  silently enable independent MFA or treat an explicitly disabled posture as a
+  configuration drift failure.
 - Running agents as the same desktop user leaves personal data within their
   potential read authority. Network authentication reduces likelihood; only OS
   or VM/container isolation reduces that blast radius.

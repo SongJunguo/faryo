@@ -190,7 +190,7 @@ Access（或仅可信设备可达的私网 VPN）作为外层身份策略，不�
 - Gateway 用户级 systemd 服务已完成启用、重启与健康检查；登录 Cookie、CSRF、登录限速和浏览器安全头均有回归覆盖。
 - 现有命名 Cloudflare Tunnel 在保留原有路由的前提下增加独立 Faryo hostname；公网 TLS、登录、真实结构化 Markdown/KaTeX 和一次性测试会话输入提交均通过。
 - 公网验证只使用通用测试文本；仓库中不记录真实域名、Token、密码、会话名、对话内容或本机绝对路径。
-- Cloudflare Tunnel 负责连通，不等于 Cloudflare Access。当前公网入口以覆盖完整 hostname 的两个精确邮箱规则限制身份，Access 应用会话为 24 小时，应用级独立 MFA 按低摩擦使用需求关闭；Email One-time PIN、Google 和 GitHub 登录入口均可选且不强制跳转到单一提供商。无 `Everyone`、无 `Bypass`，并保留 Faryo 登录作为内层认证。真实邮箱和域名只存在于私有 Cloudflare 配置中。
+- Cloudflare Tunnel 负责连通，不等于 Cloudflare Access。当前公网入口以覆盖完整 hostname 的两个精确邮箱规则限制身份，Access 应用会话为 24 小时，应用级独立 MFA 按低摩擦使用需求关闭；这是操作者明确确认的部署选择，不是待修复项，后续自动化不得擅自重新开启。Email One-time PIN、Google 和 GitHub 登录入口均可选且不强制跳转到单一提供商。无 `Everyone`、无 `Bypass`，并保留 Faryo 登录作为内层认证。真实邮箱和域名只存在于私有 Cloudflare 配置中。
 - 已增加隐私安全的公网验收脚本：它不接收或打印密码、Cookie、Token 与 hostname；只有确认请求先进入 Access 登录流程才返回通过，直接到达 Faryo 登录或无法判定都不会误报为安全。
 - Gateway 代码加固包含：所有浏览器写请求（含 Owner 代理）使用会话绑定 CSRF、登录限速使用可信代理提供的单值客户端地址、`__Host-` 严格 Cookie、nonce CSP 及已有安全响应头。内层登录期限现可由私有 `FARYO_GATEWAY_SESSION_HOURS` 在 `1`–`168` 小时内配置，默认 12 小时；当前个人部署与 Access 一致设为 24 小时。Agent 权限策略仍由操作者决定，Faryo 不强制降低 Codex/Claude 权限。
 - Gateway user service 已以私有 24 小时配置重启；真实本地登录响应验证 `Max-Age=86400`，且 `Secure`、`HttpOnly`、`SameSite=Strict` 属性保持不变。该重启未改变任何既有 tmux 窗口尺寸。

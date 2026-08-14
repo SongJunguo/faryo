@@ -377,7 +377,8 @@ Sessions、Session History 和 Projects。Gateway 的服务端分页、活动会
 - Cloudflare API 匿名化复核确认：Tunnel 健康且只回源 Gateway 回环端口；Access 仅有
   两个精确邮箱 Allow 规则，无 `Everyone`、无 `Bypass`，应用会话为 24 小时，应用级
   独立 MFA 已关闭；Email One-time PIN、Google 与 GitHub 均可选且不自动跳转到单一
-  提供商。该低摩擦策略是当前部署选择；Faryo 内层登录新增 `1`–`168` 小时的私有配置边界，
+  提供商。该低摩擦策略是操作者明确确认的当前部署基线，不是待修复项，后续自动化不得
+  擅自重新开启独立 MFA；Faryo 内层登录新增 `1`–`168` 小时的私有配置边界，
   当前部署同样设为 24 小时，Owner Token 继续保留。
 - Gateway user service 重启后进程环境确认使用 24 小时；一次真实本地登录返回 303，
   `__Host-` Cookie 的 `Max-Age=86400`，同时保持 `Secure`、`HttpOnly` 与
