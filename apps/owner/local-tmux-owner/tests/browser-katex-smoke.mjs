@@ -15,7 +15,12 @@ const skipRenderChecks = process.env.FARYO_SMOKE_SKIP_RENDER_CHECKS === '1';
 const privacySafe = process.env.FARYO_SMOKE_PRIVACY_SAFE === '1';
 const expectStructured = process.env.FARYO_SMOKE_EXPECT_STRUCTURED === '1';
 const debugLayout = process.env.FARYO_SMOKE_DEBUG_LAYOUT === '1';
+const checkOwnerLayout = process.env.FARYO_SMOKE_CHECK_OWNER_LAYOUT === '1';
+const viewportWidth = Number(process.env.FARYO_SMOKE_VIEWPORT_WIDTH || 0);
+const viewportHeight = Number(process.env.FARYO_SMOKE_VIEWPORT_HEIGHT || 0);
+const smokeTheme = process.env.FARYO_SMOKE_THEME || '';
 const screenshotPath = process.env.FARYO_SMOKE_SCREENSHOT || '';
+const uiScreenshotPath = process.env.FARYO_SMOKE_UI_SCREENSHOT || '';
 const expectedTex = JSON.parse(process.env.FARYO_SMOKE_EXPECT_TEX || '[]');
 const expectedOutput = process.env.FARYO_SMOKE_EXPECT_OUTPUT || '';
 const minMatrixRows = Number(process.env.FARYO_SMOKE_MIN_MATRIX_ROWS || 0);
@@ -116,6 +121,19 @@ try {
 
   await send('Page.enable');
   await send('Runtime.enable');
+  if (['light', 'dark', 'system'].includes(smokeTheme)) {
+    await send('Page.addScriptToEvaluateOnNewDocument', {
+      source: `localStorage.setItem('faryoTheme', ${JSON.stringify(smokeTheme)});`,
+    });
+  }
+  if (viewportWidth > 0 && viewportHeight > 0) {
+    await send('Emulation.setDeviceMetricsOverride', {
+      width: viewportWidth,
+      height: viewportHeight,
+      deviceScaleFactor: 1,
+      mobile: viewportWidth < 720,
+    });
+  }
   await send('Page.navigate', { url: targetUrl });
 
   if (loginUser && loginPassword) {
@@ -148,6 +166,15 @@ try {
       expression: `(() => {
         const output = document.getElementById('output');
         const outputWrap = document.getElementById('outputWrap');
+        const promptShell = document.querySelector('.prompt-shell');
+        const promptRect = promptShell?.getBoundingClientRect();
+        const visibleComposerControls = ['petControl', 'dockPlusBtn', 'sendBtn']
+          .map((id) => document.getElementById(id))
+          .filter((element) => element && !element.classList.contains('hidden'))
+          .map((element) => {
+            const rect = element.getBoundingClientRect();
+            return { id: element.id, width: Math.round(rect.width), height: Math.round(rect.height) };
+          });
         const katexCount = output?.querySelectorAll('.katex').length || 0;
         const displayCount = output?.querySelectorAll('.katex-display').length || 0;
         const katexErrorCount = output?.querySelectorAll('.katex-error').length || 0;
@@ -247,7 +274,19 @@ try {
           captureSource: String(output?.dataset.captureSource || ''),
           captureWarningCount: output?.querySelectorAll('.compact-capture-warning').length || 0,
           viewport: { width: innerWidth, height: innerHeight },
+          pageHorizontalOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth + 1,
           outputHorizontalOverflow: Boolean(outputWrap && outputWrap.scrollWidth > outputWrap.clientWidth + 1),
+          ownerLayout: {
+            ui: String(document.documentElement.dataset.faryoUi || ''),
+            outputWidth: Math.round(output?.getBoundingClientRect().width || 0),
+            prompt: promptRect ? {
+              left: Math.round(promptRect.left),
+              right: Math.round(promptRect.right),
+              width: Math.round(promptRect.width),
+              height: Math.round(promptRect.height),
+            } : null,
+            visibleComposerControls,
+          },
           katexStylesheetLoaded: [...document.styleSheets].some((sheet) => String(sheet.href || '').includes('/katex')),
           katexAssetUrls: ${JSON.stringify(privacySafe)}
             ? katexAssetUrls.map((url) => new URL(url).pathname)
@@ -271,6 +310,50 @@ try {
 
   if (!(skipRenderChecks ? state.domReady : state.ready)) {
     throw new Error(`KaTeX did not appear in the live Faryo DOM: ${JSON.stringify(state)}`);
+  }
+  if (checkOwnerLayout) {
+    const layout = state.ownerLayout || {};
+    const prompt = layout.prompt;
+    if (layout.ui !== 'workbench-v2') throw new Error(`Unexpected Owner UI version: ${JSON.stringify(layout.ui)}`);
+    if (state.pageHorizontalOverflow || state.outputHorizontalOverflow) {
+      throw new Error(`Owner layout caused page-level horizontal overflow: ${JSON.stringify({ viewport: state.viewport, layout })}`);
+    }
+    if (!prompt || prompt.left < 7 || prompt.right > state.viewport.width - 7) {
+      throw new Error(`Owner composer escaped the viewport: ${JSON.stringify({ viewport: state.viewport, prompt })}`);
+    }
+    if (state.viewport.width < 720 && prompt.width < state.viewport.width - 24) {
+      throw new Error(`Mobile Owner composer is unexpectedly narrow: ${JSON.stringify({ viewport: state.viewport, prompt })}`);
+    }
+    if (prompt.height < 82) throw new Error(`Owner composer is unexpectedly short: ${JSON.stringify(prompt)}`);
+    if (layout.outputWidth > 752) throw new Error(`Owner reading column is too wide: ${JSON.stringify(layout)}`);
+    const undersizedControls = (layout.visibleComposerControls || []).filter((item) => item.width < 42 || item.height < 42);
+    if (undersizedControls.length) throw new Error(`Owner composer controls are too small: ${JSON.stringify(undersizedControls)}`);
+
+    const measurePrompt = async (action = '') => {
+      const result = await send('Runtime.evaluate', {
+        expression: `(() => {
+          const input = document.getElementById('promptInput');
+          if (${JSON.stringify(action)} === 'focus') input?.focus();
+          if (${JSON.stringify(action)} === 'blur') input?.blur();
+          const rect = document.querySelector('.prompt-shell')?.getBoundingClientRect();
+          return rect ? { width: Math.round(rect.width), height: Math.round(rect.height) } : null;
+        })()`,
+        returnByValue: true,
+      });
+      return result.result?.value || null;
+    };
+    const beforeFocus = await measurePrompt();
+    await measurePrompt('focus');
+    await delay(180);
+    const focused = await measurePrompt();
+    await measurePrompt('blur');
+    await delay(260);
+    const blurred = await measurePrompt();
+    const geometries = [focused, blurred].filter(Boolean);
+    if (!beforeFocus || geometries.some((item) => Math.abs(item.width - beforeFocus.width) > 1 || Math.abs(item.height - beforeFocus.height) > 1)) {
+      throw new Error(`Owner composer changed geometry across focus/blur: ${JSON.stringify({ beforeFocus, focused, blurred })}`);
+    }
+    console.log(`faryo-browser-owner-layout=PASS viewport=${state.viewport.width}x${state.viewport.height}`);
   }
   if (!skipRenderChecks) {
     const brokenDisplayLayout = state.displayLayout.filter((item) => item.html?.whiteSpace !== 'nowrap');
@@ -424,6 +507,43 @@ try {
     });
     await writeFile(screenshotPath, Buffer.from(screenshot.data, 'base64'));
     console.log(`faryo-browser-screenshot=${screenshotPath}`);
+  }
+
+  if (uiScreenshotPath) {
+    await send('Runtime.evaluate', {
+      expression: `(() => {
+        const text = (id, value) => { const element = document.getElementById(id); if (element) element.textContent = value; };
+        text('ownerText', 'Ubuntu Workstation');
+        text('topicText', 'Research session');
+        text('draftState', 'Project workspace');
+        text('ctxText', 'Ctx 42%');
+        text('modelText', 'Agent ready');
+        text('phasePill', 'git clean');
+        const output = document.getElementById('output');
+        if (output) {
+          output.className = 'output compact-blocks';
+          output.innerHTML = [
+            '<section class="compact-block user">请检查这一节的推导，并给出修改建议。</section>',
+            '<section class="compact-process-line">Read manuscript and compared the assumptions</section>',
+            '<section class="compact-block plan"><div class="compact-plan-title">Plan</div><div class="compact-plan-list"><div class="compact-plan-item">1. Verify the regularity assumptions</div><div class="compact-plan-item">2. Tighten the theorem wording</div></div></section>',
+            '<section class="compact-block output"><div class="markdown-body"><h2>结论</h2><p>这段证明的主线成立，但需要明确区分连续性、局部 Lipschitz 条件与解的存在性。</p><ul><li>保留当前控制目标。</li><li>补充证明实际使用的有界条件。</li><li>避免超出定理范围的结论。</li></ul><blockquote>修改后不会改变现有控制器结构。</blockquote></div><button class="copy-output-block" type="button">⧉</button></section>',
+            '<section class="compact-live-terminal"><div class="compact-live-title"><span class="live-dot"></span>Live from tmux</div><pre>Reviewing references…\\nRunning focused checks…\\nWaiting for the next structured update…</pre></section>',
+          ].join('');
+        }
+        document.getElementById('bottomBtn')?.classList.add('hidden');
+        document.getElementById('errorBox')?.classList.add('hidden');
+        return true;
+      })()`,
+      returnByValue: true,
+    });
+    await send('Runtime.evaluate', { expression: 'document.fonts.ready', awaitPromise: true });
+    await delay(120);
+    const screenshot = await send('Page.captureScreenshot', {
+      format: 'png',
+      fromSurface: true,
+    });
+    await writeFile(uiScreenshotPath, Buffer.from(screenshot.data, 'base64'));
+    console.log(`faryo-browser-ui-screenshot=${uiScreenshotPath}`);
   }
 
   if (sendText) {

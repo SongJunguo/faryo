@@ -278,3 +278,497 @@ button.product-mark:active { transform: none; }
 .compact-live-title .live-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 17%, transparent); animation: live-pulse 1.3s ease-in-out infinite; }
 .compact-live-terminal pre { max-height: min(42vh, 360px); margin: 0; overflow: auto; color: var(--muted); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; font-size: calc(12px + var(--font-step)); line-height: 1.42; white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; }
 @keyframes live-pulse { 0%, 100% { opacity: .45; } 50% { opacity: 1; } }
+
+/* Workbench v2
+   ------------
+   A Faryo-owned visual layer inspired by modern agent workbenches. It is
+   deliberately scoped to the Owner page so the shared Gateway appearance can
+   migrate independently. Existing element IDs and runtime behavior stay
+   unchanged. */
+html[data-faryo-ui="workbench-v2"] {
+  --bg: #0f1115;
+  --panel: #171a20;
+  --panel2: #20242c;
+  --text: #eceef3;
+  --muted: #949ba9;
+  --line: #2c313b;
+  --accent: #7188ff;
+  --on-accent: #ffffff;
+  --accent2: #63b8c5;
+  --ok: #70b996;
+  --warn: #ddb56f;
+  --danger: #f08d91;
+  --toggle-bg: #20242c;
+  --continuity: #70b996;
+  --pending: #ddb56f;
+  --danger-bg: #5c2e35;
+  --danger-text: #ffb7ba;
+  --danger-soft: rgba(240, 141, 145, .12);
+  --header-bg: color-mix(in srgb, #0f1115 88%, transparent);
+  --block-bg: #171a20;
+  --plan-bg: #181c24;
+  --user-input-color: #cad2ff;
+  --user-block-border: rgba(113, 136, 255, .22);
+  --user-block-bg: color-mix(in srgb, #7188ff 13%, #171a20);
+  --user-block-shadow: 0 8px 28px rgba(0, 0, 0, .14);
+  --brand-ring: linear-gradient(135deg, rgba(113, 136, 255, .82), rgba(99, 184, 197, .58));
+  --prompt-bg: color-mix(in srgb, #171a20 96%, transparent);
+  --prompt-shadow: 0 20px 60px rgba(0, 0, 0, .28), 0 0 0 1px rgba(255, 255, 255, .025);
+  --dock-menu-bg: color-mix(in srgb, #20242c 95%, transparent);
+  --dock-menu-shadow: 0 24px 64px rgba(0, 0, 0, .38);
+  --dock-menu-after-bg: #20242c;
+  --dock-action-bg: color-mix(in srgb, #7188ff 7%, #20242c);
+  --dock-mode-bg: rgba(113, 136, 255, .09);
+  --owner-canvas-glow: rgba(113, 136, 255, .075);
+  --owner-surface-hover: rgba(255, 255, 255, .055);
+  --owner-hairline: rgba(255, 255, 255, .075);
+  --owner-copy: #c7ccd6;
+  --shadow: 0 20px 60px rgba(0, 0, 0, .3);
+}
+
+html[data-faryo-ui="workbench-v2"][data-theme="light"] {
+  --bg: #f6f7f9;
+  --panel: #ffffff;
+  --panel2: #eef1f5;
+  --text: #202228;
+  --muted: #747b88;
+  --line: #dde1e8;
+  --accent: #5369e7;
+  --on-accent: #ffffff;
+  --accent2: #347f8b;
+  --ok: #397c5c;
+  --warn: #96651e;
+  --danger: #b9474f;
+  --toggle-bg: #eef1f5;
+  --continuity: #397c5c;
+  --pending: #96651e;
+  --danger-bg: #b9474f;
+  --danger-text: #a83d45;
+  --danger-soft: rgba(185, 71, 79, .1);
+  --header-bg: color-mix(in srgb, #f6f7f9 89%, transparent);
+  --block-bg: #ffffff;
+  --plan-bg: #f0f2f7;
+  --user-input-color: #4254b8;
+  --user-block-border: rgba(83, 105, 231, .18);
+  --user-block-bg: color-mix(in srgb, #5369e7 9%, #ffffff);
+  --user-block-shadow: 0 8px 24px rgba(46, 53, 78, .08);
+  --brand-ring: linear-gradient(135deg, rgba(83, 105, 231, .72), rgba(52, 127, 139, .45));
+  --prompt-bg: color-mix(in srgb, #ffffff 97%, transparent);
+  --prompt-shadow: 0 18px 52px rgba(45, 51, 73, .12), 0 0 0 1px rgba(38, 44, 67, .025);
+  --dock-menu-bg: color-mix(in srgb, #ffffff 96%, transparent);
+  --dock-menu-shadow: 0 24px 60px rgba(45, 51, 73, .16);
+  --dock-menu-after-bg: #ffffff;
+  --dock-action-bg: color-mix(in srgb, #5369e7 6%, #ffffff);
+  --dock-mode-bg: rgba(83, 105, 231, .08);
+  --owner-canvas-glow: rgba(83, 105, 231, .065);
+  --owner-surface-hover: rgba(32, 34, 40, .045);
+  --owner-hairline: rgba(32, 34, 40, .075);
+  --owner-copy: #5f6674;
+  --shadow: 0 20px 56px rgba(45, 51, 73, .14);
+}
+
+html[data-faryo-ui="workbench-v2"],
+html[data-faryo-ui="workbench-v2"] body {
+  background: var(--bg);
+}
+
+html[data-faryo-ui="workbench-v2"] body {
+  background-image:
+    radial-gradient(circle at 50% -18%, var(--owner-canvas-glow), transparent 38%),
+    linear-gradient(180deg, color-mix(in srgb, var(--panel) 20%, transparent), transparent 38%);
+}
+
+html[data-faryo-ui="workbench-v2"] .app {
+  max-width: none;
+  border: 0;
+  background: transparent;
+}
+
+html[data-faryo-ui="workbench-v2"] header {
+  padding: calc(env(safe-area-inset-top) + 11px) clamp(14px, 2.4vw, 28px) 10px;
+  border-bottom: 1px solid var(--owner-hairline);
+  background: var(--header-bg);
+  box-shadow: 0 8px 30px rgba(0, 0, 0, .035);
+  backdrop-filter: blur(18px) saturate(1.15);
+}
+
+html[data-faryo-ui="workbench-v2"] header.collapsed {
+  position: absolute;
+  padding: calc(env(safe-area-inset-top) + 8px) 10px 8px;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  backdrop-filter: none;
+}
+
+html[data-faryo-ui="workbench-v2"] .brand-logo {
+  width: 22px;
+  height: 22px;
+  border-radius: 7px;
+  box-shadow: 0 0 0 1px var(--owner-hairline);
+}
+
+html[data-faryo-ui="workbench-v2"] .title-row strong {
+  font-size: calc(14px + var(--font-step));
+  letter-spacing: -.01em;
+}
+
+html[data-faryo-ui="workbench-v2"] #ownerText {
+  color: var(--muted);
+  font-weight: 650;
+}
+
+html[data-faryo-ui="workbench-v2"] #topicText {
+  max-width: min(50vw, 340px);
+}
+
+html[data-faryo-ui="workbench-v2"] #draftState {
+  width: auto;
+  min-width: 44px;
+  max-width: min(48vw, 260px);
+  min-height: 34px;
+  padding: 0 11px;
+  border: 1px solid var(--owner-hairline);
+  border-radius: 11px;
+  background: color-mix(in srgb, var(--panel) 72%, transparent);
+  color: var(--muted);
+  font-size: calc(12px + var(--font-step));
+  font-weight: 600;
+}
+
+html[data-faryo-ui="workbench-v2"] #draftState:hover,
+html[data-faryo-ui="workbench-v2"] button:hover {
+  border-color: color-mix(in srgb, var(--accent) 30%, var(--line));
+}
+
+html[data-faryo-ui="workbench-v2"] .session-menu {
+  top: calc(env(safe-area-inset-top) + 54px);
+  width: min(82vw, 320px);
+  gap: 7px;
+  padding: 10px;
+  border-color: var(--owner-hairline);
+  border-radius: 16px;
+}
+
+html[data-faryo-ui="workbench-v2"] main {
+  padding: clamp(18px, 3vw, 34px) 12px calc(env(safe-area-inset-bottom) + 184px);
+  scroll-padding-bottom: calc(env(safe-area-inset-bottom) + 184px);
+  overscroll-behavior: contain;
+}
+
+html[data-faryo-ui="workbench-v2"] .output {
+  width: min(100%, 748px);
+  margin: 0 auto;
+  line-height: 1.58;
+}
+
+html[data-faryo-ui="workbench-v2"] .output.compact-blocks {
+  gap: 18px;
+}
+
+html[data-faryo-ui="workbench-v2"] .compact-block {
+  border-radius: 16px;
+}
+
+html[data-faryo-ui="workbench-v2"] .compact-block.output {
+  align-self: stretch;
+  max-width: 100%;
+  padding: 5px 2px 8px;
+  border-color: transparent;
+  background: transparent;
+  font-size: calc(16px + var(--font-step));
+}
+
+html[data-faryo-ui="workbench-v2"] .compact-block.user {
+  align-self: flex-end;
+  max-width: min(88%, 620px);
+  padding: 11px 14px;
+  border-color: var(--user-block-border);
+  border-radius: 18px 18px 6px 18px;
+}
+
+html[data-faryo-ui="workbench-v2"] .compact-process-line,
+html[data-faryo-ui="workbench-v2"] .compact-status-line {
+  align-self: flex-start;
+  max-width: 100%;
+  padding: 5px 9px;
+  border: 1px solid var(--owner-hairline);
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--panel) 64%, transparent);
+  color: var(--muted);
+  font-size: calc(12px + var(--font-step));
+}
+
+html[data-faryo-ui="workbench-v2"] .compact-block.plan {
+  max-width: min(100%, 680px);
+  padding: 13px 14px;
+  border-color: var(--owner-hairline);
+  background: var(--plan-bg);
+}
+
+html[data-faryo-ui="workbench-v2"] .copy-output-block {
+  color: var(--owner-copy);
+  opacity: .58;
+}
+
+html[data-faryo-ui="workbench-v2"] .bottom-btn {
+  left: 50%;
+  right: auto;
+  bottom: calc(env(safe-area-inset-bottom) + 136px);
+  width: 38px;
+  min-width: 38px;
+  height: 38px;
+  min-height: 38px;
+  border: 1px solid var(--owner-hairline);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--panel) 90%, transparent);
+  color: var(--muted);
+  opacity: .9;
+  box-shadow: 0 10px 32px rgba(0, 0, 0, .16);
+  transform: translateX(-50%);
+  backdrop-filter: blur(14px);
+}
+
+html[data-faryo-ui="workbench-v2"] footer {
+  padding: 8px max(12px, env(safe-area-inset-left)) calc(env(safe-area-inset-bottom) + 14px) max(12px, env(safe-area-inset-right));
+}
+
+html[data-faryo-ui="workbench-v2"] .status-line,
+html[data-faryo-ui="workbench-v2"] .composer {
+  width: min(100%, 780px);
+  margin-left: auto;
+  margin-right: auto;
+}
+
+html[data-faryo-ui="workbench-v2"] .status-line {
+  padding: 0 4px;
+  color: var(--muted);
+  font-size: calc(11px + var(--font-step));
+}
+
+html[data-faryo-ui="workbench-v2"] .prompt-shell {
+  width: 100%;
+  min-height: 88px;
+  margin: 0;
+  padding: 13px 14px;
+  gap: 10px;
+  border: 1px solid var(--owner-hairline);
+  border-radius: 22px;
+  background: var(--prompt-bg);
+  box-shadow: var(--prompt-shadow);
+  backdrop-filter: blur(18px) saturate(1.08);
+}
+
+html[data-faryo-ui="workbench-v2"] textarea {
+  min-height: 58px;
+  max-height: 168px;
+  padding: 9px 2px;
+  font-size: max(16px, calc(15px + var(--font-step)));
+  line-height: 1.45;
+}
+
+html[data-faryo-ui="workbench-v2"] textarea::placeholder {
+  opacity: .56;
+}
+
+html[data-faryo-ui="workbench-v2"] .prompt-shell .pet-control {
+  --pet-run-y: -1px;
+  position: relative;
+  left: auto;
+  bottom: auto;
+  align-self: flex-end;
+  width: 44px;
+  min-width: 44px;
+  height: 44px;
+  min-height: 44px;
+}
+
+html[data-faryo-ui="workbench-v2"] .prompt-shell .pet-control::before {
+  width: 48px;
+  height: 39px;
+  margin-left: -3px;
+}
+
+html[data-faryo-ui="workbench-v2"] .prompt-shell .dock-plus,
+html[data-faryo-ui="workbench-v2"] .prompt-shell .dock-send {
+  position: relative;
+  right: auto;
+  bottom: auto;
+  align-self: flex-end;
+  width: 44px;
+  min-width: 44px;
+  height: 44px;
+  min-height: 44px;
+  border: 1px solid var(--owner-hairline);
+  border-radius: 14px;
+  box-shadow: none;
+}
+
+html[data-faryo-ui="workbench-v2"] .prompt-shell .dock-plus {
+  background: var(--panel2);
+  color: var(--muted);
+}
+
+html[data-faryo-ui="workbench-v2"] .prompt-shell .dock-send {
+  background: var(--accent);
+  color: var(--on-accent);
+  opacity: 1;
+  backdrop-filter: none;
+}
+
+html[data-faryo-ui="workbench-v2"] .dock-menu {
+  width: min(82vw, 260px);
+  border-color: var(--owner-hairline);
+  border-radius: 16px;
+}
+
+html[data-faryo-ui="workbench-v2"] .markdown-body {
+  color: var(--text);
+  line-height: 1.65;
+}
+
+html[data-faryo-ui="workbench-v2"] .markdown-body pre,
+html[data-faryo-ui="workbench-v2"] .markdown-body table,
+html[data-faryo-ui="workbench-v2"] .compact-live-terminal {
+  border-color: var(--owner-hairline);
+}
+
+html[data-faryo-ui="workbench-v2"] .markdown-body pre {
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--panel2) 86%, transparent);
+}
+
+html[data-faryo-ui="workbench-v2"] .compact-live-terminal {
+  border-style: solid;
+  border-radius: 13px;
+  background: color-mix(in srgb, var(--panel) 72%, transparent);
+}
+
+html[data-faryo-ui="workbench-v2"] button,
+html[data-faryo-ui="workbench-v2"] a,
+html[data-faryo-ui="workbench-v2"] textarea {
+  -webkit-tap-highlight-color: transparent;
+}
+
+html[data-faryo-ui="workbench-v2"] :is(button, a, textarea):focus-visible {
+  outline: 3px solid color-mix(in srgb, var(--accent) 38%, transparent);
+  outline-offset: 2px;
+}
+
+@media (max-width: 719px) {
+  html[data-faryo-ui="workbench-v2"] header {
+    padding-left: 12px;
+    padding-right: 12px;
+  }
+
+  html[data-faryo-ui="workbench-v2"] #topicText {
+    max-width: 36vw;
+  }
+
+  html[data-faryo-ui="workbench-v2"] #draftState {
+    max-width: 40vw;
+  }
+
+  html[data-faryo-ui="workbench-v2"] main {
+    padding: 18px 10px calc(env(safe-area-inset-bottom) + 174px);
+    scroll-padding-bottom: calc(env(safe-area-inset-bottom) + 174px);
+  }
+
+  html[data-faryo-ui="workbench-v2"] .output.compact-blocks {
+    gap: 15px;
+  }
+
+  html[data-faryo-ui="workbench-v2"] .compact-block.output {
+    font-size: calc(15px + var(--font-step));
+  }
+
+  html[data-faryo-ui="workbench-v2"] .compact-block.user {
+    max-width: 90%;
+  }
+
+  html[data-faryo-ui="workbench-v2"] footer {
+    padding-left: 10px;
+    padding-right: 10px;
+  }
+
+  html[data-faryo-ui="workbench-v2"] .prompt-shell {
+    min-height: 84px;
+    padding: 11px 10px;
+    gap: 7px;
+    border-radius: 20px;
+  }
+
+  html[data-faryo-ui="workbench-v2"] textarea {
+    min-height: 58px;
+  }
+
+  html[data-faryo-ui="workbench-v2"] .bottom-btn {
+    bottom: calc(env(safe-area-inset-bottom) + 132px);
+  }
+}
+
+@media (max-width: 380px) {
+  html[data-faryo-ui="workbench-v2"] .prompt-shell {
+    padding-left: 8px;
+    padding-right: 8px;
+    gap: 5px;
+  }
+
+  html[data-faryo-ui="workbench-v2"] .prompt-shell .pet-control,
+  html[data-faryo-ui="workbench-v2"] .prompt-shell .dock-plus,
+  html[data-faryo-ui="workbench-v2"] .prompt-shell .dock-send {
+    width: 42px;
+    min-width: 42px;
+    height: 42px;
+    min-height: 42px;
+  }
+}
+
+@media (min-width: 720px) {
+  html[data-faryo-ui="workbench-v2"] main {
+    scrollbar-gutter: stable both-edges;
+  }
+}
+
+@media (min-width: 960px) {
+  html[data-faryo-ui="workbench-v2"] header {
+    padding-left: max(24px, calc((100vw - 1180px) / 2));
+    padding-right: max(24px, calc((100vw - 1180px) / 2));
+  }
+
+  html[data-faryo-ui="workbench-v2"] main {
+    padding-top: 42px;
+    padding-bottom: calc(env(safe-area-inset-bottom) + 190px);
+  }
+
+  html[data-faryo-ui="workbench-v2"] .compact-block,
+  html[data-faryo-ui="workbench-v2"] .compact-block.output,
+  html[data-faryo-ui="workbench-v2"] .compact-process-line,
+  html[data-faryo-ui="workbench-v2"] .compact-status-line,
+  html[data-faryo-ui="workbench-v2"] .compact-block.plan {
+    max-width: 100%;
+  }
+
+  html[data-faryo-ui="workbench-v2"] .compact-block.user {
+    max-width: min(82%, 620px);
+  }
+
+  html[data-faryo-ui="workbench-v2"] footer {
+    padding-bottom: calc(env(safe-area-inset-bottom) + 18px);
+  }
+
+  html[data-faryo-ui="workbench-v2"] textarea {
+    max-height: 168px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html[data-faryo-ui="workbench-v2"] *,
+  html[data-faryo-ui="workbench-v2"] *::before,
+  html[data-faryo-ui="workbench-v2"] *::after {
+    scroll-behavior: auto !important;
+    animation-duration: .01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: .01ms !important;
+  }
+}

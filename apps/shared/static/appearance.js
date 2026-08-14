@@ -8,6 +8,7 @@
   };
   const themeMedia = window.matchMedia?.('(prefers-color-scheme: dark)');
   const themeColors = { light: '#F7F0E5', dark: '#17130F' };
+  const ownerWorkbenchThemeColors = { light: '#F6F7F9', dark: '#0F1115' };
 
   function value(name) {
     const cfg = APPEARANCE[name], current = localStorage.getItem(cfg.key);
@@ -19,7 +20,10 @@
   }
 
   function updateThemeColor(theme = value('theme')) {
-    const color = themeColors[resolvedTheme(theme)];
+    const colors = document.documentElement.dataset.faryoUi === 'workbench-v2'
+      ? ownerWorkbenchThemeColors
+      : themeColors;
+    const color = colors[resolvedTheme(theme)];
     document.querySelectorAll('meta[name="theme-color"]').forEach(meta => { meta.content = color; });
   }
 
