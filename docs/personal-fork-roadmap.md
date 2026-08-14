@@ -158,7 +158,8 @@ Agent，公网长期使用必须保留受限 Cloudflare Access（或仅可信设
 - AST 源码测试 9/9；稳定块单元测试覆盖 200 块历史追加时复用 200、仅创建 1。
 - Owner Python 20/20、Gateway Python 37/37、发布检查和 Owner HTTP/tmux smoke 通过。
 - Chrome 390x844 深色与 1440x900 浅色匿名夹具通过 GFM、分段公式、五行公式表、
-  CJK 粗体、代码隔离、Shiki TypeScript/Python、本地资源、XSS 和内部横向滚动检查。
+  CJK 粗体、代码隔离、Shiki TypeScript/Python/LaTeX/Lean/MATLAB、本地资源、XSS
+  和内部横向滚动检查。
 - 匿名网页发送成功/失败草稿、SSE 自动更新、手机/桌面 Live 滚动和既有 tmux 尺寸
   不变均通过；未向真实会话注入测试消息。
 - Gateway 重启后六个计划视口均通过登录代理回归；活动/历史分区、10 条分页和页码跳转

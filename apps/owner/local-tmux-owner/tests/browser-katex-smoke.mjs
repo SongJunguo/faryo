@@ -68,6 +68,20 @@ const astFixtureSource = [
   '    return value ** 2',
   astFence,
   '',
+  astFence + 'tex',
+  '\\begin{align}',
+  'x &= y + 1',
+  '\\end{align}',
+  astFence,
+  '',
+  astFence + 'lean4',
+  'theorem identity (value : Nat) : value = value := by rfl',
+  astFence,
+  '',
+  astFence + 'matlab',
+  'value = sin(pi / 4);',
+  astFence,
+  '',
   astFence + 'text',
   '$HOME and \\(not_math\\)',
   astFence,
@@ -572,7 +586,8 @@ try {
           ], { mode: 'settled', revision: 0, tailCount: 2 });
           const stableSecond = window.FaryoStableBlocks.reconcile(stableContainer, stableAppended, makeStableNode);
           const state = {
-            ready: highlightedLanguages.includes('ts') && highlightedLanguages.includes('python'),
+            ready: ['ts', 'python', 'tex', 'lean4', 'matlab']
+              .every((language) => highlightedLanguages.includes(language)),
             katexCount: fixture.querySelectorAll('.katex').length,
             displayCount: fixture.querySelectorAll('.katex-display').length,
             errorCount: fixture.querySelectorAll('.katex-error').length,
@@ -615,7 +630,7 @@ try {
     if (fixtureState.tableRows !== 5 || fixtureState.formulaCellCount !== 5 || fixtureState.tableDisplay !== 'table') {
       throw new Error('AST fixture table structure was incorrect: ' + JSON.stringify(fixtureState));
     }
-    if (fixtureState.codeBlockCount !== 3 || fixtureState.codeMathCount !== 0 || fixtureState.cjkStrong !== '注意：') {
+    if (fixtureState.codeBlockCount !== 6 || fixtureState.codeMathCount !== 0 || fixtureState.cjkStrong !== '注意：') {
       throw new Error('AST fixture Markdown structure was incorrect: ' + JSON.stringify(fixtureState));
     }
     if (fixtureState.rawHtmlExecuted || fixtureState.pageHorizontalOverflow || !fixtureState.assetsLocal) {
