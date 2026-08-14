@@ -19,6 +19,11 @@ const screenshotPath = process.env.FARYO_SMOKE_SCREENSHOT || '';
 const expectedTex = JSON.parse(process.env.FARYO_SMOKE_EXPECT_TEX || '[]');
 const expectedOutput = process.env.FARYO_SMOKE_EXPECT_OUTPUT || '';
 const minMatrixRows = Number(process.env.FARYO_SMOKE_MIN_MATRIX_ROWS || 0);
+const minKatex = Number(process.env.FARYO_SMOKE_MIN_KATEX ?? 2);
+const minDisplay = Number(process.env.FARYO_SMOKE_MIN_DISPLAY ?? 1);
+const minTables = Number(process.env.FARYO_SMOKE_MIN_TABLES || 0);
+const minTableKatex = Number(process.env.FARYO_SMOKE_MIN_TABLE_KATEX || 0);
+const maxBareTex = Number(process.env.FARYO_SMOKE_MAX_BARE_TEX ?? -1);
 const screenshotTex = process.env.FARYO_SMOKE_SCREENSHOT_TEX || expectedTex.at(-1) || '';
 const loginUser = process.env.FARYO_SMOKE_LOGIN_USER || '';
 const loginPasswordFile = process.env.FARYO_SMOKE_LOGIN_PASSWORD_FILE || '';
@@ -147,14 +152,18 @@ try {
         const displayCount = output?.querySelectorAll('.katex-display').length || 0;
         const katexErrorCount = output?.querySelectorAll('.katex-error').length || 0;
         const markdownCount = output?.querySelectorAll('.markdown-body').length || 0;
+        const tableCount = output?.querySelectorAll('.markdown-body table').length || 0;
+        const tableKatexCount = output?.querySelectorAll('.markdown-body table .katex').length || 0;
         let rawMathDelimiterCount = 0;
+        let bareTexParenthesisCount = 0;
         if (output) {
           const walker = document.createTreeWalker(output, NodeFilter.SHOW_TEXT);
           let node = walker.nextNode();
           while (node) {
-            if (!node.parentElement?.closest('pre, code, .katex, .math-ignore')
-                && /(?:\\\\\[|\\\\\]|\\\\\(|\\\\\)|\$\$)/.test(String(node.nodeValue || ''))) {
-              rawMathDelimiterCount += 1;
+            if (!node.parentElement?.closest('pre, code, .katex, .math-ignore')) {
+              const value = String(node.nodeValue || '');
+              if (/(?:\\\\\[|\\\\\]|\\\\\(|\\\\\)|\$\$)/.test(value)) rawMathDelimiterCount += 1;
+              if (/\\((?=[^\\n)]{0,240}\\\\[A-Za-z])/.test(value)) bareTexParenthesisCount += 1;
             }
             node = walker.nextNode();
           }
@@ -226,12 +235,15 @@ try {
         });
         return {
           domReady: Boolean(output && document.getElementById('promptInput') && document.documentElement.dataset.faryoAppReady === '1'),
-          ready: katexCount >= 2 && displayCount >= 1 && markdownCount >= 1,
+          ready: katexCount >= ${minKatex} && displayCount >= ${minDisplay} && markdownCount >= 1,
           katexCount,
           displayCount,
           katexErrorCount,
           rawMathDelimiterCount,
+          bareTexParenthesisCount,
           markdownCount,
+          tableCount,
+          tableKatexCount,
           captureSource: String(output?.dataset.captureSource || ''),
           captureWarningCount: output?.querySelectorAll('.compact-capture-warning').length || 0,
           viewport: { width: innerWidth, height: innerHeight },
@@ -273,6 +285,15 @@ try {
     }
     if (state.rawMathDelimiterCount) {
       throw new Error(`Math delimiters remained visible in ${state.rawMathDelimiterCount} text nodes`);
+    }
+    if (maxBareTex >= 0 && state.bareTexParenthesisCount > maxBareTex) {
+      throw new Error(`Bare TeX parentheses remained visible in ${state.bareTexParenthesisCount} text nodes`);
+    }
+    if (state.tableCount < minTables) {
+      throw new Error(`Expected at least ${minTables} rendered Markdown tables, found ${state.tableCount}`);
+    }
+    if (state.tableKatexCount < minTableKatex) {
+      throw new Error(`Expected at least ${minTableKatex} rendered table formulas, found ${state.tableKatexCount}`);
     }
     if (expectStructured && (state.captureSource !== 'codex-app-server' || state.captureWarningCount)) {
       throw new Error(`Codex capture did not use structured history: source=${state.captureSource || 'missing'} warning=${state.captureWarningCount || 0}`);

@@ -39,6 +39,15 @@
     return false;
   }
 
+  function looksLikeStructuredInlineMath(body) {
+    const value = String(body || '');
+    // App Server messages normally preserve explicit TeX delimiters. Repair
+    // only the high-confidence failure mode where a parenthesized span still
+    // contains a TeX command, rather than applying the broader terminal
+    // heuristic to structured Markdown prose.
+    return looksLikeInlineMath(value) && /\\[A-Za-z]+/u.test(value);
+  }
+
   function replaceInlineDollarMath(segment) {
     return segment.replace(/(^|[^\\$])\$(?!\$)([^$\n]+?)\$(?!\$)/g, (match, prefix, body) => {
       if (!looksLikeInlineMath(body)) return match;
@@ -157,7 +166,7 @@
     return out.join('\n');
   }
 
-  function replaceTerminalParenthesisMath(segment) {
+  function replaceParenthesisMath(segment, predicate) {
     let out = '';
     let cursor = 0;
     while (cursor < segment.length) {
@@ -186,14 +195,22 @@
       }
       const body = segment.slice(open + 1, close - 1);
       const after = segment[close] || '';
-      if (!/[A-Za-z0-9_]/u.test(after) && looksLikeInlineMath(body)) out += `\\(${body}\\)`;
+      if (!/[A-Za-z0-9_]/u.test(after) && predicate(body)) out += `\\(${body}\\)`;
       else out += segment.slice(open, close);
       cursor = close;
     }
     return out;
   }
 
-  function normalizeTerminalInlineMath(text) {
+  function replaceTerminalParenthesisMath(segment) {
+    return replaceParenthesisMath(segment, looksLikeInlineMath);
+  }
+
+  function replaceStructuredParenthesisMath(segment) {
+    return replaceParenthesisMath(segment, looksLikeStructuredInlineMath);
+  }
+
+  function normalizeParenthesisMath(text, replace) {
     const lines = String(text || '').split('\n');
     let fenceChar = '';
     let displayEnd = '';
@@ -226,8 +243,16 @@
         return line;
       }
       if (/^(?: {4}|\t)/u.test(line) || value.includes('$$')) return line;
-      return transformOutsideInlineCode(line, replaceTerminalParenthesisMath);
+      return transformOutsideInlineCode(line, replace);
     }).join('\n');
+  }
+
+  function normalizeTerminalInlineMath(text) {
+    return normalizeParenthesisMath(text, replaceTerminalParenthesisMath);
+  }
+
+  function normalizeStructuredInlineMath(text) {
+    return normalizeParenthesisMath(text, replaceStructuredParenthesisMath);
   }
 
   function normalizeTerminalMath(text) {
@@ -241,7 +266,7 @@
   function prepareText(text, options = {}) {
     if (!ready()) return String(text || '');
     const normalized = normalizeInlineDollarMath(text);
-    return options.terminal === false ? normalized : normalizeTerminalMath(normalized);
+    return options.terminal === false ? normalizeStructuredInlineMath(normalized) : normalizeTerminalMath(normalized);
   }
 
   function renderElement(element) {
@@ -276,11 +301,13 @@
   return {
     DEFAULT_DELIMITERS,
     looksLikeInlineMath,
+    looksLikeStructuredInlineMath,
     looksLikeTerminalDisplayMath,
     restoreTerminalRowBreaks,
     normalizeInlineDollarMath,
     normalizeTerminalDisplayMath,
     normalizeTerminalInlineMath,
+    normalizeStructuredInlineMath,
     normalizeTerminalMath,
     prepareText,
     ready,

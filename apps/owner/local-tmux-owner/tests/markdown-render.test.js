@@ -2,6 +2,7 @@
 
 const assert = require('node:assert/strict');
 const markdown = require('../static/markdown-render.js');
+const math = require('../static/math-render.js');
 
 assert.equal(markdown.ready(), true);
 
@@ -40,6 +41,16 @@ assert.match(mixed, /\\\(x_i\\\)/);
 assert.match(mixed, /\\begin\{cases\}/);
 assert.match(mixed, /a,&amp;0\\le s&lt;s_0,\\\\/);
 assert.match(mixed, /<code class="language-tex">\\\[not_math_inside_code\\\]/);
+
+const repairedStructuredTable = markdown.render(math.normalizeStructuredInlineMath([
+  '| Operator | Recommendation |',
+  '| --- | --- |',
+  '| (\\Theta_j=\\zeta_j) | exact form |',
+  '| (\\rho)-adjustment | related mechanism |',
+].join('\n')));
+assert.match(repairedStructuredTable, /<table>/);
+assert.match(repairedStructuredTable, /\\\(\\Theta_j=\\zeta_j\\\)/);
+assert.match(repairedStructuredTable, /\\\(\\rho\\\)-adjustment/);
 
 const scientificMath = markdown.render([
   'Generic mathematical notation:',

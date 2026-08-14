@@ -19,11 +19,24 @@
     return /^[-─━\s]*Worked for\s+\d+\w?(?:\s+\d+\w?)?[-─━\s]*$/i.test(value) || /^working$/i.test(value);
   }
 
+  function isMarkdownTableLine(line) {
+    const value = String(line || '').trim();
+    if (!value.startsWith('|') || !value.endsWith('|')) return false;
+    let pipes = 0;
+    for (let index = 0; index < value.length; index += 1) {
+      if (value[index] !== '|') continue;
+      let slashes = 0;
+      for (let cursor = index - 1; cursor >= 0 && value[cursor] === '\\'; cursor -= 1) slashes += 1;
+      if (slashes % 2 === 0) pipes += 1;
+    }
+    return pipes >= 2;
+  }
+
   function isProcessLine(line) {
     const value = line.trim();
     return processLineRe.test(value)
       || /^(?:[│└├↳])/.test(value)
-      || /^\|\s/.test(value)
+      || (/^\|\s/.test(value) && !isMarkdownTableLine(value))
       || /^(?:[-*•]\s*)?(?:\.{3}|…|⋯)\s*[+-]\d+\s+lines\b/i.test(value)
       || /^(?:\d+\s+)?[-+]?(?:<<<<<<<|=======|\|\|\|\|\|\|\||>>>>>>>)\b/.test(value)
       || /^\d{2,}\s+[-+]\s+/.test(value)
@@ -185,6 +198,7 @@
 
   window.FaryoCodexCompactRules = {
     userPromptRe,
+    isMarkdownTableLine,
     compactBlocks,
     processSummaryCard,
     approvalPendingRe,

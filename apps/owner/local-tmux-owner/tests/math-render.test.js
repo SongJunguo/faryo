@@ -49,6 +49,28 @@ assert.equal(
   'Keep prose (Definition 1), function call source(foo), and `echo (x)`.'
 );
 assert.equal(
+  math.normalizeStructuredInlineMath([
+    '| Operator | Note |',
+    '| --- | --- |',
+    '| (\\Theta_j=\\zeta_j) | exact form |',
+    '| (\\rho)-adjustment | related mechanism |',
+    '',
+    'Keep prose (Definition 1), plain algebra (x_j+y_j), source(foo), and `code (\\Theta_j)`.',
+  ].join('\n')),
+  [
+    '| Operator | Note |',
+    '| --- | --- |',
+    '| \\(\\Theta_j=\\zeta_j\\) | exact form |',
+    '| \\(\\rho\\)-adjustment | related mechanism |',
+    '',
+    'Keep prose (Definition 1), plain algebra (x_j+y_j), source(foo), and `code (\\Theta_j)`.',
+  ].join('\n')
+);
+assert.equal(
+  math.normalizeStructuredInlineMath('```tex\n(\\Theta_j=\\zeta_j)\n```'),
+  '```tex\n(\\Theta_j=\\zeta_j)\n```'
+);
+assert.equal(
   math.normalizeTerminalMath('Example:\n[\nx(t)=x(0)+\\int_0^t v(s)\\,ds\n]\nThen (x\\in\\mathbb R^n).'),
   'Example:\n\\[\nx(t)=x(0)+\\int_0^t v(s)\\,ds\n\\]\nThen \\(x\\in\\mathbb R^n\\).'
 );
@@ -88,6 +110,10 @@ assert.equal(browserMath.prepareText('[\n\\dot x=d(t)\n]'), '\\[\n\\dot x=d(t)\n
 assert.equal(
   browserMath.prepareText('[Assumption 1](/home/user/paper_1.tex:17)', { terminal: false }),
   '[Assumption 1](/home/user/paper_1.tex:17)'
+);
+assert.equal(
+  browserMath.prepareText('| Symbol | Meaning |\n| --- | --- |\n| (\\Theta_j=\\zeta_j) | sample |', { terminal: false }),
+  '| Symbol | Meaning |\n| --- | --- |\n| \\(\\Theta_j=\\zeta_j\\) | sample |'
 );
 const fakeBlocks = [{ id: 1 }, { id: 2 }];
 assert.equal(browserMath.renderOutput({ querySelectorAll: () => fakeBlocks }), true);
