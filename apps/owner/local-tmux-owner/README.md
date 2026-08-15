@@ -102,9 +102,12 @@ FARYO_SMOKE_URL='http://127.0.0.1:8765/?token=<token>&session=<session>' \
 
 Direct Owner local files and images are fetched with `X-Owner-Token` and opened
 through temporary Blob URLs; the credential is not copied into resource DOM
-attributes. The isolated browser regression exercises both a file and an image,
-checks the DOM for the runtime token, and confirms that Owner leaves tmux sizing
-unchanged:
+attributes. The entry token is moved to tab-scoped storage and removed from the
+visible URL; the authenticated event stream also uses the request header. The
+isolated browser regression exercises both a file and an image, a memory-reference
+card, a forced rich-render failure and the local AST Markdown/KaTeX fixture. It
+checks the DOM and event URLs for the runtime token and confirms that Owner leaves
+tmux sizing unchanged:
 
 ```bash
 FARYO_RESOURCE_PYTHON=/path/to/project/python \
@@ -130,6 +133,17 @@ and removes all test state:
 FARYO_DELIVERY_PYTHON=/path/to/project/python \
   apps/owner/local-tmux-owner/tests/browser-delivery-matrix.sh
 ```
+
+Persistent send receipts can be verified across a real Owner process restart
+without writing to an existing conversation:
+
+```bash
+FARYO_RESTART_PYTHON=/path/to/project/python \
+  apps/owner/local-tmux-owner/tests/send-restart-idempotency.sh
+```
+
+The receipt contains only the client message ID, session, digest, status and
+timestamp. It does not store the message body.
 
 Set `FARYO_DELIVERY_URL_TEMPLATE` with a literal `{session}` placeholder to run
 the same non-attachment matrix against an already deployed Owner. The URL is

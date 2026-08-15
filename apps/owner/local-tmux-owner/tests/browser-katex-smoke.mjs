@@ -39,6 +39,7 @@ const expectStructured = process.env.FARYO_SMOKE_EXPECT_STRUCTURED === '1';
 const debugLayout = process.env.FARYO_SMOKE_DEBUG_LAYOUT === '1';
 const checkOwnerLayout = process.env.FARYO_SMOKE_CHECK_OWNER_LAYOUT === '1';
 const checkAstFixture = process.env.FARYO_SMOKE_CHECK_AST_FIXTURE === '1';
+const forceRenderFailure = process.env.FARYO_SMOKE_FORCE_RENDER_FAILURE === '1';
 const expectedLivePanelState = process.env.FARYO_SMOKE_EXPECT_LIVE_PANEL_STATE || '';
 const expectedKeyNavState = process.env.FARYO_SMOKE_EXPECT_KEY_NAV || 'hidden';
 const viewportWidth = Number(process.env.FARYO_SMOKE_VIEWPORT_WIDTH || 0);
@@ -57,6 +58,8 @@ const minTables = Number(process.env.FARYO_SMOKE_MIN_TABLES || 0);
 const minTableKatex = Number(process.env.FARYO_SMOKE_MIN_TABLE_KATEX || 0);
 const minProtectedLinks = Number(process.env.FARYO_SMOKE_MIN_PROTECTED_LINKS || 0);
 const minProtectedImages = Number(process.env.FARYO_SMOKE_MIN_PROTECTED_IMAGES || 0);
+const minMemoryReferences = Number(process.env.FARYO_SMOKE_MIN_MEMORY_REFERENCES || 0);
+const minRenderFallbacks = Number(process.env.FARYO_SMOKE_MIN_RENDER_FALLBACKS || 0);
 const maxBareTex = Number(process.env.FARYO_SMOKE_MAX_BARE_TEX ?? -1);
 const screenshotTex = process.env.FARYO_SMOKE_SCREENSHOT_TEX || expectedTex.at(-1) || '';
 const loginUser = process.env.FARYO_SMOKE_LOGIN_USER || '';
@@ -289,6 +292,24 @@ try {
       source: `localStorage.setItem('faryoTheme', ${JSON.stringify(smokeTheme)});`,
     });
   }
+  if (forceRenderFailure) {
+    await send('Page.addScriptToEvaluateOnNewDocument', {
+      source: `(() => {
+        let renderer;
+        Object.defineProperty(globalThis, 'FaryoMarkdownAst', {
+          configurable: true,
+          get: () => renderer,
+          set: (value) => {
+            renderer = value && typeof value === 'object' ? new Proxy(value, {
+              get: (target, property, receiver) => property === 'render'
+                ? () => { throw new Error('anonymous render failure fixture'); }
+                : Reflect.get(target, property, receiver),
+            }) : value;
+          },
+        });
+      })();`,
+    });
+  }
   if (viewportWidth > 0 && viewportHeight > 0) {
     await send('Emulation.setDeviceMetricsOverride', {
       width: viewportWidth,
@@ -379,6 +400,9 @@ try {
         const markdownAssetUrls = performance.getEntriesByType('resource')
           .map((entry) => String(entry.name || ''))
           .filter((url) => /(?:\\/vendor\\/markdown-ast\\/|cdn\\.jsdelivr\\.net\\/npm\\/(?:micromark|mdast|katex))/i.test(url));
+        const eventResourceUrls = performance.getEntriesByType('resource')
+          .map((entry) => String(entry.name || ''))
+          .filter((url) => /\\/api\\/events(?:\\?|$)/i.test(url));
         const displayLayout = [...(output?.querySelectorAll('.katex-display') || [])].map((display) => {
           const formula = display.querySelector(':scope > .katex');
           const block = display.closest('.compact-block');
@@ -453,6 +477,11 @@ try {
           protectedImageCount,
           protectedImagePendingCount,
           ownerTokenDomCount,
+          ownerTokenInLocation: Boolean(ownerTokenNeedle && (location.href.includes(ownerTokenNeedle) || new URL(location.href).searchParams.has('token'))),
+          ownerTokenEventUrlCount: ownerTokenNeedle ? eventResourceUrls.filter((url) => url.includes(ownerTokenNeedle) || new URL(url).searchParams.has('token')).length : 0,
+          memoryReferenceCount: output?.querySelectorAll('.memory-reference-card').length || 0,
+          rawMemoryTagCount: (String(output?.innerText || '').match(/<\\/?oai-mem-citation\\b/gi) || []).length,
+          renderFallbackCount: output?.querySelectorAll('.rich-render-fallback, .capture-render-fallback').length || 0,
           captureSource: String(output?.dataset.captureSource || ''),
           captureWarningCount: output?.querySelectorAll('.compact-capture-warning').length || 0,
           stableBlockState: {
@@ -511,7 +540,9 @@ try {
     state = result.result?.value || {};
     const protectedResourcesReady = state.protectedLinkCount >= minProtectedLinks
       && state.protectedImageCount >= minProtectedImages
-      && state.protectedImagePendingCount === 0;
+      && state.protectedImagePendingCount === 0
+      && state.memoryReferenceCount >= minMemoryReferences
+      && state.renderFallbackCount >= minRenderFallbacks;
     if (skipRenderChecks
       ? state.domReady && (!checkOwnerLayout || state.stableBlockState?.keyedCount >= 1) && protectedResourcesReady
       : state.ready && protectedResourcesReady) break;
@@ -519,7 +550,9 @@ try {
 
   const protectedResourcesReady = state.protectedLinkCount >= minProtectedLinks
     && state.protectedImageCount >= minProtectedImages
-    && state.protectedImagePendingCount === 0;
+    && state.protectedImagePendingCount === 0
+    && state.memoryReferenceCount >= minMemoryReferences
+    && state.renderFallbackCount >= minRenderFallbacks;
   if (!(skipRenderChecks
     ? state.domReady && (!checkOwnerLayout || state.stableBlockState?.keyedCount >= 1) && protectedResourcesReady
     : state.ready && protectedResourcesReady)) {
@@ -527,6 +560,12 @@ try {
   }
   if (state.ownerTokenDomCount) {
     throw new Error(`Owner token appeared in ${state.ownerTokenDomCount} DOM attributes`);
+  }
+  if (state.ownerTokenInLocation || state.ownerTokenEventUrlCount) {
+    throw new Error(`Owner token remained in browser navigation or event-stream URLs: ${JSON.stringify({ location: state.ownerTokenInLocation, eventUrls: state.ownerTokenEventUrlCount })}`);
+  }
+  if (state.rawMemoryTagCount) {
+    throw new Error(`Internal memory citation markup remained visible in ${state.rawMemoryTagCount} text nodes`);
   }
   if (checkOwnerLayout) {
     const layout = state.ownerLayout || {};

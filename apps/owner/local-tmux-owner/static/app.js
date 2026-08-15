@@ -20,6 +20,8 @@
   const codexCompactRules = window.FaryoCodexCompactRules || {};
   const claudeCompactRules = window.FaryoClaudeCompactRules || {};
   const markdownRenderer = window.FaryoMarkdownAst || {};
+  const internalAnnotations = window.FaryoInternalAnnotations || {};
+  const eventStreamParser = window.FaryoEventStream || {};
   const stableBlocks = window.FaryoStableBlocks || {};
   const runtimeCompactRules = {
     userPromptRe: /^\s*›\s+/,
@@ -54,7 +56,7 @@
   const COMMAND_SUGGESTIONS = ['/permissions', '/model', '/rename', '/new', 'codex', 'codex resume', 'codex --yolo', 'claude', 'claude --dangerously-skip-permissions', 'claude --resume'];
   let captureRefreshInFlight = false, pendingCaptureRefreshLines = null, pendingDeferredCapture = null, activeCaptureRefreshController = null, captureRefreshRunId = 0;
   let statusRefreshInFlight = false, activeStatusRefreshController = null, statusRefreshRunId = 0, statusRefreshTimer = null;
-  let eventSource = null, eventRetryTimer = null, captureFallbackTimer = null, eventRetryDelayMs = 1800, liveState = 'fallback';
+  let eventStreamController = null, eventStreamRunId = 0, eventRetryTimer = null, captureFallbackTimer = null, eventRetryDelayMs = 1800, liveState = 'fallback';
   let petSending = false, petSendTimer = null, petStopping = false, petStopTimer = null, agentRunning = false, lastPetPhase = '';
   let outputActivity = 0, outputActivityTimer = null, lastCaptureSignature = '', lastCapture = null;
   let outputMode = 'compact', fullLocked = false, fullRefreshTimer = null, preserveErrorUntil = 0, seenInitialPageShow = false, needsConfirmUI = false, errorTimer = null, currentPromptTip = '';
@@ -65,7 +67,18 @@
   const routeMatch = location.pathname.match(/^\/(hp|pc|txy)(?:\/|$)/);
   const routeBase = routeMatch ? `/${routeMatch[1]}` : '';
   const params = new URLSearchParams(location.search);
-  const ownerToken = params.get('token') || '';
+  const OWNER_TOKEN_STORAGE_KEY = 'faryoOwnerToken:v1';
+  const queryOwnerToken = params.get('token') || '';
+  let ownerToken = queryOwnerToken;
+  try {
+    if (queryOwnerToken) sessionStorage.setItem(OWNER_TOKEN_STORAGE_KEY, queryOwnerToken);
+    else ownerToken = sessionStorage.getItem(OWNER_TOKEN_STORAGE_KEY) || '';
+  } catch (_err) {}
+  if (queryOwnerToken) {
+    params.delete('token');
+    const cleanQuery = params.toString();
+    history.replaceState(null, '', `${location.pathname}${cleanQuery ? `?${cleanQuery}` : ''}${location.hash}`);
+  }
   let gatewayCsrfToken = '';
   let selectedSession = params.get('session') || '';
   let submitInFlight = false, pendingSubmission = null;
@@ -370,8 +383,9 @@
     if (copy) {
       const block = copy.closest('.compact-block.output');
       const sourceIndex = Number(block?.dataset.sourceIndex);
-      const source = Number.isInteger(sourceIndex) && sourceIndex >= 0 ? compactOutputSources[sourceIndex] : '';
-      const clone = !source && block ? block.cloneNode(true) : null;
+      const hasSource = Number.isInteger(sourceIndex) && sourceIndex >= 0 && sourceIndex < compactOutputSources.length;
+      const source = hasSource ? compactOutputSources[sourceIndex] : '';
+      const clone = !hasSource && block ? block.cloneNode(true) : null;
       clone && clone.querySelector('.copy-output-block')?.remove();
       const text = source || clone?.innerText || '';
       try { await navigator.clipboard.writeText(text.trim()); copy.textContent = '✓'; setTimeout(() => { if (copy.isConnected) copy.textContent = '⧉'; }, 900); }
@@ -607,15 +621,15 @@
   }
 
   function eventUrl() {
-    const path = apiPath(`/api/events?lines=${COMPACT_CAPTURE_LINES}`);
-    return routeBase + (ownerToken ? path + (path.includes('?') ? '&' : '?') + `token=${encodeURIComponent(ownerToken)}` : path);
+    return routeBase + apiPath(`/api/events?lines=${COMPACT_CAPTURE_LINES}`);
   }
 
   function closeEventStream() {
     if (eventRetryTimer) clearTimeout(eventRetryTimer);
     eventRetryTimer = null;
-    if (eventSource) eventSource.close();
-    eventSource = null;
+    eventStreamRunId += 1;
+    eventStreamController?.abort();
+    eventStreamController = null;
   }
 
   function setStatusRefresh(on) { if (statusRefreshTimer) clearInterval(statusRefreshTimer); statusRefreshTimer = null; if (on && !document.hidden) statusRefreshTimer = setInterval(() => refreshStatus({ silent: true }).catch(handleBackgroundError), STATUS_REFRESH_MS); }
@@ -632,38 +646,74 @@
 
   function setCaptureFallback(on) { if (captureFallbackTimer) clearInterval(captureFallbackTimer); captureFallbackTimer = null; if (on && !document.hidden && outputMode === 'compact') captureFallbackTimer = setInterval(() => refreshCapture(COMPACT_CAPTURE_LINES, { silent: true }).catch(handleBackgroundError), CAPTURE_FALLBACK_MS); }
 
+  function applyCaptureEvent(event) {
+    if (event.type !== 'capture') return;
+    const keepBottom = isNearBottom();
+    const capture = JSON.parse(event.data || '{}');
+    setLiveState('live');
+    if (Object.prototype.hasOwnProperty.call(capture, 'agentRunning')) {
+      const nextRunning = Boolean(capture.agentRunning);
+      if (nextRunning !== agentRunning) {
+        agentRunning = nextRunning;
+        updatePetControl();
+      }
+    }
+    if (outputMode === 'compact') renderCaptureWhenSafe(capture, keepBottom);
+  }
+
+  function retryEventStream(controller, runId, error) {
+    if (controller.signal.aborted || eventStreamController !== controller || eventStreamRunId !== runId) return;
+    eventStreamController = null;
+    setLiveState('reconnecting');
+    if (headerStatusVisible()) refreshStatus({ silent: true }).catch(handleBackgroundError);
+    setCaptureFallback(true);
+    if (error && error.name !== 'AbortError') console.debug('event stream reconnecting', error);
+    const delay = eventRetryDelayMs;
+    eventRetryDelayMs = Math.min(15000, Math.round(eventRetryDelayMs * 1.7));
+    if (outputMode === 'compact' && !document.hidden) eventRetryTimer = setTimeout(startEventStream, delay);
+  }
+
+  async function consumeEventStream(controller, runId) {
+    const headers = ownerToken ? { 'X-Owner-Token': ownerToken } : {};
+    const response = await fetch(eventUrl(), {
+      headers,
+      cache: 'no-store',
+      credentials: 'same-origin',
+      signal: controller.signal,
+    });
+    if (!response.ok) {
+      const error = new Error(`Event stream failed ${response.status}`);
+      error.status = response.status;
+      throw error;
+    }
+    if (!response.body || typeof eventStreamParser.createParser !== 'function') throw new Error('Streaming response is unavailable');
+    eventRetryDelayMs = 1800;
+    setCaptureFallback(false);
+    setLiveState('live');
+    const parser = eventStreamParser.createParser(applyCaptureEvent);
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    while (eventStreamController === controller && eventStreamRunId === runId) {
+      const chunk = await reader.read();
+      if (chunk.done) break;
+      parser.push(decoder.decode(chunk.value, { stream: true }));
+    }
+    parser.push(decoder.decode(), true);
+    if (!controller.signal.aborted) throw new Error('Event stream ended');
+  }
+
   function startEventStream() {
-    if (!window.EventSource || outputMode !== 'compact' || document.hidden) { setLiveState('fallback'); setCaptureFallback(outputMode === 'compact' && !document.hidden); return; }
+    if (!window.fetch || !window.ReadableStream || outputMode !== 'compact' || document.hidden) {
+      setLiveState('fallback');
+      setCaptureFallback(outputMode === 'compact' && !document.hidden);
+      return;
+    }
     closeEventStream();
     setLiveState('reconnecting');
-    const source = new EventSource(eventUrl());
-    eventSource = source;
-    source.onopen = () => { eventRetryDelayMs = 1800; setCaptureFallback(false); setLiveState('live'); };
-    source.addEventListener('capture', (event) => {
-      const keepBottom = isNearBottom();
-      setLiveState('live');
-      const capture = JSON.parse(event.data || '{}');
-      if (Object.prototype.hasOwnProperty.call(capture, 'agentRunning')) {
-        const nextRunning = Boolean(capture.agentRunning);
-        if (nextRunning !== agentRunning) {
-          agentRunning = nextRunning;
-          updatePetControl();
-        }
-      }
-      if (outputMode !== 'compact') return;
-      renderCaptureWhenSafe(capture, keepBottom);
-    });
-    source.onerror = () => {
-      if (eventSource !== source) return;
-      setLiveState('reconnecting');
-      source.close();
-      eventSource = null;
-      if (headerStatusVisible()) refreshStatus({ silent: true }).catch(handleBackgroundError);
-      setCaptureFallback(true);
-      const delay = eventRetryDelayMs;
-      eventRetryDelayMs = Math.min(15000, Math.round(eventRetryDelayMs * 1.7));
-      if (outputMode === 'compact' && !document.hidden) eventRetryTimer = setTimeout(startEventStream, delay);
-    };
+    const controller = new AbortController();
+    const runId = eventStreamRunId;
+    eventStreamController = controller;
+    consumeEventStream(controller, runId).catch((error) => retryEventStream(controller, runId, error));
   }
 
   function compactGitLabel(git) {
@@ -874,7 +924,6 @@
   function switchSession(route, session) {
     const next = new URL(routeBase === `/${route}` ? location.href : `/${route}/`, location.origin);
     next.searchParams.set('session', session);
-    if (ownerToken) next.searchParams.set('token', ownerToken);
     if (routeBase !== `/${route}`) return location.assign(`${next.pathname}${next.search}${location.hash}`);
     persistPromptDraft();
     persistPendingSubmission();
@@ -971,6 +1020,28 @@
       }
     }
     return html;
+  }
+
+  function parsedInternalAnnotations(value) {
+    if (typeof internalAnnotations.parse === 'function') return internalAnnotations.parse(value);
+    return { body: String(value || ''), citations: [] };
+  }
+
+  function copyableOutputText(value) {
+    if (typeof internalAnnotations.strip === 'function') return internalAnnotations.strip(value);
+    return String(value || '');
+  }
+
+  function renderMemoryReferences(citations) {
+    const groups = Array.isArray(citations) ? citations : [];
+    if (!groups.length) return '';
+    const entries = groups.flatMap((group) => Array.isArray(group?.entries) ? group.entries : []);
+    const count = entries.length;
+    const notes = entries.map((entry) => String(entry?.note || '').trim()).filter(Boolean);
+    const items = notes.length
+      ? `<ul>${notes.map((note) => `<li>${escapeHtml(note)}</li>`).join('')}</ul>`
+      : '<p>Saved context was used for this answer.</p>';
+    return `<details class="memory-reference-card"><summary>Memory references${count ? ` · ${count}` : ''}</summary><div class="memory-reference-body">${items}</div></details>`;
   }
 
   const imagePathRe = /\.(?:jpe?g|png|webp|gif|heic|heif)$/i;
@@ -1112,7 +1183,9 @@
   }
 
   function renderTextWithFiles(text, renderOptions = {}) {
-    const originalLines = String(text || '').split('\n');
+    const parsed = parsedInternalAnnotations(text);
+    const originalLines = String(parsed.body || '').split('\n');
+    let renderedText = '';
     if (typeof markdownRenderer.render === 'function' && markdownRenderer.ready?.()) {
       const rendered = [];
       let markdownLines = [];
@@ -1140,9 +1213,20 @@
         }
       });
       flushMarkdown();
-      return rendered.join('');
+      renderedText = rendered.join('');
+    } else {
+      renderedText = originalLines.map((line) => renderImageLine(line) || renderFileLine(line) || escapeHtml(line)).join('\n');
     }
-    return originalLines.map((line) => renderImageLine(line) || renderFileLine(line) || escapeHtml(line)).join('\n');
+    return renderedText + renderMemoryReferences(parsed.citations);
+  }
+
+  function renderTextWithFilesSafely(text, renderOptions = {}) {
+    try {
+      return renderTextWithFiles(text, renderOptions);
+    } catch (_error) {
+      const parsed = parsedInternalAnnotations(text);
+      return `<div class="rich-render-fallback" role="status"><strong>Rich text preview unavailable</strong><span>Showing safe plain text for this message.</span><pre>${escapeHtml(parsed.body || '')}</pre></div>${renderMemoryReferences(parsed.citations)}`;
+    }
   }
 
   function compactRulesForCapture(capture) {
@@ -1172,7 +1256,7 @@
       }));
     compactOutputSources = [];
     for (const model of models) {
-      model.sourceIndex = model.kind === 'output' ? compactOutputSources.push(model.text) - 1 : -1;
+      model.sourceIndex = model.kind === 'output' ? compactOutputSources.push(copyableOutputText(model.text)) - 1 : -1;
     }
     const createNode = (model) => {
       if (model.kind === 'process') {
@@ -1195,7 +1279,7 @@
       const node = document.createElement('section');
       const kindClass = /^[A-Za-z0-9_-]+$/.test(model.kind) ? model.kind : 'output';
       node.className = `compact-block ${kindClass}`;
-      node.innerHTML = renderTextWithFiles(model.text, renderOptions);
+      node.innerHTML = renderTextWithFilesSafely(model.text, renderOptions);
       return node;
     };
     let metrics;
@@ -1235,7 +1319,8 @@
   }
 
   function renderPlainOutput(text, rules) {
-    const value = text || 'No output yet';
+    const parsed = parsedInternalAnnotations(text);
+    const value = parsed.body || 'No output yet';
     let inUserInput = false;
     output.innerHTML = value.split('\n').map((line) => {
       const rendered = escapeHtml(line);
@@ -1248,6 +1333,7 @@
       if (metaLineRe.test(line)) return `<span class="agent-meta-line">${rendered || ' '}</span>`;
       return inUserInput ? `<span class="user-input-line">${rendered || ' '}</span>` : rendered;
     }).join('\n');
+    if (parsed.citations.length) output.insertAdjacentHTML('beforeend', `\n${renderMemoryReferences(parsed.citations)}`);
   }
 
   function renderOutput(capture) {
@@ -1263,11 +1349,18 @@
     output.classList.toggle('compact-blocks', outputMode === 'compact');
     const structuredCapture = capture.captureSource === 'codex-jsonl' || capture.captureSource === 'codex-app-server';
     if (outputMode === 'compact') {
-      renderCompactOutput(text, rules, {
-        mode: structuredCapture ? 'settled' : 'streaming',
-      });
+      try {
+        renderCompactOutput(text, rules, {
+          mode: structuredCapture ? 'settled' : 'streaming',
+        });
+        delete output.dataset.renderFallback;
+      } catch (_error) {
+        const parsed = parsedInternalAnnotations(text);
+        output.dataset.renderFallback = 'true';
+        output.innerHTML = `<section class="compact-capture-warning" role="status">Rich conversation layout failed. Safe plain text remains available and live updates will continue.</section><section class="compact-block output"><pre class="capture-render-fallback">${escapeHtml(parsed.body || '')}</pre>${renderMemoryReferences(parsed.citations)}</section>`;
+      }
     }
-    else if (capture.html) output.innerHTML = decorateMetaLines(capture.html, text);
+    else if (capture.html && !parsedInternalAnnotations(text).citations.length) output.innerHTML = decorateMetaLines(capture.html, text);
     else renderPlainOutput(text, rules);
     if (outputMode === 'compact' && capture.agentSource === 'codex-cli' && !structuredCapture) {
       output.insertAdjacentHTML('afterbegin', '<section class="compact-capture-warning" role="status">Structured Codex history is unavailable. Showing a terminal fallback; Markdown and formulas may be incomplete.</section>');

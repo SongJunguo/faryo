@@ -55,6 +55,9 @@ release_checks() {
   for js_file in \
     "$ROOT/apps/owner/local-tmux-owner/static/compact-rules-codex.js" \
     "$ROOT/apps/owner/local-tmux-owner/static/compact-rules-claude.js" \
+    "$ROOT/apps/owner/local-tmux-owner/static/event-stream.js" \
+    "$ROOT/apps/owner/local-tmux-owner/static/internal-annotations.js" \
+    "$ROOT/apps/owner/local-tmux-owner/static/local-file-view.js" \
     "$ROOT/apps/owner/local-tmux-owner/static/stable-blocks.js" \
     "$ROOT/apps/owner/local-tmux-owner/static/vendor/markdown-ast/markdown-ast.min.js" \
     "$ROOT/apps/owner/local-tmux-owner/static/live-scroll.js" \
@@ -70,6 +73,8 @@ release_checks() {
   node --check "$ROOT/apps/owner/local-tmux-owner/tests/browser-katex-smoke.mjs"
   node --check "$ROOT/apps/gateway/server/tests/browser-workbench-smoke.mjs"
   node "$ROOT/apps/owner/local-tmux-owner/tests/markdown-ast-bundle.test.js"
+  node "$ROOT/apps/owner/local-tmux-owner/tests/internal-annotations.test.js"
+  node "$ROOT/apps/owner/local-tmux-owner/tests/event-stream.test.js"
   node "$ROOT/apps/owner/local-tmux-owner/tests/stable-blocks.test.js"
   node "$ROOT/apps/owner/local-tmux-owner/tests/live-scroll.test.js"
   node "$ROOT/apps/owner/local-tmux-owner/tests/compact-rules-codex.test.js"
@@ -90,6 +95,11 @@ assert "compact-rules-codex.js" in gateway, "gateway must allow compact-rules-co
 assert "compact-rules-claude.js" in gateway, "gateway must allow compact-rules-claude.js"
 assert "stable-blocks.js" in index, "index.html must load stable-blocks.js"
 assert "stable-blocks.js" in gateway, "gateway must allow stable-blocks.js"
+assert "internal-annotations.js" in index, "index.html must load internal annotation formatting"
+assert "internal-annotations.js" in gateway, "gateway must proxy internal annotation formatting"
+assert "event-stream.js" in index, "index.html must load the authenticated event-stream parser"
+assert "event-stream.js" in gateway, "gateway must proxy the authenticated event-stream parser"
+assert "local-file-view.js" in gateway, "gateway must proxy the CSP-safe local file controls"
 assert "vendor/markdown-ast/markdown-ast.min.js" in index, "index.html must load the AST Markdown bundle"
 assert re.search(r'<script\s+type="module"\s+src="vendor/markdown-ast/highlight/highlight\.js\?', index), "index.html must load the Shiki module locally"
 assert '"vendor/markdown-ast/"' in gateway, "gateway must proxy AST Markdown assets"
@@ -125,7 +135,9 @@ assert (root / "tools/markdown-engine/package-lock.json").is_file(), "AST Markdo
 app = (root / "apps/owner/local-tmux-owner/static/app.js").read_text(encoding="utf-8")
 assert "stableBlocks.reconcile(output, models, createNode)" in app, "Compact Chat must reconcile stable DOM blocks"
 assert "headers['X-Owner-Token'] = ownerToken" in app, "Owner API calls must include the token header"
-assert "next.searchParams.set('token', ownerToken)" in app, "session switches must preserve direct Owner auth"
+assert "sessionStorage.setItem(OWNER_TOKEN_STORAGE_KEY" in app, "direct Owner auth must survive same-tab refresh without URL persistence"
+assert "new EventSource" not in app, "Owner streaming must support the authentication header"
+assert "token=${encodeURIComponent(ownerToken)}" not in app, "Owner streaming must not place the token in request URLs"
 assert "authenticatedApiPath" not in app, "local resource DOM URLs must not append the Owner token"
 assert "fetchProtectedResource" in app, "direct Owner resources must use authenticated fetches"
 assert "data-faryo-fetch-href" in app, "protected file links must use deferred authenticated fetches"
@@ -136,6 +148,7 @@ assert "Week ${remaining}% left" in app, "Owner must label weekly quota as remai
 assert "contextWindowSource === 'agent-reported'" in app, "Owner must distinguish reported context windows from fallbacks"
 assert "usedTokens" in app and "contextWindow" in app, "Owner must show actual context token counts"
 assert "sendWithDeliveryRecovery" in app, "Owner must reconcile ambiguous send responses idempotently"
+assert "button.textContent = '⧉'" in app, "confirmed output copy button must remain unchanged"
 appearance = (root / "apps/shared/static/appearance.css").read_text(encoding="utf-8")
 assert "--bg: #0F1115" in appearance and "--accent: #7188FF" in appearance, "shared dark palette must match Owner"
 assert "--bg: #F6F7F9" in appearance and "--accent: #5369E7" in appearance, "shared light palette must match Owner"

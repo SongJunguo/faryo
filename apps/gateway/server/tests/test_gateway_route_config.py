@@ -88,6 +88,12 @@ class GatewayRouteConfigTest(unittest.TestCase):
             "/api/agent-sessions?view=split&limit=20&offset=0",
         )
 
+        handler.owner_agent_sessions("txy", "tester", 40, True)
+        self.assertEqual(
+            handler.owner_json_request.call_args.args[1],
+            "/api/agent-sessions?view=split&limit=10&offset=390",
+        )
+
     def test_workbench_keeps_active_sessions_above_ten_item_history_pages(self) -> None:
         gateway.BACKENDS.clear()
         gateway.BACKENDS.update({
@@ -100,7 +106,7 @@ class GatewayRouteConfigTest(unittest.TestCase):
             "hp": [{"id": f"hp-{index}", "updatedTs": 39.5 - index} for index in range(20)],
         }
 
-        def route_payload(route: str, _username: str, page: int) -> dict:
+        def route_payload(route: str, _username: str, page: int, _exact_page: bool = False) -> dict:
             return {
                 "activeSessions": [{"id": f"active-{route}", "tmuxSession": f"live-{route}", "updatedTs": 100}],
                 "sessions": histories[route][:page * gateway.HISTORY_PAGE_SIZE],
@@ -137,6 +143,33 @@ class GatewayRouteConfigTest(unittest.TestCase):
         self.assertTrue(set(item["id"] for item in first["sessions"]).isdisjoint(
             item["id"] for item in second["sessions"]
         ))
+
+    def test_single_route_workbench_requests_only_the_exact_history_page(self) -> None:
+        gateway.BACKENDS.clear()
+        gateway.BACKENDS["txy"] = ("127.0.0.1", 8765, "Ubuntu 工作站")
+        handler = object.__new__(gateway.GatewayHandler)
+        page_rows = [{"id": f"history-{index}", "updatedTs": 100 - index} for index in range(390, 400)]
+        handler.owner_agent_sessions = mock.Mock(return_value={
+            "activeSessions": [{"id": "active", "tmuxSession": "codex", "updatedTs": 200}],
+            "sessions": page_rows,
+            "historyTotal": 437,
+            "activeCount": 1,
+            "maxRunning": 8,
+            "canCreate": True,
+        })
+        config = mock.Mock()
+        config.user_routes.return_value = ["txy"]
+        config.list_bridge_packages.return_value = []
+        config.mcp_user = "controller"
+        handler.server = mock.Mock(config=config)
+
+        with mock.patch.object(gateway, "backend_status", return_value={"id": "txy"}):
+            result = handler.workbench_payload("tester", 40)
+
+        handler.owner_agent_sessions.assert_called_once_with("txy", "tester", 40, True)
+        self.assertEqual(result["sessions"], page_rows)
+        self.assertEqual(result["history"]["page"], 40)
+        self.assertEqual(result["history"]["totalPages"], 44)
 
     def test_portal_has_separate_active_and_paginated_history_regions(self) -> None:
         gateway.BACKENDS.clear()
@@ -226,6 +259,42 @@ class GatewayRouteConfigTest(unittest.TestCase):
             self.assertEqual(Path(package["assets"][0]["path"]).read_bytes(), b"first file\n")
             self.assertEqual(Path(package["assets"][1]["path"]).read_bytes(), b"second file\n")
             self.assertEqual(config.list_bridge_packages("tester", "pending")[0]["id"], package["id"])
+
+    def test_bridge_package_cleanup_uses_status_retention_and_skips_symlinks(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            auth = root / "gateway-auth.json"
+            env = root / "faryo.env"
+            auth.write_text(json.dumps({"users": {"tester": {"bcrypt_hash": "unused", "routes": ["txy"]}}}), encoding="utf-8")
+            env.write_text("FARYO_GATEWAY_ROUTES=txy\nFARYO_TXY_OWNER_TOKEN=enabled-token\n", encoding="utf-8")
+            config = gateway.GatewayConfig(auth, env, root / "portal", root / "state" / "cookie-secret")
+            now = 2_000_000_000
+
+            def package(package_id: str, status: str, age: int) -> Path:
+                package_dir = config.bridge_root / package_id
+                package_dir.mkdir()
+                (package_dir / "package.json").write_text(json.dumps({
+                    "id": package_id,
+                    "owner": "tester",
+                    "status": status,
+                    "updated_at": now - age,
+                }), encoding="utf-8")
+                return package_dir
+
+            old_pending = package("1000000000-aaaaaaaa", "pending", gateway.BRIDGE_PENDING_RETENTION_SECONDS + 1)
+            old_delivered = package("1000000001-bbbbbbbb", "injected", gateway.BRIDGE_DELIVERED_RETENTION_SECONDS + 1)
+            recent = package("1000000002-cccccccc", "pending", gateway.BRIDGE_PENDING_RETENTION_SECONDS - 1)
+            outside = root / "outside-package"
+            outside.mkdir()
+            (config.bridge_root / "1000000003-dddddddd").symlink_to(outside, target_is_directory=True)
+
+            removed = config.cleanup_bridge_packages(now, force=True)
+
+            self.assertEqual(removed, 2)
+            self.assertFalse(old_pending.exists())
+            self.assertFalse(old_delivered.exists())
+            self.assertTrue(recent.exists())
+            self.assertTrue(outside.exists())
 
     def test_gateway_config_accepts_route_max_running_override(self) -> None:
         with tempfile.TemporaryDirectory() as temp:

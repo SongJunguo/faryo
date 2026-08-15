@@ -200,6 +200,92 @@ class CodexTranscriptTest(unittest.TestCase):
 
         self.assertEqual(transcript, "• complete after append")
 
+    def test_large_rollout_initializes_from_a_bounded_tail(self):
+        old_event = {
+            "type": "response_item",
+            "payload": {
+                "type": "message",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "old prefix must not be cached"}],
+            },
+        }
+        usage_event = {
+            "payload": {
+                "type": "token_count",
+                "info": {
+                    "last_token_usage": {"input_tokens": 120, "output_tokens": 30, "total_tokens": 150},
+                    "model_context_window": 1_000,
+                },
+            },
+        }
+        latest_event = {
+            "type": "response_item",
+            "payload": {
+                "type": "message",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "latest bounded tail"}],
+            },
+        }
+        with tempfile.TemporaryDirectory() as root:
+            history = Path(root) / "rollout.jsonl"
+            prefix = (json.dumps(old_event) + "\n") * 40
+            history.write_text(prefix + json.dumps(usage_event) + "\n" + json.dumps(latest_event) + "\n", encoding="utf-8")
+            with mock.patch.object(server, "CODEX_ROLLOUT_TAIL_SCAN_BYTES", 640):
+                state = server.codex_rollout_state(str(history))
+
+        transcript = server.codex_message_transcript(state["messages"], 320)
+        self.assertLess(transcript.count("old prefix"), 40)
+        self.assertIn("latest bounded tail", transcript)
+        self.assertEqual(state["contextUsage"]["usedTokens"], 150)
+
+    def test_rollout_cache_evicts_the_least_recent_path(self):
+        event = {
+            "type": "response_item",
+            "payload": {
+                "type": "message",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "bounded"}],
+            },
+        }
+        with tempfile.TemporaryDirectory() as root, mock.patch.object(server, "CODEX_ROLLOUT_CACHE_MAX_PATHS", 2):
+            paths = []
+            for index in range(3):
+                path = Path(root) / f"rollout-{index}.jsonl"
+                path.write_text(json.dumps(event) + "\n", encoding="utf-8")
+                paths.append(str(path))
+                server.codex_rollout_messages(str(path))
+
+            with server._codex_rollout_cache_lock:
+                keys = list(server._codex_rollout_cache)
+
+        self.assertEqual(keys, paths[1:])
+
+    def test_large_unread_gap_rebuilds_from_the_latest_tail(self):
+        def message(text):
+            return {
+                "type": "response_item",
+                "payload": {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": text}],
+                },
+            }
+
+        with tempfile.TemporaryDirectory() as root:
+            history = Path(root) / "rollout.jsonl"
+            history.write_text(json.dumps(message("before gap")) + "\n", encoding="utf-8")
+            self.assertIn("before gap", server.codex_rollout_transcript(str(history), 320))
+            with history.open("a", encoding="utf-8") as fh:
+                for _ in range(20):
+                    fh.write(json.dumps({"type": "ignored", "padding": "x" * 48}) + "\n")
+                fh.write(json.dumps(message("after gap")) + "\n")
+            with mock.patch.object(server, "CODEX_ROLLOUT_MAX_CATCHUP_BYTES", 128), \
+                 mock.patch.object(server, "CODEX_ROLLOUT_TAIL_SCAN_BYTES", 256):
+                transcript = server.codex_rollout_transcript(str(history), 320)
+
+        self.assertNotIn("before gap", transcript)
+        self.assertIn("after gap", transcript)
+
     def test_structured_capture_prefers_the_durable_rollout(self):
         event = {
             "type": "response_item",

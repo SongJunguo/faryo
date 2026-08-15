@@ -16,6 +16,7 @@ import hashlib
 import html as _html
 import io
 import json
+import mmap
 import os
 import re
 import secrets
@@ -82,16 +83,23 @@ PASTE_READY_MIN_PROBE_CHARS = 8
 PASTE_SETTLE_SECONDS = 0.08
 SEND_ACCEPT_TIMEOUT = 1.4
 SEND_ACCEPT_RETRY_DELAY = 0.22
-SEND_DELIVERY_TTL_SECONDS = 15 * 60
+SEND_DELIVERY_TTL_SECONDS = 48 * 60 * 60
+SEND_DELIVERY_CLEANUP_INTERVAL_SECONDS = 60 * 60
 CAPTURE_COMPACT_LINES = 320
 CAPTURE_FULL_LINES = 800
 CAPTURE_DEFAULT_LINES = CAPTURE_FULL_LINES
 CAPTURE_MAX_LINES = CAPTURE_FULL_LINES
 CODEX_LIVE_TAIL_LINES = 60
 EVENT_STREAM_MAX_SECONDS = 75
-EVENT_STREAM_MAX_CONNECTIONS = 6
+EVENT_STREAM_MAX_CONNECTIONS = 16
+EVENT_STREAM_HEARTBEAT_SECONDS = 10
 RATE_LIMIT_CACHE_TTL = 120.0
 CODEX_TRANSCRIPT_CACHE_TTL = 5.0
+CODEX_ROLLOUT_CACHE_LINE_BUDGET = CAPTURE_MAX_LINES * 2
+CODEX_ROLLOUT_CACHE_CHAR_BUDGET = 4 * 1024 * 1024
+CODEX_ROLLOUT_CACHE_MAX_PATHS = 16
+CODEX_ROLLOUT_TAIL_SCAN_BYTES = 16 * 1024 * 1024
+CODEX_ROLLOUT_MAX_CATCHUP_BYTES = 8 * 1024 * 1024
 THREAD_COLUMNS = "id, title, rollout_path, tokens_used, model, reasoning_effort, cwd, updated_at, source, thread_source"
 INTERACTIVE_CODEX_THREAD_SOURCES = {"cli", "vscode"}
 AGENT_SESSION_LIST_LIMIT = 20
@@ -104,6 +112,7 @@ FARYO_OWNER_DATA = Path(os.environ.get("FARYO_OWNER_DATA", str(Path.home() / ".f
 FILE_INBOX_ROOT = Path(os.environ.get("FARYO_OWNER_INBOX_DIR", str(FARYO_OWNER_DATA / "inbox"))).expanduser()
 CACHE_ROOT = Path(os.environ.get("FARYO_OWNER_CACHE_DIR", str(FARYO_OWNER_DATA / "cache"))).expanduser()
 LOGS_ROOT = Path(os.environ.get("FARYO_OWNER_LOGS_DIR", str(FARYO_OWNER_DATA / "logs"))).expanduser()
+SEND_DELIVERY_ROOT = Path(os.environ.get("FARYO_OWNER_DELIVERY_DIR", str(FARYO_OWNER_DATA / "send-deliveries"))).expanduser()
 MAX_ATTACHMENT_UPLOAD_BYTES = 25 * 1024 * 1024
 UPLOAD_RETENTION_DAYS = 7
 IMAGE_MIME_SUFFIXES = {
@@ -267,6 +276,7 @@ _codex_rollout_cache_lock = threading.Lock()
 _codex_rollout_path_locks: dict[str, threading.Lock] = {}
 _send_delivery_lock = threading.RLock()
 _send_deliveries: dict[str, dict[str, Any]] = {}
+_send_delivery_cleanup_at = 0.0
 
 
 def short_path(path: str | None) -> str | None:
@@ -534,10 +544,20 @@ def agent_state_rows(sql: str, params: tuple[Any, ...]) -> list[dict[str, Any]]:
         return []
 
 
-def codex_rows(where: str, params: tuple[Any, ...], limit: int | None = None) -> list[dict[str, Any]]:
+def codex_rows(where: str, params: tuple[Any, ...], limit: int | None = None, offset: int = 0) -> list[dict[str, Any]]:
     sql = f"SELECT {THREAD_COLUMNS}, created_at FROM threads WHERE {where} ORDER BY updated_at DESC"
-    if limit: sql += " LIMIT ?"; params = (*params, limit)
+    if limit is not None:
+        sql += " LIMIT ? OFFSET ?"
+        params = (*params, max(0, limit), max(0, offset))
     return agent_state_rows(sql, params)
+
+
+def codex_count(where: str, params: tuple[Any, ...]) -> int:
+    rows = agent_state_rows(f"SELECT COUNT(*) AS total FROM threads WHERE {where}", params)
+    try:
+        return max(0, int(rows[0].get("total") or 0)) if rows else 0
+    except (TypeError, ValueError):
+        return 0
 
 
 def codex_session_index_titles() -> dict[str, str]:
@@ -615,6 +635,44 @@ def claude_history_items(history_root: str | None = None) -> list[dict[str, Any]
         items.append({"id": session_id, "title": session_title_topic(title or last_prompt, short_path(cwd) or session_id or "Untitled session"), "gitLabel": session_git_label(cwd, git_labels, False), "cwd": short_path(cwd), "createdAt": "", "updatedAt": updated_at, "updatedTs": stat.st_mtime, "historyPath": path.as_posix(), "rolloutPath": "", "model": "", "reasoningEffort": "", "source": "claude-code", "tmuxSession": "", "active": False, "managed": False})
     return items
 
+def codex_session_item(config: Config, item: dict[str, Any], index_titles: dict[str, str], git_labels: dict[str, str], tmux_session: str = "") -> dict[str, Any]:
+    cwd = str(item.get("cwd") or "")
+    thread_id = str(item.get("id") or "")
+    updated_ts = parse_sqlite_timestamp(item.get("updated_at"))
+    fallback = short_path(cwd) or thread_id or "Untitled session"
+    title = codex_thread_title(item, fallback, index_titles)
+    if tmux_session:
+        title = tmux_session_option(config, tmux_session, "@faryo_session_title") or title
+    return {"id": thread_id, "title": title, "gitLabel": session_git_label(session_git_cwd(config, tmux_session, cwd), git_labels, bool(tmux_session)), "cwd": short_path(cwd), "createdAt": item.get("created_at") or "", "updatedAt": item.get("updated_at") or "", "updatedTs": updated_ts, "rolloutPath": item.get("rollout_path") or "", "model": item.get("model") or "", "reasoningEffort": item.get("reasoning_effort") or "", "source": "codex-cli", "tmuxSession": tmux_session, "active": bool(tmux_session), "managed": bool(tmux_session and managed_session(config, tmux_session)), "agentRunning": agent_session_running(config, tmux_session)}
+
+
+def codex_history_filter(history_root: str | None, excluded_ids: set[str]) -> tuple[str, tuple[Any, ...]]:
+    where = "source IN ('cli', 'vscode') AND thread_source = 'user' AND COALESCE(archived, 0) = 0"
+    params: tuple[Any, ...] = ()
+    if excluded_ids:
+        placeholders = ",".join("?" for _ in excluded_ids)
+        where += f" AND id NOT IN ({placeholders})"
+        params += tuple(sorted(excluded_ids))
+    if history_root is not None:
+        try:
+            root = str(Path(history_root).expanduser().resolve()).rstrip(os.sep) or os.sep
+        except OSError:
+            root = str(Path(history_root).expanduser()).rstrip(os.sep) or os.sep
+        escaped = root.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        prefix = (escaped.rstrip(os.sep) + os.sep + "%") if root != os.sep else os.sep + "%"
+        where += " AND (cwd = ? OR cwd LIKE ? ESCAPE '\\')"
+        params += (root, prefix)
+    return where, params
+
+
+def codex_history_page(config: Config, limit: int, offset: int = 0, history_root: str | None = None, excluded_ids: set[str] | None = None) -> tuple[list[dict[str, Any]], int]:
+    where, params = codex_history_filter(history_root, excluded_ids or set())
+    total = codex_count(where, params)
+    index_titles = codex_session_index_titles(); git_labels: dict[str, str] = {}
+    rows = codex_rows(where, params, max(1, limit), max(0, offset))
+    return [codex_session_item(config, item, index_titles, git_labels) for item in rows], total
+
+
 def codex_history_items(config: Config, history_root: str | None = None) -> list[dict[str, Any]]:
     active, superseded = active_codex_thread_state(config); index_titles = codex_session_index_titles(); items = []; git_labels: dict[str, str] = {}
     for item in codex_rows("source IN ('cli', 'vscode') AND thread_source = 'user' AND COALESCE(archived, 0) = 0", ()):
@@ -622,13 +680,61 @@ def codex_history_items(config: Config, history_root: str | None = None) -> list
         if history_root is not None and not path_under_root(cwd, history_root): continue
         thread_id = str(item.get("id") or ""); tmux_session = active.get(thread_id, "")
         if thread_id in superseded: continue
-        updated_ts = parse_sqlite_timestamp(item.get("updated_at"))
-        fallback = short_path(cwd) or thread_id or "Untitled session"
-        title = codex_thread_title(item, fallback, index_titles)
-        if tmux_session:
-            title = tmux_session_option(config, tmux_session, "@faryo_session_title") or title
-        items.append({"id": thread_id, "title": title, "gitLabel": session_git_label(session_git_cwd(config, tmux_session, cwd), git_labels, bool(tmux_session)), "cwd": short_path(cwd), "createdAt": item.get("created_at") or "", "updatedAt": item.get("updated_at") or "", "updatedTs": updated_ts, "rolloutPath": item.get("rollout_path") or "", "model": item.get("model") or "", "reasoningEffort": item.get("reasoning_effort") or "", "source": "codex-cli", "tmuxSession": tmux_session, "active": bool(tmux_session), "managed": bool(tmux_session and managed_session(config, tmux_session)), "agentRunning": agent_session_running(config, tmux_session)})
+        items.append(codex_session_item(config, item, index_titles, git_labels, tmux_session))
     return items
+
+
+def active_agent_session_items(config: Config, history_root: str | None = None, codex_state: tuple[dict[str, str], set[str]] | None = None) -> tuple[list[dict[str, Any]], set[str]]:
+    active_codex, superseded = codex_state or active_codex_thread_state(config)
+    index_titles = codex_session_index_titles(); git_labels: dict[str, str] = {}; items: list[dict[str, Any]] = []
+    rows_by_id: dict[str, dict[str, Any]] = {}
+    if active_codex:
+        placeholders = ",".join("?" for _ in active_codex)
+        rows_by_id = {str(row.get("id") or ""): row for row in codex_rows(f"id IN ({placeholders})", tuple(active_codex))}
+    seen_tmux: set[str] = set()
+    for thread_id, tmux_session in active_codex.items():
+        item = rows_by_id.get(thread_id)
+        if not item:
+            continue
+        cwd = str(item.get("cwd") or "")
+        if history_root is not None and not path_under_root(cwd, history_root):
+            continue
+        items.append(codex_session_item(config, item, index_titles, git_labels, tmux_session))
+        seen_tmux.add(tmux_session)
+    for name in tmux_sessions(config):
+        if name in seen_tmux:
+            continue
+        target = target_config(config, name)
+        profile = agent_profile_in_pane(target)
+        if not profile:
+            continue
+        cwd = get_pane_cwd(target)
+        if history_root is not None and not path_under_root(cwd, history_root):
+            continue
+        thread = active_agent_thread(target, cwd) if profile is CODEX_PROFILE else None
+        thread_id = str((thread or {}).get("id") or tmux_session_option(config, name, "@faryo_agent_session_id") or name)
+        updated_ts = session_created_ts(target); updated_at = iso_from_ts(updated_ts) if updated_ts else ""
+        title = tmux_session_option(config, name, "@faryo_session_title") or (codex_thread_title(thread, short_path(cwd) or name, index_titles) if thread else short_path(cwd) or name)
+        items.append({"id": thread_id, "title": title, "gitLabel": session_git_label(session_git_cwd(config, name, cwd), git_labels), "cwd": short_path(cwd), "createdAt": "", "updatedAt": updated_at, "updatedTs": updated_ts, "rolloutPath": (thread or {}).get("rollout_path") or "", "model": (thread or {}).get("model") or "", "reasoningEffort": (thread or {}).get("reasoning_effort") or "", "source": profile.source, "tmuxSession": name, "active": True, "managed": managed_session(config, name), "agentRunning": agent_session_running(config, name)})
+        seen_tmux.add(name)
+    return sorted(items, key=lambda item: float(item.get("updatedTs") or 0), reverse=True), set(active_codex) | superseded
+
+
+def agent_session_page(config: Config, limit: int, offset: int = 0, history_root: str | None = None) -> dict[str, Any]:
+    page_limit = max(1, limit); start = max(0, offset)
+    codex_state = active_codex_thread_state(config)
+    active, excluded_ids = active_agent_session_items(config, history_root, codex_state)
+    active_ids = {str(item.get("id") or "") for item in active}
+    # Claude history remains compatible but is intentionally outside the Codex
+    # pagination fast path used by this personal deployment.
+    claude = [item for item in claude_history_items(history_root) if str(item.get("id") or "") not in active_ids]
+    if claude:
+        codex, codex_total = codex_history_page(config, start + page_limit, 0, history_root, excluded_ids)
+        history = sorted([*codex, *claude], key=lambda item: float(item.get("updatedTs") or 0), reverse=True)
+        sessions = history[start:start + page_limit]
+    else:
+        sessions, codex_total = codex_history_page(config, page_limit, start, history_root, excluded_ids)
+    return {"activeSessions": active, "sessions": sessions, "historyTotal": codex_total + len(claude), "historyOffset": start, "historyLimit": page_limit}
 
 
 def agent_session_items(config: Config, history_root: str | None = None) -> list[dict[str, Any]]:
@@ -1249,34 +1355,18 @@ def active_agent_thread(config: Config, cwd: str | None) -> dict[str, Any] | Non
 
 
 def latest_context_usage(history_path: str | None) -> dict[str, int | float] | None:
-    if not history_path:
-        return None
+    state = codex_rollout_state(history_path)
+    usage = state.get("contextUsage") if state else None
+    return dict(usage) if isinstance(usage, dict) else None
 
-    path = Path(history_path).expanduser()
-    if not path.exists():
-        return None
 
-    latest_info: dict[str, Any] | None = None
-    try:
-        with path.open("r", encoding="utf-8", errors="replace") as fh:
-            for line in fh:
-                try:
-                    event = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                payload = event.get("payload") if isinstance(event, dict) else None
-                if isinstance(payload, dict) and payload.get("type") == "token_count":
-                    info = payload.get("info")
-                    if isinstance(info, dict):
-                        latest_info = info
-    except OSError:
-        return None
-
-    if not latest_info:
+def codex_context_usage_from_info(latest_info: Any) -> dict[str, int | float] | None:
+    if not isinstance(latest_info, dict):
         return None
     try:
         last_usage = latest_info.get("last_token_usage")
-        if not isinstance(last_usage, dict): return None
+        if not isinstance(last_usage, dict):
+            return None
         input_tokens = int(last_usage.get("input_tokens") or 0)
         output_tokens = int(last_usage.get("output_tokens") or 0)
         used_tokens = int(last_usage.get("total_tokens") or (input_tokens + output_tokens))
@@ -1294,6 +1384,15 @@ def latest_context_usage(history_path: str | None) -> dict[str, int | float] | N
         "contextWindowSource": "agent-reported",
         "percent": round((used_tokens / context_window) * 100, 1),
     }
+
+
+def codex_rollout_context_usage(event: Any) -> dict[str, int | float] | None:
+    if not isinstance(event, dict):
+        return None
+    payload = event.get("payload")
+    if not isinstance(payload, dict) or payload.get("type") != "token_count":
+        return None
+    return codex_context_usage_from_info(payload.get("info"))
 
 
 CLAUDE_CONTEXT_WINDOW = 1_000_000
@@ -1653,67 +1752,189 @@ def codex_rollout_message(event: Any) -> tuple[str, str] | None:
     return (role, text) if text else None
 
 
-def codex_rollout_messages(history_path: str | None) -> list[tuple[str, str]]:
-    """Incrementally parse durable structured messages from a rollout JSONL."""
+def bounded_codex_rollout_messages(messages: list[tuple[str, str]]) -> list[tuple[str, str]]:
+    """Keep recent complete turns within explicit line and character budgets."""
+    turns: list[list[tuple[str, str]]] = []
+    current: list[tuple[str, str]] = []
+    for role, text in messages:
+        if role == "user" and current:
+            turns.append(current)
+            current = []
+        current.append((role, text))
+    if current:
+        turns.append(current)
+
+    selected: list[list[tuple[str, str]]] = []
+    used_lines = 0
+    used_chars = 0
+    for turn in reversed(turns):
+        turn_lines = sum(text.count("\n") + 1 for _role, text in turn)
+        turn_chars = sum(len(text) for _role, text in turn)
+        if selected and (
+            used_lines + turn_lines > CODEX_ROLLOUT_CACHE_LINE_BUDGET
+            or used_chars + turn_chars > CODEX_ROLLOUT_CACHE_CHAR_BUDGET
+        ):
+            break
+        selected.append(turn)
+        used_lines += turn_lines
+        used_chars += turn_chars
+    return [message for turn in reversed(selected) for message in turn]
+
+
+def store_codex_rollout_cache(key: str, state: dict[str, Any]) -> None:
+    """Store a most-recently-used bounded set of rollout states."""
+    with _codex_rollout_cache_lock:
+        _codex_rollout_cache.pop(key, None)
+        _codex_rollout_cache[key] = state
+        while len(_codex_rollout_cache) > CODEX_ROLLOUT_CACHE_MAX_PATHS:
+            _codex_rollout_cache.pop(next(iter(_codex_rollout_cache)))
+
+
+def cached_codex_rollout_state(key: str) -> dict[str, Any] | None:
+    with _codex_rollout_cache_lock:
+        state = _codex_rollout_cache.pop(key, None)
+        if state is not None:
+            _codex_rollout_cache[key] = state
+        return state
+
+
+def parse_codex_rollout_event(raw_line: bytes) -> tuple[tuple[str, str] | None, dict[str, int | float] | None]:
+    try:
+        event = json.loads(raw_line.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return None, None
+    return codex_rollout_message(event), codex_rollout_context_usage(event)
+
+
+def initial_codex_rollout_state(path: Path, identity: tuple[int, int]) -> dict[str, Any]:
+    """Build a bounded state by scanning complete JSONL records from the tail."""
+    messages_reversed: list[tuple[str, str]] = []
+    context_usage: dict[str, int | float] | None = None
+    line_budget = 0
+    complete_end = 0
+    try:
+        with path.open("rb") as fh:
+            if os.fstat(fh.fileno()).st_size <= 0:
+                return {"identity": identity, "offset": 0, "messages": [], "contextUsage": None}
+            with mmap.mmap(fh.fileno(), 0, access=mmap.ACCESS_READ) as mapped:
+                size = len(mapped)
+                if size <= 0:
+                    return {"identity": identity, "offset": 0, "messages": [], "contextUsage": None}
+                if mapped[size - 1] == 0x0A:
+                    complete_end = size
+                else:
+                    final_newline = mapped.rfind(b"\n", 0, size)
+                    if final_newline < 0:
+                        return {"identity": identity, "offset": 0, "messages": [], "contextUsage": None}
+                    complete_end = final_newline + 1
+
+                scan_floor = max(0, complete_end - CODEX_ROLLOUT_TAIL_SCAN_BYTES)
+                cursor = complete_end
+                while cursor > scan_floor:
+                    line_end = cursor - 1 if mapped[cursor - 1] == 0x0A else cursor
+                    previous_newline = mapped.rfind(b"\n", scan_floor, line_end)
+                    if previous_newline < 0:
+                        if scan_floor > 0:
+                            break
+                        line_start = 0
+                    else:
+                        line_start = previous_newline + 1
+                    raw_line = mapped[line_start:line_end]
+                    cursor = line_start
+                    if not raw_line:
+                        continue
+                    message, usage = parse_codex_rollout_event(raw_line)
+                    if context_usage is None and usage is not None:
+                        context_usage = usage
+                    if message is not None:
+                        messages_reversed.append(message)
+                        line_budget += message[1].count("\n") + 1
+                        if (
+                            line_budget >= CODEX_ROLLOUT_CACHE_LINE_BUDGET
+                            and message[0] == "user"
+                            and context_usage is not None
+                        ):
+                            break
+    except (OSError, ValueError):
+        return {"identity": identity, "offset": 0, "messages": [], "contextUsage": None}
+
+    messages = bounded_codex_rollout_messages(list(reversed(messages_reversed)))
+    return {
+        "identity": identity,
+        "offset": complete_end,
+        "messages": messages,
+        "contextUsage": context_usage,
+    }
+
+
+def codex_rollout_state(history_path: str | None) -> dict[str, Any] | None:
+    """Return a bounded, incrementally updated state for a durable rollout."""
     if not history_path:
-        return []
+        return None
     path = Path(history_path).expanduser()
     key = str(path)
-
     with _codex_rollout_cache_lock:
         path_lock = _codex_rollout_path_locks.setdefault(key, threading.Lock())
 
-    # Match Harness's per-session ownership principle: a large first read for
-    # one conversation must not serialize unrelated conversations.
+    # One large conversation never serializes unrelated session reads.
     with path_lock:
-        with _codex_rollout_cache_lock:
-            cached = _codex_rollout_cache.get(key)
+        cached = cached_codex_rollout_state(key)
         try:
             stat = path.stat()
         except OSError:
-            return list(cached.get("messages") or []) if cached else []
+            return cached
 
         identity = (stat.st_dev, stat.st_ino)
-        if not cached or cached.get("identity") != identity or stat.st_size < int(cached.get("offset") or 0):
-            cached = {"identity": identity, "offset": 0, "messages": []}
+        offset = int(cached.get("offset") or 0) if cached else 0
+        rebuild = (
+            cached is None
+            or cached.get("identity") != identity
+            or stat.st_size < offset
+            or stat.st_size - offset > CODEX_ROLLOUT_MAX_CATCHUP_BYTES
+        )
+        if rebuild:
+            cached = initial_codex_rollout_state(path, identity)
+            store_codex_rollout_cache(key, cached)
+            return cached
 
-        offset = int(cached.get("offset") or 0)
         if stat.st_size == offset:
-            with _codex_rollout_cache_lock:
-                _codex_rollout_cache[key] = cached
-            return list(cached["messages"])
+            store_codex_rollout_cache(key, cached)
+            return cached
 
         try:
             with path.open("rb") as fh:
                 fh.seek(offset)
-                chunk = fh.read()
+                chunk = fh.read(stat.st_size - offset)
         except OSError:
-            return list(cached["messages"])
+            return cached
 
-        # Codex appends JSONL records. Leave a partial final record unread so a
-        # concurrent writer cannot make the structured transcript malformed.
+        # Leave a partial final record unread until Codex appends its newline.
         complete_end = chunk.rfind(b"\n")
         if complete_end < 0:
-            with _codex_rollout_cache_lock:
-                _codex_rollout_cache[key] = cached
-            return list(cached["messages"])
+            store_codex_rollout_cache(key, cached)
+            return cached
 
-        messages = list(cached["messages"])
+        messages = list(cached.get("messages") or [])
+        context_usage = cached.get("contextUsage")
         for raw_line in chunk[:complete_end].splitlines():
-            try:
-                event = json.loads(raw_line.decode("utf-8"))
-            except (UnicodeDecodeError, json.JSONDecodeError):
-                continue
-            if message := codex_rollout_message(event):
+            message, usage = parse_codex_rollout_event(raw_line)
+            if message is not None:
                 messages.append(message)
+            if usage is not None:
+                context_usage = usage
         cached = {
             "identity": identity,
             "offset": offset + complete_end + 1,
-            "messages": messages,
+            "messages": bounded_codex_rollout_messages(messages),
+            "contextUsage": context_usage,
         }
-        with _codex_rollout_cache_lock:
-            _codex_rollout_cache[key] = cached
-        return list(messages)
+        store_codex_rollout_cache(key, cached)
+        return cached
+
+
+def codex_rollout_messages(history_path: str | None) -> list[tuple[str, str]]:
+    state = codex_rollout_state(history_path)
+    return list(state.get("messages") or []) if state else []
 
 
 def codex_message_transcript(messages: list[tuple[str, str]], max_lines: int) -> str:
@@ -2984,10 +3205,129 @@ class MultipartFile:
         self.file = io.BytesIO(data)
 
 
+def send_delivery_record_path(delivery_id: str) -> Path | None:
+    clean_id = clean_client_message_id(delivery_id)
+    return SEND_DELIVERY_ROOT / f"{clean_id}.json" if clean_id else None
+
+
+def cleanup_persisted_send_deliveries(now_epoch: float | None = None, *, force: bool = False) -> None:
+    global _send_delivery_cleanup_at
+    monotonic_now = time.monotonic()
+    if not force and monotonic_now - _send_delivery_cleanup_at < SEND_DELIVERY_CLEANUP_INTERVAL_SECONDS:
+        return
+    _send_delivery_cleanup_at = monotonic_now
+    cutoff = (now_epoch if now_epoch is not None else time.time()) - SEND_DELIVERY_TTL_SECONDS
+    try:
+        paths = list(SEND_DELIVERY_ROOT.iterdir())
+    except OSError:
+        return
+    for path in paths:
+        if path.suffix != ".json" or clean_client_message_id(path.stem) != path.stem:
+            continue
+        try:
+            stat = path.lstat()
+            if path.is_symlink() or stat.st_mtime < cutoff:
+                path.unlink()
+        except OSError:
+            continue
+
+
+def persist_send_delivery(delivery_id: str, state: dict[str, Any]) -> bool:
+    path = send_delivery_record_path(delivery_id)
+    receipt = state.get("receipt")
+    if path is None or state.get("status") != "accepted" or not isinstance(receipt, dict):
+        return False
+    record = {
+        "version": 1,
+        "deliveryId": delivery_id,
+        "session": str(state.get("session") or ""),
+        "digest": str(state.get("digest") or ""),
+        "status": "accepted",
+        "receipt": receipt,
+        "updatedEpoch": float(state.get("updatedEpoch") or time.time()),
+    }
+    tmp_path: str | None = None
+    try:
+        SEND_DELIVERY_ROOT.mkdir(parents=True, exist_ok=True, mode=0o700)
+        os.chmod(SEND_DELIVERY_ROOT, 0o700)
+        fd, tmp_path = tempfile.mkstemp(prefix=".delivery-", suffix=".tmp", dir=SEND_DELIVERY_ROOT)
+        os.fchmod(fd, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            json.dump(record, fh, ensure_ascii=False, separators=(",", ":"))
+            fh.write("\n")
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp_path, path)
+        tmp_path = None
+        return True
+    except OSError:
+        return False
+    finally:
+        if tmp_path:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+
+
+def load_persisted_send_delivery(delivery_id: str, now_epoch: float | None = None) -> dict[str, Any] | None:
+    path = send_delivery_record_path(delivery_id)
+    if path is None:
+        return None
+    try:
+        stat = path.lstat()
+        if path.is_symlink() or stat.st_size > 16 * 1024:
+            return None
+        record = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(record, dict):
+        return None
+    updated_epoch = record.get("updatedEpoch")
+    try:
+        updated_epoch = float(updated_epoch)
+    except (TypeError, ValueError):
+        return None
+    if (now_epoch if now_epoch is not None else time.time()) - updated_epoch > SEND_DELIVERY_TTL_SECONDS:
+        try:
+            path.unlink()
+        except OSError:
+            pass
+        return None
+    receipt = record.get("receipt")
+    digest = str(record.get("digest") or "")
+    if (
+        record.get("version") != 1
+        or record.get("deliveryId") != delivery_id
+        or record.get("status") != "accepted"
+        or not re.fullmatch(r"[0-9a-f]{64}", digest)
+        or not isinstance(receipt, dict)
+        or receipt.get("deliveryId") != delivery_id
+        or receipt.get("delivery") != "accepted"
+    ):
+        return None
+    return {
+        "session": str(record.get("session") or ""),
+        "digest": digest,
+        "status": "accepted",
+        "receipt": receipt,
+        "updatedAt": time.monotonic(),
+        "updatedEpoch": updated_epoch,
+    }
+
+
+def remember_accepted_send_delivery(delivery_id: str, state: dict[str, Any]) -> None:
+    state["updatedAt"] = time.monotonic()
+    state["updatedEpoch"] = time.time()
+    _send_deliveries[delivery_id] = state
+    persist_send_delivery(delivery_id, state)
+
+
 def prune_send_deliveries(now: float | None = None) -> None:
     cutoff = (now if now is not None else time.monotonic()) - SEND_DELIVERY_TTL_SECONDS
     for delivery_id in [key for key, value in _send_deliveries.items() if float(value.get("updatedAt") or 0) < cutoff]:
         _send_deliveries.pop(delivery_id, None)
+    cleanup_persisted_send_deliveries()
 
 
 def send_delivery_receipt(delivery_id: str, config: Config, state: str, enter_attempts: int, *, duplicate: bool = False) -> dict[str, Any]:
@@ -3019,13 +3359,17 @@ def send_text(config: Config, text: str, client_message_id: str | None = None) -
     with _send_delivery_lock:
         now = time.monotonic()
         prune_send_deliveries(now)
-        existing = _send_deliveries.get(delivery_id)
+        existing = _send_deliveries.get(delivery_id) or load_persisted_send_delivery(delivery_id)
+        if existing and delivery_id not in _send_deliveries:
+            _send_deliveries[delivery_id] = existing
         if existing and (existing.get("session") != config.session or existing.get("digest") != digest):
             raise OwnerError("client message id was already used for different content", HTTPStatus.CONFLICT)
         if existing and existing.get("status") == "accepted":
             receipt = dict(existing["receipt"])
             receipt["duplicate"] = True
             existing["updatedAt"] = now
+            existing["updatedEpoch"] = time.time()
+            persist_send_delivery(delivery_id, existing)
             return receipt
 
         if shell_prep and not agent_in_pane(config):
@@ -3034,7 +3378,7 @@ def send_text(config: Config, text: str, client_message_id: str | None = None) -
                 if res.returncode != 0:
                     raise OwnerError(res.stderr.strip() or "tmux send shell prep failed", HTTPStatus.INTERNAL_SERVER_ERROR)
             receipt = send_delivery_receipt(delivery_id, config, "shell", 1)
-            _send_deliveries[delivery_id] = {"session": config.session, "digest": digest, "status": "accepted", "receipt": receipt, "updatedAt": time.monotonic()}
+            remember_accepted_send_delivery(delivery_id, {"session": config.session, "digest": digest, "status": "accepted", "receipt": receipt})
             return receipt
 
         profile = agent_profile_in_pane(config)
@@ -3082,7 +3426,8 @@ def send_text(config: Config, text: str, client_message_id: str | None = None) -
             time.sleep(PASTE_SETTLE_SECONDS)
         elif profile is CODEX_PROFILE and not codex_composer_has_draft(config):
             receipt = send_delivery_receipt(delivery_id, config, "recovered", 0)
-            existing.update({"status": "accepted", "receipt": receipt, "updatedAt": time.monotonic()})
+            existing.update({"status": "accepted", "receipt": receipt})
+            remember_accepted_send_delivery(delivery_id, existing)
             return receipt
 
         enter_attempts = 0
@@ -3107,13 +3452,12 @@ def send_text(config: Config, text: str, client_message_id: str | None = None) -
             raise OwnerError("Codex did not accept Enter; the browser and TUI drafts were kept for retry", HTTPStatus.GATEWAY_TIMEOUT)
 
         receipt = send_delivery_receipt(delivery_id, config, accepted_state, enter_attempts)
-        _send_deliveries[delivery_id] = {
+        remember_accepted_send_delivery(delivery_id, {
             "session": config.session,
             "digest": digest,
             "status": "accepted",
             "receipt": receipt,
-            "updatedAt": time.monotonic(),
-        }
+        })
         return receipt
 
 
@@ -3142,6 +3486,27 @@ class Handler(SimpleHTTPRequestHandler):
 
     def end_headers(self) -> None:
         self.send_header("Cache-Control", "no-store")
+        self.send_header(
+            "Content-Security-Policy",
+            "; ".join([
+                "default-src 'self'",
+                "script-src 'self'",
+                "script-src-attr 'none'",
+                "style-src 'self' 'unsafe-inline'",
+                "img-src 'self' data: blob:",
+                "font-src 'self'",
+                "connect-src 'self'",
+                "worker-src 'self'",
+                "object-src 'none'",
+                "base-uri 'none'",
+                "frame-ancestors 'none'",
+                "form-action 'self'",
+            ]),
+        )
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("X-Frame-Options", "DENY")
+        self.send_header("Referrer-Policy", "no-referrer")
+        self.send_header("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
         super().end_headers()
 
     def do_GET(self) -> None:
@@ -3169,10 +3534,10 @@ class Handler(SimpleHTTPRequestHandler):
                     offset = max(0, int(query.get("offset", ["0"])[0]))
                 except ValueError as exc:
                     raise OwnerError("invalid agent session pagination") from exc
-                items = self.agent_session_items()
                 if query.get("view", [""])[0] == "split":
-                    payload = split_agent_session_items(items, limit, offset)
+                    payload = agent_session_page(self.config, limit, offset, self.history_root())
                 else:
+                    items = self.agent_session_items()
                     payload = {"sessions": items[offset:offset + limit]}
                 self.write_json({"ok": True, **payload, "activeCount": active_agent_count(self.config), "updatedAt": now_iso()})
                 return
@@ -3256,6 +3621,14 @@ class Handler(SimpleHTTPRequestHandler):
         except (BrokenPipeError, ConnectionResetError, TimeoutError):
             return False
 
+    def send_event_heartbeat(self) -> bool:
+        try:
+            self.wfile.write(b": keepalive\n\n")
+            self.wfile.flush()
+            return True
+        except (BrokenPipeError, ConnectionResetError, TimeoutError):
+            return False
+
     def write_events(self, parsed: Any) -> None:
         query = parse_qs(parsed.query)
         target = self.target_from_query(parsed)
@@ -3277,6 +3650,7 @@ class Handler(SimpleHTTPRequestHandler):
         self.end_headers()
         last_hash = ""
         last_running = None
+        last_write = time.monotonic()
         deadline = time.monotonic() + EVENT_STREAM_MAX_SECONDS
         try:
             while time.monotonic() < deadline:
@@ -3305,6 +3679,11 @@ class Handler(SimpleHTTPRequestHandler):
                             payload["liveText"] = live_text
                         if not self.send_event("capture", payload):
                             return
+                        last_write = time.monotonic()
+                    elif time.monotonic() - last_write >= EVENT_STREAM_HEARTBEAT_SECONDS:
+                        if not self.send_event_heartbeat():
+                            return
+                        last_write = time.monotonic()
                 except OwnerError:
                     return
                 time.sleep(1.0)
@@ -3587,7 +3966,7 @@ main{{padding:14px 14px calc(env(safe-area-inset-bottom) + 22px)}}
 pre{{margin:0;white-space:pre-wrap;overflow-wrap:anywhere;font:15px/1.58 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}}
 .notice{{padding:12px;border:1px solid #DDE1E8;border-radius:12px;background:#FFFFFF}}
 @media (prefers-color-scheme: dark){{body{{background:#0F1115;color:#ECEEF3}}header{{background:rgba(23,26,32,.96);border-color:#2C313B}}button,.pill,.notice{{background:#171A20;color:#ECEEF3;border-color:#2C313B}}}}
-</style></head><body><header><button type="button" onclick="history.length>1?history.back():location.href='/'">Back</button><h1>{title}</h1><a class="pill" href="{raw_url}">Raw</a><a class="pill" href="{download_url}" download>Download</a></header><main>{body}</main></body></html>"""
+</style></head><body><header><button id="backButton" type="button">Back</button><h1>{title}</h1><a class="pill" href="{raw_url}">Raw</a><a class="pill" href="{download_url}" download>Download</a></header><main>{body}</main><script src="../../local-file-view.js"></script></body></html>"""
         data = html.encode("utf-8")
         self.send_response(HTTPStatus.OK)
         self.send_header("Content-Type", "text/html; charset=utf-8")

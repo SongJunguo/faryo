@@ -555,6 +555,59 @@ html[data-faryo-ui="workbench-v2"] .copy-output-block {
   opacity: .58;
 }
 
+html[data-faryo-ui="workbench-v2"] .memory-reference-card {
+  max-width: min(100%, 680px);
+  margin-top: 12px;
+  border: 1px solid var(--owner-hairline);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--panel) 58%, transparent);
+  color: var(--muted);
+  font-size: calc(12px + var(--font-step));
+}
+
+html[data-faryo-ui="workbench-v2"] .memory-reference-card summary {
+  min-height: 36px;
+  padding: 8px 11px;
+  cursor: pointer;
+  font-weight: 650;
+  user-select: none;
+}
+
+html[data-faryo-ui="workbench-v2"] .memory-reference-body {
+  padding: 0 11px 10px;
+}
+
+html[data-faryo-ui="workbench-v2"] .memory-reference-body p,
+html[data-faryo-ui="workbench-v2"] .memory-reference-body ul {
+  margin: 0;
+}
+
+html[data-faryo-ui="workbench-v2"] .memory-reference-body ul {
+  padding-left: 18px;
+}
+
+html[data-faryo-ui="workbench-v2"] .rich-render-fallback {
+  display: grid;
+  gap: 5px;
+  padding: 11px 12px;
+  border: 1px solid color-mix(in srgb, var(--danger) 42%, var(--owner-hairline));
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--danger) 7%, var(--panel));
+}
+
+html[data-faryo-ui="workbench-v2"] .rich-render-fallback span {
+  color: var(--muted);
+  font-size: calc(12px + var(--font-step));
+}
+
+html[data-faryo-ui="workbench-v2"] .rich-render-fallback pre,
+html[data-faryo-ui="workbench-v2"] .capture-render-fallback {
+  margin: 5px 0 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font: inherit;
+}
+
 html[data-faryo-ui="workbench-v2"] .bottom-btn {
   left: auto;
   right: max(18px, calc((100vw - 920px) / 2 + 18px));

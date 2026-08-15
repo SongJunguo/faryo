@@ -144,9 +144,23 @@ function withLocalOverviewMeta(workbench) {
   }) };
 }
 function render() {
+  syncOwnerRouteOptions();
   const mode = projectFilter(), items = projects().filter(project => mode === 'all' || Boolean(project.archived) === (mode === 'archived'));
   if (els.archiveFilterLabel) els.archiveFilterLabel.textContent = PROJECT_FILTER.labels[mode];
   els.list.replaceChildren(...(items.length ? items.map(projectCard) : [empty(mode === 'archived' ? 'No archived projects' : 'No projects')]));
+}
+function syncOwnerRouteOptions() {
+  const select = els.importForm?.elements?.owner_route;
+  const routes = Array.isArray(state?.routes) ? state.routes.filter(route => route?.id) : [];
+  if (!select || !routes.length) return;
+  const selected = select.value;
+  select.replaceChildren(...routes.map(route => {
+    const option = document.createElement('option');
+    option.value = String(route.id);
+    option.textContent = String(route.label || route.id);
+    return option;
+  }));
+  if (routes.some(route => String(route.id) === selected)) select.value = selected;
 }
 async function saveProjection() {
   if (!state || !dirty) return;

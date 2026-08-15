@@ -1,5 +1,7 @@
 # Faryo DeepSeek-inspired UI 实施计划
 
+计划索引：[`README.md`](README.md)
+
 更新时间：2026-08-15
 
 状态：已完成，进入日常维护
@@ -37,6 +39,8 @@
   剩余百分比，并在详情面板显示已用比例和重置时间。
 - 长历史可靠性补充采用 Codex rollout JSONL 的每会话增量游标，消除了并发全量
   `thread/read` 导致的 tmux 降级；502/504 歧义发送也能以同一消息 ID 自动确认。
+- 后续长会话、持久发送、内部引用卡片、认证实时流和精确历史分页的加固已在
+  [`codex-reliability-hardening-plan.md`](codex-reliability-hardening-plan.md) 完成；本计划不再重复维护同一实现清单。
 - 最终发布回归已覆盖 5 个同时存在的真实 Codex 会话、390x844 手机视口、GFM/KaTeX/
   Shiki、实际上下文窗口、周额度和重启前后 tmux 尺寸不变；公开差异隐私扫描无命中。
 
@@ -305,8 +309,8 @@ AST 管线，而不是继续以正则修补现有渲染器：
 - 已删除 `markdown-render.js`、`math-render.js`、markdown-it、KaTeX auto-render 和独立
   KaTeX JS；回滚依靠固定标签/备份分支，不再维护同功能旧代码。
 - 直连 Owner 的本地文件与图片改为同源 `X-Owner-Token` 请求后生成临时 Blob URL；
-  Token 不再进入资源 DOM 属性。Gateway 仍由服务端注入 Owner Token，不改变公网认证
-  边界。
+  首次入口 Token 还会立即从地址栏移入当前标签页，事件流同样使用认证头。Gateway 仍由
+  服务端注入 Owner Token，不改变公网认证边界。
 
 验收：
 

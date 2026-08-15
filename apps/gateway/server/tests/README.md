@@ -8,7 +8,8 @@ PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s apps/gateway/server/te
 
 The suite checks the CSRF boundary, browser security headers, enabled-route
 validation, private runtime configuration, active/history separation,
-10-record history pagination, CSP nonces, hardened session-cookie attributes,
+exact 10-record history pagination, bridge-package retention/symlink boundaries,
+CSP nonces, hardened session-cookie attributes,
 trusted-proxy login limiting, CSRF-protected Owner proxy POST behavior, and the
 privacy-safe public Access verifier contract.
 

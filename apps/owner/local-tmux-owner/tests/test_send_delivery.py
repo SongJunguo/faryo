@@ -1,4 +1,7 @@
+import json
+import stat
 import sys
+import tempfile
 import unittest
 from http import HTTPStatus
 from pathlib import Path
@@ -16,10 +19,17 @@ class SendDeliveryTest(unittest.TestCase):
     def setUp(self):
         self.config = server.Config("codex-send-test", "token", 145)
         server._send_deliveries.clear()
+        self.delivery_temp = tempfile.TemporaryDirectory()
+        self.original_delivery_root = server.SEND_DELIVERY_ROOT
+        server.SEND_DELIVERY_ROOT = Path(self.delivery_temp.name) / "send-deliveries"
+        server._send_delivery_cleanup_at = 0.0
         self.completed = mock.Mock(returncode=0, stdout="", stderr="")
 
     def tearDown(self):
         server._send_deliveries.clear()
+        server.SEND_DELIVERY_ROOT = self.original_delivery_root
+        server._send_delivery_cleanup_at = 0.0
+        self.delivery_temp.cleanup()
 
     def send_patches(self, *, composer_states=None, submission_states=None):
         return (
@@ -44,9 +54,6 @@ class SendDeliveryTest(unittest.TestCase):
         self.assertTrue(ready)
 
     def test_rollout_confirmation_uses_only_new_exact_user_message(self):
-        import json
-        import tempfile
-
         with tempfile.NamedTemporaryFile("w+b") as fh:
             fh.write((json.dumps({"type": "response_item", "payload": {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "old"}]}}) + "\n").encode())
             offset = fh.tell()
@@ -96,11 +103,49 @@ class SendDeliveryTest(unittest.TestCase):
         with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5], patches[6], patches[7] as tmux, patches[8]:
             first = server.send_text(self.config, "only once", "web-idempotent")
             tmux_calls = len(tmux.call_args_list)
+            server._send_deliveries.clear()
             second = server.send_text(self.config, "only once", "web-idempotent")
 
         self.assertFalse(first["duplicate"])
         self.assertTrue(second["duplicate"])
         self.assertEqual(tmux_calls, len(tmux.call_args_list))
+        record = server.send_delivery_record_path("web-idempotent")
+        self.assertTrue(record.is_file())
+        self.assertEqual(stat.S_IMODE(record.stat().st_mode), 0o600)
+
+    def test_expired_persisted_delivery_is_not_reused(self):
+        delivery_id = "web-expired"
+        digest = "0" * 64
+        record = server.send_delivery_record_path(delivery_id)
+        record.parent.mkdir(parents=True)
+        record.write_text(json.dumps({
+            "version": 1,
+            "deliveryId": delivery_id,
+            "session": self.config.session,
+            "digest": digest,
+            "status": "accepted",
+            "receipt": {
+                "deliveryId": delivery_id,
+                "delivery": "accepted",
+                "deliveryState": "recorded",
+                "session": self.config.session,
+                "enterAttempts": 1,
+                "duplicate": False,
+            },
+            "updatedEpoch": 1,
+        }), encoding="utf-8")
+
+        loaded = server.load_persisted_send_delivery(delivery_id, now_epoch=server.SEND_DELIVERY_TTL_SECONDS + 2)
+
+        self.assertIsNone(loaded)
+        self.assertFalse(record.exists())
+
+    def test_corrupt_persisted_delivery_is_ignored(self):
+        record = server.send_delivery_record_path("web-corrupt")
+        record.parent.mkdir(parents=True)
+        record.write_text("{not-json", encoding="utf-8")
+
+        self.assertIsNone(server.load_persisted_send_delivery("web-corrupt"))
 
     def test_existing_tmux_draft_is_not_overwritten(self):
         with (

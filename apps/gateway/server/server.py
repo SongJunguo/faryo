@@ -58,9 +58,9 @@ LOGIN_RATE_WINDOW_SECONDS = 10 * 60
 LOGIN_RATE_BLOCK_SECONDS = 5 * 60
 LOGIN_RATE_MAX_FAILURES = 8
 ROUTE_DEFAULTS = {
-    "hp": (18766, "HP"),
-    "txy": (8765, "TXY"),
-    "pc": (18765, "PC"),
+    "hp": (18766, "Home workstation"),
+    "txy": (8765, "Ubuntu 工作站"),
+    "pc": (18765, "Windows PC"),
 }
 
 
@@ -118,6 +118,9 @@ WORKORDER_TEMPLATE_SOURCE = Path(__file__).resolve().parent / "templates" / "wor
 BRIDGE_PACKAGE_MAX_BYTES = 120 * 1024 * 1024
 BRIDGE_ASSET_MAX_BYTES = 20 * 1024 * 1024
 BRIDGE_ASSET_LIMIT = 4
+BRIDGE_PENDING_RETENTION_SECONDS = 30 * 24 * 60 * 60
+BRIDGE_DELIVERED_RETENTION_SECONDS = 7 * 24 * 60 * 60
+BRIDGE_CLEANUP_INTERVAL_SECONDS = 60 * 60
 BRIDGE_MIME_EXT = {
     "image/png": ".png",
     "image/jpeg": ".jpg",
@@ -166,7 +169,7 @@ self.addEventListener('activate',(event)=>{event.waitUntil(caches.keys().then((k
 self.addEventListener('fetch',()=>{});
 """
 
-OWNER_STATIC_FILES = {"appearance.css", "appearance.js", "app.js", "style.css", "index.html", "stable-blocks.js", "live-scroll.js", "compact-rules-codex.js", "compact-rules-claude.js"}
+OWNER_STATIC_FILES = {"appearance.css", "appearance.js", "app.js", "style.css", "index.html", "event-stream.js", "internal-annotations.js", "local-file-view.js", "stable-blocks.js", "live-scroll.js", "compact-rules-codex.js", "compact-rules-claude.js"}
 OWNER_STATIC_PREFIXES = ("icons/", "pet/", "vendor/katex/", "vendor/markdown-ast/")
 GATEWAY_STATIC_FILES = {
     "projects.css": "text/css; charset=utf-8",
@@ -201,6 +204,13 @@ HOP_BY_HOP_HEADERS = {
     "trailer",
     "transfer-encoding",
     "upgrade",
+}
+UPSTREAM_SECURITY_HEADERS = {
+    "content-security-policy",
+    "permissions-policy",
+    "referrer-policy",
+    "x-content-type-options",
+    "x-frame-options",
 }
 LOGIN_RATE_STATE: dict[str, dict[str, Any]] = {}
 LOGIN_RATE_LOCK = threading.Lock()
@@ -460,6 +470,8 @@ class GatewayConfig:
         self.faryo_profile_runtime = self.gateway_home / "codex" / "faryo-profile.md"
         self.bridge_root.mkdir(parents=True, exist_ok=True)
         self.project_downlink_root.mkdir(parents=True, exist_ok=True)
+        self._bridge_cleanup_lock = threading.Lock()
+        self._bridge_cleanup_at = 0.0
 
     def install_faryo_codex_profile(self) -> None:
         self.faryo_work_root.mkdir(parents=True, exist_ok=True)
@@ -643,6 +655,7 @@ class GatewayConfig:
         return owner == username or (not owner and username == self.mcp_user)
 
     def save_bridge_package(self, payload: dict[str, Any], username: str) -> dict[str, Any]:
+        self.cleanup_bridge_packages()
         title = str(payload.get("title") or payload.get("topic") or "Untitled handoff").strip()[:120] or "Untitled handoff"; prompt = str(payload.get("prompt") or payload.get("instruction") or payload.get("handoff_prompt") or "").strip(); assets = self.bridge_asset_sources(payload)
         if not prompt and not assets: raise ValueError("package prompt or attachment is required")
         package_id = f"{now_ts()}-{secrets.token_hex(4)}"; package_dir = self.bridge_root / package_id; package_dir.mkdir(parents=True, exist_ok=False)
@@ -663,8 +676,43 @@ class GatewayConfig:
         package["prompt"] = str(package.get("prompt") or "").strip() or self.attachment_only_prompt(str(package.get("title") or "Handoff package")); self.update_bridge_package(package); return package
 
     def list_bridge_packages(self, username: str, status: str | None = None) -> list[dict[str, Any]]:
+        self.cleanup_bridge_packages()
         packages = [p for p in (self.bridge_package(path.parent.name, username) for path in self.bridge_root.glob("*/package.json")) if p and (not status or p.get("status") == status)]
         return sorted(packages, key=lambda item: int(item.get("updated_at") or item.get("created_at") or 0), reverse=True)
+
+    def cleanup_bridge_packages(self, current_time: int | None = None, force: bool = False) -> int:
+        now = int(current_time if current_time is not None else now_ts())
+        monotonic_now = time.monotonic()
+        with self._bridge_cleanup_lock:
+            if not force and monotonic_now < self._bridge_cleanup_at:
+                return 0
+            self._bridge_cleanup_at = monotonic_now + BRIDGE_CLEANUP_INTERVAL_SECONDS
+            root = self.bridge_root.resolve()
+            removed = 0
+            try:
+                candidates = list(self.bridge_root.iterdir())
+            except OSError:
+                return 0
+            for package_dir in candidates:
+                if package_dir.is_symlink() or clean_package_id(package_dir.name) != package_dir.name:
+                    continue
+                try:
+                    target = package_dir.resolve(strict=True)
+                    if target.parent != root or not target.is_dir():
+                        continue
+                    package_file = target / "package.json"
+                    package = json.loads(package_file.read_text(encoding="utf-8"))
+                    if not isinstance(package, dict):
+                        continue
+                    updated = int(package.get("updated_at") or package.get("created_at") or package_file.stat().st_mtime)
+                except (OSError, ValueError, TypeError, json.JSONDecodeError):
+                    continue
+                retention = BRIDGE_PENDING_RETENTION_SECONDS if package.get("status") == "pending" else BRIDGE_DELIVERED_RETENTION_SECONDS
+                if updated <= 0 or now - updated <= retention:
+                    continue
+                shutil.rmtree(target)
+                removed += 1
+            return removed
 
     def bridge_package(self, package_id: str, username: str | None = None) -> dict[str, Any] | None:
         path = self.bridge_root / (clean_package_id(package_id) or "") / "package.json"
@@ -1106,7 +1154,11 @@ class GatewayHandler(BaseHTTPRequestHandler):
     def project_workbench_payload(self, username: str | None = None) -> dict[str, Any]:
         if username:
             self.recover_workorder_receipts(username)
-        return {"projects": self.read_project_rows()}
+        routes = self.config.user_routes(username) if username else list(BACKENDS)
+        return {
+            "projects": self.read_project_rows(),
+            "routes": [{"id": route, "label": BACKENDS[route][2]} for route in routes],
+        }
 
     def project_git_statuses(self, username: str) -> dict[str, dict[str, Any] | None]:
         return {row["id"]: self.project_git_status(username, row) for row in self.read_project_rows()}
@@ -2565,11 +2617,12 @@ class GatewayHandler(BaseHTTPRequestHandler):
             "source": str(item.get("source") or ""),
         }
 
-    def owner_agent_sessions(self, route: str, username: str, history_page: int = 1) -> dict[str, Any]:
+    def owner_agent_sessions(self, route: str, username: str, history_page: int = 1, exact_page: bool = False) -> dict[str, Any]:
         page = max(1, history_page)
-        history_limit = min(HISTORY_PAGE_SIZE * page, HISTORY_MAX_FETCH)
+        history_limit = HISTORY_PAGE_SIZE if exact_page else min(HISTORY_PAGE_SIZE * page, HISTORY_MAX_FETCH)
+        history_offset = (page - 1) * HISTORY_PAGE_SIZE if exact_page else 0
         max_running = self.max_running_for(username, route)
-        result = self.owner_json_request(route, f"/api/agent-sessions?view=split&limit={history_limit}&offset=0", None, username, method="GET")
+        result = self.owner_json_request(route, f"/api/agent-sessions?view=split&limit={history_limit}&offset={history_offset}", None, username, method="GET")
         active_count = int(result.get("activeCount") or 0)
         limit_reached = active_count >= max_running
         raw_active = result.get("activeSessions", []) if result.get("ok") and isinstance(result.get("activeSessions"), list) else []
@@ -2588,7 +2641,8 @@ class GatewayHandler(BaseHTTPRequestHandler):
     def workbench_payload(self, username: str, history_page: int = 1) -> dict[str, Any]:
         requested_page = max(1, history_page)
         routes = self.config.user_routes(username)
-        route_payloads = {route: self.owner_agent_sessions(route, username, requested_page) for route in routes}
+        exact_page = len(routes) == 1
+        route_payloads = {route: self.owner_agent_sessions(route, username, requested_page, exact_page) for route in routes}
         active_sessions = [item for route in routes for item in route_payloads[route]["activeSessions"]]
         active_sessions.sort(key=lambda item: (bool(item.get("agentRunning")), float(item.get("updatedTs") or 0)), reverse=True)
         sessions = [item for route in routes for item in route_payloads[route]["sessions"]]
@@ -2596,6 +2650,11 @@ class GatewayHandler(BaseHTTPRequestHandler):
         history_total = sum(int(route_payloads[route]["historyTotal"]) for route in routes)
         total_pages = max(1, (history_total + HISTORY_PAGE_SIZE - 1) // HISTORY_PAGE_SIZE)
         page = min(requested_page, total_pages)
+        if exact_page and page != requested_page:
+            route = routes[0]
+            route_payloads[route] = self.owner_agent_sessions(route, username, page, True)
+            active_sessions = route_payloads[route]["activeSessions"]
+            sessions = route_payloads[route]["sessions"]
         start = (page - 1) * HISTORY_PAGE_SIZE
         entries = []
         for item in [backend_status(route) for route in routes]:
@@ -2606,7 +2665,7 @@ class GatewayHandler(BaseHTTPRequestHandler):
             "ok": True,
             "entries": entries,
             "activeSessions": active_sessions,
-            "sessions": sessions[start:start + HISTORY_PAGE_SIZE],
+            "sessions": sessions[:HISTORY_PAGE_SIZE] if exact_page else sessions[start:start + HISTORY_PAGE_SIZE],
             "history": {
                 "page": page,
                 "pageSize": HISTORY_PAGE_SIZE,
@@ -2693,14 +2752,17 @@ class GatewayHandler(BaseHTTPRequestHandler):
             self.send_response(resp.status, resp.reason)
             for key, value in response_headers:
                 lower = key.lower()
-                if lower in HOP_BY_HOP_HEADERS or lower == "content-length":
+                if lower in HOP_BY_HOP_HEADERS or lower in UPSTREAM_SECURITY_HEADERS or lower == "content-length":
                     continue
                 self.send_header(key, value)
             if is_event_stream:
                 self.send_header("Cache-Control", "no-store, no-transform")
                 self.end_headers()
                 while True:
-                    chunk = resp.readline()
+                    try:
+                        chunk = resp.readline()
+                    except (OSError, TimeoutError):
+                        break
                     if not chunk:
                         break
                     try:

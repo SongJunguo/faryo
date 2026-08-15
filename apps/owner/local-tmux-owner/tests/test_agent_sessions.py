@@ -76,6 +76,32 @@ class AgentSessionTest(unittest.TestCase):
 
         self.assertEqual(items, [])
 
+    def test_codex_history_page_fetches_only_the_requested_window(self):
+        active = [{"id": "live", "tmuxSession": "codex", "updatedTs": 100}]
+        page = [{"id": f"history-{index}", "tmuxSession": "", "updatedTs": 50 - index} for index in range(10)]
+        with (
+            mock.patch.object(server, "active_codex_thread_state", return_value=({}, set())),
+            mock.patch.object(server, "active_agent_session_items", return_value=(active, {"live"})),
+            mock.patch.object(server, "claude_history_items", return_value=[]),
+            mock.patch.object(server, "codex_history_page", return_value=(page, 437)) as history_page,
+        ):
+            result = server.agent_session_page(self.config, 10, 390, "/workspace")
+
+        history_page.assert_called_once_with(self.config, 10, 390, "/workspace", {"live"})
+        self.assertEqual(result["activeSessions"], active)
+        self.assertEqual(result["sessions"], page)
+        self.assertEqual(result["historyTotal"], 437)
+        self.assertEqual(result["historyOffset"], 390)
+
+    def test_codex_history_filter_scopes_and_excludes_active_threads(self):
+        where, params = server.codex_history_filter("/workspace/project", {"live-b", "live-a"})
+
+        self.assertIn("id NOT IN (?,?)", where)
+        self.assertIn("cwd LIKE ? ESCAPE", where)
+        self.assertEqual(params[:2], ("live-a", "live-b"))
+        self.assertEqual(params[2], "/workspace/project")
+        self.assertEqual(params[3], "/workspace/project/%")
+
 
 if __name__ == "__main__":
     unittest.main()
