@@ -133,6 +133,14 @@ assert "data-faryo-fetch-src" in app, "protected images must use deferred authen
 assert "target.searchParams.delete('token')" in app, "protected resource fetches must strip query tokens"
 assert 'id="quotaText"' in index and 'id="detailsQuota"' in index, "Owner must expose weekly quota in header and details"
 assert "Week ${remaining}% left" in app, "Owner must label weekly quota as remaining allowance"
+assert "contextWindowSource === 'agent-reported'" in app, "Owner must distinguish reported context windows from fallbacks"
+assert "usedTokens" in app and "contextWindow" in app, "Owner must show actual context token counts"
+assert "sendWithDeliveryRecovery" in app, "Owner must reconcile ambiguous send responses idempotently"
+appearance = (root / "apps/shared/static/appearance.css").read_text(encoding="utf-8")
+assert "--bg: #0F1115" in appearance and "--accent: #7188FF" in appearance, "shared dark palette must match Owner"
+assert "--bg: #F6F7F9" in appearance and "--accent: #5369E7" in appearance, "shared light palette must match Owner"
+assert "Files to session" in gateway and "Send to…" in gateway, "Gateway must expose explicit file-to-session controls"
+assert "No handoff package" not in gateway, "Gateway must not expose unexplained handoff copy"
 with (root / "deploy/launchd/dev.faryo.owner.keepalive.plist").open("rb") as fh:
     plistlib.load(fh)
 PY

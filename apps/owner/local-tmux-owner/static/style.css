@@ -1,5 +1,3 @@
-:root { --continuity: #9FA985; --pending: #D9AF80; --danger-bg: #5B2B25; --danger-text: #F2B8AC; --danger-soft: rgba(242, 184, 172, .14); --brand-ring: linear-gradient(135deg, rgba(224, 194, 157, .72), rgba(159, 169, 133, .56)); --user-input-color: #E0C29D; --header-bg: linear-gradient(rgba(23, 19, 15, .98), rgba(33, 26, 21, .94)); --block-bg: rgba(33, 26, 21, .92); --plan-bg: rgba(43, 36, 29, .58); --user-block-border: rgba(224, 194, 157, .28); --user-block-bg: linear-gradient(135deg, rgba(224, 194, 157, .10), rgba(159, 169, 133, .09)); --user-block-shadow: 0 10px 24px rgba(0, 0, 0, .20), inset 0 1px rgba(255, 255, 255, .03); --prompt-bg: linear-gradient(var(--panel), var(--panel)) padding-box, var(--brand-ring) border-box; --prompt-shadow: 0 8px 28px rgba(0, 0, 0, .24), 0 0 22px rgba(224, 194, 157, .08); --dock-menu-bg: linear-gradient(145deg, rgba(33, 26, 21, .94), rgba(23, 19, 15, .88)); --dock-menu-shadow: 0 18px 46px rgba(0, 0, 0, .36); --dock-menu-after-bg: rgba(33, 26, 21, .92); --dock-action-bg: radial-gradient(circle at 14px 14px, rgba(159, 169, 133, .20), rgba(159, 169, 133, .07) 48%, rgba(43, 36, 29, .62)); --dock-mode-bg: rgba(224, 194, 157, .10); }
-html[data-theme="light"] { --continuity: #63734F; --pending: #8A641F; --danger-bg: #B54A3D; --danger-text: #B54A3D; --danger-soft: rgba(181, 74, 61, .12); --brand-ring: linear-gradient(135deg, rgba(224, 194, 157, .88), rgba(99, 115, 79, .48)); --user-input-color: #856344; --header-bg: linear-gradient(rgba(247, 240, 229, .98), rgba(255, 253, 248, .94)); --block-bg: rgba(255, 253, 248, .92); --plan-bg: rgba(237, 229, 217, .92); --user-block-border: rgba(133, 99, 68, .24); --user-block-bg: linear-gradient(135deg, rgba(224, 194, 157, .18), rgba(159, 169, 133, .12)), rgba(255, 253, 248, .94); --user-block-shadow: 0 8px 18px rgba(83, 56, 36, .10); --prompt-bg: linear-gradient(#FFFDF8, #FFFDF8) padding-box, var(--brand-ring) border-box; --prompt-shadow: 0 8px 24px rgba(83, 56, 36, .10), 0 0 18px rgba(224, 194, 157, .14); --dock-menu-bg: linear-gradient(145deg, rgba(255, 253, 248, .96), rgba(247, 240, 229, .90)); --dock-menu-shadow: 0 14px 34px rgba(83, 56, 36, .14); --dock-menu-after-bg: rgba(255, 253, 248, .94); --dock-action-bg: radial-gradient(circle at 14px 14px, rgba(159, 169, 133, .20), rgba(159, 169, 133, .07) 48%, rgba(237, 229, 217, .72)); --dock-mode-bg: rgba(224, 194, 157, .22); }
 * { box-sizing: border-box; }
 html, body { width: 100%; height: 100%; overflow: hidden; }
 body { margin: 0; height: 100%; background: var(--bg); color: var(--text); font-family: var(--app-font); overflow: hidden; }
@@ -789,6 +787,12 @@ html[data-faryo-ui="workbench-v2"] :is(button, a, textarea):focus-visible {
   html[data-faryo-ui="workbench-v2"] .bottom-btn {
     bottom: calc(env(safe-area-inset-bottom) + 132px);
   }
+}
+
+@media (max-width: 420px) {
+  html[data-faryo-ui="workbench-v2"] .meta-main { gap: 4px; }
+  html[data-faryo-ui="workbench-v2"] .quota-bars { display: none; }
+  html[data-faryo-ui="workbench-v2"] #ctxText { font-size: calc(11px + var(--font-step)); }
 }
 
 @media (max-width: 380px) {

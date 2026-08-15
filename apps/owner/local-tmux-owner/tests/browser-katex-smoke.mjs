@@ -25,6 +25,8 @@ const attachmentExpectedOutput = process.env.FARYO_SMOKE_ATTACHMENT_EXPECT_OUTPU
 const checkRecovery = process.env.FARYO_SMOKE_CHECK_RECOVERY === '1';
 const recoveryTmuxSession = process.env.FARYO_SMOKE_TMUX_SESSION || '';
 const recoveryStartIndex = Number(process.env.FARYO_SMOKE_RECOVERY_START_INDEX || 0);
+const checkAmbiguousSend = process.env.FARYO_SMOKE_CHECK_AMBIGUOUS_SEND === '1';
+const ambiguousSendIndex = Number(process.env.FARYO_SMOKE_AMBIGUOUS_SEND_INDEX || 0);
 const expectSendFailure = process.env.FARYO_SMOKE_EXPECT_SEND_FAILURE === '1';
 const expectLive = process.env.FARYO_SMOKE_EXPECT_LIVE === '1';
 const expectLiveClears = process.env.FARYO_SMOKE_EXPECT_LIVE_CLEARS === '1';
@@ -482,6 +484,11 @@ try {
               details: String(document.getElementById('detailsQuota')?.textContent || '').trim(),
               title: String(document.getElementById('quotaTop')?.title || '').trim(),
             },
+            contextStatus: {
+              label: String(document.getElementById('ctxText')?.textContent || '').trim(),
+              details: String(document.getElementById('detailsContext')?.textContent || '').trim(),
+              title: String(document.getElementById('ctxText')?.title || '').trim(),
+            },
           },
           katexStylesheetLoaded: [...document.styleSheets].some((sheet) => String(sheet.href || '').includes('/katex')),
           katexAssetUrls: ${JSON.stringify(privacySafe)}
@@ -537,6 +544,10 @@ try {
     if (!/^Week (?:--|\d+(?:\.\d+)?% left)$/.test(layout.weeklyQuota?.label || '')
       || !layout.weeklyQuota?.details || !layout.weeklyQuota?.title) {
       throw new Error(`Owner weekly quota status is not explicit: ${JSON.stringify(layout.weeklyQuota)}`);
+    }
+    if (!/^Ctx (?:--|\d+(?:\.\d+)?%(?: · \d+(?:\.\d+)?[km]?\/\d+(?:\.\d+)?[km]?)?)$/.test(layout.contextStatus?.label || '')
+      || !layout.contextStatus?.details) {
+      throw new Error(`Owner context status is not explicit: ${JSON.stringify(layout.contextStatus)}`);
     }
     if (prompt.height < 82) throw new Error(`Owner composer is unexpectedly short: ${JSON.stringify(prompt)}`);
     if (layout.outputWidth > 752) throw new Error(`Owner reading column is too wide: ${JSON.stringify(layout)}`);
@@ -725,7 +736,7 @@ try {
     if (state.tableKatexCount < minTableKatex) {
       throw new Error(`Expected at least ${minTableKatex} rendered table formulas, found ${state.tableKatexCount}`);
     }
-    if (expectStructured && (state.captureSource !== 'codex-app-server' || state.captureWarningCount)) {
+    if (expectStructured && (!['codex-jsonl', 'codex-app-server'].includes(state.captureSource) || state.captureWarningCount)) {
       throw new Error(`Codex capture did not use structured history: source=${state.captureSource || 'missing'} warning=${state.captureWarningCount || 0}`);
     }
     if (!state.katexAssetsLocal) {
@@ -992,23 +1003,23 @@ try {
         text('ownerText', 'Ubuntu Workstation');
         text('topicText', 'Research session');
         text('draftState', 'Project workspace');
-        text('ctxText', 'Ctx 42%');
+        text('ctxText', 'Ctx 42% · 108.5k/258k');
         text('quotaText', 'Week 58% left');
         text('modelText', 'Agent ready');
         text('phasePill', 'git clean');
         text('detailsSession', 'Research session');
         text('detailsOwner', 'Ubuntu Workstation');
         text('detailsModel', 'Agent model');
-        text('detailsContext', 'Ctx 42%');
+        text('detailsContext', '108,528 / 258,400 tokens · 42% used');
         text('detailsQuota', '58% left · 42% used · resets Aug 20, 10:20');
         text('detailsGit', 'git clean');
         text('detailsSource', 'structured history');
         text('detailsConnection', 'live');
         const smokeSafeText = {
           ownerText: 'Ubuntu Workstation', topicText: 'Research session', draftState: 'Project workspace',
-          ctxText: 'Ctx 42%', quotaText: 'Week 58% left', modelText: 'Agent ready', phasePill: 'git clean',
+          ctxText: 'Ctx 42% · 108.5k/258k', quotaText: 'Week 58% left', modelText: 'Agent ready', phasePill: 'git clean',
           detailsSession: 'Research session', detailsOwner: 'Ubuntu Workstation', detailsModel: 'Agent model',
-          detailsContext: 'Ctx 42%', detailsQuota: '58% left · 42% used · resets Aug 20, 10:20', detailsGit: 'git clean', detailsSource: 'structured history', detailsConnection: 'live',
+          detailsContext: '108,528 / 258,400 tokens · 42% used', detailsQuota: '58% left · 42% used · resets Aug 20, 10:20', detailsGit: 'git clean', detailsSource: 'structured history', detailsConnection: 'live',
         };
         const safeStyle = document.createElement('style');
         safeStyle.textContent = '.faryo-smoke-safe-text{font-size:0!important;color:transparent!important}.faryo-smoke-safe-text::after{content:attr(data-faryo-smoke-text);font-size:12px;color:var(--text)}#ownerText.faryo-smoke-safe-text::after,#topicText.faryo-smoke-safe-text::after{font-size:14px}.details-list dd.faryo-smoke-safe-text::after{font-size:12px}';
@@ -1336,6 +1347,56 @@ try {
     }
     if (!hiddenRecovered) throw new Error('Faryo did not catch up after the page returned from background');
     console.log('faryo-browser-background-recovery=PASS reloads=0');
+  }
+
+  if (checkAmbiguousSend) {
+    const ambiguousText = 'anonymous ambiguous delivery';
+    const ambiguousMarker = receiverAck(ambiguousSendIndex, ambiguousText);
+    await send('Runtime.evaluate', {
+      expression: `(() => {
+        const originalFetch = window.fetch.bind(window);
+        window.__faryoOriginalFetch = originalFetch;
+        window.__faryoAmbiguousSendInjected = false;
+        window.fetch = async (...args) => {
+          const target = String(args[0]?.url || args[0] || '');
+          if (!window.__faryoAmbiguousSendInjected && target.includes('/api/send')) {
+            window.__faryoAmbiguousSendInjected = true;
+            const delivered = await originalFetch(...args);
+            await delivered.clone().text();
+            return new Response(JSON.stringify({ ok: false, error: 'simulated ambiguous delivery' }), {
+              status: 504,
+              headers: { 'Content-Type': 'application/json' },
+            });
+          }
+          return originalFetch(...args);
+        };
+        const input = document.getElementById('promptInput');
+        input.value = ${JSON.stringify(ambiguousText)};
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+        document.getElementById('sendBtn').click();
+      })()`,
+    });
+
+    let ambiguousState = {};
+    for (let attempt = 0; attempt < 120; attempt += 1) {
+      await delay(100);
+      const result = await send('Runtime.evaluate', {
+        expression: `(() => ({
+          inputValue: document.getElementById('promptInput')?.value || '',
+          errorText: document.getElementById('errorBox')?.innerText || '',
+          injected: Boolean(window.__faryoAmbiguousSendInjected),
+          outputFound: String(document.getElementById('output')?.innerText || '').includes(${JSON.stringify(ambiguousMarker)}),
+        }))()`,
+        returnByValue: true,
+      });
+      ambiguousState = result.result?.value || {};
+      if (!ambiguousState.inputValue && !ambiguousState.errorText && ambiguousState.outputFound) break;
+    }
+    await send('Runtime.evaluate', { expression: 'if (window.__faryoOriginalFetch) window.fetch = window.__faryoOriginalFetch' });
+    if (!ambiguousState.injected || ambiguousState.inputValue || ambiguousState.errorText || !ambiguousState.outputFound) {
+      throw new Error(`Faryo ambiguous-send recovery failed: ${JSON.stringify(ambiguousState)}`);
+    }
+    console.log('faryo-browser-ambiguous-send-recovery=PASS duplicates=0 draft=cleared');
   }
 
   if (sendText) {

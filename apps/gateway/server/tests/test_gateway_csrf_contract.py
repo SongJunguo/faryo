@@ -178,6 +178,23 @@ class GatewayCsrfContractTest(unittest.TestCase):
         finally:
             conn.close()
 
+    def test_portal_exposes_explicit_file_transfer_and_launcher_controls(self) -> None:
+        conn = http.client.HTTPConnection(*self.base, timeout=5)
+        try:
+            conn.request("GET", "/", headers={"Cookie": self.cookie})
+            resp = conn.getresponse()
+            body = resp.read().decode("utf-8")
+        finally:
+            conn.close()
+
+        self.assertEqual(resp.status, HTTPStatus.OK)
+        self.assertIn("Files to session", body)
+        self.assertIn("Choose files", body)
+        self.assertIn("Send to…", body)
+        self.assertIn("Start ${label}", body)
+        self.assertIn("Start on ${e.label", body)
+        self.assertNotIn("No handoff package", body)
+
     def test_auth_cookie_defaults_to_twelve_hours_host_only_and_strict(self) -> None:
         handler = object.__new__(gateway.GatewayHandler)
         handler.server = self.server

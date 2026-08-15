@@ -13,6 +13,7 @@ const expectedDesktop = Number(process.env.FARYO_SMOKE_EXPECT_DESKTOP || -1);
 const expectedRouteLabel = process.env.FARYO_SMOKE_EXPECT_ROUTE_LABEL || '';
 const viewportWidth = Number(process.env.FARYO_SMOKE_VIEWPORT_WIDTH || 430);
 const viewportHeight = Number(process.env.FARYO_SMOKE_VIEWPORT_HEIGHT || 820);
+const smokeTheme = process.env.FARYO_SMOKE_THEME || '';
 const hostResolverRules = process.env.FARYO_SMOKE_HOST_RESOLVER_RULES || 'MAP * ~NOTFOUND, EXCLUDE 127.0.0.1';
 const chromeBin = process.env.CHROME_BIN || '/usr/bin/google-chrome';
 
@@ -123,6 +124,20 @@ try {
     })()`);
   }
 
+  if (smokeTheme) {
+    let appearanceReady = false;
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      await delay(100);
+      appearanceReady = Boolean(await evaluate("document.getElementById('activeSessionList') && window.FaryoAppearance"));
+      if (appearanceReady) break;
+    }
+    if (!appearanceReady) throw new Error('Faryo appearance controls did not become ready');
+    await evaluate(`(() => {
+      localStorage.setItem('faryoTheme', ${JSON.stringify(smokeTheme)});
+      window.FaryoAppearance.apply();
+    })()`);
+  }
+
   let first = {};
   for (let attempt = 0; attempt < 100; attempt += 1) {
     await delay(150);
@@ -135,6 +150,9 @@ try {
       const historyIds = history.map((item) => item.dataset.agentSessionId).filter(Boolean);
       const historySignature = historyIds.join('|');
       const style = historyList ? getComputedStyle(historyList) : null;
+      const rootStyle = getComputedStyle(document.documentElement);
+      const launchers = [...document.querySelectorAll('#newSessionSlot .launcher-card')];
+      const packageList = document.getElementById('packageList');
       window.__faryoHistoryPageOne = historySignature;
       return {
         ready: activeList && historyList && history.length === 10 && document.getElementById('historyPageInput')?.value === '1' && Number(document.getElementById('historyPageTotal')?.textContent) > 2,
@@ -149,6 +167,16 @@ try {
         routeLabelMatches: !${JSON.stringify(expectedRouteLabel)} || [...document.querySelectorAll('.route-chip strong')].some((item) => item.textContent.trim() === ${JSON.stringify(expectedRouteLabel)}),
         overflowY: style?.overflowY || '',
         scrollable: Boolean(historyList && historyList.scrollHeight > historyList.clientHeight),
+        fileTransferReady: Boolean(
+          document.getElementById('newPackage')?.textContent.includes('Choose files')
+          && (packageList?.querySelector('.send-package') || packageList?.textContent.includes('send them to a session'))
+        ),
+        launcherCount: launchers.length,
+        launcherLabelsClear: launchers.every((item) => item.textContent.includes('Start ') && !item.textContent.includes('$ ')),
+        palette: {
+          bg: rootStyle.getPropertyValue('--bg').trim().toLowerCase(),
+          accent: rootStyle.getPropertyValue('--accent').trim().toLowerCase(),
+        },
         viewport: { width: innerWidth, height: innerHeight },
         pageHorizontalOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth + 1,
       };
@@ -164,7 +192,31 @@ try {
   if (!first.previousDisabled || !first.nextEnabled) throw new Error('First-page navigation state is incorrect');
   if (!first.routeLabelMatches) throw new Error('Configured route label did not render');
   if (!['auto', 'scroll'].includes(first.overflowY) || !first.scrollable) throw new Error('Session History is not independently scrollable');
+  if (!first.fileTransferReady) throw new Error('Files-to-session controls are not discoverable');
+  if (!first.launcherCount || !first.launcherLabelsClear) throw new Error('New-session launchers are unclear');
+  const validPalettes = new Set(['#f6f7f9:#5369e7', '#0f1115:#7188ff']);
+  if (!validPalettes.has(`${first.palette.bg}:${first.palette.accent}`)) throw new Error(`Unexpected shared palette: ${JSON.stringify(first.palette)}`);
+  const expectedPalette = { light: '#f6f7f9:#5369e7', dark: '#0f1115:#7188ff' }[smokeTheme];
+  if (expectedPalette && `${first.palette.bg}:${first.palette.accent}` !== expectedPalette) throw new Error(`Theme palette mismatch: ${JSON.stringify(first.palette)}`);
   if (first.pageHorizontalOverflow) throw new Error(`Gateway workbench overflowed horizontally: ${JSON.stringify(first.viewport)}`);
+
+  await evaluate("document.querySelector('#newSessionSlot .launcher-card').click()");
+  let launchConfirmation = {};
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    await delay(50);
+    launchConfirmation = await evaluate(`(() => ({
+      open: document.getElementById('modal')?.classList.contains('open'),
+      title: document.getElementById('modalTitle')?.textContent || '',
+      choices: document.querySelectorAll('#modalChoices .choice-btn').length,
+      hasCancel: [...document.querySelectorAll('#modalActions button')].some((item) => item.textContent === 'Cancel'),
+    }))()`);
+    if (launchConfirmation?.open) break;
+  }
+  const explicitLaunchTitle = launchConfirmation.title.startsWith('Start ') || launchConfirmation.title === 'Agent limit reached';
+  if (!launchConfirmation.open || !explicitLaunchTitle || !launchConfirmation.choices || !launchConfirmation.hasCancel) {
+    throw new Error(`Launcher confirmation did not open: ${JSON.stringify(launchConfirmation)}`);
+  }
+  await evaluate("[...document.querySelectorAll('#modalActions button')].find((item) => item.textContent === 'Cancel')?.click()");
 
   await evaluate("document.getElementById('historyNext').click()");
   let second = {};

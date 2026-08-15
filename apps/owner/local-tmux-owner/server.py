@@ -91,7 +91,7 @@ CODEX_LIVE_TAIL_LINES = 60
 EVENT_STREAM_MAX_SECONDS = 75
 EVENT_STREAM_MAX_CONNECTIONS = 6
 RATE_LIMIT_CACHE_TTL = 120.0
-CODEX_TRANSCRIPT_CACHE_TTL = 0.6
+CODEX_TRANSCRIPT_CACHE_TTL = 5.0
 THREAD_COLUMNS = "id, title, rollout_path, tokens_used, model, reasoning_effort, cwd, updated_at, source, thread_source"
 INTERACTIVE_CODEX_THREAD_SOURCES = {"cli", "vscode"}
 AGENT_SESSION_LIST_LIMIT = 20
@@ -251,16 +251,20 @@ BLACK_VALUES = {"#000", "#000000", "black", "rgb(0,0,0)", "rgb(0, 0, 0)"}
 # background) is the light-theme twin of BLACK_VALUES: drop it so the text
 # inherits the theme foreground instead of vanishing on light backgrounds.
 WHITE_VALUES = {"#fff", "#ffffff", "white", "rgb(255,255,255)", "rgb(255, 255, 255)"}
-USER_INPUT_COLOR = "var(--user-input-color, #E0C29D)"
+USER_INPUT_COLOR = "var(--user-input-color, #CAD2FF)"
 LOW_CONTRAST_TERMINAL_VALUES = {"#000080", "#0000aa", "#0000cd", "#0000ff", "blue"}
 _rate_limit_cache: dict[str, Any] | None = None
 _rate_limit_cache_at = 0.0
 _rate_limit_lock = threading.Lock()
+_rate_limit_refreshing = False
 _codex_app_server_process: subprocess.Popen[str] | None = None
 _codex_app_server_request_id = 0
 _codex_app_server_lock = threading.Lock()
 _codex_thread_cache: dict[str, tuple[float, dict[str, Any]]] = {}
 _codex_thread_cache_lock = threading.Lock()
+_codex_rollout_cache: dict[str, dict[str, Any]] = {}
+_codex_rollout_cache_lock = threading.Lock()
+_codex_rollout_path_locks: dict[str, threading.Lock] = {}
 _send_delivery_lock = threading.RLock()
 _send_deliveries: dict[str, dict[str, Any]] = {}
 
@@ -676,6 +680,24 @@ def agent_launch_executable(command: str) -> str:
     if command == "claude" and CLAUDE_DEEPSEEK_LAUNCHER and CLAUDE_DEEPSEEK_LAUNCHER.is_file():
         return str(CLAUDE_DEEPSEEK_LAUNCHER)
     return shutil.which(command) or command
+
+
+def codex_app_server_argv(*args: str) -> list[str]:
+    """Build an app-server command that also works outside a login shell."""
+    executable = Path(agent_launch_executable("codex")).expanduser()
+    try:
+        resolved = executable.resolve()
+    except OSError:
+        resolved = executable
+    if resolved.suffix == ".js":
+        # NVM installs codex.js below <version>/lib/node_modules and node below
+        # <version>/bin. A systemd/tmux Owner may not inherit that bin directory
+        # in PATH, so invoke the matching runtime explicitly when available.
+        for parent in resolved.parents:
+            node = parent / "bin" / "node"
+            if node.is_file() and os.access(node, os.X_OK):
+                return [str(node), str(resolved), *args]
+    return [str(executable), *args]
 
 
 CLAUDE_STAMP_HOOK = APP_DIR.parent / "scripts" / "claude-session-stamp.sh"
@@ -1256,16 +1278,21 @@ def latest_context_usage(history_path: str | None) -> dict[str, int | float] | N
         last_usage = latest_info.get("last_token_usage")
         if not isinstance(last_usage, dict): return None
         input_tokens = int(last_usage.get("input_tokens") or 0)
+        output_tokens = int(last_usage.get("output_tokens") or 0)
+        used_tokens = int(last_usage.get("total_tokens") or (input_tokens + output_tokens))
         context_window = int(latest_info.get("model_context_window") or 0)
     except (TypeError, ValueError):
         return None
-    if input_tokens <= 0 or context_window <= 0:
+    if used_tokens <= 0 or context_window <= 0:
         return None
 
     return {
         "inputTokens": input_tokens,
+        "outputTokens": output_tokens,
+        "usedTokens": used_tokens,
         "contextWindow": context_window,
-        "percent": round((input_tokens / context_window) * 100, 1),
+        "contextWindowSource": "agent-reported",
+        "percent": round((used_tokens / context_window) * 100, 1),
     }
 
 
@@ -1307,7 +1334,9 @@ def claude_status_meta(history_path: str | None) -> dict[str, Any]:
         if input_tokens > 0:
             meta["contextUsage"] = {
                 "inputTokens": input_tokens,
+                "usedTokens": input_tokens,
                 "contextWindow": CLAUDE_CONTEXT_WINDOW,
+                "contextWindowSource": "configured-fallback",
                 "percent": round((input_tokens / CLAUDE_CONTEXT_WINDOW) * 100, 1),
             }
     return meta
@@ -1318,6 +1347,7 @@ CLAUDE_USAGE_URL = "https://api.anthropic.com/api/oauth/usage"
 _claude_rate_limit_cache: dict[str, Any] | None = None
 _claude_rate_limit_cache_at = 0.0
 _claude_rate_limit_lock = threading.Lock()
+_claude_rate_limit_refreshing = False
 
 
 def fetch_claude_rate_limits(timeout: float = 6.0) -> dict[str, Any] | None:
@@ -1360,18 +1390,41 @@ def fetch_claude_rate_limits(timeout: float = 6.0) -> dict[str, Any] | None:
     return result
 
 
+def refresh_claude_rate_limit_cache() -> None:
+    global _claude_rate_limit_cache, _claude_rate_limit_cache_at, _claude_rate_limit_refreshing
+    fresh = None
+    try:
+        fresh = fetch_claude_rate_limits()
+    except Exception:
+        # Usage telemetry must never take down the Owner or permanently wedge
+        # future refreshes. The next status request will retry in a new thread.
+        pass
+    finally:
+        with _claude_rate_limit_lock:
+            if fresh is not None:
+                _claude_rate_limit_cache = fresh
+                _claude_rate_limit_cache_at = time.monotonic()
+            _claude_rate_limit_refreshing = False
+
+
 def cached_claude_rate_limits() -> dict[str, Any] | None:
-    global _claude_rate_limit_cache, _claude_rate_limit_cache_at
+    global _claude_rate_limit_refreshing
     now = time.monotonic()
+    launch_refresh = False
     with _claude_rate_limit_lock:
         if _claude_rate_limit_cache is not None and now - _claude_rate_limit_cache_at < RATE_LIMIT_CACHE_TTL:
             return _claude_rate_limit_cache
-    fresh = fetch_claude_rate_limits()
-    with _claude_rate_limit_lock:
-        if fresh is not None:
-            _claude_rate_limit_cache = fresh
-            _claude_rate_limit_cache_at = time.monotonic()
-        return _claude_rate_limit_cache
+        if not _claude_rate_limit_refreshing:
+            _claude_rate_limit_refreshing = True
+            launch_refresh = True
+        cached = _claude_rate_limit_cache
+    if launch_refresh:
+        try:
+            threading.Thread(target=refresh_claude_rate_limit_cache, name="faryo-claude-rate-limit", daemon=True).start()
+        except Exception:
+            with _claude_rate_limit_lock:
+                _claude_rate_limit_refreshing = False
+    return cached
 
 
 def send_app_server_message(process: subprocess.Popen[str], message: dict[str, Any]) -> bool:
@@ -1442,7 +1495,7 @@ def _start_codex_app_server_locked(timeout: float) -> subprocess.Popen[str] | No
     _stop_codex_app_server_locked()
     try:
         process = subprocess.Popen(
-            [agent_launch_executable("codex"), "app-server", "--listen", "stdio://"],
+            codex_app_server_argv("app-server", "--listen", "stdio://"),
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
@@ -1515,12 +1568,18 @@ def cached_codex_thread(thread_id: str) -> dict[str, Any] | None:
         cached = _codex_thread_cache.get(thread_id)
         if cached and now - cached[0] < CODEX_TRANSCRIPT_CACHE_TTL:
             return cached[1]
-        result = codex_app_server_request("thread/read", {"threadId": thread_id, "includeTurns": True})
-        thread = result.get("thread") if isinstance(result, dict) else None
-        if not isinstance(thread, dict):
-            return None
+
+    # Never hold the cache lock during an app-server round trip. A large
+    # thread/read can otherwise block structured capture for every session.
+    result = codex_app_server_request("thread/read", {"threadId": thread_id, "includeTurns": True})
+    thread = result.get("thread") if isinstance(result, dict) else None
+    if not isinstance(thread, dict):
+        # A stale structured transcript is preferable to a lossy tmux fallback
+        # while the app-server is restarting or temporarily busy.
+        return cached[1] if cached else None
+    with _codex_thread_cache_lock:
         _codex_thread_cache[thread_id] = (time.monotonic(), thread)
-        return thread
+    return thread
 
 
 def codex_user_message_text(item: dict[str, Any]) -> str:
@@ -1568,17 +1627,145 @@ def codex_thread_transcript(thread: dict[str, Any], max_lines: int) -> str:
     return "\n\n".join(reversed(selected)).strip()
 
 
-def codex_structured_capture(config: Config, lines: int) -> tuple[str, str] | None:
+def codex_rollout_message(event: Any) -> tuple[str, str] | None:
+    """Extract one displayable user/assistant message from a Codex rollout."""
+    if not isinstance(event, dict) or event.get("type") != "response_item":
+        return None
+    payload = event.get("payload")
+    if not isinstance(payload, dict) or payload.get("type") != "message":
+        return None
+    role = str(payload.get("role") or "")
+    if role not in {"user", "assistant"}:
+        return None
+
+    values: list[str] = []
+    for item in payload.get("content") or []:
+        if not isinstance(item, dict):
+            continue
+        content_type = str(item.get("type") or "")
+        if content_type in {"input_text", "output_text", "text"}:
+            if text := str(item.get("text") or "").strip():
+                values.append(text)
+        elif role == "user":
+            if path := str(item.get("path") or item.get("url") or "").strip():
+                values.append(f"Attachment: {path}")
+    text = "\n".join(values).strip()
+    return (role, text) if text else None
+
+
+def codex_rollout_messages(history_path: str | None) -> list[tuple[str, str]]:
+    """Incrementally parse durable structured messages from a rollout JSONL."""
+    if not history_path:
+        return []
+    path = Path(history_path).expanduser()
+    key = str(path)
+
+    with _codex_rollout_cache_lock:
+        path_lock = _codex_rollout_path_locks.setdefault(key, threading.Lock())
+
+    # Match Harness's per-session ownership principle: a large first read for
+    # one conversation must not serialize unrelated conversations.
+    with path_lock:
+        with _codex_rollout_cache_lock:
+            cached = _codex_rollout_cache.get(key)
+        try:
+            stat = path.stat()
+        except OSError:
+            return list(cached.get("messages") or []) if cached else []
+
+        identity = (stat.st_dev, stat.st_ino)
+        if not cached or cached.get("identity") != identity or stat.st_size < int(cached.get("offset") or 0):
+            cached = {"identity": identity, "offset": 0, "messages": []}
+
+        offset = int(cached.get("offset") or 0)
+        if stat.st_size == offset:
+            with _codex_rollout_cache_lock:
+                _codex_rollout_cache[key] = cached
+            return list(cached["messages"])
+
+        try:
+            with path.open("rb") as fh:
+                fh.seek(offset)
+                chunk = fh.read()
+        except OSError:
+            return list(cached["messages"])
+
+        # Codex appends JSONL records. Leave a partial final record unread so a
+        # concurrent writer cannot make the structured transcript malformed.
+        complete_end = chunk.rfind(b"\n")
+        if complete_end < 0:
+            with _codex_rollout_cache_lock:
+                _codex_rollout_cache[key] = cached
+            return list(cached["messages"])
+
+        messages = list(cached["messages"])
+        for raw_line in chunk[:complete_end].splitlines():
+            try:
+                event = json.loads(raw_line.decode("utf-8"))
+            except (UnicodeDecodeError, json.JSONDecodeError):
+                continue
+            if message := codex_rollout_message(event):
+                messages.append(message)
+        cached = {
+            "identity": identity,
+            "offset": offset + complete_end + 1,
+            "messages": messages,
+        }
+        with _codex_rollout_cache_lock:
+            _codex_rollout_cache[key] = cached
+        return list(messages)
+
+
+def codex_message_transcript(messages: list[tuple[str, str]], max_lines: int) -> str:
+    """Group chronological rollout messages into intact recent turns."""
+    turns: list[list[str]] = []
+    current: list[str] = []
+    for role, text in messages:
+        block = f"› {text}" if role == "user" else f"• {text}"
+        if role == "user" and current:
+            turns.append(current)
+            current = []
+        current.append(block)
+    if current:
+        turns.append(current)
+
+    selected: list[str] = []
+    used_lines = 0
+    for turn_blocks in reversed(turns):
+        turn = "\n\n".join(turn_blocks)
+        turn_lines = turn.count("\n") + 1
+        if selected and used_lines + turn_lines > max_lines:
+            break
+        selected.append(turn)
+        used_lines += turn_lines
+    return "\n\n".join(reversed(selected)).strip()
+
+
+def codex_rollout_transcript(history_path: str | None, max_lines: int) -> str:
+    return codex_message_transcript(codex_rollout_messages(history_path), max_lines)
+
+
+def codex_structured_capture(config: Config, lines: int) -> tuple[str, str, str] | None:
     cwd = get_pane_cwd(config)
     thread = active_agent_thread(config, cwd)
     thread_id = str(thread.get("id") or "") if thread else ""
     if not thread_id:
         return None
+
+    # The rollout is the durable source that Codex itself writes. Reading it
+    # incrementally avoids repeated full thread/read calls for large histories
+    # and preserves the original Markdown and TeX verbatim.
+    history_path = str(thread.get("rollout_path") or "") if thread else ""
+    if text := codex_rollout_transcript(history_path, lines):
+        return text, thread_id, "codex-jsonl"
+
+    # Older/imported sessions may not expose a rollout path; retain the Codex
+    # app-server as a structured compatibility fallback.
     stored = cached_codex_thread(thread_id)
     if not stored:
         return None
     text = codex_thread_transcript(stored, lines)
-    return (text, thread_id) if text else None
+    return (text, thread_id, "codex-app-server") if text else None
 
 
 def rate_limit_from_response(result: dict[str, Any]) -> dict[str, Any] | None:
@@ -1614,88 +1801,49 @@ def rate_limit_from_response(result: dict[str, Any]) -> dict[str, Any] | None:
 
 
 def fetch_weekly_rate_limit(timeout: float = 6.0) -> dict[str, Any] | None:
+    # Reuse the Owner's serialized app-server channel instead of maintaining a
+    # second short-lived protocol client. Structured history uses JSONL in the
+    # normal path, so this low-frequency request does not contend with capture.
+    result = codex_app_server_request("account/rateLimits/read", {}, timeout=timeout)
+    return rate_limit_from_response(result) if isinstance(result, dict) else None
+
+
+def refresh_weekly_rate_limit_cache() -> None:
+    global _rate_limit_cache, _rate_limit_cache_at, _rate_limit_refreshing
+    fresh = None
     try:
-        process = subprocess.Popen(
-            [agent_launch_executable("codex"), "app-server", "--listen", "stdio://"],
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-        )
-    except OSError:
-        return None
-
-    try:
-        deadline = time.monotonic() + timeout
-        initialized = send_app_server_message(
-            process,
-            {
-                "id": 1,
-                "method": "initialize",
-                "params": {
-                    "clientInfo": {"name": "local-tmux-owner", "title": None, "version": "0"},
-                    "capabilities": {"experimentalApi": True},
-                },
-            },
-        )
-        if not initialized:
-            return None
-
-        while time.monotonic() < deadline:
-            message = read_app_server_message(process, deadline)
-            if message is None:
-                break
-            if message.get("id") == 1:
-                break
-        else:
-            return None
-
-        if not send_app_server_message(process, {"method": "initialized", "params": {}}):
-            return None
-
-        if not send_app_server_message(process, {"id": 2, "method": "account/rateLimits/read"}):
-            return None
-
-        while time.monotonic() < deadline:
-            message = read_app_server_message(process, deadline)
-            if message is None:
-                break
-            if message.get("id") != 2:
-                continue
-            result = message.get("result")
-            return rate_limit_from_response(result) if isinstance(result, dict) else None
+        fresh = fetch_weekly_rate_limit()
+    except Exception:
+        # Quota is optional status data. A transient CLI/subprocess failure
+        # must not poison the singleton refresh flag forever.
+        pass
     finally:
-        if process.stdin is not None:
-            try:
-                process.stdin.close()
-            except OSError:
-                pass
-        if process.poll() is None:
-            process.terminate()
-            try:
-                process.wait(timeout=0.5)
-            except subprocess.TimeoutExpired:
-                process.kill()
-
-    return None
+        with _rate_limit_lock:
+            if fresh is not None:
+                _rate_limit_cache = fresh
+                _rate_limit_cache_at = time.monotonic()
+            _rate_limit_refreshing = False
 
 
 def cached_weekly_rate_limit() -> dict[str, Any] | None:
-    global _rate_limit_cache, _rate_limit_cache_at
+    global _rate_limit_refreshing
 
     now = time.monotonic()
+    launch_refresh = False
     with _rate_limit_lock:
         if _rate_limit_cache is not None and now - _rate_limit_cache_at < RATE_LIMIT_CACHE_TTL:
             return _rate_limit_cache
-
-    fresh = fetch_weekly_rate_limit()
-    with _rate_limit_lock:
-        if fresh is not None:
-            _rate_limit_cache = fresh
-            _rate_limit_cache_at = time.monotonic()
-        return _rate_limit_cache
+        if not _rate_limit_refreshing:
+            _rate_limit_refreshing = True
+            launch_refresh = True
+        cached = _rate_limit_cache
+    if launch_refresh:
+        try:
+            threading.Thread(target=refresh_weekly_rate_limit_cache, name="faryo-codex-rate-limit", daemon=True).start()
+        except Exception:
+            with _rate_limit_lock:
+                _rate_limit_refreshing = False
+    return cached
 
 
 def ansi_plain(line: str) -> str:
@@ -1938,10 +2086,63 @@ def wait_for_paste_tail(
     return False
 
 
-def wait_for_codex_submission(config: Config, text: str, timeout: float = SEND_ACCEPT_TIMEOUT) -> str | None:
+def codex_rollout_submission_probe(config: Config) -> tuple[Path, int] | None:
+    """Return the active rollout and its current EOF for exact delivery checks."""
+    try:
+        thread = active_agent_thread(config, get_pane_cwd(config))
+        path_value = str(thread.get("rollout_path") or "") if thread else ""
+        path = Path(path_value).expanduser()
+        return (path, path.stat().st_size) if path_value and path.is_file() else None
+    except OSError:
+        return None
+
+
+def codex_rollout_user_message(event: Any) -> str:
+    if not isinstance(event, dict) or event.get("type") != "response_item":
+        return ""
+    payload = event.get("payload")
+    if not isinstance(payload, dict) or payload.get("type") != "message" or payload.get("role") != "user":
+        return ""
+    values: list[str] = []
+    for item in payload.get("content") or []:
+        if isinstance(item, dict) and item.get("type") == "input_text":
+            values.append(str(item.get("text") or ""))
+    return "\n".join(values).replace("\r\n", "\n").replace("\r", "\n").strip()
+
+
+def codex_rollout_has_user_message(probe: tuple[Path, int] | None, text: str) -> bool:
+    if probe is None:
+        return False
+    path, offset = probe
+    expected = text.replace("\r\n", "\n").replace("\r", "\n").strip()
+    try:
+        with path.open("rb") as fh:
+            if offset > path.stat().st_size:
+                return False
+            fh.seek(offset)
+            for raw_line in fh:
+                try:
+                    event = json.loads(raw_line.decode("utf-8"))
+                except (UnicodeDecodeError, json.JSONDecodeError):
+                    continue
+                if codex_rollout_user_message(event) == expected:
+                    return True
+    except OSError:
+        return False
+    return False
+
+
+def wait_for_codex_submission(
+    config: Config,
+    text: str,
+    timeout: float = SEND_ACCEPT_TIMEOUT,
+    rollout_probe: tuple[Path, int] | None = None,
+) -> str | None:
     probe = paste_tail_probe(text)
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
+        if codex_rollout_has_user_message(rollout_probe, text):
+            return "recorded"
         cursor = tmux_cursor_position(config)
         prompt = last_agent_prompt_block(config, CODEX_PROFILE)
         queued = "Queued follow-up inputs" in tmux_current_capture(config)
@@ -2840,6 +3041,7 @@ def send_text(config: Config, text: str, client_message_id: str | None = None) -
         continuing_paste = bool(existing and existing.get("status") == "pasted")
         if profile is CODEX_PROFILE and not continuing_paste and codex_composer_has_draft(config):
             raise OwnerError("Codex TUI already has an unsent draft; the browser draft was kept", HTTPStatus.CONFLICT)
+        rollout_probe = codex_rollout_submission_probe(config) if profile is CODEX_PROFILE else None
 
         if not continuing_paste:
             buffer_name = f"local-tmux-owner-{secrets.token_hex(4)}"
@@ -2891,7 +3093,7 @@ def send_text(config: Config, text: str, client_message_id: str | None = None) -
             if res.returncode != 0:
                 raise OwnerError(res.stderr.strip() or "tmux send Enter failed", HTTPStatus.INTERNAL_SERVER_ERROR)
             if profile is CODEX_PROFILE:
-                accepted_state = wait_for_codex_submission(config, text)
+                accepted_state = wait_for_codex_submission(config, text, rollout_probe=rollout_probe)
                 if accepted_state:
                     break
                 time.sleep(SEND_ACCEPT_RETRY_DELAY)
@@ -2994,8 +3196,7 @@ class Handler(SimpleHTTPRequestHandler):
                 if profile is CODEX_PROFILE and not want_html:
                     structured = codex_structured_capture(target, lines)
                     if structured:
-                        text, thread_id = structured
-                        capture_source = "codex-app-server"
+                        text, thread_id, capture_source = structured
                         if agent_running:
                             live_text = codex_live_tail(terminal_text)
                 payload = {
@@ -3090,8 +3291,7 @@ class Handler(SimpleHTTPRequestHandler):
                     if profile is CODEX_PROFILE:
                         structured = codex_structured_capture(target, lines)
                         if structured:
-                            text, thread_id = structured
-                            capture_source = "codex-app-server"
+                            text, thread_id, capture_source = structured
                             if agent_running:
                                 live_text = codex_live_tail(terminal_text)
                     digest = hash((text, live_text))
@@ -3378,15 +3578,15 @@ class Handler(SimpleHTTPRequestHandler):
                 except json.JSONDecodeError:
                     pass
             body = f"<pre>{_html.escape(text)}</pre>"
-        html = f"""<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="theme-color" content="#F7F0E5"><title>{title}</title><style>
-body{{margin:0;background:#F7F0E5;color:#3E3026;font:16px/1.58 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;-webkit-text-size-adjust:100%}}
-header{{position:sticky;top:0;z-index:2;display:flex;align-items:center;gap:8px;padding:calc(env(safe-area-inset-top) + 8px) 10px 8px;background:rgba(255,253,248,.96);border-bottom:1px solid #D9C9B8;backdrop-filter:blur(12px)}}
+        html = f"""<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="theme-color" content="#F6F7F9"><title>{title}</title><style>
+body{{margin:0;background:#F6F7F9;color:#202228;font:16px/1.58 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;-webkit-text-size-adjust:100%}}
+header{{position:sticky;top:0;z-index:2;display:flex;align-items:center;gap:8px;padding:calc(env(safe-area-inset-top) + 8px) 10px 8px;background:rgba(255,255,255,.96);border-bottom:1px solid #DDE1E8;backdrop-filter:blur(12px)}}
 h1{{min-width:0;flex:1;margin:0;font-size:15px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}}
-button,.pill{{min-height:34px;padding:0 10px;border:1px solid #D9C9B8;border-radius:999px;background:#FFFDF8;color:#3E3026;font:600 14px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;text-decoration:none}}
+button,.pill{{min-height:34px;padding:0 10px;border:1px solid #DDE1E8;border-radius:999px;background:#FFFFFF;color:#202228;font:600 14px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;text-decoration:none}}
 main{{padding:14px 14px calc(env(safe-area-inset-bottom) + 22px)}}
 pre{{margin:0;white-space:pre-wrap;overflow-wrap:anywhere;font:15px/1.58 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}}
-.notice{{padding:12px;border:1px solid #D9C9B8;border-radius:12px;background:#FFFDF8}}
-@media (prefers-color-scheme: dark){{body{{background:#17130F;color:#F7F0E5}}header{{background:rgba(33,26,21,.96);border-color:#4B3D32}}button,.pill,.notice{{background:#211A15;color:#F7F0E5;border-color:#4B3D32}}}}
+.notice{{padding:12px;border:1px solid #DDE1E8;border-radius:12px;background:#FFFFFF}}
+@media (prefers-color-scheme: dark){{body{{background:#0F1115;color:#ECEEF3}}header{{background:rgba(23,26,32,.96);border-color:#2C313B}}button,.pill,.notice{{background:#171A20;color:#ECEEF3;border-color:#2C313B}}}}
 </style></head><body><header><button type="button" onclick="history.length>1?history.back():location.href='/'">Back</button><h1>{title}</h1><a class="pill" href="{raw_url}">Raw</a><a class="pill" href="{download_url}" download>Download</a></header><main>{body}</main></body></html>"""
         data = html.encode("utf-8")
         self.send_response(HTTPStatus.OK)

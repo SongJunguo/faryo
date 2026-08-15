@@ -698,6 +698,53 @@
     return Math.round((elapsedMs / windowMs) * 100);
   }
 
+  function numericTokenCount(value) {
+    if (value === null || value === '' || typeof value === 'undefined') return null;
+    const number = Number(value);
+    return Number.isFinite(number) && number >= 0 ? Math.round(number) : null;
+  }
+
+  function compactTokenCount(value) {
+    const count = numericTokenCount(value);
+    if (count === null) return null;
+    if (count >= 1_000_000) {
+      const millions = Math.round((count / 1_000_000) * 10) / 10;
+      return `${Number.isInteger(millions) ? millions : millions.toFixed(1)}m`;
+    }
+    if (count >= 100_000) return `${Math.round(count / 1000)}k`;
+    if (count >= 10_000) return `${(count / 1000).toFixed(1)}k`;
+    if (count >= 1000) return `${Math.round(count / 1000)}k`;
+    return String(count);
+  }
+
+  function exactTokenCount(value) {
+    const count = numericTokenCount(value);
+    if (count === null) return null;
+    try { return new Intl.NumberFormat().format(count); }
+    catch (_err) { return String(count); }
+  }
+
+  function renderContextStatus(contextUsage) {
+    const percent = Number(contextUsage.percent);
+    const percentText = Number.isFinite(percent) ? `${quotaPercent(percent)}%` : null;
+    const usedTokens = numericTokenCount(contextUsage.usedTokens ?? contextUsage.inputTokens);
+    const contextWindow = numericTokenCount(contextUsage.contextWindow);
+    const reportedWindow = contextUsage.contextWindowSource === 'agent-reported';
+    const hasReportedCounts = reportedWindow && usedTokens !== null && contextWindow > 0;
+    const compactCounts = hasReportedCounts ? `${compactTokenCount(usedTokens)}/${compactTokenCount(contextWindow)}` : '';
+    const compact = `Ctx ${percentText || '--'}${compactCounts ? ` · ${compactCounts}` : ''}`;
+    const detail = hasReportedCounts
+      ? `${exactTokenCount(usedTokens)} / ${exactTokenCount(contextWindow)} tokens${percentText ? ` · ${percentText} used` : ''}`
+      : (percentText ? `${percentText} used` : 'Unavailable');
+    const label = $('ctxText');
+    if (label) {
+      label.textContent = compact;
+      label.title = hasReportedCounts ? `Agent-reported context · ${detail}` : detail;
+    }
+    if ($('detailsContext')) $('detailsContext').textContent = detail;
+    return compact;
+  }
+
   function quotaPercent(value) {
     if (value === null || value === '' || typeof value === 'undefined') return null;
     const number = Number(value);
@@ -802,14 +849,13 @@
     const model = data.model || `tmux:${data.session || 'unknown'}`;
     const ownerLabel = data.ownerLabel || 'TMUX';
     const contextUsage = data.contextUsage || {};
-    const contextText = Number.isFinite(contextUsage.percent) ? `Ctx ${contextUsage.percent}%` : 'Ctx --';
+    const contextText = renderContextStatus(contextUsage);
     const weeklyRateLimit = data.weeklyRateLimit || {};
     const sessionLabel = data.sessionTitle || data.sessionId || 'session unknown';
     const modelLabel = compactModelLabel(model, data.fastStatus);
     $('ownerText').textContent = ownerLabel;
     $('topicText').textContent = leadingText(sessionLabel, 18);
     $('sessionTitle').title = `${ownerLabel} · ${sessionLabel}`;
-    $('ctxText').textContent = contextText;
     $('modelText').textContent = modelLabel;
     $('modelText').title = model;
     const quotaText = renderQuotaStatus(weeklyRateLimit);
@@ -820,7 +866,6 @@
     if ($('detailsSession')) $('detailsSession').textContent = sessionLabel;
     if ($('detailsOwner')) $('detailsOwner').textContent = ownerLabel;
     if ($('detailsModel')) $('detailsModel').textContent = modelLabel;
-    if ($('detailsContext')) $('detailsContext').textContent = contextText;
     if ($('detailsGit')) $('detailsGit').textContent = phasePill.textContent || 'git --';
     agentRunning = Boolean(data.agentRunning);
     updatePetControl();
@@ -1216,14 +1261,15 @@
     needsConfirmUI = hasConfirmUI(text, rules);
     updateStatusLineAutoExpand();
     output.classList.toggle('compact-blocks', outputMode === 'compact');
+    const structuredCapture = capture.captureSource === 'codex-jsonl' || capture.captureSource === 'codex-app-server';
     if (outputMode === 'compact') {
       renderCompactOutput(text, rules, {
-        mode: capture.captureSource === 'codex-app-server' ? 'settled' : 'streaming',
+        mode: structuredCapture ? 'settled' : 'streaming',
       });
     }
     else if (capture.html) output.innerHTML = decorateMetaLines(capture.html, text);
     else renderPlainOutput(text, rules);
-    if (outputMode === 'compact' && capture.agentSource === 'codex-cli' && capture.captureSource !== 'codex-app-server') {
+    if (outputMode === 'compact' && capture.agentSource === 'codex-cli' && !structuredCapture) {
       output.insertAdjacentHTML('afterbegin', '<section class="compact-capture-warning" role="status">Structured Codex history is unavailable. Showing a terminal fallback; Markdown and formulas may be incomplete.</section>');
     }
     if (outputMode === 'compact' && capture.agentRunning && capture.liveText) {
@@ -1528,6 +1574,21 @@
     }
   }
 
+  function isAmbiguousDeliveryError(error) {
+    return error instanceof TypeError || [502, 504].includes(Number(error?.status || 0));
+  }
+
+  async function sendWithDeliveryRecovery(payload) {
+    try {
+      return await postAction('/api/send', payload);
+    } catch (error) {
+      if (!isAmbiguousDeliveryError(error)) throw error;
+      setError('Checking whether the message was delivered…', { timeoutMs: 0 });
+      await new Promise((resolve) => setTimeout(resolve, 180));
+      return postAction('/api/send', payload);
+    }
+  }
+
   async function uploadAttachments(files) {
     const selected = Array.from(files || []).slice(0, MAX_ATTACHMENTS - pendingAttachments.length);
     if (!selected.length) { attachmentInput.value = ''; if (pendingAttachments.length >= MAX_ATTACHMENTS) setError(`Attach up to ${MAX_ATTACHMENTS} files`); return; }
@@ -1650,7 +1711,7 @@
     try {
       closeDockMenu();
       playPetSend();
-      await postAction('/api/send', { text: outboundText, clientMessageId: pendingSubmission.id });
+      await sendWithDeliveryRecovery({ text: outboundText, clientMessageId: pendingSubmission.id });
       if (promptInput.value === browserText) promptInput.value = '';
       clearPendingAttachments();
       pendingSubmission = null;

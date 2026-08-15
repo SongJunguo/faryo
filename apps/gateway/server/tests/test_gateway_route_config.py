@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import importlib.util
+import base64
 import json
 import os
 import subprocess
@@ -183,6 +184,48 @@ class GatewayRouteConfigTest(unittest.TestCase):
             self.assertEqual(config.owner_tokens, {"txy": "enabled-token"})
             self.assertEqual(list(gateway.BACKENDS), ["txy"])
             self.assertEqual(config.max_running("txy"), 8)
+
+    def test_file_package_persists_and_accepts_more_files(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            auth = root / "gateway-auth.json"
+            env = root / "faryo.env"
+            auth.write_text(json.dumps({
+                "users": {
+                    "tester": {
+                        "bcrypt_hash": "not-checked-during-load",
+                        "routes": ["txy"],
+                    }
+                }
+            }), encoding="utf-8")
+            env.write_text(
+                "FARYO_GATEWAY_ROUTES=txy\n"
+                "FARYO_TXY_OWNER_TOKEN=enabled-token\n",
+                encoding="utf-8",
+            )
+            config = gateway.GatewayConfig(auth, env, root / "portal", root / "state" / "cookie-secret")
+
+            first = base64.b64encode(b"first file\n").decode("ascii")
+            package = config.save_bridge_package({
+                "title": "two files",
+                "attachments": [{
+                    "file_name": "first.md",
+                    "mime_type": "text/markdown",
+                    "data_url": f"data:text/markdown;base64,{first}",
+                }],
+            }, "tester")
+            second = base64.b64encode(b"second file\n").decode("ascii")
+            package = config.append_bridge_package_assets(package["id"], [{
+                "file_name": "second.txt",
+                "mime_type": "text/plain",
+                "data_url": f"data:text/plain;base64,{second}",
+            }], "tester")
+
+            self.assertEqual(package["status"], "pending")
+            self.assertEqual([asset["file_name"] for asset in package["assets"]], ["first.md", "second.txt"])
+            self.assertEqual(Path(package["assets"][0]["path"]).read_bytes(), b"first file\n")
+            self.assertEqual(Path(package["assets"][1]["path"]).read_bytes(), b"second file\n")
+            self.assertEqual(config.list_bridge_packages("tester", "pending")[0]["id"], package["id"])
 
     def test_gateway_config_accepts_route_max_running_override(self) -> None:
         with tempfile.TemporaryDirectory() as temp:

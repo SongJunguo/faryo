@@ -14,10 +14,11 @@
 
 ## 当前架构边界
 
-当前网页有两条不同的数据路径，排查时不能混为一谈：
+当前网页有三条职责不同的数据路径，排查时不能混为一谈：
 
-1. **结构化显示路径**：Owner 通过独立的 `codex app-server` 读取线程历史，网页用 `/api/events` 和结构化快照显示消息、Markdown 与公式。
+1. **结构化显示路径**：Owner 以 Codex 自身追加的 rollout JSONL 为首选来源，按会话、文件身份和字节游标增量读取原始 user/assistant 消息；`codex app-server` 只作为旧会话兼容后备。网页用 `/api/events` 和结构化快照显示消息、Markdown 与公式。
 2. **交互输入与 Raw 路径**：正在运行的 Codex TUI 仍位于 tmux 中；`/api/send` 目前通过 tmux 粘贴文本并发送按键，Raw 视图也来自 tmux pane。
+3. **状态元数据路径**：上下文用量直接读取 agent 写入 rollout 的实际 token/window；周额度通过单例 app-server 低频异步刷新，不阻塞聊天捕获。
 
 因此，“从 JSON 读取显示”并不等于“输入也由 App Server 提交”。在完成架构验证前，不允许网页 App Server 与独立 Codex TUI 同时成为同一线程的 turn writer，以免出现并发写入、重复消息或会话状态损坏。
 
@@ -33,8 +34,8 @@
 | 安全 Markdown | **AST v2 已完成** | 单一 micromark/mdast/GFM/math 管线、Shiki 按需高亮和稳定块 DOM 对账已接入；旧实现已移除，实际页面观感已确认 |
 | 本地资源认证 | **已完成** | 直连 Owner 的文件/图片经认证请求头取回为 Blob，资源 DOM 不含 Owner Token；Gateway 继续服务端注入 Token |
 | 对话状态额度 | **已完成** | 顶部明确显示周额度剩余百分比；详情同时显示剩余、已用和提供方返回的重置时间，无数据时明确显示不可用 |
-| 网页输入可靠提交 | **P0 已完成并推送** | 消息 ID 幂等、粘贴/Enter 确认、失败草稿保留和 TUI 草稿冲突保护均通过 |
-| 结构化消息实时更新 | **P0 已完成并推送** | 最终内容用结构化数据；运行中显示脱敏 tmux live 尾部，结束后自动收敛 |
+| 网页输入可靠提交 | **P0 已完成并推送** | 消息 ID 幂等、JSONL 精确接收确认、504 歧义恢复、失败草稿保留和 TUI 草稿冲突保护均通过 |
+| 结构化消息实时更新 | **P0 已完成并推送** | 最终内容从增量 JSONL 读取；运行中显示脱敏 tmux live 尾部，结束后自动收敛 |
 | 本机开机自启 | 已完成 | user timer 已启用，`Linger=yes`；停止 Owner 后的自动恢复测试通过 |
 | 手机/Gateway/隧道 | 已部署 | Gateway 与 Owner 均仅监听回环地址；公网主路径位于精确身份限制的 Cloudflare Access 外层，采用 24 小时会话且关闭独立 MFA；仓库不保存允许身份或域名 |
 
@@ -61,6 +62,7 @@
 - 把 `/api/send` 从“按键已发送”改为“提交结果已确认”的语义。
 - 浏览器只有收到确认后才能清空草稿；超时或失败时保留/恢复原文本，并显示可重试错误。
 - 防止双击、重复请求和旧请求晚到造成重复 turn。
+- 对“服务已投递但反向代理返回 502/504”的歧义结果，使用同一消息 ID 自动核对并重试确认；确认前不清空草稿，确认后不留下已发送文本。
 
 ### 验收标准
 
@@ -73,12 +75,10 @@
 
 ### 工作项
 
-- 测量消息在 Codex TUI、线程持久化、`thread/read`、Owner SSE 和网页 DOM 五个位置的时间差。
-- 修正 App Server 初始化流程，并验证独立 App Server 能否观察由独立 TUI 写入的增量。
-- 检查当前 0.6 秒缓存、请求串行化和 SSE 去重是否吞掉或延迟更新。
-- 根据实测在以下方案中选择最小可靠实现：
-  - 监听结构化会话文件变化并立即刷新；或
-  - 让单一 App Server 成为会话 owner，并由其事件通知驱动网页。
+- 测量消息在 Codex TUI、rollout JSONL、Owner SSE 和网页 DOM 四个位置的时间差。
+- 已选择 rollout JSONL 作为首选结构化来源：按文件身份和字节游标增量读取，保留写入中的半行，文件替换或截断时自动重建。
+- 每个会话拥有独立读取锁；一个超长历史的首次读取不会锁住其他会话。SSE 仍发送可自愈的尾部快照，重连后无需依赖漏失的单条事件。
+- App Server 保留为无 rollout 路径时的兼容后备；缓存读取不在全局锁内执行，临时失败时保留旧结构化结果。
 - 增加 SSE 断线重连、页面隐藏后恢复和线程切换测试。
 
 ### 验收标准
@@ -148,8 +148,8 @@ Node 运行时或 CDN。
 
 ## 下一步
 
-完成最终差异和隐私审计，提交本轮可靠交互覆盖并推送个人 `origin`；随后进行用户实际
-长对话观感验收。由于网页能够控制终端 Agent，公网长期使用必须保留受限 Cloudflare
+进行用户实际长对话观感验收；后续维护继续以增量事件源为基础，不恢复每秒全量读取
+长历史。由于网页能够控制终端 Agent，公网长期使用必须保留受限 Cloudflare
 Access（或仅可信设备可达的私网 VPN）作为外层身份策略，不能由 Tunnel 或 Faryo
 单密码替代。
 
@@ -157,7 +157,7 @@ Access（或仅可信设备可达的私网 VPN）作为外层身份策略，不�
 
 - 输入成功路径：真实 Owner HTTP 返回 `delivery=accepted`；同一 `clientMessageId` 第二次请求返回 `duplicate=true`，没有重复粘贴。
 - 输入失败路径：人为保留 TUI 草稿后，Chrome 收到冲突错误，输入框和 `sessionStorage` 草稿均未被清空。
-- 实时路径：独立 App Server 可在约 0.28 秒看到 TUI 新用户消息，但进行中的 shell turn 直到完成前没有结构化 item；因此采用“结构化最终内容 + 临时脱敏 tmux live 尾部”。Chrome 验证 live 面板自动出现并在完成后自动消失。
+- 实时路径：rollout JSONL 提供原始结构化 user/assistant 消息；进行中的 shell turn 仍由临时脱敏 tmux live 尾部补充。Chrome 验证 live 面板自动出现并在完成后自动消失。
 - Markdown/公式：Node 单元测试、14 个 Owner Python 测试、26 个 Gateway 测试、包发布检查和 Owner smoke 全部通过。
 
 ## 2026-08-15 AST v2 验证记录
@@ -204,9 +204,14 @@ Access（或仅可信设备可达的私网 VPN）作为外层身份策略，不�
 
 ### 结构化来源加固
 
-- Owner 服务可通过私有运行时配置 `FARYO_CODEX_BIN` 定位 Codex CLI，避免版本管理器安装目录未进入服务 `PATH` 时静默退回终端屏幕文本。
+- Owner 首选增量读取 Codex rollout JSONL，并把 `codex-jsonl` 标为结构化来源；只有 JSONL 不可用时才调用 App Server，再失败才明确退回 tmux。
+- Owner 服务可通过私有运行时配置 `FARYO_CODEX_BIN` 定位 Codex CLI；若配置指向 NVM 下的 `codex.js`，服务会直接解析同版本 `bin/node`，不依赖 systemd 登录环境的 `PATH`。
 - 紧凑视图会标记实际 capture source；Codex 结构化历史不可用时显示明确警告，而不再把可能残缺的终端回退误认为完整 Markdown。
+- 参考 DeepSeek Harness 的可靠会话模式后，Faryo 采用了“追加日志 + 每会话游标 + 半记录保护 + 重连后完整尾部快照”的适配方案；Harness 的双 WebSocket、完整事件 seq 和 Agent runtime 不直接移植，因为 Faryo 仍是现有 TUI 的受限代理。
 - 通用回归样例覆盖行内/行间公式、分段函数、指示函数、平方根表达式和终端换行恢复；测试数据不包含真实对话、Token、域名或本机绝对路径。
 - 隔离浏览器回归覆盖本地文件和图片：验证认证请求头、Blob 打开、DOM 无 Token，以及
   测试前后 tmux 尺寸不变；测试资源和运行时状态自动清理。
 - `Live from tmux` 内层滚动已改为终端语义：首次显示定位最新内容，停留底部时随输出更新，用户手动上翻后刷新保持阅读位置；纯函数回归与真实公网 Chrome 动态刷新检查均通过。
+- 最终回归同时读取 5 个活动 Codex 会话，均返回 `codex-jsonl` 且具有结构化会话标识；
+  390x844 Chrome 验证 GFM、KaTeX、Shiki 与结构化来源通过，服务重启前后这些 Codex
+  tmux 窗口的宽高保持不变。

@@ -124,9 +124,11 @@ The Gateway home page presents two distinct session regions:
   move one page, while the page input accepts Enter or Go for a direct jump, so
   active panes cannot disappear behind a long history display limit.
 
-## Handoff Packages
+## Files to Session (internal handoff packages)
 
-Handoff packages carry work material into a target session.
+The Gateway labels this workflow **Files to session**. Internally, a handoff
+package is the small manifest that carries selected work material into a target
+session; it does not create or copy a conversation.
 
 A package can include:
 
@@ -140,7 +142,7 @@ A package can include:
 Packages can be created from Gateway, received through the MCP bridge, and
 injected into a selected session.
 
-## Same-Session Handoff Walkthrough
+## Same-Session File Transfer Walkthrough
 
 1. Start from an existing Owner machine `tmux` session that is already running
    Codex, Claude Code, or a shell.
@@ -151,8 +153,8 @@ injected into a selected session.
    terminal evidence is needed.
 5. Send one short instruction from the workbench composer. The instruction
    appears in the same live `tmux` session.
-6. Create a text handoff package from the Gateway workbench and inject it into
-   the same target session. The session receives a `# Faryo Handoff Package`
+6. Choose files or text from the Gateway workbench and send the generated
+   internal handoff package into the same target session. The session receives a `# Faryo Handoff Package`
    block.
 7. Create an attachment handoff. Gateway uploads the file to the Owner inbox and
    injects the attachment path into the same target session.

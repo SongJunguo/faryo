@@ -55,10 +55,13 @@ Harness commit under MIT. Exact sources, versions, and license texts are under
 process, CDN, or permissive external-resource CSP. Raw HTML is escaped, links
 and images pass protocol allowlists, and KaTeX runs with `trust: false`.
 
-For a bound Codex session, Compact Chat reads original finalized message text
-through Codex App Server. While a message is incomplete, the streaming grammar
-keeps math literal; the finalized structured message switches atomically to the
-full GFM/math grammar. Raw remains terminal evidence. If structured history is
+For a bound Codex session, Compact Chat incrementally reads original finalized
+message text from Codex's rollout JSONL. The cache is isolated per session,
+tracks file identity and byte offset, and does not commit a partial final JSONL
+record. Codex App Server remains a compatibility fallback for sessions without
+a readable rollout. While a message is incomplete, the streaming grammar keeps
+math literal; the finalized structured message switches atomically to the full
+GFM/math grammar. Raw remains terminal evidence. If both structured sources are
 unavailable, the tmux fallback deliberately avoids guessing damaged formula
 boundaries and displays a warning.
 
@@ -145,8 +148,12 @@ consumed as private runtime input and is never printed.
 Codex status reading is optional metadata for model, context, and rate-limit
 display. The Owner header shows the remaining weekly percentage, while Session
 Details also shows the used percentage and reset time when the provider returns
-one. Without this metadata, the service still works as a generic tmux control
-surface and displays the quota as unavailable.
+one. Context used/window values come from the agent's rollout rather than a
+configured model maximum. Rate limits use one non-blocking, single-flight cache;
+an NVM-installed `codex.js` is paired with its sibling Node runtime even when a
+systemd service has no NVM directory in `PATH`. Without this metadata, the
+service still works as a generic tmux control surface and displays the quota as
+unavailable.
 
 ## API
 

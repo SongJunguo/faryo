@@ -43,6 +43,30 @@ class SendDeliveryTest(unittest.TestCase):
 
         self.assertTrue(ready)
 
+    def test_rollout_confirmation_uses_only_new_exact_user_message(self):
+        import json
+        import tempfile
+
+        with tempfile.NamedTemporaryFile("w+b") as fh:
+            fh.write((json.dumps({"type": "response_item", "payload": {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "old"}]}}) + "\n").encode())
+            offset = fh.tell()
+            fh.write((json.dumps({"type": "response_item", "payload": {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "confirmed text"}]}}) + "\n").encode())
+            fh.flush()
+            probe = (Path(fh.name), offset)
+            self.assertTrue(server.codex_rollout_has_user_message(probe, "confirmed text"))
+            self.assertFalse(server.codex_rollout_has_user_message(probe, "old"))
+            self.assertFalse(server.codex_rollout_has_user_message(probe, "confirmed"))
+
+    def test_wait_for_submission_prefers_rollout_confirmation(self):
+        with (
+            mock.patch.object(server, "codex_rollout_has_user_message", return_value=True),
+            mock.patch.object(server, "tmux_cursor_position") as cursor,
+        ):
+            state = server.wait_for_codex_submission(self.config, "confirmed", rollout_probe=mock.sentinel.probe)
+
+        self.assertEqual("recorded", state)
+        cursor.assert_not_called()
+
     def test_retries_enter_until_codex_confirms_submission(self):
         patches = self.send_patches(submission_states=[None, "submitted"])
         with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5], patches[6], patches[7] as tmux, patches[8]:

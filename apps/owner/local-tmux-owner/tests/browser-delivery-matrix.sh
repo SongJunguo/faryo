@@ -102,6 +102,8 @@ smoke_env+=(
   'FARYO_SMOKE_CHECK_RECOVERY=1'
   "FARYO_SMOKE_TMUX_SESSION=$session"
   "FARYO_SMOKE_RECOVERY_START_INDEX=$recovery_start_index"
+  'FARYO_SMOKE_CHECK_AMBIGUOUS_SEND=1'
+  "FARYO_SMOKE_AMBIGUOUS_SEND_INDEX=$((recovery_start_index + 2))"
 )
 
 env "${smoke_env[@]}" node "$browser_smoke"
@@ -141,7 +143,7 @@ if [[ "$initial_size" != "$final_size" ]]; then
   exit 1
 fi
 
-expected_ack_count=$((22 + attachment_smoke))
+expected_ack_count=$((23 + attachment_smoke))
 actual_ack_count="$(tmux capture-pane -p -S - -t "$session" | awk '/^FARYO_DELIVERY_ACK_/ { count += 1 } END { print count + 0 }')"
 if [[ "$actual_ack_count" != "$expected_ack_count" ]]; then
   echo "anonymous receiver ACK count mismatch: expected=$expected_ack_count actual=$actual_ack_count" >&2
