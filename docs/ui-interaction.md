@@ -62,7 +62,7 @@ It shows:
 
 - owner/route label
 - current topic/session title
-- model and context metadata when available
+- model, context usage, and remaining weekly quota when available
 - git status when available
 - compact or raw terminal output
 - attachment preview

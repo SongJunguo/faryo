@@ -30,8 +30,9 @@
 | tmux 桌面换行 | 已完成并提交 | Owner 默认宽度为 0，不执行尺寸调整；Codex 窗口始终由真实 tmux 客户端决定 |
 | 公式版式 | 已完成并提交 | 分段函数、范数和块公式已经过 Chrome/Edge 验证 |
 | KaTeX 本地化 | 已完成 | KaTeX 0.18.4 已打入 AST bundle；CSS、字体和许可证继续离线提供 |
-| 安全 Markdown | AST v2 已实现，最终验收中 | 单一 micromark/mdast/GFM/math 管线、Shiki 按需高亮和稳定块 DOM 对账已接入；旧实现已移除 |
-| 本地资源认证 | 已实现，最终验收中 | 直连 Owner 的文件/图片经认证请求头取回为 Blob，资源 DOM 不含 Owner Token；Gateway 继续服务端注入 Token |
+| 安全 Markdown | **AST v2 已完成** | 单一 micromark/mdast/GFM/math 管线、Shiki 按需高亮和稳定块 DOM 对账已接入；旧实现已移除，实际页面观感已确认 |
+| 本地资源认证 | **已完成** | 直连 Owner 的文件/图片经认证请求头取回为 Blob，资源 DOM 不含 Owner Token；Gateway 继续服务端注入 Token |
+| 对话状态额度 | **已完成** | 顶部明确显示周额度剩余百分比；详情同时显示剩余、已用和提供方返回的重置时间，无数据时明确显示不可用 |
 | 网页输入可靠提交 | **P0 已完成并推送** | 消息 ID 幂等、粘贴/Enter 确认、失败草稿保留和 TUI 草稿冲突保护均通过 |
 | 结构化消息实时更新 | **P0 已完成并推送** | 最终内容用结构化数据；运行中显示脱敏 tmux live 尾部，结束后自动收敛 |
 | 本机开机自启 | 已完成 | user timer 已启用，`Linger=yes`；停止 Owner 后的自动恢复测试通过 |

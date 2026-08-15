@@ -143,7 +143,10 @@ consumed as private runtime input and is never printed.
 - Should not bind directly to public or LAN addresses.
 
 Codex status reading is optional metadata for model, context, and rate-limit
-display. Without it, the service still works as a generic tmux control surface.
+display. The Owner header shows the remaining weekly percentage, while Session
+Details also shows the used percentage and reset time when the provider returns
+one. Without this metadata, the service still works as a generic tmux control
+surface and displays the quota as unavailable.
 
 ## API
 

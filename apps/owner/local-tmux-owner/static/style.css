@@ -75,7 +75,8 @@ footer { position: absolute; left: 0; right: 0; bottom: 0; z-index: 6; min-width
 .status-line { min-width: 0; max-width: 100%; display: flex; justify-content: space-between; align-items: center; gap: 10px; margin: 0 4px 6px; color: var(--muted); font-size: calc(12px + var(--font-step)); overflow: hidden; }
 .status-line span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #statusLeft, .quota-top { flex: 0 0 auto; min-width: 34px; min-height: 18px; display: inline-flex; justify-content: center; align-items: center; padding: 0; border: 0; border-radius: 0; background: transparent; cursor: pointer; }
-.quota-top { cursor: default; }
+.quota-top { gap: 5px; color: var(--muted); cursor: default; font-size: calc(12px + var(--font-step)); font-weight: 650; }
+.quota-label { white-space: nowrap; font-variant-numeric: tabular-nums; }
 .quota-bars { width: 34px; display: inline-grid; gap: 3px; }
 .quota-bar { position: relative; width: 34px; height: 3px; border-radius: 999px; background: color-mix(in srgb, var(--muted) 18%, transparent); overflow: hidden; }
 #quotaFill, #quotaWeekFill { position: absolute; inset: 0 auto 0 0; border-radius: inherit; background: var(--pending); }

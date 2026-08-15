@@ -477,6 +477,11 @@ try {
             statusAutoExpanded: Boolean(statusLine?.classList.contains('auto-expanded')),
             keyNavVisible: Boolean(keyNav && keyNav.getClientRects().length),
             livePanel: livePanel ? { open: Boolean(livePanel.open), session: String(livePanel.dataset.session || '') } : null,
+            weeklyQuota: {
+              label: String(document.getElementById('quotaText')?.textContent || '').trim(),
+              details: String(document.getElementById('detailsQuota')?.textContent || '').trim(),
+              title: String(document.getElementById('quotaTop')?.title || '').trim(),
+            },
           },
           katexStylesheetLoaded: [...document.styleSheets].some((sheet) => String(sheet.href || '').includes('/katex')),
           katexAssetUrls: ${JSON.stringify(privacySafe)}
@@ -528,6 +533,10 @@ try {
     }
     if (state.viewport.width < 720 && prompt.width < state.viewport.width - 24) {
       throw new Error(`Mobile Owner composer is unexpectedly narrow: ${JSON.stringify({ viewport: state.viewport, prompt })}`);
+    }
+    if (!/^Week (?:--|\d+(?:\.\d+)?% left)$/.test(layout.weeklyQuota?.label || '')
+      || !layout.weeklyQuota?.details || !layout.weeklyQuota?.title) {
+      throw new Error(`Owner weekly quota status is not explicit: ${JSON.stringify(layout.weeklyQuota)}`);
     }
     if (prompt.height < 82) throw new Error(`Owner composer is unexpectedly short: ${JSON.stringify(prompt)}`);
     if (layout.outputWidth > 752) throw new Error(`Owner reading column is too wide: ${JSON.stringify(layout)}`);
@@ -984,20 +993,22 @@ try {
         text('topicText', 'Research session');
         text('draftState', 'Project workspace');
         text('ctxText', 'Ctx 42%');
+        text('quotaText', 'Week 58% left');
         text('modelText', 'Agent ready');
         text('phasePill', 'git clean');
         text('detailsSession', 'Research session');
         text('detailsOwner', 'Ubuntu Workstation');
         text('detailsModel', 'Agent model');
         text('detailsContext', 'Ctx 42%');
+        text('detailsQuota', '58% left · 42% used · resets Aug 20, 10:20');
         text('detailsGit', 'git clean');
         text('detailsSource', 'structured history');
         text('detailsConnection', 'live');
         const smokeSafeText = {
           ownerText: 'Ubuntu Workstation', topicText: 'Research session', draftState: 'Project workspace',
-          ctxText: 'Ctx 42%', modelText: 'Agent ready', phasePill: 'git clean',
+          ctxText: 'Ctx 42%', quotaText: 'Week 58% left', modelText: 'Agent ready', phasePill: 'git clean',
           detailsSession: 'Research session', detailsOwner: 'Ubuntu Workstation', detailsModel: 'Agent model',
-          detailsContext: 'Ctx 42%', detailsGit: 'git clean', detailsSource: 'structured history', detailsConnection: 'live',
+          detailsContext: 'Ctx 42%', detailsQuota: '58% left · 42% used · resets Aug 20, 10:20', detailsGit: 'git clean', detailsSource: 'structured history', detailsConnection: 'live',
         };
         const safeStyle = document.createElement('style');
         safeStyle.textContent = '.faryo-smoke-safe-text{font-size:0!important;color:transparent!important}.faryo-smoke-safe-text::after{content:attr(data-faryo-smoke-text);font-size:12px;color:var(--text)}#ownerText.faryo-smoke-safe-text::after,#topicText.faryo-smoke-safe-text::after{font-size:14px}.details-list dd.faryo-smoke-safe-text::after{font-size:12px}';

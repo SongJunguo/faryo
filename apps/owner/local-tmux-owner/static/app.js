@@ -686,17 +686,9 @@
     phasePill.title = git ? git.title : 'Current directory is not a Git repository';
   }
 
-  function formatWeeklyElapsedDays(rateLimit) {
-    const resetSeconds = Number(rateLimit.resetsAt);
-    const windowMinutes = Number(rateLimit.windowDurationMins);
-    if (!Number.isFinite(resetSeconds) || !Number.isFinite(windowMinutes)) return null;
-    const windowMs = windowMinutes * 60 * 1000;
-    const startMs = resetSeconds * 1000 - windowMs;
-    const elapsedMs = Math.min(Math.max(Date.now() - startMs, 0), windowMs);
-    return (elapsedMs / 86400000).toFixed(1);
-  }
-
   function weeklyElapsedPercent(rateLimit) {
+    if (rateLimit.resetsAt === null || rateLimit.resetsAt === ''
+      || rateLimit.windowDurationMins === null || rateLimit.windowDurationMins === '') return null;
     const resetSeconds = Number(rateLimit.resetsAt);
     const windowMinutes = Number(rateLimit.windowDurationMins);
     if (!Number.isFinite(resetSeconds) || !Number.isFinite(windowMinutes) || windowMinutes <= 0) return null;
@@ -706,37 +698,80 @@
     return Math.round((elapsedMs / windowMs) * 100);
   }
 
+  function quotaPercent(value) {
+    if (value === null || value === '' || typeof value === 'undefined') return null;
+    const number = Number(value);
+    if (!Number.isFinite(number)) return null;
+    const rounded = Math.round(Math.max(0, Math.min(100, number)) * 10) / 10;
+    return Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(1);
+  }
+
+  function weeklyResetLabel(rateLimit) {
+    if (rateLimit.resetsAt === null || rateLimit.resetsAt === '' || typeof rateLimit.resetsAt === 'undefined') return '';
+    const resetSeconds = Number(rateLimit.resetsAt);
+    if (!Number.isFinite(resetSeconds)) return '';
+    const reset = new Date(resetSeconds * 1000);
+    if (Number.isNaN(reset.getTime())) return '';
+    try {
+      return new Intl.DateTimeFormat(undefined, {
+        month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit',
+      }).format(reset);
+    } catch (_err) {
+      return reset.toLocaleString();
+    }
+  }
+
   function renderQuotaStatus(rateLimit) {
     const button = $('quotaTop') || $('statusLeft');
+    const label = $('quotaText');
+    const details = $('detailsQuota');
     const usageFill = $('quotaFill');
     const weekFill = $('quotaWeekFill');
-    const percent = Number(rateLimit.usedPercent);
-    const scopedPercent = Number(rateLimit.scopedPercent);
+    const percent = rateLimit.usedPercent === null || typeof rateLimit.usedPercent === 'undefined' ? NaN : Number(rateLimit.usedPercent);
+    const scopedPercent = rateLimit.scopedPercent === null || typeof rateLimit.scopedPercent === 'undefined' ? NaN : Number(rateLimit.scopedPercent);
     if (Number.isFinite(scopedPercent)) {
-      button.style.setProperty('--quota-pct', Number.isFinite(percent) ? Math.max(0, Math.min(100, percent)) : 0);
-      button.style.setProperty('--quota-week-pct', Math.max(0, Math.min(100, scopedPercent)));
+      const used = quotaPercent(percent);
+      const scopedUsed = quotaPercent(scopedPercent);
+      const remaining = used === null ? null : quotaPercent(100 - Number(used));
+      const scopedRemaining = quotaPercent(100 - Number(scopedUsed));
+      const scopedLabel = rateLimit.scopedLabel || 'Model';
+      const compact = remaining === null ? 'Week --' : `Week ${remaining}% left`;
+      const detail = [remaining === null ? 'All unavailable' : `All ${remaining}% left`, `${scopedLabel} ${scopedRemaining}% left`].join(' · ');
+      button.style.setProperty('--quota-pct', used === null ? 0 : Number(used));
+      button.style.setProperty('--quota-week-pct', Number(scopedUsed));
       usageFill.setAttribute('aria-hidden', 'true');
       weekFill.setAttribute('aria-hidden', 'true');
-      button.title = `Week ${percent}% · ${rateLimit.scopedLabel || 'Model'} ${scopedPercent}%`;
+      if (label) label.textContent = compact;
+      if (details) details.textContent = detail;
+      button.title = `Weekly quota · ${detail}`;
       button.setAttribute('aria-label', button.title);
-      return;
+      return compact;
     }
-    const days = formatWeeklyElapsedDays(rateLimit);
     const weekPercent = weeklyElapsedPercent(rateLimit);
     if (!Number.isFinite(percent)) {
       button.style.setProperty('--quota-pct', 0);
       button.style.setProperty('--quota-week-pct', Number.isFinite(weekPercent) ? weekPercent : 0);
+      if (label) label.textContent = 'Week --';
+      if (details) details.textContent = 'Unavailable';
       button.title = 'Quota unknown';
       button.setAttribute('aria-label', 'Quota unknown');
-      return;
+      return 'Week --';
     }
     const clamped = Math.max(0, Math.min(100, percent));
+    const used = quotaPercent(clamped);
+    const remaining = quotaPercent(100 - clamped);
+    const reset = weeklyResetLabel(rateLimit);
+    const compact = `Week ${remaining}% left`;
+    const detail = `${remaining}% left · ${used}% used${reset ? ` · resets ${reset}` : ''}`;
     button.style.setProperty('--quota-pct', clamped);
     button.style.setProperty('--quota-week-pct', Number.isFinite(weekPercent) ? Math.max(0, Math.min(100, weekPercent)) : 0);
     usageFill.setAttribute('aria-hidden', 'true');
     weekFill.setAttribute('aria-hidden', 'true');
-    button.title = `Weekly quota ${percent}%${days ? ` · day ${days}` : ''}`;
+    if (label) label.textContent = compact;
+    if (details) details.textContent = detail;
+    button.title = `Weekly quota · ${detail}`;
     button.setAttribute('aria-label', button.title);
+    return compact;
   }
 
   function leadingText(text, maxChars) {
@@ -777,8 +812,8 @@
     $('ctxText').textContent = contextText;
     $('modelText').textContent = modelLabel;
     $('modelText').title = model;
-    $('subTitle').title = `${contextText} · ${model}${data.fastStatus ? ` · fast:${data.fastStatus}` : ''}`;
-    renderQuotaStatus(weeklyRateLimit);
+    const quotaText = renderQuotaStatus(weeklyRateLimit);
+    $('subTitle').title = `${contextText} · ${quotaText} · ${model}${data.fastStatus ? ` · fast:${data.fastStatus}` : ''}`;
     selectedSession = data.session || selectedSession;
     updateFolderLabel(data);
     updateStatusPill(data.gitStatus);

@@ -131,6 +131,8 @@ assert "fetchProtectedResource" in app, "direct Owner resources must use authent
 assert "data-faryo-fetch-href" in app, "protected file links must use deferred authenticated fetches"
 assert "data-faryo-fetch-src" in app, "protected images must use deferred authenticated fetches"
 assert "target.searchParams.delete('token')" in app, "protected resource fetches must strip query tokens"
+assert 'id="quotaText"' in index and 'id="detailsQuota"' in index, "Owner must expose weekly quota in header and details"
+assert "Week ${remaining}% left" in app, "Owner must label weekly quota as remaining allowance"
 with (root / "deploy/launchd/dev.faryo.owner.keepalive.plist").open("rb") as fh:
     plistlib.load(fh)
 PY
