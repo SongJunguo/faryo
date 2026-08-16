@@ -80,9 +80,10 @@ MAX_SEND_CHARS = 120_000
 PASTE_READY_TIMEOUT = 1.2
 PASTE_READY_POLL_INTERVAL = 0.05
 PASTE_READY_MIN_PROBE_CHARS = 8
-PASTE_SETTLE_SECONDS = 0.08
-SEND_ACCEPT_TIMEOUT = 1.4
-SEND_ACCEPT_RETRY_DELAY = 0.22
+PASTE_SETTLE_SECONDS = 0.12
+SEND_ACCEPT_TIMEOUT = 2.2
+SEND_ACCEPT_RETRY_DELAY = 0.18
+SEND_KEY_MAX_ATTEMPTS = 3
 SEND_DELIVERY_TTL_SECONDS = 48 * 60 * 60
 SEND_DELIVERY_CLEANUP_INTERVAL_SECONDS = 60 * 60
 CAPTURE_COMPACT_LINES = 320
@@ -208,6 +209,7 @@ LOCAL_FILE_SUFFIXES = set(LOCAL_FILE_CONTENT_TYPES)
 EXTERNAL_VIEWER_SUFFIXES = {".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx", ".odt", ".odp", ".ods", ".rtf"}
 CONTROL_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 ANSI_CONTROL_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1a\x1c-\x1f\x7f]")
+ANSI_SGR_RE = re.compile(r"\x1b\[([0-9;]*)m")
 HTML_CODE_RE = re.compile(r"<code[^>]*>(.*)</code>", re.S)
 RICH_PRE_RE = re.compile(r"^\s*<pre\b[^>]*>(.*)</pre>\s*$", re.S)
 STYLE_ATTR_RE = re.compile(r'\sstyle="([^"]*)"')
@@ -217,7 +219,10 @@ LONG_SEPARATOR_RE = re.compile(r"[─━═]{20,}")
 AGENT_BOUNDARY_RE = re.compile(r"^[\s─━═\-—_]*(Worked for .*?)[\s─━═\-—_]*$", re.I)
 AGENT_PLACEHOLDER_RE = re.compile(r"^\s*[›>]\s*Write tests for @filename\s*$", re.I)
 USER_PROMPT_RE = re.compile(r"^\s*›\s+")
-AGENT_INPUT_PROMPT_RE = re.compile(r"^\s*[›>](?:\s|$)")
+# Codex uses `›` while idle and `»` while a turn or background startup is
+# active.  Both glyphs identify the live composer; historical user messages
+# continue to use `›` and are matched separately by USER_PROMPT_RE.
+AGENT_INPUT_PROMPT_RE = re.compile(r"^\s*[›>»](?:\s|$)")
 AGENT_META_RE = re.compile(r"^\s*((?:gpt|o\d|claude)[\w.\- ]*)\s*·\s+(.+?)\s*$", re.I)
 CLAUDE_USER_PROMPT_RE = re.compile(r"^\s*(?:[›>❯]\s+|[│┃]\s*[›>❯]\s+)")
 CLAUDE_INPUT_PROMPT_RE = re.compile(r"^\s*(?:[›>❯](?:\s|$)|[│┃]\s*[›>❯](?:\s|$))")
@@ -2249,6 +2254,11 @@ def tmux_current_capture(config: Config) -> str:
     return CONTROL_RE.sub("", res.stdout.replace("\r\n", "\n").replace("\r", "\n")) if res.returncode == 0 else ""
 
 
+def tmux_current_ansi_capture(config: Config) -> str:
+    res = tmux(config, ["capture-pane", "-p", "-e", "-J", "-t", tmux_target(config)], timeout=2)
+    return ANSI_CONTROL_RE.sub("", res.stdout.replace("\r\n", "\n").replace("\r", "\n")) if res.returncode == 0 else ""
+
+
 def paste_tail_probe(text: str) -> str:
     compacted = " ".join(text.split())
     if len(compacted) <= PASTE_READY_MIN_PROBE_CHARS:
@@ -2256,17 +2266,85 @@ def paste_tail_probe(text: str) -> str:
     return compacted[-min(80, len(compacted)):]
 
 
-def last_agent_prompt_block(config: Config, profile: AgentProfile = CODEX_PROFILE) -> str:
-    lines = tmux_current_capture(config).splitlines()
+def last_agent_prompt_block_from_text(text: str, profile: AgentProfile = CODEX_PROFILE) -> str:
+    lines = text.splitlines()
     prompt_index = next((index for index in range(len(lines) - 1, -1, -1) if profile.input_prompt_re.match(lines[index].strip())), None)
     if prompt_index is None:
         return ""
     return compact_capture_for_probe("\n".join(lines[prompt_index:]))
 
 
+def last_agent_prompt_block(config: Config, profile: AgentProfile = CODEX_PROFILE) -> str:
+    return last_agent_prompt_block_from_text(tmux_current_capture(config), profile)
+
+
+def ansi_visible_cells(text: str) -> list[tuple[str, bool]]:
+    """Return visible characters paired with the active ANSI dim state."""
+    cells: list[tuple[str, bool]] = []
+    dim = False
+    cursor = 0
+    for match in ANSI_SGR_RE.finditer(text):
+        cells.extend((char, dim) for char in text[cursor:match.start()])
+        raw_codes = match.group(1)
+        codes = [0] if raw_codes == "" else [int(value or 0) for value in raw_codes.split(";")]
+        for code in codes:
+            if code == 0:
+                dim = False
+            elif code == 2:
+                dim = True
+            elif code == 22:
+                dim = False
+        cursor = match.end()
+    cells.extend((char, dim) for char in text[cursor:])
+    return cells
+
+
+def ansi_prompt_has_real_text(line: str, profile: AgentProfile = CODEX_PROFILE) -> bool | None:
+    """Distinguish a real Codex draft from its dim rotating placeholder."""
+    cells = ansi_visible_cells(line)
+    plain = "".join(char for char, _dim in cells)
+    match = profile.input_prompt_re.match(plain)
+    if not match:
+        return None
+    for char, dim in cells[match.end():]:
+        if char.isspace():
+            continue
+        return not dim
+    return False
+
+
 def codex_composer_has_draft(config: Config) -> bool:
+    ansi_capture = tmux_current_ansi_capture(config)
+    for line in reversed(ansi_capture.splitlines()):
+        has_text = ansi_prompt_has_real_text(line)
+        if has_text is not None:
+            return has_text
+    # Minimal environments without styled capture retain the old conservative
+    # cursor fallback. Wrapped and multiline drafts are handled by the ANSI
+    # path used by the deployed Owner.
     cursor = tmux_cursor_position(config)
     return bool(cursor and cursor[0] > 2)
+
+
+def codex_submission_key(config: Config) -> str:
+    """Queue a new web message while Codex works; otherwise submit it."""
+    tail = "\n".join(tmux_current_capture(config).splitlines()[-24:]).lower()
+    if "tab to queue message" in tail or "esc to interrupt" in tail:
+        return "Tab"
+    return "Enter"
+
+
+def codex_composer_contains_text(config: Config, text: str) -> bool:
+    probe = paste_tail_probe(text)
+    prompt = last_agent_prompt_block(config, CODEX_PROFILE)
+    return bool(probe and probe in prompt)
+
+
+def codex_queued_followup_contains(capture: str, text: str) -> bool:
+    compact = compact_capture_for_probe(capture)
+    marker = compact.lower().rfind("queued follow-up inputs")
+    probe = paste_tail_probe(text)
+    return bool(marker >= 0 and probe and probe in compact[marker:])
 
 
 def release_version() -> str:
@@ -2364,11 +2442,17 @@ def wait_for_codex_submission(
     while time.monotonic() < deadline:
         if codex_rollout_has_user_message(rollout_probe, text):
             return "recorded"
-        cursor = tmux_cursor_position(config)
-        prompt = last_agent_prompt_block(config, CODEX_PROFILE)
-        queued = "Queued follow-up inputs" in tmux_current_capture(config)
-        if cursor and cursor[0] <= 2 and (not probe or probe not in prompt):
-            return "queued" if queued else "submitted"
+        capture = tmux_current_capture(config)
+        if codex_queued_followup_contains(capture, text):
+            return "queued"
+        prompt = last_agent_prompt_block_from_text(capture, CODEX_PROFILE)
+        # A submitted message remains visible in transcript history, so the
+        # pane as a whole is not a valid confirmation signal.  The active
+        # composer is: once its exact tail disappears, Enter/Tab was accepted.
+        # This also works while Codex is starting MCP servers, where rollout
+        # persistence can lag several seconds behind the TUI.
+        if prompt and (not probe or probe not in prompt):
+            return "submitted"
         time.sleep(PASTE_READY_POLL_INTERVAL)
     return None
 
@@ -3424,19 +3508,22 @@ def send_text(config: Config, text: str, client_message_id: str | None = None) -
                         pass
                 tmux(config, ["delete-buffer", "-b", buffer_name], timeout=1)
             time.sleep(PASTE_SETTLE_SECONDS)
-        elif profile is CODEX_PROFILE and not codex_composer_has_draft(config):
-            receipt = send_delivery_receipt(delivery_id, config, "recovered", 0)
+        elif profile is CODEX_PROFILE and not codex_composer_contains_text(config, text):
+            recovered_state = wait_for_codex_submission(config, text, timeout=0.35, rollout_probe=rollout_probe) or "recovered"
+            receipt = send_delivery_receipt(delivery_id, config, recovered_state, 0)
             existing.update({"status": "accepted", "receipt": receipt})
             remember_accepted_send_delivery(delivery_id, existing)
             return receipt
 
         enter_attempts = 0
         accepted_state: str | None = None
-        for key in ("C-m", "Enter"):
+        key_attempts = SEND_KEY_MAX_ATTEMPTS if profile is CODEX_PROFILE else 1
+        for _attempt in range(key_attempts):
             enter_attempts += 1
+            key = codex_submission_key(config) if profile is CODEX_PROFILE else "C-m"
             res = tmux(config, ["send-keys", "-t", tmux_target(config), key], timeout=3)
             if res.returncode != 0:
-                raise OwnerError(res.stderr.strip() or "tmux send Enter failed", HTTPStatus.INTERNAL_SERVER_ERROR)
+                raise OwnerError(res.stderr.strip() or f"tmux send {key} failed", HTTPStatus.INTERNAL_SERVER_ERROR)
             if profile is CODEX_PROFILE:
                 accepted_state = wait_for_codex_submission(config, text, rollout_probe=rollout_probe)
                 if accepted_state:
@@ -3449,7 +3536,7 @@ def send_text(config: Config, text: str, client_message_id: str | None = None) -
         if not accepted_state:
             state = _send_deliveries[delivery_id]
             state["updatedAt"] = time.monotonic()
-            raise OwnerError("Codex did not accept Enter; the browser and TUI drafts were kept for retry", HTTPStatus.GATEWAY_TIMEOUT)
+            raise OwnerError("Codex did not accept the submit key; the browser and TUI drafts were kept for retry", HTTPStatus.GATEWAY_TIMEOUT)
 
         receipt = send_delivery_receipt(delivery_id, config, accepted_state, enter_attempts)
         remember_accepted_send_delivery(delivery_id, {

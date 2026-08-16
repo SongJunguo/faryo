@@ -74,9 +74,16 @@ Live tmux remains outside that frozen history and restores its own scroll
 snapshot before the next paint.
 
 Owner does not resize tmux or the Codex/Claude TUI. Browser sends retain the
-client message id, confirmed Enter delivery, idempotent retries, draft
+client message id, confirmed submit delivery, idempotent retries, draft
 preservation on failure, and conflict response when a different desktop draft
-already occupies the TUI composer.
+already occupies the TUI composer. For Codex, the Owner recognizes both the
+idle `›` and working `»` composer prompts. It sends `Enter` while idle and,
+following the Codex CLI interaction contract, sends `Tab` while Codex is
+working so the web message becomes an explicit next-turn follow-up (see the
+[official interactive shortcuts](https://learn.chatgpt.com/docs/developer-commands?surface=cli#interactive-shortcuts)). Acceptance
+is confirmed when the exact text leaves the active composer, appears in the
+queued-follow-up panel, or reaches the rollout JSONL; delayed MCP startup no
+longer becomes a false HTTP 504.
 
 Rebuild and test the committed browser bundle from the repository root with:
 

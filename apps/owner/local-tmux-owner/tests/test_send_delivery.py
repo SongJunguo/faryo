@@ -31,7 +31,7 @@ class SendDeliveryTest(unittest.TestCase):
         server._send_delivery_cleanup_at = 0.0
         self.delivery_temp.cleanup()
 
-    def send_patches(self, *, composer_states=None, submission_states=None):
+    def send_patches(self, *, composer_states=None, submission_states=None, composer_contains_states=None, submission_key="Enter"):
         return (
             mock.patch.object(server, "has_session", return_value=True),
             mock.patch.object(server, "agent_profile_in_pane", return_value=server.CODEX_PROFILE),
@@ -40,6 +40,8 @@ class SendDeliveryTest(unittest.TestCase):
             mock.patch.object(server, "tmux_cursor_position", return_value=(2, 20)),
             mock.patch.object(server, "wait_for_paste_tail", return_value=True),
             mock.patch.object(server, "wait_for_codex_submission", side_effect=submission_states or ["submitted"]),
+            mock.patch.object(server, "codex_submission_key", return_value=submission_key),
+            mock.patch.object(server, "codex_composer_contains_text", side_effect=composer_contains_states or [True]),
             mock.patch.object(server, "tmux", return_value=self.completed),
             mock.patch.object(server.time, "sleep"),
         )
@@ -74,20 +76,85 @@ class SendDeliveryTest(unittest.TestCase):
         self.assertEqual("recorded", state)
         cursor.assert_not_called()
 
+    def test_active_composer_prompt_uses_double_angle_while_working(self):
+        capture = "\n".join((
+            "› already submitted",
+            "• Working (1s • esc to interrupt)",
+            "» current web draft",
+            "  tab to queue message",
+        ))
+
+        self.assertIn("current web draft", server.last_agent_prompt_block_from_text(capture))
+        self.assertNotIn("already submitted", server.last_agent_prompt_block_from_text(capture))
+
+    def test_ansi_draft_detection_distinguishes_dim_placeholder(self):
+        placeholder = "\x1b[1m›\x1b[0m \x1b[2mUse /skills to list available skills\x1b[0m"
+        idle_draft = "\x1b[1m›\x1b[0m actual draft"
+        working_draft = "\x1b[1m\x1b[38;2;186;130;255m»\x1b[0m wrapped draft"
+
+        self.assertFalse(server.ansi_prompt_has_real_text(placeholder))
+        self.assertTrue(server.ansi_prompt_has_real_text(idle_draft))
+        self.assertTrue(server.ansi_prompt_has_real_text(working_draft))
+
+    def test_submission_key_queues_only_while_codex_is_working(self):
+        with mock.patch.object(server, "tmux_current_capture", return_value="› idle prompt\n  100% context left"):
+            self.assertEqual("Enter", server.codex_submission_key(self.config))
+        with mock.patch.object(server, "tmux_current_capture", return_value="» follow up\n  tab to queue message"):
+            self.assertEqual("Tab", server.codex_submission_key(self.config))
+        with mock.patch.object(server, "tmux_current_capture", return_value="• Working (1s • esc to interrupt)\n» follow up"):
+            self.assertEqual("Tab", server.codex_submission_key(self.config))
+
+    def test_wait_for_submission_accepts_cleared_active_composer_while_working(self):
+        capture = "\n".join((
+            "› prompt that has just been submitted",
+            "• Starting MCP servers (1s • esc to interrupt)",
+            "» Use /skills to list available skills",
+        ))
+        with (
+            mock.patch.object(server, "codex_rollout_has_user_message", return_value=False),
+            mock.patch.object(server, "tmux_current_capture", return_value=capture),
+        ):
+            state = server.wait_for_codex_submission(self.config, "prompt that has just been submitted", timeout=0.1)
+
+        self.assertEqual("submitted", state)
+
+    def test_wait_for_submission_recognizes_exact_queued_followup(self):
+        capture = "\n".join((
+            "• Queued follow-up inputs",
+            "  ↳ keep working, then answer this followup",
+            "» Improve documentation in @filename",
+        ))
+        with (
+            mock.patch.object(server, "codex_rollout_has_user_message", return_value=False),
+            mock.patch.object(server, "tmux_current_capture", return_value=capture),
+        ):
+            state = server.wait_for_codex_submission(self.config, "keep working, then answer this followup", timeout=0.1)
+
+        self.assertEqual("queued", state)
+
     def test_retries_enter_until_codex_confirms_submission(self):
         patches = self.send_patches(submission_states=[None, "submitted"])
-        with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5], patches[6], patches[7] as tmux, patches[8]:
+        with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5], patches[6], patches[7], patches[8], patches[9] as tmux, patches[10]:
             receipt = server.send_text(self.config, "hello", "web-retry-enter")
 
         enter_keys = [call.args[1][-1] for call in tmux.call_args_list if call.args[1][:3] == ["send-keys", "-t", self.config.session]]
-        self.assertEqual(["C-m", "Enter"], enter_keys)
+        self.assertEqual(["Enter", "Enter"], enter_keys)
         self.assertEqual("accepted", receipt["delivery"])
         self.assertEqual("submitted", receipt["deliveryState"])
         self.assertEqual(2, receipt["enterAttempts"])
 
+    def test_working_codex_uses_tab_and_returns_queued_receipt(self):
+        patches = self.send_patches(submission_states=["queued"], submission_key="Tab")
+        with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5], patches[6], patches[7], patches[8], patches[9] as tmux, patches[10]:
+            receipt = server.send_text(self.config, "follow up", "web-queued-followup")
+
+        keys = [call.args[1][-1] for call in tmux.call_args_list if call.args[1][:3] == ["send-keys", "-t", self.config.session]]
+        self.assertEqual(["Tab"], keys)
+        self.assertEqual("queued", receipt["deliveryState"])
+
     def test_retry_after_timeout_does_not_paste_the_message_twice(self):
-        patches = self.send_patches(composer_states=[False, True], submission_states=[None, None, "submitted"])
-        with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5], patches[6], patches[7] as tmux, patches[8]:
+        patches = self.send_patches(composer_states=[False], submission_states=[None, None, None, "submitted"], composer_contains_states=[True])
+        with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5], patches[6], patches[7], patches[8], patches[9] as tmux, patches[10]:
             with self.assertRaises(server.OwnerError) as raised:
                 server.send_text(self.config, "keep this draft", "web-timeout-retry")
             receipt = server.send_text(self.config, "keep this draft", "web-timeout-retry")
@@ -100,7 +167,7 @@ class SendDeliveryTest(unittest.TestCase):
 
     def test_accepted_client_message_id_is_idempotent(self):
         patches = self.send_patches()
-        with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5], patches[6], patches[7] as tmux, patches[8]:
+        with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5], patches[6], patches[7], patches[8], patches[9] as tmux, patches[10]:
             first = server.send_text(self.config, "only once", "web-idempotent")
             tmux_calls = len(tmux.call_args_list)
             server._send_deliveries.clear()
