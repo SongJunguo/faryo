@@ -142,23 +142,43 @@
 
   function promptDraftKey(session = selectedSession) { return `faryoPromptDraft:${routeBase || 'owner'}:${session || 'default'}`; }
   function pendingSubmissionKey(session = selectedSession) { return `${promptDraftKey(session)}:pending`; }
-  function persistPromptDraft() {
+  function persistPromptDraft(session = selectedSession, value = promptInput.value) {
     try {
-      if (promptInput.value) sessionStorage.setItem(promptDraftKey(), promptInput.value);
-      else sessionStorage.removeItem(promptDraftKey());
+      if (value) sessionStorage.setItem(promptDraftKey(session), value);
+      else sessionStorage.removeItem(promptDraftKey(session));
     } catch (_err) {}
   }
-  function persistPendingSubmission() {
+  function persistPendingSubmission(submission = pendingSubmission, session = submission?.session || selectedSession) {
     try {
-      if (pendingSubmission) sessionStorage.setItem(pendingSubmissionKey(), JSON.stringify(pendingSubmission));
-      else sessionStorage.removeItem(pendingSubmissionKey());
+      if (submission) sessionStorage.setItem(pendingSubmissionKey(session), JSON.stringify(submission));
+      else sessionStorage.removeItem(pendingSubmissionKey(session));
+    } catch (_err) {}
+  }
+  function clearPendingSubmission(submission) {
+    if (!submission?.session) return;
+    persistPendingSubmission(null, submission.session);
+  }
+  function clearDeliveredPromptDraft(submission) {
+    try {
+      const key = promptDraftKey(submission.session);
+      if (sessionStorage.getItem(key) === submission.browserText) sessionStorage.removeItem(key);
+    } catch (_err) {}
+  }
+  function preserveFailedPromptDraft(submission) {
+    try {
+      const key = promptDraftKey(submission.session);
+      if (sessionStorage.getItem(key) === null) sessionStorage.setItem(key, submission.browserText);
+      if (sessionStorage.getItem(key) === submission.browserText) persistPendingSubmission(submission, submission.session);
     } catch (_err) {}
   }
   function restorePromptDraft() {
     try {
       promptInput.value = sessionStorage.getItem(promptDraftKey()) || '';
       const restored = JSON.parse(sessionStorage.getItem(pendingSubmissionKey()) || 'null');
-      pendingSubmission = restored?.browserText === promptInput.value ? restored : null;
+      pendingSubmission = restored?.browserText === promptInput.value && (!restored.session || restored.session === selectedSession)
+        ? { ...restored, session: selectedSession }
+        : null;
+      if (pendingSubmission && restored.session !== selectedSession) persistPendingSubmission(pendingSubmission, selectedSession);
       if (!pendingSubmission) sessionStorage.removeItem(pendingSubmissionKey());
     } catch (_err) {
       pendingSubmission = null;
@@ -174,8 +194,9 @@
   restorePromptDraft();
   promptInput.addEventListener('input', () => {
     if (pendingSubmission?.browserText !== promptInput.value) {
+      const staleSubmission = pendingSubmission;
       pendingSubmission = null;
-      persistPendingSubmission();
+      persistPendingSubmission(null, staleSubmission?.session || selectedSession);
     }
     persistPromptDraft();
     autosize();
@@ -1526,9 +1547,13 @@
     renderAttachmentPreview();
   }
 
-  function clearPendingAttachments() {
-    for (const item of pendingAttachments) if (item.url) URL.revokeObjectURL(item.url);
-    pendingAttachments = [];
+  function clearSubmittedAttachments(paths) {
+    const submitted = new Set((paths || []).filter(Boolean));
+    if (!submitted.size) return;
+    for (const item of pendingAttachments) {
+      if (submitted.has(item.path) && item.url) URL.revokeObjectURL(item.url);
+    }
+    pendingAttachments = pendingAttachments.filter((item) => !submitted.has(item.path));
     renderAttachmentPreview();
   }
 
@@ -1655,12 +1680,12 @@
     }
   }
 
-  async function postAction(path, body) {
+  async function postAction(path, body, options = {}) {
     setBusy(true);
     setError('');
     try {
       const payload = Object.assign({ session: selectedSession }, body || {});
-      const data = await api(path, { method: 'POST', body: JSON.stringify(payload) });
+      const data = await api(path, { ...options, method: 'POST', body: JSON.stringify(payload) });
       return data;
     } finally {
       setBusy(false);
@@ -1668,17 +1693,33 @@
   }
 
   function isAmbiguousDeliveryError(error) {
-    return error instanceof TypeError || [502, 504].includes(Number(error?.status || 0));
+    return error instanceof TypeError || error?.name === 'AbortError' || [502, 504].includes(Number(error?.status || 0));
+  }
+
+  async function sendDeliveryAttempt(payload) {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+    try {
+      return await postAction('/api/send', payload, { signal: controller.signal });
+    } catch (error) {
+      if (error?.name !== 'AbortError') throw error;
+      const timeoutError = new Error('Send confirmation timed out');
+      timeoutError.name = 'AbortError';
+      timeoutError.status = 504;
+      throw timeoutError;
+    } finally {
+      clearTimeout(timeoutId);
+    }
   }
 
   async function sendWithDeliveryRecovery(payload) {
     try {
-      return await postAction('/api/send', payload);
+      return await sendDeliveryAttempt(payload);
     } catch (error) {
       if (!isAmbiguousDeliveryError(error)) throw error;
       setError('Checking whether the message was delivered…', { timeoutMs: 0 });
       await new Promise((resolve) => setTimeout(resolve, 180));
-      return postAction('/api/send', payload);
+      return sendDeliveryAttempt(payload);
     }
   }
 
@@ -1793,33 +1834,45 @@
     if (!text && !pendingAttachments.length) return;
     if (pendingAttachments.some((item) => ['compressing', 'uploading'].includes(item.status))) { setError('Attachments are still uploading'); return; }
     if (pendingAttachments.some((item) => item.status === 'error')) { setError('Remove failed attachments and try again'); return; }
-    const attachmentText = pendingAttachments.filter((item) => item.path).map((item) => `${item.kind === 'image' ? 'Image' : 'Attachment'}: ${item.path}`).join('\n');
+    const readyAttachments = pendingAttachments.filter((item) => item.path);
+    const attachmentText = readyAttachments.map((item) => `${item.kind === 'image' ? 'Image' : 'Attachment'}: ${item.path}`).join('\n');
     const browserText = promptInput.value;
     const outboundText = [text, attachmentText].filter(Boolean).join('\n');
-    if (!pendingSubmission || pendingSubmission.browserText !== browserText || pendingSubmission.outboundText !== outboundText) {
-      pendingSubmission = { id: newClientMessageId(), browserText, outboundText };
-      persistPendingSubmission();
+    const submissionSession = selectedSession;
+    if (!pendingSubmission || pendingSubmission.session !== submissionSession || pendingSubmission.browserText !== browserText || pendingSubmission.outboundText !== outboundText) {
+      pendingSubmission = {
+        id: newClientMessageId(),
+        session: submissionSession,
+        browserText,
+        outboundText,
+        attachmentPaths: readyAttachments.map((item) => item.path),
+      };
+      persistPendingSubmission(pendingSubmission, submissionSession);
     }
+    const submission = { ...pendingSubmission, attachmentPaths: [...(pendingSubmission.attachmentPaths || [])] };
     submitInFlight = true;
     try {
       closeDockMenu();
       playPetSend();
-      await sendWithDeliveryRecovery({ text: outboundText, clientMessageId: pendingSubmission.id });
-      if (promptInput.value === browserText) promptInput.value = '';
-      clearPendingAttachments();
-      pendingSubmission = null;
-      persistPendingSubmission();
-      persistPromptDraft();
-      autosize();
-      updateSendVisibility();
+      await sendWithDeliveryRecovery({ session: submission.session, text: submission.outboundText, clientMessageId: submission.id });
+      clearDeliveredPromptDraft(submission);
+      clearPendingSubmission(submission);
+      clearSubmittedAttachments(submission.attachmentPaths);
+      if (pendingSubmission?.id === submission.id) pendingSubmission = null;
+      if (selectedSession === submission.session) {
+        if (promptInput.value === submission.browserText) promptInput.value = '';
+        persistPromptDraft();
+        autosize();
+        updateSendVisibility();
+      }
       refreshStatus({ silent: true }).catch(handleBackgroundError);
       refreshCapture(currentCaptureLines(), { silent: true }).catch(handleBackgroundError);
       setTimeout(() => refreshCapture(currentCaptureLines(), { silent: true }).catch(handleBackgroundError), 500);
     } catch (err) {
       stopPetSend();
       updatePetControl();
-      persistPromptDraft();
-      persistPendingSubmission();
+      if (selectedSession === submission.session) persistPromptDraft();
+      preserveFailedPromptDraft(submission);
       setError(userErrorMessage(err));
     } finally {
       submitInFlight = false;

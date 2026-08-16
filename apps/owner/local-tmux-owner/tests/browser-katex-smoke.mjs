@@ -27,6 +27,9 @@ const recoveryTmuxSession = process.env.FARYO_SMOKE_TMUX_SESSION || '';
 const recoveryStartIndex = Number(process.env.FARYO_SMOKE_RECOVERY_START_INDEX || 0);
 const checkAmbiguousSend = process.env.FARYO_SMOKE_CHECK_AMBIGUOUS_SEND === '1';
 const ambiguousSendIndex = Number(process.env.FARYO_SMOKE_AMBIGUOUS_SEND_INDEX || 0);
+const checkSessionSendIsolation = process.env.FARYO_SMOKE_CHECK_SESSION_SEND_ISOLATION === '1';
+const isolationSessionA = process.env.FARYO_SMOKE_SESSION_A || '';
+const isolationSessionB = process.env.FARYO_SMOKE_SESSION_B || '';
 const expectSendFailure = process.env.FARYO_SMOKE_EXPECT_SEND_FAILURE === '1';
 const expectLive = process.env.FARYO_SMOKE_EXPECT_LIVE === '1';
 const expectLiveClears = process.env.FARYO_SMOKE_EXPECT_LIVE_CLEARS === '1';
@@ -184,6 +187,9 @@ if ([attachmentName, attachmentContent, attachmentPrompt, attachmentExpectedOutp
 }
 if (checkRecovery && (!recoveryTmuxSession || recoveryStartIndex < 1)) {
   throw new Error('Recovery smoke requires a tmux session and positive start index');
+}
+if (checkSessionSendIsolation && (!isolationSessionA || !isolationSessionB || !new URL(targetUrl).pathname.startsWith('/txy/'))) {
+  throw new Error('Session send isolation requires two sessions and a /txy/ URL');
 }
 
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -1436,6 +1442,133 @@ try {
       throw new Error(`Faryo ambiguous-send recovery failed: ${JSON.stringify(ambiguousState)}`);
     }
     console.log('faryo-browser-ambiguous-send-recovery=PASS duplicates=0 draft=cleared');
+  }
+
+  if (checkSessionSendIsolation) {
+    const sessionDraftKey = (session) => `faryoPromptDraft:/txy:${session}`;
+    const sessionPendingKey = (session) => `${sessionDraftKey(session)}:pending`;
+    const clearDraftStorage = `for (const key of Object.keys(sessionStorage)) if (key.startsWith('faryoPromptDraft:')) sessionStorage.removeItem(key);`;
+    const switchSessionExpression = (session) => `(() => {
+      const menu = document.getElementById('sessionMenu');
+      menu.innerHTML = '<button type="button" data-route="txy" data-session=${JSON.stringify(session)}>switch</button>';
+      menu.querySelector('button').click();
+    })()`;
+
+    const retryText = 'anonymous cross session retry';
+    await send('Runtime.evaluate', {
+      expression: `(() => {
+        ${clearDraftStorage}
+        const originalFetch = window.fetch.bind(window);
+        window.__faryoIsolationOriginalFetch = originalFetch;
+        window.__faryoIsolationFailedOnce = false;
+        window.fetch = async (...args) => {
+          const target = String(args[0]?.url || args[0] || '');
+          if (!window.__faryoIsolationFailedOnce && target.includes('/api/send')) {
+            window.__faryoIsolationFailedOnce = true;
+            throw new TypeError('anonymous pre-dispatch failure');
+          }
+          return originalFetch(...args);
+        };
+        const input = document.getElementById('promptInput');
+        input.value = ${JSON.stringify(retryText)};
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+        document.getElementById('sendBtn').click();
+        setTimeout(() => ${switchSessionExpression(isolationSessionB)}, 50);
+      })()`,
+    });
+
+    let retryState = {};
+    for (let attempt = 0; attempt < 160; attempt += 1) {
+      await delay(100);
+      const result = await send('Runtime.evaluate', {
+        expression: `(() => ({
+          failedOnce: Boolean(window.__faryoIsolationFailedOnce),
+          session: new URLSearchParams(location.search).get('session') || '',
+          currentInput: document.getElementById('promptInput')?.value || '',
+          aDraft: sessionStorage.getItem(${JSON.stringify(sessionDraftKey(isolationSessionA))}),
+          aPending: sessionStorage.getItem(${JSON.stringify(sessionPendingKey(isolationSessionA))}),
+          bDraft: sessionStorage.getItem(${JSON.stringify(sessionDraftKey(isolationSessionB))}),
+          error: document.getElementById('errorBox')?.innerText || '',
+        }))()`,
+        returnByValue: true,
+      });
+      retryState = result.result?.value || {};
+      if (retryState.failedOnce && retryState.session === isolationSessionB && retryState.aDraft === null && retryState.aPending === null) break;
+    }
+    await send('Runtime.evaluate', { expression: 'if (window.__faryoIsolationOriginalFetch) window.fetch = window.__faryoIsolationOriginalFetch' });
+    if (!retryState.failedOnce || retryState.session !== isolationSessionB || retryState.aDraft !== null || retryState.aPending !== null || retryState.bDraft !== null || retryState.error) {
+      throw new Error(`Faryo retry changed session state: ${JSON.stringify(retryState)}`);
+    }
+
+    await send('Page.navigate', { url: targetUrl });
+    let reloaded = false;
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      await delay(100);
+      const result = await send('Runtime.evaluate', {
+        expression: `document.documentElement.dataset.faryoAppReady === '1'`,
+        returnByValue: true,
+      });
+      reloaded = Boolean(result.result?.value);
+      if (reloaded) break;
+    }
+    if (!reloaded) throw new Error('Faryo did not reload for delayed-response isolation');
+
+    const sameText = 'anonymous same text independent draft';
+    await send('Runtime.evaluate', {
+      expression: `(() => {
+        ${clearDraftStorage}
+        sessionStorage.setItem(${JSON.stringify(sessionDraftKey(isolationSessionB))}, ${JSON.stringify(sameText)});
+        const originalFetch = window.fetch.bind(window);
+        window.__faryoIsolationOriginalFetch = originalFetch;
+        window.__faryoIsolationHeld = false;
+        window.fetch = async (...args) => {
+          const target = String(args[0]?.url || args[0] || '');
+          const response = await originalFetch(...args);
+          if (!window.__faryoIsolationHeld && target.includes('/api/send')) {
+            window.__faryoIsolationHeld = true;
+            await new Promise((resolve) => { window.__faryoIsolationRelease = resolve; });
+          }
+          return response;
+        };
+        const input = document.getElementById('promptInput');
+        input.value = ${JSON.stringify(sameText)};
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+        document.getElementById('sendBtn').click();
+      })()`,
+    });
+    let held = false;
+    for (let attempt = 0; attempt < 120; attempt += 1) {
+      await delay(100);
+      const result = await send('Runtime.evaluate', { expression: 'window.__faryoIsolationHeld === true', returnByValue: true });
+      held = Boolean(result.result?.value);
+      if (held) break;
+    }
+    if (!held) throw new Error('Faryo accepted response could not be held for session isolation');
+    await send('Runtime.evaluate', { expression: `${switchSessionExpression(isolationSessionB)}; window.__faryoIsolationRelease();` });
+
+    let delayedState = {};
+    for (let attempt = 0; attempt < 120; attempt += 1) {
+      await delay(100);
+      const result = await send('Runtime.evaluate', {
+        expression: `(() => ({
+          session: new URLSearchParams(location.search).get('session') || '',
+          currentInput: document.getElementById('promptInput')?.value || '',
+          aDraft: sessionStorage.getItem(${JSON.stringify(sessionDraftKey(isolationSessionA))}),
+          aPending: sessionStorage.getItem(${JSON.stringify(sessionPendingKey(isolationSessionA))}),
+          bDraft: sessionStorage.getItem(${JSON.stringify(sessionDraftKey(isolationSessionB))}),
+          bPending: sessionStorage.getItem(${JSON.stringify(sessionPendingKey(isolationSessionB))}),
+          error: document.getElementById('errorBox')?.innerText || '',
+        }))()`,
+        returnByValue: true,
+      });
+      delayedState = result.result?.value || {};
+      if (delayedState.session === isolationSessionB && delayedState.aDraft === null && delayedState.aPending === null) break;
+    }
+    await send('Runtime.evaluate', { expression: 'if (window.__faryoIsolationOriginalFetch) window.fetch = window.__faryoIsolationOriginalFetch' });
+    if (delayedState.session !== isolationSessionB || delayedState.currentInput !== sameText || delayedState.aDraft !== null || delayedState.aPending !== null || delayedState.bDraft !== sameText || delayedState.bPending !== null || delayedState.error) {
+      throw new Error(`Faryo delayed response changed another session: ${JSON.stringify(delayedState)}`);
+    }
+    console.log('faryo-browser-session-send-isolation=PASS retry=original-session delayed-response=isolated');
   }
 
   if (sendText) {

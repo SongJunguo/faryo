@@ -73,17 +73,19 @@ switches and highlighter revisions; it is never persisted to browser storage.
 Live tmux remains outside that frozen history and restores its own scroll
 snapshot before the next paint.
 
-Owner does not resize tmux or the Codex/Claude TUI. Browser sends retain the
-client message id, confirmed submit delivery, idempotent retries, draft
-preservation on failure, and conflict response when a different desktop draft
-already occupies the TUI composer. For Codex, the Owner recognizes both the
-idle `›` and working `»` composer prompts. It sends `Enter` while idle and,
-following the Codex CLI interaction contract, sends `Tab` while Codex is
-working so the web message becomes an explicit next-turn follow-up (see the
-[official interactive shortcuts](https://learn.chatgpt.com/docs/developer-commands?surface=cli#interactive-shortcuts)). Acceptance
-is confirmed when the exact text leaves the active composer, appears in the
-queued-follow-up panel, or reaches the rollout JSONL; delayed MCP startup no
-longer becomes a false HTTP 504.
+Owner does not resize tmux or the Codex/Claude TUI. Browser sends retain an
+immutable target session and client message id across timeout recovery,
+confirmed submit delivery, idempotent retries, draft preservation on failure,
+and conflict response when a different desktop draft already occupies the TUI
+composer. Sends are serialized per tmux session, not globally, so a delayed
+confirmation in one session does not block another session. For Codex, the
+Owner recognizes both the idle `›` and working `»` composer prompts. It sends
+`Enter` while idle and, following the Codex CLI interaction contract, sends
+`Tab` while Codex is working so the web message becomes an explicit next-turn
+follow-up (see the [official interactive shortcuts](https://learn.chatgpt.com/docs/developer-commands?surface=cli#interactive-shortcuts)).
+An idle Enter may be confirmed when the exact text leaves the active composer.
+A working Tab requires a new exact queued-follow-up occurrence or a new exact
+rollout user event; an old identical queue item is not sufficient evidence.
 
 Rebuild and test the committed browser bundle from the repository root with:
 
@@ -141,6 +143,16 @@ FARYO_DELIVERY_PYTHON=/path/to/project/python \
   apps/owner/local-tmux-owner/tests/browser-delivery-matrix.sh
 ```
 
+The mobile-width cross-session regression holds retries and accepted responses
+while the page switches between two anonymous sessions. It verifies that the
+fixed original target receives both messages, the other session receives none,
+same-text drafts stay isolated, and neither temporary tmux window is resized:
+
+```bash
+FARYO_DELIVERY_PYTHON=/path/to/project/python \
+  apps/owner/local-tmux-owner/tests/browser-session-send-isolation.sh
+```
+
 Persistent send receipts can be verified across a real Owner process restart
 without writing to an existing conversation:
 
@@ -149,8 +161,11 @@ FARYO_RESTART_PYTHON=/path/to/project/python \
   apps/owner/local-tmux-owner/tests/send-restart-idempotency.sh
 ```
 
-The receipt contains only the client message ID, session, digest, status and
-timestamp. It does not store the message body.
+Version 2 delivery records contain only the client message ID, session, digest,
+status and timestamp. An accepted record adds its receipt. A pasted checkpoint
+may add the pre-submit queue count and rollout device/inode/offset needed for
+safe restart recovery. Records contain neither the message body nor the rollout
+path; their directory is `0700` and each file is `0600`.
 
 Set `FARYO_DELIVERY_URL_TEMPLATE` with a literal `{session}` placeholder to run
 the same non-attachment matrix against an already deployed Owner. The URL is

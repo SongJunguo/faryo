@@ -2,6 +2,8 @@ import json
 import stat
 import sys
 import tempfile
+import threading
+import time
 import unittest
 from http import HTTPStatus
 from pathlib import Path
@@ -19,6 +21,8 @@ class SendDeliveryTest(unittest.TestCase):
     def setUp(self):
         self.config = server.Config("codex-send-test", "token", 145)
         server._send_deliveries.clear()
+        server._send_session_locks.clear()
+        server._send_message_locks.clear()
         self.delivery_temp = tempfile.TemporaryDirectory()
         self.original_delivery_root = server.SEND_DELIVERY_ROOT
         server.SEND_DELIVERY_ROOT = Path(self.delivery_temp.name) / "send-deliveries"
@@ -27,6 +31,8 @@ class SendDeliveryTest(unittest.TestCase):
 
     def tearDown(self):
         server._send_deliveries.clear()
+        server._send_session_locks.clear()
+        server._send_message_locks.clear()
         server.SEND_DELIVERY_ROOT = self.original_delivery_root
         server._send_delivery_cleanup_at = 0.0
         self.delivery_temp.cleanup()
@@ -103,6 +109,8 @@ class SendDeliveryTest(unittest.TestCase):
             self.assertEqual("Tab", server.codex_submission_key(self.config))
         with mock.patch.object(server, "tmux_current_capture", return_value="• Working (1s • esc to interrupt)\n» follow up"):
             self.assertEqual("Tab", server.codex_submission_key(self.config))
+        with mock.patch.object(server, "tmux_current_capture", return_value="• Worked for 2s (esc to interrupt)\n› idle prompt"):
+            self.assertEqual("Enter", server.codex_submission_key(self.config))
 
     def test_wait_for_submission_accepts_cleared_active_composer_while_working(self):
         capture = "\n".join((
@@ -129,6 +137,49 @@ class SendDeliveryTest(unittest.TestCase):
             mock.patch.object(server, "tmux_current_capture", return_value=capture),
         ):
             state = server.wait_for_codex_submission(self.config, "keep working, then answer this followup", timeout=0.1)
+
+        self.assertEqual("queued", state)
+
+    def test_existing_identical_queue_does_not_confirm_active_composer_copy(self):
+        capture = "\n".join((
+            "• Queued follow-up inputs",
+            "  ↳ repeat exactly",
+            "» repeat exactly",
+            "  tab to queue message",
+        ))
+        with (
+            mock.patch.object(server, "codex_rollout_has_user_message", return_value=False),
+            mock.patch.object(server, "tmux_current_capture", return_value=capture),
+        ):
+            state = server.wait_for_codex_submission(
+                self.config,
+                "repeat exactly",
+                timeout=0.01,
+                queued_baseline=1,
+                allow_composer_disappearance=False,
+            )
+
+        self.assertIsNone(state)
+        self.assertEqual(1, server.codex_queued_followup_count(capture, "repeat exactly"))
+
+    def test_identical_queue_requires_count_increase(self):
+        capture = "\n".join((
+            "• Queued follow-up inputs",
+            "  ↳ repeat exactly",
+            "  ↳ repeat exactly",
+            "» Improve documentation in @filename",
+        ))
+        with (
+            mock.patch.object(server, "codex_rollout_has_user_message", return_value=False),
+            mock.patch.object(server, "tmux_current_capture", return_value=capture),
+        ):
+            state = server.wait_for_codex_submission(
+                self.config,
+                "repeat exactly",
+                timeout=0.1,
+                queued_baseline=1,
+                allow_composer_disappearance=False,
+            )
 
         self.assertEqual("queued", state)
 
@@ -164,6 +215,161 @@ class SendDeliveryTest(unittest.TestCase):
         self.assertEqual(1, len(paste_calls))
         self.assertEqual("accepted", receipt["delivery"])
         self.assertEqual(1, receipt["enterAttempts"])
+
+    def test_retry_without_rollout_or_new_queue_evidence_stays_ambiguous(self):
+        delivery_id = "web-ambiguous-retry"
+        text = "lost draft"
+        server._send_deliveries[delivery_id] = {
+            "session": self.config.session,
+            "digest": server.hashlib.sha256(text.encode("utf-8")).hexdigest(),
+            "status": "pasted",
+            "pasteReady": True,
+            "queuedBaseline": 0,
+            "updatedAt": time.monotonic(),
+        }
+        with (
+            mock.patch.object(server, "has_session", return_value=True),
+            mock.patch.object(server, "agent_profile_in_pane", return_value=server.CODEX_PROFILE),
+            mock.patch.object(server, "codex_rollout_submission_probe", return_value=None),
+            mock.patch.object(server, "codex_composer_contains_text", return_value=False),
+            mock.patch.object(server, "wait_for_codex_submission", return_value=None),
+            mock.patch.object(server, "tmux", return_value=self.completed) as tmux,
+        ):
+            with self.assertRaises(server.OwnerError) as raised:
+                server.send_text(self.config, text, delivery_id)
+
+        self.assertEqual(HTTPStatus.GATEWAY_TIMEOUT, raised.exception.status)
+        self.assertNotIn("receipt", server._send_deliveries[delivery_id])
+        self.assertFalse(any(call.args[1] and call.args[1][0] == "send-keys" for call in tmux.call_args_list))
+
+    def test_pasted_state_survives_memory_clear_without_message_body(self):
+        delivery_id = "web-pasted-restart"
+        state = {
+            "session": self.config.session,
+            "digest": "1" * 64,
+            "status": "pasted",
+            "pasteReady": True,
+            "queuedBaseline": 2,
+            "rolloutDevice": 10,
+            "rolloutInode": 20,
+            "rolloutOffset": 30,
+        }
+
+        server.remember_pasted_send_delivery(delivery_id, state)
+        server._send_deliveries.clear()
+        loaded = server.load_persisted_send_delivery(delivery_id)
+
+        self.assertEqual("pasted", loaded["status"])
+        self.assertEqual(2, loaded["queuedBaseline"])
+        self.assertEqual(30, loaded["rolloutOffset"])
+        record = server.send_delivery_record_path(delivery_id)
+        self.assertEqual(stat.S_IMODE(record.stat().st_mode), 0o600)
+        self.assertNotIn("lost draft", record.read_text(encoding="utf-8"))
+
+    def test_different_sessions_do_not_share_the_long_delivery_lock(self):
+        config_a = server.Config("codex-send-a", "token", 0)
+        config_b = server.Config("codex-send-b", "token", 0)
+        delivery_a = "web-concurrent-a"
+        delivery_b = "web-concurrent-b"
+        entered_a = threading.Event()
+        release_a = threading.Event()
+        entered_b = threading.Event()
+        errors = []
+
+        def confirmation(config, _text, **_kwargs):
+            if config.session == config_a.session:
+                entered_a.set()
+                release_a.wait(2)
+            else:
+                entered_b.set()
+            return "submitted"
+
+        def worker(config, text, delivery_id):
+            try:
+                server.send_text(config, text, delivery_id)
+            except Exception as exc:  # pragma: no cover - asserted below
+                errors.append(exc)
+
+        with (
+            mock.patch.object(server, "has_session", return_value=True),
+            mock.patch.object(server, "agent_profile_in_pane", return_value=server.CODEX_PROFILE),
+            mock.patch.object(server, "codex_composer_has_draft", return_value=False),
+            mock.patch.object(server, "codex_rollout_submission_probe", return_value=None),
+            mock.patch.object(server, "tmux_capture_compact", return_value="baseline"),
+            mock.patch.object(server, "tmux_current_capture", return_value="› placeholder"),
+            mock.patch.object(server, "tmux_cursor_position", return_value=(2, 20)),
+            mock.patch.object(server, "wait_for_paste_tail", return_value=True),
+            mock.patch.object(server, "codex_submission_key", return_value="Enter"),
+            mock.patch.object(server, "wait_for_codex_submission", side_effect=confirmation),
+            mock.patch.object(server, "tmux", return_value=self.completed),
+        ):
+            thread_a = threading.Thread(target=worker, args=(config_a, "message a", delivery_a))
+            thread_b = threading.Thread(target=worker, args=(config_b, "message b", delivery_b))
+            thread_a.start()
+            self.assertTrue(entered_a.wait(1))
+            thread_b.start()
+            self.assertTrue(entered_b.wait(1), "session B was blocked by session A")
+            release_a.set()
+            thread_a.join(2)
+            thread_b.join(2)
+
+        self.assertFalse(thread_a.is_alive())
+        self.assertFalse(thread_b.is_alive())
+        self.assertEqual([], errors)
+        self.assertEqual({}, server._send_session_locks)
+        self.assertEqual({}, server._send_message_locks)
+
+    def test_same_message_id_across_sessions_serializes_then_conflicts(self):
+        config_a = server.Config("codex-same-id-a", "token", 0)
+        config_b = server.Config("codex-same-id-b", "token", 0)
+        delivery_id = "web-same-id"
+        entered_a = threading.Event()
+        release_a = threading.Event()
+        errors = []
+
+        def confirmation(config, _text, **_kwargs):
+            if config.session == config_a.session:
+                entered_a.set()
+                release_a.wait(2)
+            return "submitted"
+
+        def worker(config):
+            try:
+                server.send_text(config, "same content", delivery_id)
+            except Exception as exc:  # pragma: no cover - asserted below
+                errors.append(exc)
+
+        with (
+            mock.patch.object(server, "has_session", return_value=True),
+            mock.patch.object(server, "agent_profile_in_pane", return_value=server.CODEX_PROFILE),
+            mock.patch.object(server, "codex_composer_has_draft", return_value=False),
+            mock.patch.object(server, "codex_rollout_submission_probe", return_value=None),
+            mock.patch.object(server, "tmux_capture_compact", return_value="baseline"),
+            mock.patch.object(server, "tmux_current_capture", return_value="› placeholder"),
+            mock.patch.object(server, "tmux_cursor_position", return_value=(2, 20)),
+            mock.patch.object(server, "wait_for_paste_tail", return_value=True),
+            mock.patch.object(server, "codex_submission_key", return_value="Enter"),
+            mock.patch.object(server, "wait_for_codex_submission", side_effect=confirmation),
+            mock.patch.object(server, "tmux", return_value=self.completed),
+        ):
+            thread_a = threading.Thread(target=worker, args=(config_a,))
+            thread_b = threading.Thread(target=worker, args=(config_b,))
+            thread_a.start()
+            self.assertTrue(entered_a.wait(1))
+            thread_b.start()
+            time.sleep(0.05)
+            self.assertTrue(thread_b.is_alive(), "same message id was not serialized")
+            release_a.set()
+            thread_a.join(2)
+            thread_b.join(2)
+
+        self.assertFalse(thread_a.is_alive())
+        self.assertFalse(thread_b.is_alive())
+        self.assertEqual(1, len(errors))
+        self.assertIsInstance(errors[0], server.OwnerError)
+        self.assertEqual(HTTPStatus.CONFLICT, errors[0].status)
+        self.assertEqual({}, server._send_session_locks)
+        self.assertEqual({}, server._send_message_locks)
 
     def test_accepted_client_message_id_is_idempotent(self):
         patches = self.send_patches()
