@@ -4,7 +4,7 @@
 
 状态：维护加固完成（2026-08-18）
 
-开发分支：`feature/deepseek-inspired-ui`
+当前主分支：`main`（原实施分支 `feature/deepseek-inspired-ui` 已于 2026-08-19 提升）
 
 计划索引：[`README.md`](README.md)
 

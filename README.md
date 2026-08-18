@@ -13,7 +13,7 @@ an unreleased, deployed Codex-focused workbench branch.
 
 - Upstream project: https://github.com/Snailflyer/faryo
 - Personal fork: https://github.com/SongJunguo/faryo
-- Current fork branch: `feature/deepseek-inspired-ui`
+- Current fork branch: `main`
 
 ## Visual Proof
 
@@ -98,7 +98,7 @@ curl --noproxy '*' http://127.0.0.1:8765/health
 ```
 
 Those package commands install the upstream release. To use the current fork
-features, deploy the `feature/deepseek-inspired-ui` source branch and follow the
+features, deploy the personal fork's `main` source branch and follow the
 [Owner](apps/owner/README.md) and [Gateway](apps/gateway/README.md) component
 guides.
 
@@ -284,7 +284,7 @@ feel fast enough to open, inspect, dictate a command, attach context, and leave.
 
 ## Current Fork Validation
 
-The deployed `feature/deepseek-inspired-ui` branch was revalidated on
+The deployed personal-fork `main` branch was revalidated on
 2026-08-19 with privacy-safe fixtures:
 
 - Release checks plus 56 Owner and 44 Gateway Python tests pass.

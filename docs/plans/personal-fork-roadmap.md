@@ -4,7 +4,7 @@
 
 更新时间：2026-08-15
 
-当前分支：`feature/deepseek-inspired-ui`
+当前主分支：`main`（原实施分支 `feature/deepseek-inspired-ui` 已于 2026-08-19 提升）
 
 个人仓库：`origin`（`SongJunguo/faryo`）
 

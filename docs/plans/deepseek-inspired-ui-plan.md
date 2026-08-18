@@ -6,7 +6,7 @@
 
 状态：已完成，进入日常维护
 
-开发分支：`feature/deepseek-inspired-ui`
+当前主分支：`main`（本计划原实施分支 `feature/deepseek-inspired-ui` 已于 2026-08-19 提升）
 
 稳定基线：`66f8d7e84040be0e9434c426de21a03288a2f74c`
 
