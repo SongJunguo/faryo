@@ -506,7 +506,8 @@ try {
             markerCount: questionMarkers.length,
             current: String(document.getElementById('questionNavCurrent')?.textContent || ''),
             total: String(document.getElementById('questionNavTotal')?.textContent || ''),
-            visible: Boolean(questionNavigator && !questionNavigator.classList.contains('hidden') && questionNavigator.getClientRects().length),
+            available: Boolean(questionNavigator && !questionNavigator.classList.contains('hidden') && questionNavigator.getClientRects().length),
+            shown: Boolean(questionNavigator && Number.parseFloat(getComputedStyle(questionNavigator).opacity) > 0.5),
             clearsOutput: Boolean(questionNavigator && output
               && questionNavigator.getBoundingClientRect().left >= output.getBoundingClientRect().right - 1),
           },
@@ -588,8 +589,9 @@ try {
   if (state.rawMemoryTagCount) {
     throw new Error(`Internal memory citation markup remained visible in ${state.rawMemoryTagCount} text nodes`);
   }
-  if (minQuestionMarkers > 0 && (!state.questionNavigation?.visible
+  if (minQuestionMarkers > 0 && (!state.questionNavigation?.available
     || !state.questionNavigation?.clearsOutput
+    || state.questionNavigation?.shown
     || Number(state.questionNavigation?.total || 0) < minQuestionMarkers)) {
     throw new Error(`Question navigator did not match the structured history: ${JSON.stringify(state.questionNavigation)}`);
   }
@@ -976,7 +978,8 @@ try {
             markerCount: markers.length,
             current: document.getElementById('questionNavCurrent')?.textContent || '',
             total: document.getElementById('questionNavTotal')?.textContent || '',
-            visible: Boolean(navigator && !navigator.classList.contains('hidden') && navigator.getClientRects().length),
+            available: Boolean(navigator && !navigator.classList.contains('hidden') && navigator.getClientRects().length),
+            shown: Boolean(navigator && Number.parseFloat(getComputedStyle(navigator).opacity) > 0.5),
             moduleReady: typeof window.FaryoQuestionNavigator?.createController === 'function',
             pageHorizontalOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth + 1,
             clearsOutput: Boolean(navRect && outputRect && navRect.left >= outputRect.right - 1),
@@ -989,9 +992,33 @@ try {
       if (initial.markerCount === 12 && initial.current === '1') break;
     }
     if (initial.markerCount !== 12 || initial.total !== '12' || initial.current !== '1'
-      || !initial.visible || !initial.moduleReady || !initial.scrollable
+      || !initial.available || initial.shown || !initial.moduleReady || !initial.scrollable
       || initial.pageHorizontalOverflow || !initial.clearsOutput) {
       throw new Error(`Question navigator initial state failed: ${JSON.stringify(initial)}`);
+    }
+
+    await send('Runtime.evaluate', {
+      expression: `document.getElementById('outputWrap')?.dispatchEvent(new WheelEvent('wheel', { deltaY: 240, bubbles: true }))`,
+    });
+    let revealed = {};
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      await delay(30);
+      const result = await send('Runtime.evaluate', {
+        expression: `(() => {
+          const navigator = document.getElementById('questionNavigator');
+          return {
+            shown: Boolean(navigator && Number.parseFloat(getComputedStyle(navigator).opacity) > 0.5),
+            interactive: getComputedStyle(navigator).pointerEvents !== 'none',
+            scrollingClass: Boolean(navigator?.classList.contains('is-scrolling')),
+          };
+        })()`,
+        returnByValue: true,
+      });
+      revealed = result.result?.value || {};
+      if (revealed.shown) break;
+    }
+    if (!revealed.shown || !revealed.interactive || !revealed.scrollingClass) {
+      throw new Error(`Question navigator did not reveal for fast scrolling: ${JSON.stringify(revealed)}`);
     }
 
     await send('Runtime.evaluate', {
@@ -1166,7 +1193,23 @@ try {
       await writeFile(questionNavScreenshotPath, Buffer.from(screenshot.data, 'base64'));
       console.log(`faryo-browser-question-navigator-screenshot=${questionNavScreenshotPath}`);
     }
-    console.log('faryo-browser-question-navigator=PASS questions=13 jump=8 live-append=preserved latest=13');
+    await send('Runtime.evaluate', { expression: `document.activeElement?.blur()` });
+    await delay(1500);
+    const hiddenResult = await send('Runtime.evaluate', {
+      expression: `(() => {
+        const navigator = document.getElementById('questionNavigator');
+        return {
+          shown: Boolean(navigator && Number.parseFloat(getComputedStyle(navigator).opacity) > 0.05),
+          interactive: getComputedStyle(navigator).pointerEvents !== 'none',
+        };
+      })()`,
+      returnByValue: true,
+    });
+    const hiddenState = hiddenResult.result?.value || {};
+    if (hiddenState.shown || hiddenState.interactive) {
+      throw new Error(`Question navigator did not auto-hide: ${JSON.stringify(hiddenState)}`);
+    }
+    console.log('faryo-browser-question-navigator=PASS questions=13 reveal=fast-scroll auto-hide=PASS jump=8 live-append=preserved latest=13');
   }
 
   if (checkLiveScroll) {

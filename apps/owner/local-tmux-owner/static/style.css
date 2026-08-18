@@ -642,18 +642,22 @@ html[data-faryo-ui="workbench-v2"] .bottom-btn {
   border-radius: 13px;
   background: color-mix(in srgb, var(--panel) 80%, transparent);
   box-shadow: 0 8px 26px rgba(0, 0, 0, .11);
-  opacity: .5;
-  transform: translateY(-50%);
+  opacity: 0;
+  pointer-events: none;
+  transform: translate(7px, -50%);
   transition: opacity .16s ease, border-color .16s ease, background .16s ease;
   backdrop-filter: blur(14px) saturate(1.08);
 }
 
 .question-navigator:hover,
 .question-navigator:focus-within,
-.question-navigator.is-scrolling {
+.question-navigator.is-scrolling,
+.question-navigator.is-interacting {
   border-color: color-mix(in srgb, var(--accent) 34%, var(--owner-hairline));
   background: color-mix(in srgb, var(--panel) 94%, transparent);
   opacity: 1;
+  pointer-events: auto;
+  transform: translate(0, -50%);
 }
 
 .question-nav-count {

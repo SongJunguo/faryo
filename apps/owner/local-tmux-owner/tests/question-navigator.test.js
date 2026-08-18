@@ -16,4 +16,8 @@ assert.equal(navigator.targetScrollTop(400, 500, 100, 20, 2000), 780);
 assert.equal(navigator.targetScrollTop(20, 10, 100, 20, 2000), 0);
 assert.equal(navigator.targetScrollTop(1900, 700, 100, 20, 2000), 2000);
 
+assert.equal(navigator.shouldRevealForScroll(4, 16), false);
+assert.equal(navigator.shouldRevealForScroll(14, 20), true);
+assert.equal(navigator.shouldRevealForScroll(60, 500), true);
+
 console.log('question navigator tests passed');

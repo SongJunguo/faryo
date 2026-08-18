@@ -37,6 +37,12 @@
     return Math.max(0, Math.min(requested, Math.max(0, Number(maximum || 0))));
   }
 
+  function shouldRevealForScroll(delta, elapsedMs) {
+    const distance = Math.abs(Number(delta) || 0);
+    const elapsed = Math.max(1, Number(elapsedMs) || 0);
+    return distance >= 48 || (distance >= 12 && distance / elapsed >= 0.45);
+  }
+
   function createController(options = {}) {
     const view = options.view || root;
     const navigator = options.navigator;
@@ -58,6 +64,9 @@
     let scrollingTimer = 0;
     let flashTimer = 0;
     let flashTarget = null;
+    let userScrollIntentUntil = 0;
+    let lastScrollTop = Number(scroller.scrollTop || 0);
+    let lastScrollAt = Number(view.performance?.now?.() || Date.now());
 
     const requestFrame = typeof view.requestAnimationFrame === 'function'
       ? view.requestAnimationFrame.bind(view)
@@ -67,6 +76,7 @@
       : view.clearTimeout.bind(view);
 
     function hidePreview() {
+      navigator.classList.remove('is-interacting');
       if (!preview) return;
       preview.classList.remove('visible');
       preview.setAttribute('aria-hidden', 'true');
@@ -82,6 +92,7 @@
       preview.style.right = `${Math.max(8, Number(view.innerWidth || 0) - rect.left + 8)}px`;
       preview.classList.add('visible');
       preview.setAttribute('aria-hidden', 'false');
+      navigator.classList.add('is-interacting');
     }
 
     function keepMarkerVisible(button) {
@@ -125,10 +136,26 @@
       updateFrame = requestFrame(updateActive);
     }
 
-    function noteScrolling() {
+    function revealTemporarily() {
       navigator.classList.add('is-scrolling');
       if (scrollingTimer) view.clearTimeout(scrollingTimer);
-      scrollingTimer = view.setTimeout(() => navigator.classList.remove('is-scrolling'), 850);
+      scrollingTimer = view.setTimeout(() => navigator.classList.remove('is-scrolling'), 1400);
+    }
+
+    function markUserScrollIntent(event) {
+      const now = Number(view.performance?.now?.() || Date.now());
+      userScrollIntentUntil = now + 500;
+      if (event.type === 'wheel' && Math.abs(Number(event.deltaY || 0)) >= 48) revealTemporarily();
+    }
+
+    function noteScrolling() {
+      const now = Number(view.performance?.now?.() || Date.now());
+      const nextScrollTop = Number(scroller.scrollTop || 0);
+      const delta = nextScrollTop - lastScrollTop;
+      const elapsed = now - lastScrollAt;
+      if (now <= userScrollIntentUntil && shouldRevealForScroll(delta, elapsed)) revealTemporarily();
+      lastScrollTop = nextScrollTop;
+      lastScrollAt = now;
       scheduleActiveUpdate();
     }
 
@@ -137,10 +164,16 @@
       active = -1;
       markers.replaceChildren();
       navigator.classList.add('hidden');
+      navigator.classList.remove('is-scrolling', 'is-interacting');
       navigator.setAttribute('aria-hidden', 'true');
       scroller.classList.remove('question-navigation-visible');
       if (current) current.textContent = '0';
       if (total) total.textContent = '0';
+      if (scrollingTimer) view.clearTimeout(scrollingTimer);
+      scrollingTimer = 0;
+      userScrollIntentUntil = 0;
+      lastScrollTop = Number(scroller.scrollTop || 0);
+      lastScrollAt = Number(view.performance?.now?.() || Date.now());
       hidePreview();
     }
 
@@ -195,6 +228,7 @@
     function jumpTo(index) {
       const target = targets[index];
       if (!target) return false;
+      revealTemporarily();
       const scrollerRect = scroller.getBoundingClientRect();
       const targetRect = target.getBoundingClientRect();
       const maximum = Math.max(0, scroller.scrollHeight - scroller.clientHeight);
@@ -276,6 +310,10 @@
     markers.addEventListener('blur', onFocusOut, true);
     markers.addEventListener('keydown', onKeyDown);
     scroller.addEventListener('scroll', noteScrolling, { passive: true });
+    scroller.addEventListener('wheel', markUserScrollIntent, { passive: true });
+    scroller.addEventListener('touchstart', markUserScrollIntent, { passive: true });
+    scroller.addEventListener('touchmove', markUserScrollIntent, { passive: true });
+    scroller.addEventListener('pointerdown', markUserScrollIntent, { passive: true });
     view.addEventListener('resize', scheduleActiveUpdate);
     const observer = typeof view.MutationObserver === 'function'
       ? new view.MutationObserver(scheduleSync)
@@ -291,6 +329,10 @@
       markers.removeEventListener('blur', onFocusOut, true);
       markers.removeEventListener('keydown', onKeyDown);
       scroller.removeEventListener('scroll', noteScrolling);
+      scroller.removeEventListener('wheel', markUserScrollIntent);
+      scroller.removeEventListener('touchstart', markUserScrollIntent);
+      scroller.removeEventListener('touchmove', markUserScrollIntent);
+      scroller.removeEventListener('pointerdown', markUserScrollIntent);
       view.removeEventListener('resize', scheduleActiveUpdate);
       if (updateFrame) cancelFrame(updateFrame);
       if (syncFrame) cancelFrame(syncFrame);
@@ -302,5 +344,5 @@
     return Object.freeze({ sync, reset, destroy, jumpTo, updateActive, get activeIndex() { return active; } });
   }
 
-  return Object.freeze({ version: '1', previewText, activeIndex, targetScrollTop, createController });
+  return Object.freeze({ version: '2', previewText, activeIndex, targetScrollTop, shouldRevealForScroll, createController });
 });
