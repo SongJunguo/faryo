@@ -9,7 +9,7 @@
   <meta name="theme-color" content="#0F1115" media="(prefers-color-scheme: dark)" />
   <script src="appearance.js?v=faryo-appearance-3"></script>
   <link rel="stylesheet" href="appearance.css?v=faryo-appearance-2" />
-  <link rel="stylesheet" href="style.css?v=faryo-owner-workbench-7" />
+  <link rel="stylesheet" href="style.css?v=faryo-owner-workbench-8" />
   <link rel="stylesheet" href="vendor/katex/katex.min.css?v=0.18.4" />
 </head>
 <body>
@@ -124,14 +124,20 @@
       </div>
     </footer>
   </div>
+  <nav id="questionNavigator" class="question-navigator hidden" aria-label="Jump between questions" aria-hidden="true">
+    <span class="question-nav-count" aria-hidden="true"><span id="questionNavCurrent">0</span>/<span id="questionNavTotal">0</span></span>
+    <div id="questionNavMarkers" class="question-nav-markers"></div>
+  </nav>
+  <div id="questionNavPreview" class="question-nav-preview" aria-hidden="true"></div>
   <script src="vendor/markdown-ast/markdown-ast.min.js?v=faryo-markdown-ast-2"></script>
   <script src="internal-annotations.js?v=faryo-internal-annotations-1"></script>
   <script src="event-stream.js?v=faryo-event-stream-1"></script>
   <script src="stable-blocks.js?v=faryo-stable-blocks-1"></script>
+  <script src="question-navigator.js?v=faryo-question-navigator-1"></script>
   <script type="module" src="vendor/markdown-ast/highlight/highlight.js?v=faryo-shiki-1"></script>
   <script src="compact-rules-codex.js?v=faryo-owner-plan-2"></script>
   <script src="compact-rules-claude.js?v=faryo-owner-compact-claude-8"></script>
   <script src="live-scroll.js?v=faryo-owner-live-scroll-2"></script>
-  <script src="app.js?v=faryo-owner-workbench-9"></script>
+  <script src="app.js?v=faryo-owner-workbench-10"></script>
 </body>
 </html>

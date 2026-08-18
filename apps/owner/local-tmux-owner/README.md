@@ -81,6 +81,13 @@ switches and highlighter revisions; it is never persisted to browser storage.
 Live tmux remains outside that frozen history and restores its own scroll
 snapshot before the next paint.
 
+When at least two structured user turns are visible, a compact question rail
+appears at the right edge. Each marker is derived from an existing stable user
+block, carries an accessible truncated label, and jumps within the browser's
+conversation scroller only. The active marker follows manual scrolling; a live
+append reuses existing markers and does not move the reading position. The rail
+is hidden in Raw mode and stores neither question text nor navigation state.
+
 Owner does not resize tmux or the Codex/Claude TUI. Browser sends retain an
 immutable target session and client message id across timeout recovery,
 confirmed submit delivery, idempotent retries, draft preservation on failure,

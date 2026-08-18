@@ -59,6 +59,7 @@ release_checks() {
     "$ROOT/apps/owner/local-tmux-owner/static/internal-annotations.js" \
     "$ROOT/apps/owner/local-tmux-owner/static/local-file-view.js" \
     "$ROOT/apps/owner/local-tmux-owner/static/stable-blocks.js" \
+    "$ROOT/apps/owner/local-tmux-owner/static/question-navigator.js" \
     "$ROOT/apps/owner/local-tmux-owner/static/vendor/markdown-ast/markdown-ast.min.js" \
     "$ROOT/apps/owner/local-tmux-owner/static/live-scroll.js" \
     "$ROOT/apps/shared/static/appearance.js" \
@@ -76,6 +77,7 @@ release_checks() {
   node "$ROOT/apps/owner/local-tmux-owner/tests/internal-annotations.test.js"
   node "$ROOT/apps/owner/local-tmux-owner/tests/event-stream.test.js"
   node "$ROOT/apps/owner/local-tmux-owner/tests/stable-blocks.test.js"
+  node "$ROOT/apps/owner/local-tmux-owner/tests/question-navigator.test.js"
   node "$ROOT/apps/owner/local-tmux-owner/tests/live-scroll.test.js"
   node "$ROOT/apps/owner/local-tmux-owner/tests/compact-rules-codex.test.js"
   node --test "$ROOT/apps/owner/local-tmux-owner/tests/terminal-delivery-receiver.test.mjs"
@@ -95,6 +97,8 @@ assert "compact-rules-codex.js" in gateway, "gateway must allow compact-rules-co
 assert "compact-rules-claude.js" in gateway, "gateway must allow compact-rules-claude.js"
 assert "stable-blocks.js" in index, "index.html must load stable-blocks.js"
 assert "stable-blocks.js" in gateway, "gateway must allow stable-blocks.js"
+assert "question-navigator.js" in index, "index.html must load question-navigator.js"
+assert "question-navigator.js" in gateway, "gateway must allow question-navigator.js"
 assert "internal-annotations.js" in index, "index.html must load internal annotation formatting"
 assert "internal-annotations.js" in gateway, "gateway must proxy internal annotation formatting"
 assert "event-stream.js" in index, "index.html must load the authenticated event-stream parser"

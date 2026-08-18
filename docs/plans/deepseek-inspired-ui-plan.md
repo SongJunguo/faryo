@@ -2,7 +2,7 @@
 
 计划索引：[`README.md`](README.md)
 
-更新时间：2026-08-15
+更新时间：2026-08-19
 
 状态：已完成，进入日常维护
 
@@ -43,6 +43,10 @@
   [`codex-reliability-hardening-plan.md`](codex-reliability-hardening-plan.md) 完成；本计划不再重复维护同一实现清单。
 - 最终发布回归已覆盖 5 个同时存在的真实 Codex 会话、390x844 手机视口、GFM/KaTeX/
   Shiki、实际上下文窗口、周额度和重启前后 tmux 尺寸不变；公开差异隐私扫描无命中。
+- 长对话新增右侧问题导航轨道：稳定用户块映射为小格标记，滚动时跟踪当前问题，点击或
+  键盘方向键可跳转；问题预览只存在于当前 DOM，不写入浏览器存储。
+- 问题轨道已部署到 Owner/Gateway；真实长会话在 390x844 与 1440x900 均显示 12 个标记，
+  同页 KaTeX 检查通过，五个 Codex tmux 尺寸保持不变。
 
 ## 1. 目标
 
@@ -91,7 +95,7 @@ DeepSeek Harness 启发的现代 Agent 工作台：桌面端具有清晰、安�
 | Markdown/TeX | 本地离线加载；禁用原始 HTML；危险协议、路径越界和 XSS 继续被拒绝 |
 | 手机输入 | 保留 `visualViewport`、安全区、草稿恢复和输入框失焦后尺寸稳定 |
 | tmux/TUI | `FARYO_OWNER_PANE_WIDTH=0` 的语义保持不变，不执行 `resize-window` |
-| Gateway | CSRF、严格 Cookie、登录限速、CSP 和 Cloudflare Access 精确身份/无 Bypass 外层边界不弱化；部署选定的 24 小时会话与关闭独立 MFA 保持不变 |
+| Gateway | CSRF、严格 Cookie、登录限速、CSP 和 Cloudflare Access 精确身份/无 Bypass 外层边界不弱化；Access 使用操作者选定的 7 天会话且关闭独立 MFA，Faryo 内层 Cookie 仍为 24 小时 |
 
 ## 4. 目标信息架构
 
@@ -399,11 +403,11 @@ Sessions、Session History 和 Projects。Gateway 的服务端分页、活动会
   请求由 Cloudflare Access 302 到 Access 登录入口。Owner 未认证 GET/POST 均为 401，
   Owner/Gateway 仅监听回环，私有配置与 Cookie secret 权限均为 600。
 - Cloudflare API 匿名化复核确认：Tunnel 健康且只回源 Gateway 回环端口；Access 仅有
-  两个精确邮箱 Allow 规则，无 `Everyone`、无 `Bypass`，应用会话为 24 小时，应用级
+  两个精确邮箱 Allow 规则，无 `Everyone`、无 `Bypass`，应用会话现为 7 天，应用级
   独立 MFA 已关闭；Email One-time PIN、Google 与 GitHub 均可选且不自动跳转到单一
   提供商。该低摩擦策略是操作者明确确认的当前部署基线，不是待修复项，后续自动化不得
   擅自重新开启独立 MFA；Faryo 内层登录新增 `1`–`168` 小时的私有配置边界，
-  当前部署同样设为 24 小时，Owner Token 继续保留。
+  当前内层 Cookie 仍设为 24 小时，Owner Token 继续保留。
 - Gateway user service 重启后进程环境确认使用 24 小时；一次真实本地登录返回 303，
   `__Host-` Cookie 的 `Max-Age=86400`，同时保持 `Secure`、`HttpOnly` 与
   `SameSite=Strict`。重启前后 5 个既有 tmux 窗口尺寸均未变化。
@@ -418,6 +422,37 @@ Sessions、Session History 和 Projects。Gateway 的服务端分页、活动会
   390x844 路径重新通过完整渲染检查：没有 KaTeX 错误、裸露数学定界符、页面级横向
   溢出或终端回退警告，AST 与 KaTeX/Shiki 资源均来自同源本地部署；测试不读取、打印
   或保存对话正文。
+
+### 阶段 H：长对话问题导航轨道（P1）
+
+范围：Owner `index.html`、`style.css`、`app.js`、独立 `question-navigator.js`、浏览器与
+Node 回归，不改变服务端 transcript、发送协议或 tmux。
+
+实现：
+
+- 从稳定 `.compact-block.user` 节点构建右侧小格轨道；少于两个问题或 Raw 模式时隐藏。
+- 当前问题按主滚动容器的阅读锚点计算；位于底部时明确选中最后一问。
+- 点击标记平滑跳到对应问题，键盘支持方向键、Home、End；桌面 hover/键盘 focus 显示
+  当前页内截断预览。
+- 手机为轨道预留窄右边距，桌面把轨道放在 748 px 阅读主轴之外；不遮挡正文、公式、
+  回到最新按钮或输入器。
+- 实时追加只增加新标记并复用旧按钮，不改变主对话 `scrollTop`；不持久化问题正文、
+  当前索引或预览。
+
+验收：
+
+- 390x844 与 1440x900 匿名 Chrome 均通过 13 问轨道、跳到第 8 问、预览、实时追加、
+  阅读位置保持和滚到底部选中第 13 问；页面无横向溢出，临时 tmux 尺寸不变。
+- 独立 Node 测试覆盖 Unicode 预览截断、活动问题选择和目标滚动坐标；发布检查包含新
+  静态资源、Gateway 代理允许列表与模块语法。
+
+2026-08-19 完成证据：
+
+- 发布检查、Owner 56 项、Gateway 44 项、20 条发送矩阵、跨会话重试隔离均通过。
+- 390x844 与 1440x900 匿名 13 问浏览器回归通过：Tab 进入轨道、方向键跳转、点击第 8
+  问、追加第 13 问时主滚动位置变化不超过 2 px，旧标记 DOM 保持复用。
+- Owner/Gateway 重启后，真实结构化长会话在两个视口均显示 12 个问题标记且 KaTeX
+  正常；五个 Codex tmux 窗口宽高与部署前逐项一致。
 
 ## 7. 浏览器回归矩阵
 
@@ -473,10 +508,11 @@ git switch -c recovery/pre-deepseek-ui pre-deepseek-ui-20260815
 | 公式、GFM 与代码效果 | 匿名复杂夹具覆盖表格、分段函数、长根式、矩阵、中文强调和多语言代码；当前真实结构化会话也通过 Owner/Gateway 完整 DOM 检查 | 已证明 |
 | 流式稳定块与按需高亮 | 200 块 DOM 对账测试、streaming/settled 测试、Shiki manifest 和浏览器动态语言加载均通过 | 已证明 |
 | 手机优先与桌面工作台 | 六个计划视口完成布局回归；390x844 与 1440x900 对表格、公式、代码逐项验证可见的“回到最新”按钮不遮挡内容 | 已证明 |
+| 长对话问题导航 | 右侧轨道在手机与桌面匿名 13 问夹具中完成滚动高亮、点击/键盘跳转、实时追加节点复用与位置保持；不持久化问题文字 | 已证明 |
 | 实时更新、可靠提交与 Live 滚动 | 两种视口各 20 条精确 ACK、附件、断网/后台恢复、失败草稿和真实 Live 滚动位置回归均通过 | 已证明 |
 | 长历史结构化可靠性 | 所有活动 Codex 会话均从增量 `codex-jsonl` 返回结构化 Markdown/TeX；每会话缓存、半行、文件替换和 App Server 暂时失败均有单元回归 | 已证明 |
 | 上下文与周额度状态 | 上下文显示 agent 实报的 used/window；周额度使用单飞异步缓存，NVM CLI 在非登录服务环境中可启动，缺失元数据不影响聊天 | 已证明 |
-| Owner/Gateway 认证与公开仓库隐私 | Owner 401/200、Gateway Cookie/CSRF、Access 精确身份且无宽泛放行；24 小时且关闭独立 MFA 是操作者选定基线；资源 DOM 无 Token，隐私扫描通过 | 已证明 |
+| Owner/Gateway 认证与公开仓库隐私 | Owner 401/200、Gateway Cookie/CSRF、Access 精确身份且无宽泛放行；Access 7 天、内层 Cookie 24 小时且关闭独立 MFA 是操作者选定基线；资源 DOM 无 Token，隐私扫描通过 | 已证明 |
 | tmux/Codex TUI 尺寸不变 | 运行配置保持 pane width 0；临时矩阵与 4 个真实 Agent 会话在 Owner 读取前后尺寸一致 | 已证明 |
 | Fork、部署与回滚 | 当前功能分支已推送个人 `origin`；远端备份分支和固定标签均存在；运行 Owner 已提供新版静态资源 | 已证明 |
 | 最终实际观感 | 操作者已在自己的实际页面完成主观确认；周额度文字增强另通过 340x740 与 390x844 浏览器布局检查 | 已确认 |

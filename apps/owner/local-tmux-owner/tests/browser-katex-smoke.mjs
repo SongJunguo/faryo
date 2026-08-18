@@ -42,6 +42,7 @@ const expectStructured = process.env.FARYO_SMOKE_EXPECT_STRUCTURED === '1';
 const debugLayout = process.env.FARYO_SMOKE_DEBUG_LAYOUT === '1';
 const checkOwnerLayout = process.env.FARYO_SMOKE_CHECK_OWNER_LAYOUT === '1';
 const checkAstFixture = process.env.FARYO_SMOKE_CHECK_AST_FIXTURE === '1';
+const checkQuestionNavigator = process.env.FARYO_SMOKE_CHECK_QUESTION_NAV === '1';
 const forceRenderFailure = process.env.FARYO_SMOKE_FORCE_RENDER_FAILURE === '1';
 const expectedLivePanelState = process.env.FARYO_SMOKE_EXPECT_LIVE_PANEL_STATE || '';
 const expectedKeyNavState = process.env.FARYO_SMOKE_EXPECT_KEY_NAV || 'hidden';
@@ -50,6 +51,7 @@ const viewportHeight = Number(process.env.FARYO_SMOKE_VIEWPORT_HEIGHT || 0);
 const smokeTheme = process.env.FARYO_SMOKE_THEME || '';
 const screenshotPath = process.env.FARYO_SMOKE_SCREENSHOT || '';
 const uiScreenshotPath = process.env.FARYO_SMOKE_UI_SCREENSHOT || '';
+const questionNavScreenshotPath = process.env.FARYO_SMOKE_QUESTION_NAV_SCREENSHOT || '';
 const uiScreenshotPanel = process.env.FARYO_SMOKE_UI_PANEL || '';
 const uiScreenshotFocus = process.env.FARYO_SMOKE_UI_FOCUS || '';
 const expectedTex = JSON.parse(process.env.FARYO_SMOKE_EXPECT_TEX || '[]');
@@ -62,6 +64,7 @@ const minTableKatex = Number(process.env.FARYO_SMOKE_MIN_TABLE_KATEX || 0);
 const minProtectedLinks = Number(process.env.FARYO_SMOKE_MIN_PROTECTED_LINKS || 0);
 const minProtectedImages = Number(process.env.FARYO_SMOKE_MIN_PROTECTED_IMAGES || 0);
 const minMemoryReferences = Number(process.env.FARYO_SMOKE_MIN_MEMORY_REFERENCES || 0);
+const minQuestionMarkers = Number(process.env.FARYO_SMOKE_MIN_QUESTION_MARKERS || 0);
 const minRenderFallbacks = Number(process.env.FARYO_SMOKE_MIN_RENDER_FALLBACKS || 0);
 const maxBareTex = Number(process.env.FARYO_SMOKE_MAX_BARE_TEX ?? -1);
 const screenshotTex = process.env.FARYO_SMOKE_SCREENSHOT_TEX || expectedTex.at(-1) || '';
@@ -357,6 +360,8 @@ try {
         const output = document.getElementById('output');
         const outputWrap = document.getElementById('outputWrap');
         const promptShell = document.querySelector('.prompt-shell');
+        const questionNavigator = document.getElementById('questionNavigator');
+        const questionMarkers = [...document.querySelectorAll('#questionNavMarkers .question-nav-marker')];
         const livePanel = output?.querySelector('.compact-live-terminal');
         const statusLine = document.querySelector('.status-line');
         const keyNav = document.querySelector('.key-nav');
@@ -497,6 +502,14 @@ try {
             reused: Number(output?.dataset.compactReused || -1),
             stable: Number(output?.dataset.compactStable || -1),
           },
+          questionNavigation: {
+            markerCount: questionMarkers.length,
+            current: String(document.getElementById('questionNavCurrent')?.textContent || ''),
+            total: String(document.getElementById('questionNavTotal')?.textContent || ''),
+            visible: Boolean(questionNavigator && !questionNavigator.classList.contains('hidden') && questionNavigator.getClientRects().length),
+            clearsOutput: Boolean(questionNavigator && output
+              && questionNavigator.getBoundingClientRect().left >= output.getBoundingClientRect().right - 1),
+          },
           viewport: { width: innerWidth, height: innerHeight },
           pageHorizontalOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth + 1,
           outputHorizontalOverflow: Boolean(outputWrap && outputWrap.scrollWidth > outputWrap.clientWidth + 1),
@@ -549,9 +562,10 @@ try {
       && state.protectedImagePendingCount === 0
       && state.memoryReferenceCount >= minMemoryReferences
       && state.renderFallbackCount >= minRenderFallbacks;
+    const questionNavigationReady = state.questionNavigation?.markerCount >= minQuestionMarkers;
     if (skipRenderChecks
-      ? state.domReady && (!checkOwnerLayout || state.stableBlockState?.keyedCount >= 1) && protectedResourcesReady
-      : state.ready && protectedResourcesReady) break;
+      ? state.domReady && (!checkOwnerLayout || state.stableBlockState?.keyedCount >= 1) && protectedResourcesReady && questionNavigationReady
+      : state.ready && protectedResourcesReady && questionNavigationReady) break;
   }
 
   const protectedResourcesReady = state.protectedLinkCount >= minProtectedLinks
@@ -559,9 +573,10 @@ try {
     && state.protectedImagePendingCount === 0
     && state.memoryReferenceCount >= minMemoryReferences
     && state.renderFallbackCount >= minRenderFallbacks;
+  const questionNavigationReady = state.questionNavigation?.markerCount >= minQuestionMarkers;
   if (!(skipRenderChecks
-    ? state.domReady && (!checkOwnerLayout || state.stableBlockState?.keyedCount >= 1) && protectedResourcesReady
-    : state.ready && protectedResourcesReady)) {
+    ? state.domReady && (!checkOwnerLayout || state.stableBlockState?.keyedCount >= 1) && protectedResourcesReady && questionNavigationReady
+    : state.ready && protectedResourcesReady && questionNavigationReady)) {
     throw new Error(`KaTeX did not appear in the live Faryo DOM: ${JSON.stringify(state)}`);
   }
   if (state.ownerTokenDomCount) {
@@ -572,6 +587,14 @@ try {
   }
   if (state.rawMemoryTagCount) {
     throw new Error(`Internal memory citation markup remained visible in ${state.rawMemoryTagCount} text nodes`);
+  }
+  if (minQuestionMarkers > 0 && (!state.questionNavigation?.visible
+    || !state.questionNavigation?.clearsOutput
+    || Number(state.questionNavigation?.total || 0) < minQuestionMarkers)) {
+    throw new Error(`Question navigator did not match the structured history: ${JSON.stringify(state.questionNavigation)}`);
+  }
+  if (minQuestionMarkers > 0) {
+    console.log(`faryo-browser-question-navigation-live=PASS markers=${state.questionNavigation.markerCount}`);
   }
   if (checkOwnerLayout) {
     const layout = state.ownerLayout || {};
@@ -915,6 +938,235 @@ try {
       throw new Error('AST fixture table did not scroll inside its mobile container: ' + JSON.stringify(fixtureState));
     }
     console.log('faryo-browser-ast-fixture=PASS markdown=GFM math=KaTeX highlight=Shiki');
+  }
+
+  if (checkQuestionNavigator) {
+    const fixtureResult = await send('Runtime.evaluate', {
+      expression: `(() => {
+        const output = document.getElementById('output');
+        const scroller = document.getElementById('outputWrap');
+        if (!output || !scroller) return { ready: false };
+        const turns = [];
+        for (let index = 0; index < 12; index += 1) {
+          turns.push('<section class="compact-block user" data-faryo-block-key="question-' + index + '" data-faryo-question-preview="Anonymous question ' + (index + 1) + '">Anonymous question ' + (index + 1) + '</section>');
+          turns.push('<section class="compact-block output" data-faryo-block-key="answer-' + index + '" style="min-height:180px"><div class="markdown-body">Anonymous answer ' + (index + 1) + '</div></section>');
+        }
+        output.className = 'output compact-blocks';
+        output.innerHTML = turns.join('');
+        scroller.scrollTop = 0;
+        return { ready: true };
+      })()`,
+      returnByValue: true,
+    });
+    if (!fixtureResult.result?.value?.ready) throw new Error('Question navigator fixture could not be installed');
+
+    let initial = {};
+    for (let attempt = 0; attempt < 80; attempt += 1) {
+      await delay(50);
+      const result = await send('Runtime.evaluate', {
+        expression: `(() => {
+          const navigator = document.getElementById('questionNavigator');
+          const markers = [...document.querySelectorAll('#questionNavMarkers .question-nav-marker')];
+          const output = document.getElementById('output');
+          const scroller = document.getElementById('outputWrap');
+          const navRect = navigator?.getBoundingClientRect();
+          const outputRect = output?.getBoundingClientRect();
+          window.__faryoQuestionNavFirst = markers[0] || null;
+          return {
+            markerCount: markers.length,
+            current: document.getElementById('questionNavCurrent')?.textContent || '',
+            total: document.getElementById('questionNavTotal')?.textContent || '',
+            visible: Boolean(navigator && !navigator.classList.contains('hidden') && navigator.getClientRects().length),
+            moduleReady: typeof window.FaryoQuestionNavigator?.createController === 'function',
+            pageHorizontalOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth + 1,
+            clearsOutput: Boolean(navRect && outputRect && navRect.left >= outputRect.right - 1),
+            scrollable: Boolean(scroller && scroller.scrollHeight > scroller.clientHeight),
+          };
+        })()`,
+        returnByValue: true,
+      });
+      initial = result.result?.value || {};
+      if (initial.markerCount === 12 && initial.current === '1') break;
+    }
+    if (initial.markerCount !== 12 || initial.total !== '12' || initial.current !== '1'
+      || !initial.visible || !initial.moduleReady || !initial.scrollable
+      || initial.pageHorizontalOverflow || !initial.clearsOutput) {
+      throw new Error(`Question navigator initial state failed: ${JSON.stringify(initial)}`);
+    }
+
+    await send('Runtime.evaluate', {
+      expression: `document.getElementById('promptInput')?.focus()`,
+    });
+    let tabFocus = {};
+    for (let attempt = 0; attempt < 24; attempt += 1) {
+      await send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Tab', code: 'Tab', windowsVirtualKeyCode: 9, nativeVirtualKeyCode: 9 });
+      await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Tab', code: 'Tab', windowsVirtualKeyCode: 9, nativeVirtualKeyCode: 9 });
+      const result = await send('Runtime.evaluate', {
+        expression: `(() => ({
+          marker: document.activeElement?.classList?.contains('question-nav-marker') || false,
+          focusedIndex: document.activeElement?.dataset?.questionIndex || '',
+        }))()`,
+        returnByValue: true,
+      });
+      tabFocus = result.result?.value || {};
+      if (tabFocus.marker) break;
+    }
+    if (!tabFocus.marker || tabFocus.focusedIndex !== '0') {
+      throw new Error(`Question navigator was not reachable by Tab: ${JSON.stringify(tabFocus)}`);
+    }
+    await delay(30);
+    const previewResult = await send('Runtime.evaluate', {
+      expression: `(() => {
+        const preview = document.getElementById('questionNavPreview');
+        return {
+          visible: Boolean(preview?.classList.contains('visible')),
+          text: preview?.textContent || '',
+          focusedIndex: document.activeElement?.dataset?.questionIndex || '',
+          focusedTag: document.activeElement?.tagName || '',
+          navigatorHidden: document.getElementById('questionNavigator')?.classList.contains('hidden'),
+          markerCount: document.querySelectorAll('#questionNavMarkers .question-nav-marker').length,
+        };
+      })()`,
+      returnByValue: true,
+    });
+    const previewState = previewResult.result?.value || {};
+    if (!previewState.visible || previewState.text !== '1. Anonymous question 1') {
+      throw new Error(`Question navigator preview failed: ${JSON.stringify(previewState)}`);
+    }
+    await send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'ArrowDown', code: 'ArrowDown', windowsVirtualKeyCode: 40, nativeVirtualKeyCode: 40 });
+    await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'ArrowDown', code: 'ArrowDown', windowsVirtualKeyCode: 40, nativeVirtualKeyCode: 40 });
+    let keyboardState = {};
+    for (let attempt = 0; attempt < 80; attempt += 1) {
+      await delay(50);
+      const result = await send('Runtime.evaluate', {
+        expression: `(() => ({
+          current: document.getElementById('questionNavCurrent')?.textContent || '',
+          active: document.querySelector('#questionNavMarkers .question-nav-marker[aria-current="step"]')?.dataset.questionIndex || '',
+          focused: document.activeElement?.dataset?.questionIndex || '',
+        }))()`,
+        returnByValue: true,
+      });
+      keyboardState = result.result?.value || {};
+      if (keyboardState.active === '1') break;
+    }
+    if (keyboardState.current !== '2' || keyboardState.active !== '1' || keyboardState.focused !== '1') {
+      throw new Error(`Question navigator keyboard jump failed: ${JSON.stringify(keyboardState)}`);
+    }
+    await send('Runtime.evaluate', { expression: `document.activeElement?.blur()` });
+
+    await send('Runtime.evaluate', {
+      expression: `document.querySelectorAll('#questionNavMarkers .question-nav-marker')[7]?.click()`,
+    });
+    let jumped = {};
+    for (let attempt = 0; attempt < 80; attempt += 1) {
+      await delay(50);
+      const result = await send('Runtime.evaluate', {
+        expression: `(() => {
+          const scroller = document.getElementById('outputWrap');
+          const target = document.querySelectorAll('#output .compact-block.user')[7];
+          const active = document.querySelector('#questionNavMarkers .question-nav-marker[aria-current="step"]');
+          const preview = document.getElementById('questionNavPreview');
+          const scrollerRect = scroller?.getBoundingClientRect();
+          const targetRect = target?.getBoundingClientRect();
+          return {
+            scrollTop: scroller?.scrollTop || 0,
+            active: active?.dataset.questionIndex || '',
+            current: document.getElementById('questionNavCurrent')?.textContent || '',
+            targetDelta: scrollerRect && targetRect ? Math.abs(targetRect.top - scrollerRect.top - 20) : -1,
+            previewHidden: !preview?.classList.contains('visible'),
+          };
+        })()`,
+        returnByValue: true,
+      });
+      jumped = result.result?.value || {};
+      if (jumped.active === '7' && jumped.targetDelta >= 0 && jumped.targetDelta < 10) break;
+    }
+    if (jumped.scrollTop <= 0 || jumped.active !== '7' || jumped.current !== '8'
+      || jumped.targetDelta < 0 || jumped.targetDelta >= 10 || !jumped.previewHidden) {
+      throw new Error(`Question navigator jump failed: ${JSON.stringify(jumped)}`);
+    }
+    // Let native smooth scrolling finish before measuring whether a later DOM
+    // append moves the reader. Otherwise its final few animation pixels look
+    // like a refresh-induced jump.
+    await delay(260);
+
+    const appendResult = await send('Runtime.evaluate', {
+      expression: `(() => {
+        const output = document.getElementById('output');
+        const scroller = document.getElementById('outputWrap');
+        window.__faryoQuestionNavScrollBefore = scroller?.scrollTop || 0;
+        const user = document.createElement('section');
+        user.className = 'compact-block user';
+        user.dataset.faryoBlockKey = 'question-12';
+        user.dataset.faryoQuestionPreview = 'Anonymous question 13';
+        user.textContent = 'Anonymous question 13';
+        const answer = document.createElement('section');
+        answer.className = 'compact-block output';
+        answer.dataset.faryoBlockKey = 'answer-12';
+        answer.style.minHeight = '180px';
+        answer.textContent = 'Anonymous answer 13';
+        output?.append(user, answer);
+        return { appended: Boolean(output && scroller) };
+      })()`,
+      returnByValue: true,
+    });
+    if (!appendResult.result?.value?.appended) throw new Error('Question navigator append fixture failed');
+
+    let appended = {};
+    for (let attempt = 0; attempt < 80; attempt += 1) {
+      await delay(50);
+      const result = await send('Runtime.evaluate', {
+        expression: `(() => {
+          const scroller = document.getElementById('outputWrap');
+          const markers = [...document.querySelectorAll('#questionNavMarkers .question-nav-marker')];
+          return {
+            markerCount: markers.length,
+            firstPreserved: markers[0] === window.__faryoQuestionNavFirst,
+            scrollDelta: Math.abs((scroller?.scrollTop || 0) - Number(window.__faryoQuestionNavScrollBefore || 0)),
+            total: document.getElementById('questionNavTotal')?.textContent || '',
+            current: document.getElementById('questionNavCurrent')?.textContent || '',
+            active: document.querySelector('#questionNavMarkers .question-nav-marker[aria-current="step"]')?.dataset.questionIndex || '',
+          };
+        })()`,
+        returnByValue: true,
+      });
+      appended = result.result?.value || {};
+      if (appended.markerCount === 13) break;
+    }
+    if (appended.markerCount !== 13 || appended.total !== '13'
+      || appended.current !== '8' || appended.active !== '7'
+      || !appended.firstPreserved || appended.scrollDelta > 2) {
+      throw new Error(`Question navigator live append moved history: ${JSON.stringify(appended)}`);
+    }
+
+    await send('Runtime.evaluate', {
+      expression: `(() => {
+        const scroller = document.getElementById('outputWrap');
+        if (scroller) scroller.scrollTop = scroller.scrollHeight;
+      })()`,
+    });
+    let latest = {};
+    for (let attempt = 0; attempt < 40; attempt += 1) {
+      await delay(50);
+      const result = await send('Runtime.evaluate', {
+        expression: `(() => ({
+          current: document.getElementById('questionNavCurrent')?.textContent || '',
+          active: document.querySelector('#questionNavMarkers .question-nav-marker[aria-current="step"]')?.dataset.questionIndex || '',
+        }))()`,
+        returnByValue: true,
+      });
+      latest = result.result?.value || {};
+      if (latest.current === '13') break;
+    }
+    if (latest.current !== '13' || latest.active !== '12') {
+      throw new Error(`Question navigator latest tracking failed: ${JSON.stringify(latest)}`);
+    }
+    if (questionNavScreenshotPath) {
+      const screenshot = await send('Page.captureScreenshot', { format: 'png', fromSurface: true });
+      await writeFile(questionNavScreenshotPath, Buffer.from(screenshot.data, 'base64'));
+      console.log(`faryo-browser-question-navigator-screenshot=${questionNavScreenshotPath}`);
+    }
+    console.log('faryo-browser-question-navigator=PASS questions=13 jump=8 live-append=preserved latest=13');
   }
 
   if (checkLiveScroll) {

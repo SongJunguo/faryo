@@ -10,6 +10,9 @@
   const errorBox = $('errorBox');
   const phasePill = $('phasePill');
   const bottomBtn = $('bottomBtn');
+  const questionNavigatorElement = $('questionNavigator');
+  const questionNavMarkers = $('questionNavMarkers');
+  const questionNavPreview = $('questionNavPreview');
   const dockMenu = $('dockMenu');
   const sessionMenu = $('sessionMenu');
   const detailsPanel = $('detailsPanel');
@@ -23,6 +26,7 @@
   const internalAnnotations = window.FaryoInternalAnnotations || {};
   const eventStreamParser = window.FaryoEventStream || {};
   const stableBlocks = window.FaryoStableBlocks || {};
+  const questionNavigatorApi = window.FaryoQuestionNavigator || {};
   const runtimeCompactRules = {
     userPromptRe: /^\s*›\s+/,
     compactBlocks: (text) => [{ kind: 'output', text: text || 'No output yet' }],
@@ -84,9 +88,26 @@
   let submitInFlight = false, pendingSubmission = null;
   let activeSurfacePanel = null, panelReturnFocus = null;
   const restoringLivePanels = new WeakSet();
+  let questionNavigatorController = null;
+  if (typeof questionNavigatorApi.createController === 'function') {
+    try {
+      questionNavigatorController = questionNavigatorApi.createController({
+        view: window,
+        navigator: questionNavigatorElement,
+        markers: questionNavMarkers,
+        current: $('questionNavCurrent'),
+        total: $('questionNavTotal'),
+        preview: questionNavPreview,
+        scroller: outputWrap,
+        output,
+      });
+    } catch (_error) {
+      questionNavigatorController = null;
+    }
+  }
 
   function setWorkbenchInert(inert) {
-    for (const element of [document.querySelector('header'), outputWrap, document.querySelector('footer')]) {
+    for (const element of [document.querySelector('header'), outputWrap, document.querySelector('footer'), questionNavigatorElement]) {
       if (element) element.inert = inert;
     }
   }
@@ -1317,6 +1338,11 @@
       if (!node) return;
       if (model.sourceIndex >= 0) node.dataset.sourceIndex = String(model.sourceIndex);
       else delete node.dataset.sourceIndex;
+      if (model.kind === 'user') {
+        node.dataset.faryoQuestionPreview = typeof questionNavigatorApi.previewText === 'function'
+          ? questionNavigatorApi.previewText(model.text, 88)
+          : String(model.text || '').replace(/^\s*›\s*/u, '').trim().slice(0, 88);
+      } else delete node.dataset.faryoQuestionPreview;
     });
     const blocks = output.querySelectorAll('.compact-block.output');
     blocks.forEach((block, index) => {
@@ -1390,12 +1416,14 @@
       output.insertAdjacentHTML('beforeend', `<details class="compact-live-terminal" data-session="${escapeHtml(selectedSession || 'default')}"><summary class="compact-live-title"><span class="live-dot"></span><span>Live from tmux</span><span class="compact-live-state">Agent working</span></summary><pre>${escapeHtml(String(capture.liveText))}</pre></details>`);
     }
     restoreLiveTerminalState(liveStateSnapshot);
+    questionNavigatorController?.sync(outputMode === 'compact');
     void hydrateProtectedImages(output);
   }
 
   function resetRefreshState() {
     cancelActiveRefreshes();
     pendingDeferredCapture = null;
+    questionNavigatorController?.reset();
   }
 
   function cancelActiveRefreshes() {

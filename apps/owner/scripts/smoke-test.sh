@@ -45,6 +45,8 @@ test "$(curl --noproxy '*' -sS -o "$TMP" -w '%{http_code}' "http://$FARYO_OWNER_
 grep -q 'FaryoClaudeCompactRules' "$TMP"
 test "$(curl --noproxy '*' -sS -o "$TMP" -w '%{http_code}' "http://$FARYO_OWNER_HOST:$FARYO_OWNER_PORT/stable-blocks.js")" = "200"
 grep -q 'FaryoStableBlocks' "$TMP"
+test "$(curl --noproxy '*' -sS -o "$TMP" -w '%{http_code}' "http://$FARYO_OWNER_HOST:$FARYO_OWNER_PORT/question-navigator.js")" = "200"
+grep -q 'FaryoQuestionNavigator' "$TMP"
 test "$(curl --noproxy '*' -sS -o "$TMP" -w '%{http_code}' "http://$FARYO_OWNER_HOST:$FARYO_OWNER_PORT/vendor/markdown-ast/markdown-ast.min.js")" = "200"
 grep -q 'FaryoMarkdownAst' "$TMP"
 test "$(curl --noproxy '*' -sS -o "$TMP" -w '%{http_code}' "http://$FARYO_OWNER_HOST:$FARYO_OWNER_PORT/vendor/markdown-ast/THIRD_PARTY_LICENSES.txt")" = "200"
