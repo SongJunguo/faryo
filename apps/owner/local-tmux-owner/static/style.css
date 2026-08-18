@@ -974,10 +974,6 @@ html[data-faryo-ui="workbench-v2"] :is(button, a, textarea):focus-visible {
 }
 
 @media (max-width: 959px) {
-  html[data-faryo-ui="workbench-v2"] main.question-navigation-visible {
-    padding-right: max(42px, calc(env(safe-area-inset-right) + 36px));
-  }
-
   .question-navigator {
     right: max(2px, env(safe-area-inset-right));
     max-height: min(48vh, 380px);

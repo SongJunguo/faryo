@@ -88,8 +88,9 @@ hovered or keyboard-focused. Each marker is derived from an existing stable
 user block, carries an accessible truncated label, and jumps within the
 browser's conversation scroller only. The active marker follows manual
 scrolling; a live append reuses existing markers and does not move the reading
-position. The rail is absent in Raw mode and stores neither question text nor
-navigation state.
+position. On narrow screens it overlays the extreme edge without reserving
+permanent content width. The rail is absent in Raw mode and stores neither
+question text nor navigation state.
 
 Owner does not resize tmux or the Codex/Claude TUI. Browser sends retain an
 immutable target session and client message id across timeout recovery,

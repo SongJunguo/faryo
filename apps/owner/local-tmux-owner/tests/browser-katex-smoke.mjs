@@ -508,8 +508,10 @@ try {
             total: String(document.getElementById('questionNavTotal')?.textContent || ''),
             available: Boolean(questionNavigator && !questionNavigator.classList.contains('hidden') && questionNavigator.getClientRects().length),
             shown: Boolean(questionNavigator && Number.parseFloat(getComputedStyle(questionNavigator).opacity) > 0.5),
-            clearsOutput: Boolean(questionNavigator && output
-              && questionNavigator.getBoundingClientRect().left >= output.getBoundingClientRect().right - 1),
+            balancedPadding: Boolean(outputWrap && Math.abs(
+              Number.parseFloat(getComputedStyle(outputWrap).paddingLeft)
+              - Number.parseFloat(getComputedStyle(outputWrap).paddingRight)
+            ) < 1),
           },
           viewport: { width: innerWidth, height: innerHeight },
           pageHorizontalOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth + 1,
@@ -590,7 +592,7 @@ try {
     throw new Error(`Internal memory citation markup remained visible in ${state.rawMemoryTagCount} text nodes`);
   }
   if (minQuestionMarkers > 0 && (!state.questionNavigation?.available
-    || !state.questionNavigation?.clearsOutput
+    || !state.questionNavigation?.balancedPadding
     || state.questionNavigation?.shown
     || Number(state.questionNavigation?.total || 0) < minQuestionMarkers)) {
     throw new Error(`Question navigator did not match the structured history: ${JSON.stringify(state.questionNavigation)}`);
@@ -971,8 +973,6 @@ try {
           const markers = [...document.querySelectorAll('#questionNavMarkers .question-nav-marker')];
           const output = document.getElementById('output');
           const scroller = document.getElementById('outputWrap');
-          const navRect = navigator?.getBoundingClientRect();
-          const outputRect = output?.getBoundingClientRect();
           window.__faryoQuestionNavFirst = markers[0] || null;
           return {
             markerCount: markers.length,
@@ -982,7 +982,11 @@ try {
             shown: Boolean(navigator && Number.parseFloat(getComputedStyle(navigator).opacity) > 0.5),
             moduleReady: typeof window.FaryoQuestionNavigator?.createController === 'function',
             pageHorizontalOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth + 1,
-            clearsOutput: Boolean(navRect && outputRect && navRect.left >= outputRect.right - 1),
+            balancedPadding: Boolean(scroller && Math.abs(
+              Number.parseFloat(getComputedStyle(scroller).paddingLeft)
+              - Number.parseFloat(getComputedStyle(scroller).paddingRight)
+            ) < 1),
+            outputWidth: Math.round(output?.getBoundingClientRect().width || 0),
             scrollable: Boolean(scroller && scroller.scrollHeight > scroller.clientHeight),
           };
         })()`,
@@ -993,7 +997,7 @@ try {
     }
     if (initial.markerCount !== 12 || initial.total !== '12' || initial.current !== '1'
       || !initial.available || initial.shown || !initial.moduleReady || !initial.scrollable
-      || initial.pageHorizontalOverflow || !initial.clearsOutput) {
+      || initial.pageHorizontalOverflow || !initial.balancedPadding) {
       throw new Error(`Question navigator initial state failed: ${JSON.stringify(initial)}`);
     }
 
@@ -1010,6 +1014,7 @@ try {
             shown: Boolean(navigator && Number.parseFloat(getComputedStyle(navigator).opacity) > 0.5),
             interactive: getComputedStyle(navigator).pointerEvents !== 'none',
             scrollingClass: Boolean(navigator?.classList.contains('is-scrolling')),
+            outputWidth: Math.round(document.getElementById('output')?.getBoundingClientRect().width || 0),
           };
         })()`,
         returnByValue: true,
@@ -1017,7 +1022,8 @@ try {
       revealed = result.result?.value || {};
       if (revealed.shown) break;
     }
-    if (!revealed.shown || !revealed.interactive || !revealed.scrollingClass) {
+    if (!revealed.shown || !revealed.interactive || !revealed.scrollingClass
+      || Math.abs(revealed.outputWidth - initial.outputWidth) > 1) {
       throw new Error(`Question navigator did not reveal for fast scrolling: ${JSON.stringify(revealed)}`);
     }
 

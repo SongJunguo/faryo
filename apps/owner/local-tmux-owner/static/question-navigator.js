@@ -166,7 +166,6 @@
       navigator.classList.add('hidden');
       navigator.classList.remove('is-scrolling', 'is-interacting');
       navigator.setAttribute('aria-hidden', 'true');
-      scroller.classList.remove('question-navigation-visible');
       if (current) current.textContent = '0';
       if (total) total.textContent = '0';
       if (scrollingTimer) view.clearTimeout(scrollingTimer);
@@ -217,7 +216,6 @@
       if (total) total.textContent = String(targets.length);
       navigator.classList.remove('hidden');
       navigator.setAttribute('aria-hidden', 'false');
-      scroller.classList.add('question-navigation-visible');
       const preservedIndex = previousActiveKey
         ? [...markers.querySelectorAll('.question-nav-marker')].findIndex((button) => button.dataset.questionKey === previousActiveKey)
         : -1;
