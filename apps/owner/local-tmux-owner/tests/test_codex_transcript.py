@@ -123,11 +123,81 @@ class CodexTranscriptTest(unittest.TestCase):
             ]
         }
 
-        transcript = server.codex_thread_transcript(thread, 4)
+        with mock.patch.object(server, "CODEX_TRANSCRIPT_MIN_TURNS", 1):
+            transcript = server.codex_thread_transcript(thread, 4)
 
         self.assertNotIn("old answer", transcript)
         self.assertIn("› new", transcript)
         self.assertIn("\\[\nx^2+y^2\n\\]", transcript)
+
+    def test_formula_heavy_turn_does_not_hide_recent_conversation_history(self):
+        messages = []
+        for index in range(14):
+            messages.extend((
+                ("user", f"question {index}"),
+                ("assistant", "\n".join(f"formula row {row}" for row in range(100))),
+            ))
+
+        transcript = server.codex_message_transcript(messages, 20)
+
+        self.assertNotIn("› question 1\n", transcript)
+        self.assertIn("› question 2\n", transcript)
+        self.assertIn("› question 13\n", transcript)
+        self.assertEqual(transcript.count("› question "), server.CODEX_TRANSCRIPT_MIN_TURNS)
+
+    def test_recent_history_keeps_a_hard_character_ceiling(self):
+        messages = []
+        for index in range(6):
+            messages.extend((("user", f"question {index}"), ("assistant", "x" * 100)))
+
+        with mock.patch.object(server, "CODEX_TRANSCRIPT_CHAR_BUDGET", 250):
+            transcript = server.codex_message_transcript(messages, 1)
+
+        self.assertNotIn("› question 3\n", transcript)
+        self.assertIn("› question 4\n", transcript)
+        self.assertIn("› question 5\n", transcript)
+        self.assertLessEqual(transcript.count("x"), 200)
+
+    def test_rollout_cache_collects_minimum_turns_beyond_soft_line_budget(self):
+        events = []
+        for index in range(12):
+            events.extend((
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": [{"type": "input_text", "text": f"question {index}"}],
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": [{"type": "output_text", "text": "line one\nline two"}],
+                    },
+                },
+            ))
+        events.append({
+            "payload": {
+                "type": "token_count",
+                "info": {
+                    "last_token_usage": {"total_tokens": 10},
+                    "model_context_window": 1_000,
+                },
+            },
+        })
+        with tempfile.TemporaryDirectory() as root:
+            history = Path(root) / "rollout.jsonl"
+            history.write_text("\n".join(json.dumps(event) for event in events) + "\n", encoding="utf-8")
+            with mock.patch.object(server, "CODEX_ROLLOUT_CACHE_LINE_BUDGET", 4):
+                state = server.codex_rollout_state(str(history))
+
+        self.assertEqual(
+            sum(1 for role, _text in state["messages"] if role == "user"),
+            server.CODEX_ROLLOUT_CACHE_MIN_TURNS,
+        )
 
     def test_rollout_transcript_is_incremental_and_preserves_markdown_math(self):
         events = [

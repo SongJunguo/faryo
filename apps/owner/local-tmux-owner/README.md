@@ -65,6 +65,14 @@ GFM/math grammar. Raw remains terminal evidence. If both structured sources are
 unavailable, the tmux fallback deliberately avoids guessing damaged formula
 boundaries and displays a warning.
 
+Structured history treats the requested line count as a soft rendering budget.
+Formula-heavy Markdown can have hundreds of short source lines without being a
+large browser payload, so the Owner targets the 12 most recent complete turns
+available inside its bounded rollout tail instead of allowing one long answer
+to hide the whole recent conversation. A separate 512 KiB hard character
+ceiling keeps this exception bounded; the newest complete turn is always
+retained even when it alone exceeds that ceiling.
+
 Compact Chat plans stable content keys for top-level conversation blocks and
 reconciles those elements instead of replacing the entire output DOM. All but
 the changing two-block tail are marked stable, and a 256-entry in-memory LRU

@@ -97,8 +97,16 @@ EVENT_STREAM_MAX_CONNECTIONS = 16
 EVENT_STREAM_HEARTBEAT_SECONDS = 10
 RATE_LIMIT_CACHE_TTL = 120.0
 CODEX_TRANSCRIPT_CACHE_TTL = 5.0
+# Markdown source line count is a poor proxy for browser cost: one formula-heavy
+# answer can contain hundreds of short lines while remaining only a few KB.  A
+# soft line budget must therefore never make the conversation look as if all
+# prior turns disappeared.  Keep a useful recent turn window, with a separate
+# hard character ceiling for mobile payload safety.
+CODEX_TRANSCRIPT_MIN_TURNS = 12
+CODEX_TRANSCRIPT_CHAR_BUDGET = 512 * 1024
 CODEX_ROLLOUT_CACHE_LINE_BUDGET = CAPTURE_MAX_LINES * 2
 CODEX_ROLLOUT_CACHE_CHAR_BUDGET = 4 * 1024 * 1024
+CODEX_ROLLOUT_CACHE_MIN_TURNS = CODEX_TRANSCRIPT_MIN_TURNS
 CODEX_ROLLOUT_CACHE_MAX_PATHS = 16
 CODEX_ROLLOUT_TAIL_SCAN_BYTES = 16 * 1024 * 1024
 CODEX_ROLLOUT_MAX_CATCHUP_BYTES = 8 * 1024 * 1024
@@ -1729,6 +1737,25 @@ def codex_user_message_text(item: dict[str, Any]) -> str:
     return "\n".join(values).strip()
 
 
+def turn_exceeds_recent_budget(
+    selected_count: int,
+    used_lines: int,
+    used_chars: int,
+    turn_lines: int,
+    turn_chars: int,
+    *,
+    line_budget: int,
+    char_budget: int,
+    min_turns: int,
+) -> bool:
+    """Apply a soft line budget, a minimum turn window, and a hard char cap."""
+    if selected_count <= 0:
+        return False
+    if used_chars + turn_chars > char_budget:
+        return True
+    return selected_count >= min_turns and used_lines + turn_lines > line_budget
+
+
 def codex_thread_transcript(thread: dict[str, Any], max_lines: int) -> str:
     turns: list[str] = []
     for turn in thread.get("turns") or []:
@@ -1753,12 +1780,24 @@ def codex_thread_transcript(thread: dict[str, Any], max_lines: int) -> str:
 
     selected: list[str] = []
     used_lines = 0
+    used_chars = 0
     for turn in reversed(turns):
         turn_lines = turn.count("\n") + 1
-        if selected and used_lines + turn_lines > max_lines:
+        turn_chars = len(turn)
+        if turn_exceeds_recent_budget(
+            len(selected),
+            used_lines,
+            used_chars,
+            turn_lines,
+            turn_chars,
+            line_budget=max_lines,
+            char_budget=CODEX_TRANSCRIPT_CHAR_BUDGET,
+            min_turns=CODEX_TRANSCRIPT_MIN_TURNS,
+        ):
             break
         selected.append(turn)
         used_lines += turn_lines
+        used_chars += turn_chars
     return "\n\n".join(reversed(selected)).strip()
 
 
@@ -1806,9 +1845,15 @@ def bounded_codex_rollout_messages(messages: list[tuple[str, str]]) -> list[tupl
     for turn in reversed(turns):
         turn_lines = sum(text.count("\n") + 1 for _role, text in turn)
         turn_chars = sum(len(text) for _role, text in turn)
-        if selected and (
-            used_lines + turn_lines > CODEX_ROLLOUT_CACHE_LINE_BUDGET
-            or used_chars + turn_chars > CODEX_ROLLOUT_CACHE_CHAR_BUDGET
+        if turn_exceeds_recent_budget(
+            len(selected),
+            used_lines,
+            used_chars,
+            turn_lines,
+            turn_chars,
+            line_budget=CODEX_ROLLOUT_CACHE_LINE_BUDGET,
+            char_budget=CODEX_ROLLOUT_CACHE_CHAR_BUDGET,
+            min_turns=CODEX_ROLLOUT_CACHE_MIN_TURNS,
         ):
             break
         selected.append(turn)
@@ -1847,6 +1892,8 @@ def initial_codex_rollout_state(path: Path, identity: tuple[int, int]) -> dict[s
     messages_reversed: list[tuple[str, str]] = []
     context_usage: dict[str, int | float] | None = None
     line_budget = 0
+    char_budget = 0
+    turn_count = 0
     complete_end = 0
     try:
         with path.open("rb") as fh:
@@ -1885,10 +1932,19 @@ def initial_codex_rollout_state(path: Path, identity: tuple[int, int]) -> dict[s
                     if message is not None:
                         messages_reversed.append(message)
                         line_budget += message[1].count("\n") + 1
+                        char_budget += len(message[1])
+                        if message[0] == "user":
+                            turn_count += 1
                         if (
-                            line_budget >= CODEX_ROLLOUT_CACHE_LINE_BUDGET
-                            and message[0] == "user"
+                            message[0] == "user"
                             and context_usage is not None
+                            and (
+                                char_budget >= CODEX_ROLLOUT_CACHE_CHAR_BUDGET
+                                or (
+                                    line_budget >= CODEX_ROLLOUT_CACHE_LINE_BUDGET
+                                    and turn_count >= CODEX_ROLLOUT_CACHE_MIN_TURNS
+                                )
+                            )
                         ):
                             break
     except (OSError, ValueError):
@@ -1988,13 +2044,25 @@ def codex_message_transcript(messages: list[tuple[str, str]], max_lines: int) ->
 
     selected: list[str] = []
     used_lines = 0
+    used_chars = 0
     for turn_blocks in reversed(turns):
         turn = "\n\n".join(turn_blocks)
         turn_lines = turn.count("\n") + 1
-        if selected and used_lines + turn_lines > max_lines:
+        turn_chars = len(turn)
+        if turn_exceeds_recent_budget(
+            len(selected),
+            used_lines,
+            used_chars,
+            turn_lines,
+            turn_chars,
+            line_budget=max_lines,
+            char_budget=CODEX_TRANSCRIPT_CHAR_BUDGET,
+            min_turns=CODEX_TRANSCRIPT_MIN_TURNS,
+        ):
             break
         selected.append(turn)
         used_lines += turn_lines
+        used_chars += turn_chars
     return "\n\n".join(reversed(selected)).strip()
 
 
