@@ -29,6 +29,37 @@ class SelectRecentAgentCwdTest(unittest.TestCase):
         sessions = [session("~/brain/projects/old", 10), session("~/brain/projects/faryo", 20)]
         self.assertEqual(gateway.select_recent_agent_cwd(sessions, None), "~/brain/projects/faryo")
 
+    def test_cwd_choices_are_recent_distinct_and_include_workspace(self) -> None:
+        sessions = [
+            session("~/brain/projects/old", 10),
+            session("~/brain/projects/faryo", 30),
+            session("~/brain/projects/faryo/", 20),
+        ]
+
+        choices = gateway.agent_cwd_choices(sessions, "/srv/brain")
+
+        self.assertEqual([item["value"] for item in choices], [
+            "~/brain/projects/faryo",
+            "~/brain/projects/old",
+            "/srv/brain",
+        ])
+        self.assertEqual([item["kind"] for item in choices], ["recent", "recent", "workspace"])
+
+    def test_home_shortened_workspace_is_not_duplicated(self) -> None:
+        choices = gateway.agent_cwd_choices(
+            [session("~/brain/projects", 20)],
+            "/home/example/brain/projects",
+        )
+
+        self.assertEqual(len(choices), 1)
+        self.assertEqual(choices[0]["kind"], "workspace")
+
+    def test_directory_selection_token_is_bound_to_the_exact_path(self) -> None:
+        token = gateway.owner_directory_selection_token("owner-secret", "/workspace/a")
+
+        self.assertEqual(token, gateway.owner_directory_selection_token("owner-secret", "/workspace/a"))
+        self.assertNotEqual(token, gateway.owner_directory_selection_token("owner-secret", "/workspace/b"))
+
     def test_skips_exact_workspace_root(self) -> None:
         sessions = [session("/srv/brain", 20), session("/srv/brain/projects/faryo", 10)]
         self.assertEqual(gateway.select_recent_agent_cwd(sessions, "/srv/brain"), "/srv/brain/projects/faryo")

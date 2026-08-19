@@ -1,4 +1,5 @@
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -47,6 +48,72 @@ class AgentSessionTest(unittest.TestCase):
 
         self.assertEqual(count, 2)
         cleanup.assert_called_once_with(self.config)
+
+    def test_new_managed_session_uses_the_first_available_faryo_number(self):
+        with mock.patch.object(server, "tmux_sessions", return_value=["codex", "faryo1", "faryo3", "faryo-legacy"]):
+            self.assertEqual(server.next_faryo_session_name(self.config), "faryo2")
+
+    def test_directory_browser_lists_only_allowed_visible_directories(self):
+        with tempfile.TemporaryDirectory() as root:
+            workspace = Path(root) / "workspace"
+            visible = workspace / "visible"
+            hidden = workspace / ".hidden"
+            outside = Path(root) / "outside"
+            visible.mkdir(parents=True)
+            hidden.mkdir()
+            outside.mkdir()
+            (workspace / "file.txt").write_text("not a directory", encoding="utf-8")
+            (workspace / "escape").symlink_to(outside, target_is_directory=True)
+            with mock.patch.dict(server.os.environ, {
+                "FARYO_START_DIRECTORY_ROOTS": str(workspace),
+                "FARYO_PROJECT_WORKBENCH_ALLOWED_ROOTS": "",
+            }, clear=False):
+                payload = server.directory_browser_payload(self.config, str(workspace))
+                child = server.directory_browser_payload(self.config, str(visible))
+                with self.assertRaises(server.OwnerError) as denied:
+                    server.resolve_start_directory(str(outside))
+
+        self.assertEqual([item["name"] for item in payload["directories"]], ["visible"])
+        self.assertEqual(payload["selectionToken"], server.directory_selection_token(self.config, workspace.resolve()))
+        self.assertEqual(child["parent"], str(workspace.resolve()))
+        self.assertEqual(denied.exception.status, server.HTTPStatus.FORBIDDEN)
+
+    def test_agent_start_waits_for_a_real_codex_process(self):
+        completed = server.subprocess.CompletedProcess(["tmux"], 0, "", "")
+        with (
+            mock.patch.object(server, "active_agent_count", return_value=0),
+            mock.patch.object(server, "agent_login_shell", return_value="/bin/bash"),
+            mock.patch.object(server, "codex_cli_argv", return_value=["/runtime/node", "/runtime/codex.js"]),
+            mock.patch.object(server, "tmux", return_value=completed) as tmux,
+            mock.patch.object(server, "tmux_session_option"),
+            mock.patch.object(server, "has_session", return_value=True),
+            mock.patch.object(server, "codex_cli_in_pane", side_effect=[False, True]),
+            mock.patch.object(server, "ensure_pane_width") as ensure_width,
+            mock.patch.object(server.time, "sleep"),
+        ):
+            name = server.start_agent_runtime(self.config, Path("/workspace"), "codex", [], max_running=8)
+
+        launch = next(call.args[1] for call in tmux.call_args_list if call.args[1][0] == "new-session")
+        self.assertTrue(name.startswith("faryo") and name[5:].isdigit())
+        self.assertIn("/bin/bash", launch)
+        self.assertIn("/runtime/codex.js", launch[-1])
+        ensure_width.assert_called_once()
+
+    def test_agent_start_timeout_removes_the_empty_tmux(self):
+        completed = server.subprocess.CompletedProcess(["tmux"], 0, "", "")
+        with (
+            mock.patch.object(server, "AGENT_START_READY_TIMEOUT", 0),
+            mock.patch.object(server, "active_agent_count", return_value=0),
+            mock.patch.object(server, "agent_login_shell", return_value="/bin/bash"),
+            mock.patch.object(server, "codex_cli_argv", return_value=["/runtime/codex"]),
+            mock.patch.object(server, "tmux", return_value=completed) as tmux,
+            mock.patch.object(server, "tmux_session_option"),
+        ):
+            with self.assertRaises(server.OwnerError) as raised:
+                server.start_agent_runtime(self.config, Path("/workspace"), "codex", [])
+
+        self.assertEqual(raised.exception.status, server.HTTPStatus.BAD_GATEWAY)
+        self.assertTrue(any(call.args[1][:2] == ["kill-session", "-t"] for call in tmux.call_args_list))
 
     def test_workspace_history_scope_hides_unmapped_desktop_agent(self):
         with (

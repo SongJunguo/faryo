@@ -186,6 +186,22 @@ FARYO_HISTORY_PYTHON=/path/to/project/python \
   apps/owner/local-tmux-owner/tests/browser-full-history.sh
 ```
 
+The isolated runtime-start check removes zsh from PATH, starts a managed
+`faryoN` Codex-shaped process through the bash fallback, validates an explicit
+directory root, requires Owner to observe the live process before returning
+success, and removes only the temporary session:
+
+```bash
+FARYO_START_PYTHON=/path/to/project/python \
+  apps/owner/local-tmux-owner/tests/start-codex-runtime.sh
+```
+
+`FARYO_START_DIRECTORY_ROOTS` is an `os.pathsep`/colon-separated list used only
+by the authenticated directory picker and start validation. Owner canonicalizes
+each selected path, lists directories only, hides dot-directories, rejects
+symlink escapes, and signs the selected absolute path. Gateway verifies that
+signature before forwarding the launch; Owner validates the root again.
+
 Persistent send receipts can be verified across a real Owner process restart
 without writing to an existing conversation:
 

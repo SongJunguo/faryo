@@ -54,9 +54,28 @@ class CodexTranscriptTest(unittest.TestCase):
         self.assertEqual(usage["percent"], 18.4)
 
     def test_configured_codex_executable_wins_over_service_path(self):
-        with mock.patch.dict(server.os.environ, {"FARYO_CODEX_BIN": "/opt/codex/bin/codex"}, clear=False):
-            with mock.patch.object(server.shutil, "which", return_value="/usr/bin/codex"):
-                self.assertEqual(server.agent_launch_executable("codex"), "/opt/codex/bin/codex")
+        with tempfile.TemporaryDirectory() as root:
+            executable = Path(root) / "codex"
+            executable.write_text("#!/bin/sh\n", encoding="utf-8")
+            executable.chmod(0o755)
+            with mock.patch.dict(server.os.environ, {"FARYO_CODEX_BIN": str(executable)}, clear=False):
+                with mock.patch.object(server.shutil, "which", return_value="/usr/bin/codex"):
+                    self.assertEqual(server.agent_launch_executable("codex"), str(executable))
+
+    def test_invalid_configured_codex_executable_fails_before_tmux(self):
+        with mock.patch.dict(server.os.environ, {"FARYO_CODEX_BIN": "/missing/codex"}, clear=False):
+            with self.assertRaises(server.OwnerError) as raised:
+                server.agent_launch_executable("codex")
+
+        self.assertEqual(raised.exception.status, server.HTTPStatus.BAD_GATEWAY)
+
+    def test_login_shell_falls_back_to_bash_when_zsh_is_missing(self):
+        def which(command):
+            return {"zsh": None, "bash": "/bin/bash", "sh": "/bin/sh"}.get(command)
+
+        with mock.patch.dict(server.os.environ, {"FARYO_AGENT_SHELL": "", "SHELL": ""}, clear=False):
+            with mock.patch.object(server.shutil, "which", side_effect=which):
+                self.assertEqual(server.agent_login_shell(), "/bin/bash")
 
     def test_codex_executable_falls_back_to_service_path(self):
         with mock.patch.dict(server.os.environ, {}, clear=False):

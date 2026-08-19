@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -14,6 +14,7 @@ const expectedRouteLabel = process.env.FARYO_SMOKE_EXPECT_ROUTE_LABEL || '';
 const viewportWidth = Number(process.env.FARYO_SMOKE_VIEWPORT_WIDTH || 430);
 const viewportHeight = Number(process.env.FARYO_SMOKE_VIEWPORT_HEIGHT || 820);
 const smokeTheme = process.env.FARYO_SMOKE_THEME || '';
+const directoryScreenshotPath = process.env.FARYO_SMOKE_DIRECTORY_SCREENSHOT || '';
 const hostResolverRules = process.env.FARYO_SMOKE_HOST_RESOLVER_RULES || 'MAP * ~NOTFOUND, EXCLUDE 127.0.0.1';
 const chromeBin = process.env.CHROME_BIN || '/usr/bin/google-chrome';
 
@@ -217,6 +218,51 @@ try {
   const explicitLaunchTitle = launchConfirmation.title.startsWith('Start ') || launchConfirmation.title === 'Agent limit reached';
   if (!launchConfirmation.open || !explicitLaunchTitle || !launchConfirmation.choices || !launchConfirmation.hasCancel) {
     throw new Error(`Launcher confirmation did not open: ${JSON.stringify(launchConfirmation)}`);
+  }
+  if (launchConfirmation.title.startsWith('Start ')) {
+    await evaluate("document.querySelector('#modalChoices .choice-btn:not([disabled])')?.click()");
+    let cwdConfirmation = {};
+    for (let attempt = 0; attempt < 40; attempt += 1) {
+      await delay(50);
+      cwdConfirmation = await evaluate(`(() => ({
+        open: document.getElementById('modal')?.classList.contains('open'),
+        title: document.getElementById('modalTitle')?.textContent || '',
+        choices: document.querySelectorAll('#modalChoices .choice-btn').length,
+        body: document.getElementById('modalBody')?.textContent || '',
+        hasPath: [...document.querySelectorAll('#modalChoices .choice-btn span')].some((item) => item.textContent.trim().length > 0),
+        hasParent: [...document.querySelectorAll('#modalChoices .choice-btn strong')].some((item) => item.textContent.startsWith('↑ Parent folder')),
+        hasCancel: [...document.querySelectorAll('#modalActions button')].some((item) => item.textContent === 'Cancel'),
+        cancelVisible: (() => { const item=[...document.querySelectorAll('#modalActions button')].find((button)=>button.textContent==='Cancel'),rect=item?.getBoundingClientRect();return Boolean(rect&&rect.top>=0&&rect.bottom<=innerHeight); })(),
+        sheetContained: (() => { const rect=document.querySelector('#modal .sheet')?.getBoundingClientRect();return Boolean(rect&&rect.top>=0&&rect.bottom<=innerHeight); })(),
+        listScrollable: (() => { const list=document.getElementById('modalChoices');return Boolean(list&&list.scrollHeight>list.clientHeight); })(),
+      }))()`);
+      if (cwdConfirmation?.title === 'Choose working directory') break;
+    }
+    if (!cwdConfirmation.open || cwdConfirmation.title !== 'Choose working directory'
+      || !cwdConfirmation.choices || !cwdConfirmation.hasPath || !cwdConfirmation.hasCancel
+      || !cwdConfirmation.hasParent || !cwdConfirmation.cancelVisible
+      || !cwdConfirmation.sheetContained || !cwdConfirmation.listScrollable) {
+      throw new Error(`Working-directory confirmation did not open: ${JSON.stringify(cwdConfirmation)}`);
+    }
+    if (directoryScreenshotPath) {
+      const screenshot = await send('Page.captureScreenshot', { format: 'png', fromSurface: true });
+      await writeFile(directoryScreenshotPath, Buffer.from(screenshot.data, 'base64'));
+    }
+    await evaluate("[...document.querySelectorAll('#modalChoices .choice-btn')].find((item) => item.querySelector('strong')?.textContent.startsWith('↑ Parent folder'))?.click()");
+    let parentDirectory = {};
+    for (let attempt = 0; attempt < 40; attempt += 1) {
+      await delay(50);
+      parentDirectory = await evaluate(`(() => ({
+        title: document.getElementById('modalTitle')?.textContent || '',
+        body: document.getElementById('modalBody')?.textContent || '',
+        canSelect: document.querySelector('#modalChoices .choice-btn strong')?.textContent === 'Use this folder',
+      }))()`);
+      if (parentDirectory.body && parentDirectory.body !== cwdConfirmation.body) break;
+    }
+    if (parentDirectory.title !== 'Choose working directory' || !parentDirectory.canSelect
+      || !parentDirectory.body || parentDirectory.body === cwdConfirmation.body) {
+      throw new Error(`Parent-directory navigation failed: ${JSON.stringify(parentDirectory)}`);
+    }
   }
   await evaluate("[...document.querySelectorAll('#modalActions button')].find((item) => item.textContent === 'Cancel')?.click()");
 

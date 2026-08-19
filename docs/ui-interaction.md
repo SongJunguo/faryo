@@ -29,6 +29,14 @@ The authenticated Gateway home page keeps two session regions separate:
 Only sessions created and stamped by Faryo expose remote Close. Desktop-created
 tmux sessions can be opened but are not remotely destroyed.
 
+`Start Codex` is successful only after Owner observes a live Codex process in
+the new managed tmux. A missing CLI, invalid configured path, unavailable shell,
+or readiness timeout returns an explicit error and removes the partial session.
+Managed sessions use the first free `faryoN` name. The start flow asks for the
+workstation, then opens a directory-only browser at the most recent cwd. It
+shows the current path, parent, configured roots, recent locations and child
+folders; the selected canonical path is signed and revalidated by Owner.
+
 Gateway route labels come from runtime configuration. Public browser requests
 never receive raw Owner tokens; Gateway injects them while proxying.
 
@@ -179,6 +187,10 @@ The maintained matrix includes:
 - structured Markdown/GFM/KaTeX/Shiki;
 - 40-question complete index, bounded first page, cursor preload, lazy jump,
   eventual full DOM loading, auto-hide, stable append, and unchanged width;
+- isolated no-zsh startup, invalid executable, readiness timeout cleanup, and a
+  real Gateway-to-Owner Codex start;
+- mobile directory-picker containment, default recent cwd, HMAC tamper rejection,
+  `faryoN` naming and exact test-session cleanup;
 - offline/background recovery and 20-message exact delivery;
 - cross-session retry/delayed-response isolation;
 - protected files/images, CSP, and safe render fallback;

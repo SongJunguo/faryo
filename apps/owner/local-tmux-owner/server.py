@@ -14,6 +14,7 @@ from email import policy
 from email.parser import BytesParser
 import gzip
 import hashlib
+import hmac
 import html as _html
 import io
 import json
@@ -120,6 +121,8 @@ AGENT_SESSION_LIST_LIMIT = 20
 AGENT_SESSION_QUERY_LIMIT = 1000
 EMPTY_MANAGED_SESSION_TTL_SECONDS = 60
 MAX_MANAGED_AGENT_IDLE_SECONDS = 24 * 60 * 60
+AGENT_START_READY_TIMEOUT = 15.0
+START_DIRECTORY_MAX_ENTRIES = 160
 RUNTIME_LOCK = threading.RLock()
 RELEASE_VERSION_CACHE: str | None = None
 FARYO_OWNER_DATA = Path(os.environ.get("FARYO_OWNER_DATA", str(Path.home() / ".faryo" / "owner" / "data"))).expanduser()
@@ -696,12 +699,18 @@ def codex_thread_by_id(thread_id: str) -> dict[str, Any] | None:
 def agent_launch_executable(command: str) -> str:
     configured = os.environ.get("FARYO_CODEX_BIN", "").strip() if command == "codex" else ""
     if configured:
-        return str(Path(configured).expanduser())
-    return shutil.which(command) or command
+        path = Path(configured).expanduser()
+        if not path.is_file() or not os.access(path, os.X_OK):
+            raise OwnerError("configured Codex executable is missing or not executable", HTTPStatus.BAD_GATEWAY)
+        return str(path)
+    executable = shutil.which(command)
+    if not executable:
+        raise OwnerError("Codex executable was not found in the Owner environment", HTTPStatus.BAD_GATEWAY)
+    return executable
 
 
-def codex_app_server_argv(*args: str) -> list[str]:
-    """Build an app-server command that also works outside a login shell."""
+def codex_cli_argv(*args: str) -> list[str]:
+    """Build a Codex command that also works outside a login shell."""
     executable = Path(agent_launch_executable("codex")).expanduser()
     try:
         resolved = executable.resolve()
@@ -718,11 +727,48 @@ def codex_app_server_argv(*args: str) -> list[str]:
     return [str(executable), *args]
 
 
+def codex_app_server_argv(*args: str) -> list[str]:
+    return codex_cli_argv(*args)
+
+
+def agent_login_shell() -> str:
+    candidates = [
+        os.environ.get("FARYO_AGENT_SHELL", "").strip(),
+        os.environ.get("SHELL", "").strip(),
+        shutil.which("zsh") or "",
+        shutil.which("bash") or "",
+        shutil.which("sh") or "",
+        "/bin/bash",
+        "/bin/sh",
+    ]
+    for candidate in candidates:
+        if not candidate:
+            continue
+        path = Path(candidate).expanduser() if "/" in candidate else Path(shutil.which(candidate) or "")
+        if path.is_file() and os.access(path, os.X_OK):
+            return str(path)
+    raise OwnerError("no executable login shell is available", HTTPStatus.BAD_GATEWAY)
+
+
+def next_faryo_session_name(config: Config) -> str:
+    used = {
+        int(match.group(1))
+        for name in tmux_sessions(config)
+        if (match := FARYO_MANAGED_SESSION_RE.fullmatch(name))
+    }
+    index = 1
+    while index in used:
+        index += 1
+    return f"faryo{index}"
+
+
 def start_agent_runtime(config: Config, cwd: Path, command: str, args: list[str], max_running: int = 0, wait_ready: bool = True, agent_id: str = "", title: str = "") -> str:
     with RUNTIME_LOCK:
         if max_running and active_agent_count(config) >= max_running: raise OwnerError("running agent limit reached", HTTPStatus.CONFLICT)
-        name = f"faryo-{_dt.datetime.now():%m%d-%H%M%S}-{secrets.token_hex(2)}"; executable = agent_launch_executable(command)
-        shell = shutil.which("zsh") or "/usr/bin/zsh"; launch = f"{shlex.join([executable, *args])}; exec {shlex.quote(shell)} -l"
+        name = next_faryo_session_name(config)
+        shell = agent_login_shell()
+        argv = codex_cli_argv(*args) if command == "codex" else [agent_launch_executable(command), *args]
+        launch = f"{shlex.join(argv)}; exec {shlex.quote(shell)} -l"
         res = tmux(config, ["new-session", "-d", "-s", name, "-c", str(cwd), shell, "-lc", launch], timeout=5)
         if res.returncode != 0: raise OwnerError(res.stderr.strip() or "tmux session start failed", HTTPStatus.INTERNAL_SERVER_ERROR)
         if source := AGENT_SOURCE_BY_COMMAND.get(command): tmux_session_option(config, name, "@faryo_agent_source", source)
@@ -732,7 +778,7 @@ def start_agent_runtime(config: Config, cwd: Path, command: str, args: list[str]
             tmux_session_option(config, name, "@faryo_agent_session_id", agent_id)
     if not wait_ready:
         return name
-    target = Config(name, config.token, config.pane_width); deadline = time.monotonic() + 10.0
+    target = Config(name, config.token, config.pane_width); deadline = time.monotonic() + AGENT_START_READY_TIMEOUT
     while time.monotonic() < deadline:
         if has_session(target) and codex_cli_in_pane(target): ensure_pane_width(target); return name
         time.sleep(0.2)
@@ -834,6 +880,7 @@ def close_shell_session(config: Config, session: str | None) -> None:
 
 
 TMUX_SESSION_NAME_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,80}$")
+FARYO_MANAGED_SESSION_RE = re.compile(r"^faryo([1-9][0-9]*)$")
 CODEX_THREAD_ID_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,120}$")
 CLIENT_MESSAGE_ID_RE = re.compile(r"^[A-Za-z0-9_.:-]{8,128}$")
 
@@ -2700,6 +2747,79 @@ def resolve_local_image_path(path_value: str | None, config: Config, workspace_r
     return resolve_local_path(path_value, config, IMAGE_SUFFIXES, workspace_root)
 
 
+def start_directory_roots(workspace_root: str | None = None) -> list[Path]:
+    values = []
+    for name in ("FARYO_START_DIRECTORY_ROOTS", "FARYO_PROJECT_WORKBENCH_ALLOWED_ROOTS"):
+        values.extend(part for part in os.environ.get(name, "").split(os.pathsep) if part.strip())
+    if workspace_root:
+        values.append(workspace_root)
+    if not values:
+        values.append(str(Path.home()))
+    roots: list[Path] = []
+    for value in values:
+        try:
+            root = Path(os.path.expandvars(value)).expanduser().resolve()
+        except OSError:
+            continue
+        if root.is_dir() and root not in roots:
+            roots.append(root)
+    return roots
+
+
+def resolve_start_directory(path_value: str | None, workspace_root: str | None = None) -> tuple[Path, list[Path]]:
+    roots = start_directory_roots(workspace_root)
+    if not roots:
+        raise OwnerError("no start-directory roots are configured", HTTPStatus.FORBIDDEN)
+    raw = str(path_value or "").strip()
+    try:
+        path = (Path(os.path.expandvars(raw)).expanduser() if raw else roots[0]).resolve()
+    except OSError as exc:
+        raise OwnerError("working directory is unavailable", HTTPStatus.NOT_FOUND) from exc
+    if not any(path == root or path.is_relative_to(root) for root in roots):
+        raise OwnerError("working directory is outside the configured roots", HTTPStatus.FORBIDDEN)
+    if not path.is_dir():
+        raise OwnerError("working directory is unavailable", HTTPStatus.NOT_FOUND)
+    return path, roots
+
+
+def directory_selection_token(config: Config, path: Path) -> str:
+    return hmac.new(config.token.encode("utf-8"), f"cwd:{path}".encode("utf-8"), hashlib.sha256).hexdigest()
+
+
+def directory_browser_payload(config: Config, path_value: str | None, workspace_root: str | None = None) -> dict[str, Any]:
+    path, roots = resolve_start_directory(path_value, workspace_root)
+    parent = path.parent if path.parent != path and any(path.parent == root or path.parent.is_relative_to(root) for root in roots) else None
+    directories = []
+    try:
+        children = sorted(path.iterdir(), key=lambda item: item.name.casefold())
+    except OSError as exc:
+        raise OwnerError("working directory cannot be listed", HTTPStatus.FORBIDDEN) from exc
+    for child in children:
+        if child.name.startswith("."):
+            continue
+        try:
+            resolved = child.resolve()
+        except OSError:
+            continue
+        if not resolved.is_dir() or not any(resolved == root or resolved.is_relative_to(root) for root in roots):
+            continue
+        directories.append({"name": child.name, "path": str(resolved), "displayPath": short_path(str(resolved))})
+        if len(directories) >= START_DIRECTORY_MAX_ENTRIES:
+            break
+    return {
+        "ok": True,
+        "path": str(path),
+        "displayPath": short_path(str(path)) or str(path),
+        "selectionToken": directory_selection_token(config, path),
+        "parent": str(parent) if parent else "",
+        "parentDisplayPath": short_path(str(parent)) if parent else "",
+        "directories": directories,
+        "roots": [{"path": str(root), "displayPath": short_path(str(root)) or str(root)} for root in roots],
+        "truncated": len(directories) >= START_DIRECTORY_MAX_ENTRIES,
+        "updatedAt": now_iso(),
+    }
+
+
 def compact_text(value: Any) -> str:
     return wb_state.compact_text(value)
 
@@ -3786,6 +3906,15 @@ class Handler(SimpleHTTPRequestHandler):
                     around=around,
                 ))
                 return
+            if parsed.path == "/api/directories":
+                self.require_token(parsed)
+                query = parse_qs(parsed.query)
+                self.write_json(directory_browser_payload(
+                    self.config,
+                    query.get("path", [""])[0],
+                    self.workspace_root(),
+                ))
+                return
             if parsed.path == "/api/capture":
                 self.require_token(parsed)
                 query = parse_qs(parsed.query)
@@ -3959,16 +4088,17 @@ class Handler(SimpleHTTPRequestHandler):
                 workspace_root = self.workspace_root()
                 raw_cwd = compact_text(payload.get("cwd") or payload.get("project_root"))
                 if raw_cwd:
-                    cwd = Path(raw_cwd).expanduser()
-                    if not cwd.is_dir():
-                        raise OwnerError("cwd not found", HTTPStatus.BAD_REQUEST)
+                    cwd, _roots = resolve_start_directory(raw_cwd, workspace_root)
+                    cwd_token = str(payload.get("cwd_token") or payload.get("cwdToken") or "").strip()
+                    if cwd_token and not hmac.compare_digest(cwd_token, directory_selection_token(self.config, cwd)):
+                        raise OwnerError("working directory selection expired", HTTPStatus.CONFLICT)
                 else:
                     cwd = Path(workspace_root or get_pane_cwd(self.config) or str(Path.home())).expanduser(); cwd = cwd if cwd.is_dir() else Path.home()
                 command = clean_agent_launch_command(str(payload.get("command") or ""))
                 if not command:
                     raise OwnerError("invalid launch command")
                 title = clean_session_title(payload.get("title"))
-                name = start_agent_runtime(self.config, cwd, command, [], bounded_max_running(payload), wait_ready=False, title=title)
+                name = start_agent_runtime(self.config, cwd, command, [], bounded_max_running(payload), wait_ready=True, title=title)
                 self.write_json({"ok": True, "session": name, "updatedAt": now_iso()})
                 return
             if parsed.path == "/api/agent/cleanup-idle":

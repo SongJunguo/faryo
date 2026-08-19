@@ -145,6 +145,12 @@ micromark -> mdast -> CommonMark/GFM/math nodes -> safe HTML -> KaTeX
 - Keeps history server-paginated at 10 records per page with Previous/Next and
   direct page-number navigation.
 - Allows remote Close only for sessions that Faryo created and stamped.
+- `Start Codex` resolves the configured CLI with its matching Node runtime,
+  selects an available login shell, and returns success only after the Codex
+  process is present; failed starts remove their partial tmux session.
+- New managed sessions use `faryo1`, `faryo2`, ... names. After choosing a
+  workstation, an authenticated directory browser opens at the most recent cwd
+  and offers parent, configured roots, recent locations, and child folders.
 - Injects Owner tokens server-side so public browser URLs do not contain them.
 
 ## Architecture
@@ -231,7 +237,7 @@ or an equivalent exact-identity layer.
 
 The `main` branch was revalidated on 2026-08-19 with privacy-safe fixtures:
 
-- source checks plus 56 Owner and 45 Gateway Python tests;
+- source checks plus 62 Owner and 48 Gateway Python tests;
 - a 20-message browser delivery matrix including Chinese, multiline Markdown,
   TeX, attachment, offline/background recovery, and failed-draft cases;
 - a two-session retry/delayed-response isolation test;
@@ -245,8 +251,12 @@ The `main` branch was revalidated on 2026-08-19 with privacy-safe fixtures:
   using count-only diagnostics that never record its conversation text;
 - a 263.3 MiB rollout cold-read check at about 0.0025 s and 41.5 MiB process peak
   RSS on the validated workstation;
-- Owner/Gateway health and unchanged dimensions for five active Codex tmux
-  sessions after deployment.
+- a real Gateway `Start Codex` reaching a ready managed tmux in 0.853 s, followed
+  by exact cleanup of the test session;
+- a real `faryo1` start in the browser-selected recent directory, with a forged
+  directory credential rejected as HTTP 400 and the test session cleaned;
+- Owner/Gateway health and unchanged dimensions for every pre-existing Codex
+  tmux session after deployment.
 - desktop and mobile Gateway checks with exactly one Codex launcher and three
   independently fetched 10-record history pages.
 
