@@ -21,6 +21,10 @@ def session(cwd: str, updated_ts: float) -> dict:
 
 
 class SelectRecentAgentCwdTest(unittest.TestCase):
+    def test_only_codex_is_a_supported_agent_launcher(self) -> None:
+        self.assertEqual(gateway.clean_agent_launch_command("codex"), "codex")
+        self.assertIsNone(gateway.clean_agent_launch_command("claude"))
+
     def test_picks_most_recent_cwd(self) -> None:
         sessions = [session("~/brain/projects/old", 10), session("~/brain/projects/faryo", 20)]
         self.assertEqual(gateway.select_recent_agent_cwd(sessions, None), "~/brain/projects/faryo")

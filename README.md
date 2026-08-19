@@ -171,6 +171,11 @@ control surface; the durable work remains in tmux and Codex's own history.
 - current Chrome or Microsoft Edge
 - a public HTTPS edge only when remote access is required
 
+This fork deliberately maintains one production path: Codex on Ubuntu/Linux.
+The inherited Claude runtime, macOS launchd installer, and unvalidated binary
+package builders have been retired. Historical release notes remain available
+for audit, but they do not define current platform support.
+
 Create an isolated environment rather than modifying Conda base:
 
 ```bash
@@ -222,7 +227,7 @@ or an equivalent exact-identity layer.
 
 The `main` branch was revalidated on 2026-08-19 with privacy-safe fixtures:
 
-- release checks plus 56 Owner and 44 Gateway Python tests;
+- source checks plus 53 Owner and 45 Gateway Python tests;
 - a 20-message browser delivery matrix including Chinese, multiline Markdown,
   TeX, attachment, offline/background recovery, and failed-draft cases;
 - a two-session retry/delayed-response isolation test;
@@ -236,16 +241,17 @@ The `main` branch was revalidated on 2026-08-19 with privacy-safe fixtures:
   RSS on the validated workstation;
 - Owner/Gateway health and unchanged dimensions for five active Codex tmux
   sessions after deployment.
+- desktop and mobile Gateway checks with exactly one Codex launcher and three
+  independently fetched 10-record history pages.
 
 Run the repository release checks with the selected project environment:
 
 ```bash
-PATH="$CONDA_PREFIX/bin:$PATH" scripts/package-client.sh check
+PATH="$CONDA_PREFIX/bin:$PATH" scripts/check-source.sh
 ```
 
-The check target validates source syntax, browser bundles, Owner tests, and
-required runtime asset inclusion. It does not mean that this fork currently
-publishes a binary package.
+This command validates source syntax, browser bundles, Owner tests, required
+runtime assets, and the absence of retired compatibility paths.
 
 ## Security Boundary
 
@@ -287,6 +293,7 @@ tools/              Development-only Markdown bundle builder
 - [Current UI interaction contract](docs/ui-interaction.md)
 - [Current UI plan and evidence](docs/plans/deepseek-inspired-ui-plan.md)
 - [Codex reliability plan and evidence](docs/plans/codex-reliability-hardening-plan.md)
+- [Codebase cleanup scope and evidence](docs/plans/codebase-cleanup-plan.md)
 - [Personal fork roadmap](docs/plans/personal-fork-roadmap.md)
 
 ## Inspiration and Acknowledgements

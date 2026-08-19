@@ -173,6 +173,7 @@ try {
         ),
         launcherCount: launchers.length,
         launcherLabelsClear: launchers.every((item) => item.textContent.includes('Start ') && !item.textContent.includes('$ ')),
+        launcherIsCodexOnly: launchers.length === 1 && launchers[0].textContent.includes('Start Codex'),
         palette: {
           bg: rootStyle.getPropertyValue('--bg').trim().toLowerCase(),
           accent: rootStyle.getPropertyValue('--accent').trim().toLowerCase(),
@@ -194,6 +195,7 @@ try {
   if (!['auto', 'scroll'].includes(first.overflowY) || !first.scrollable) throw new Error('Session History is not independently scrollable');
   if (!first.fileTransferReady) throw new Error('Files-to-session controls are not discoverable');
   if (!first.launcherCount || !first.launcherLabelsClear) throw new Error('New-session launchers are unclear');
+  if (!first.launcherIsCodexOnly) throw new Error('Retired agent launchers are still visible');
   const validPalettes = new Set(['#f6f7f9:#5369e7', '#0f1115:#7188ff']);
   if (!validPalettes.has(`${first.palette.bg}:${first.palette.accent}`)) throw new Error(`Unexpected shared palette: ${JSON.stringify(first.palette)}`);
   const expectedPalette = { light: '#f6f7f9:#5369e7', dark: '#0f1115:#7188ff' }[smokeTheme];

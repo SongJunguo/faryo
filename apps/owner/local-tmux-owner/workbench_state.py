@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import datetime as _dt
-import hashlib
 import json
 import os
 import re
@@ -103,10 +102,6 @@ def clean_project(project: dict[str, Any]) -> dict[str, Any]:
 
 def project_text(project: dict[str, Any]) -> str:
     return json.dumps(project, ensure_ascii=False, indent=2) + "\n"
-
-
-def project_hash(project: dict[str, Any]) -> str:
-    return hashlib.sha256(json.dumps(project, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
 
 
 def event_id() -> str:

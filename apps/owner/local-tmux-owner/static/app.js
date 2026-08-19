@@ -19,9 +19,8 @@
   const panelBackdrop = $('panelBackdrop');
   const commandSuggest = $('commandSuggest');
   const promptShell = document.querySelector('.prompt-shell');
-  const metaLineRe = /^\s*(gpt|o\d|claude)[\w.\- ]*·\s+/;
+  const metaLineRe = /^\s*(gpt|o\d)[\w.\- ]*·\s+/;
   const codexCompactRules = window.FaryoCodexCompactRules || {};
-  const claudeCompactRules = window.FaryoClaudeCompactRules || {};
   const markdownRenderer = window.FaryoMarkdownAst || {};
   const internalAnnotations = window.FaryoInternalAnnotations || {};
   const eventStreamParser = window.FaryoEventStream || {};
@@ -58,7 +57,7 @@
     'Tap folder to switch sessions',
     'Set font on home',
   ];
-  const COMMAND_SUGGESTIONS = ['/permissions', '/model', '/rename', '/new', 'codex', 'codex resume', 'codex --yolo', 'claude', 'claude --dangerously-skip-permissions', 'claude --resume'];
+  const COMMAND_SUGGESTIONS = ['/permissions', '/model', '/rename', '/new', 'codex', 'codex resume', 'codex --yolo'];
   let captureRefreshInFlight = false, pendingCaptureRefreshLines = null, pendingDeferredCapture = null, activeCaptureRefreshController = null, captureRefreshRunId = 0;
   let statusRefreshInFlight = false, activeStatusRefreshController = null, statusRefreshRunId = 0, statusRefreshTimer = null;
   let eventStreamController = null, eventStreamRunId = 0, eventRetryTimer = null, captureFallbackTimer = null, eventRetryDelayMs = 1800, liveState = 'fallback';
@@ -281,7 +280,7 @@
     }
     return items;
   }
-  function commandMatches() { const q = promptInput.value.trimStart().toLowerCase(); if (/^cd(\s.*)?$/.test(q)) return recentDirCommands().filter((v) => v.toLowerCase().startsWith(q) && v.toLowerCase() !== q).slice(0, 5); return (/^\/[a-z]*$/.test(q) || (q.length >= 2 && ('codex'.startsWith(q) || 'claude'.startsWith(q))) || /^(?:codex|claude)(?:\s+[-\w]+){0,3}\s*$/.test(q)) ? COMMAND_SUGGESTIONS.filter((v) => v.startsWith(q) && v !== q).slice(0, 5) : []; }
+  function commandMatches() { const q = promptInput.value.trimStart().toLowerCase(); if (/^cd(\s.*)?$/.test(q)) return recentDirCommands().filter((v) => v.toLowerCase().startsWith(q) && v.toLowerCase() !== q).slice(0, 5); return (/^\/[a-z]*$/.test(q) || (q.length >= 2 && 'codex'.startsWith(q)) || /^codex(?:\s+[-\w]+){0,3}\s*$/.test(q)) ? COMMAND_SUGGESTIONS.filter((v) => v.startsWith(q) && v !== q).slice(0, 5) : []; }
   function applyCommandSuggestion(value) { promptInput.value = value; promptInput.focus(); promptInput.setSelectionRange(value.length, value.length); autosize(); updateSendVisibility(); renderCommandSuggestions(); return true; }
   function renderCommandSuggestions() { const items = commandMatches(); if (!commandSuggest) return; commandSuggest.classList.toggle('hidden', !items.length); commandSuggest.innerHTML = items.map((v) => `<button type="button" data-value="${escapeHtml(v)}">${escapeHtml(v)}</button>`).join(''); }
   function handleCommandSuggestionKey(event) { const [value] = commandMatches(); if ((event.key === 'Tab' || event.key === 'Enter') && value) { event.preventDefault(); return applyCommandSuggestion(value); } if (event.key === 'Escape') commandSuggest?.classList.add('hidden'); return false; }
@@ -1274,7 +1273,7 @@
 
   function compactRulesForCapture(capture) {
     const source = String(capture?.agentSource || capture?.source || '').toLowerCase();
-    const rules = source === 'claude-code' ? claudeCompactRules : (source === 'codex-cli' ? codexCompactRules : runtimeCompactRules);
+    const rules = source === 'codex-cli' ? codexCompactRules : runtimeCompactRules;
     return {
       userPromptRe: rules.userPromptRe || runtimeCompactRules.userPromptRe,
       compactBlocks: rules.compactBlocks || runtimeCompactRules.compactBlocks,

@@ -32,7 +32,6 @@ import sys
 import tempfile
 import threading
 import time
-import urllib.request
 import uuid
 try:
     import tomllib
@@ -65,7 +64,6 @@ SHARED_STATIC_DIR = SHARED_DIR / "static"
 RELEASE_FILE = APP_DIR.parent / "RELEASE"
 AGENT_STATE_DB = Path.home() / ".codex" / "state_5.sqlite"
 CODEX_SESSION_INDEX = Path.home() / ".codex" / "session_index.jsonl"
-CLAUDE_PROJECTS_ROOT = Path(os.environ.get("CLAUDE_CONFIG_DIR", str(Path.home() / ".claude"))).expanduser() / "projects"
 DEFAULT_SESSION = "__faryo_no_default__"
 DEFAULT_PORT = 8765
 SHARED_STATIC_FILES = {
@@ -232,10 +230,7 @@ USER_PROMPT_RE = re.compile(r"^\s*›\s+")
 # active.  Both glyphs identify the live composer; historical user messages
 # continue to use `›` and are matched separately by USER_PROMPT_RE.
 AGENT_INPUT_PROMPT_RE = re.compile(r"^\s*[›>»](?:\s|$)")
-AGENT_META_RE = re.compile(r"^\s*((?:gpt|o\d|claude)[\w.\- ]*)\s*·\s+(.+?)\s*$", re.I)
-CLAUDE_USER_PROMPT_RE = re.compile(r"^\s*(?:[›>❯]\s+|[│┃]\s*[›>❯]\s+)")
-CLAUDE_INPUT_PROMPT_RE = re.compile(r"^\s*(?:[›>❯](?:\s|$)|[│┃]\s*[›>❯](?:\s|$))")
-CLAUDE_PROMPT_HINT_RE = re.compile(r"^\s*\? for shortcuts\b.*$", re.I)
+AGENT_META_RE = re.compile(r"^\s*((?:gpt|o\d)[\w.\- ]*)\s*·\s+(.+?)\s*$", re.I)
 NO_AGENT_META_RE = re.compile(r"a^")
 ROLLOUT_THREAD_ID_RE = re.compile(r"rollout-.*-(?P<id>[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})\.jsonl", re.I)
 REASONING_EFFORT_SUFFIX_RE = re.compile(r"\b(?P<effort>low|medium|high|xhigh)\s*$", re.I)
@@ -247,32 +242,27 @@ FAST_CONFIG_KEYS = {
 }
 SESSION_GIT_PREFIXES = ("🌿", "✏️", "✏", "⚠️")
 SESSION_GIT_ROOT_OPTION = "@faryo_git_root"
-SESSION_TITLE_NOISE_RE = re.compile(r"^(?:📁 |Ctx |(?:gpt|o\d|claude)[\w.\- ]+\s+(?:low|medium|high|xhigh)$)", re.I)
+SESSION_TITLE_NOISE_RE = re.compile(r"^(?:📁 |Ctx |(?:gpt|o\d)[\w.\- ]+\s+(?:low|medium|high|xhigh)$)", re.I)
 class AgentProfile(NamedTuple):
     key: str
     command: str
     source: str
-    process_names: frozenset[str] = frozenset()
     input_prompt_re: Any = AGENT_INPUT_PROMPT_RE
     user_prompt_re: Any = USER_PROMPT_RE
     meta_re: Any = AGENT_META_RE
     boundary_re: Any = AGENT_BOUNDARY_RE
     placeholder_re: Any = AGENT_PLACEHOLDER_RE
-    prompt_hint_re: Any = NO_AGENT_META_RE
 
 
 CODEX_PROFILE = AgentProfile("codex", "codex", "codex-cli")
-CLAUDE_PROFILE = AgentProfile("claude", "claude", "claude-code", frozenset({"claude"}), CLAUDE_INPUT_PROMPT_RE, CLAUDE_USER_PROMPT_RE, NO_AGENT_META_RE, AGENT_BOUNDARY_RE, AGENT_PLACEHOLDER_RE, CLAUDE_PROMPT_HINT_RE)
-RUNTIME_PROFILE = AgentProfile("runtime", "", "runtime", frozenset(), NO_AGENT_META_RE, NO_AGENT_META_RE, NO_AGENT_META_RE, NO_AGENT_META_RE, NO_AGENT_META_RE, NO_AGENT_META_RE)
-AGENT_PROFILES = (CODEX_PROFILE, CLAUDE_PROFILE)
+RUNTIME_PROFILE = AgentProfile("runtime", "", "runtime", NO_AGENT_META_RE, NO_AGENT_META_RE, NO_AGENT_META_RE, NO_AGENT_META_RE, NO_AGENT_META_RE)
+AGENT_PROFILES = (CODEX_PROFILE,)
 AGENT_LAUNCH_COMMANDS = {profile.command for profile in AGENT_PROFILES}
 AGENT_SOURCE_BY_COMMAND = {profile.command: profile.source for profile in AGENT_PROFILES}
-_CLAUDE_DEEPSEEK_LAUNCHER = os.environ.get("FARYO_CLAUDE_DEEPSEEK_LAUNCHER", "").strip()
-CLAUDE_DEEPSEEK_LAUNCHER = Path(_CLAUDE_DEEPSEEK_LAUNCHER).expanduser() if _CLAUDE_DEEPSEEK_LAUNCHER else None
 BLACK_VALUES = {"#000", "#000000", "black", "rgb(0,0,0)", "rgb(0, 0, 0)"}
-# Explicit terminal white (e.g. Claude Code diff text over the stripped green/red
-# background) is the light-theme twin of BLACK_VALUES: drop it so the text
-# inherits the theme foreground instead of vanishing on light backgrounds.
+# Explicit terminal white is the light-theme twin of BLACK_VALUES: drop it so
+# terminal text inherits the theme foreground instead of vanishing on light
+# backgrounds.
 WHITE_VALUES = {"#fff", "#ffffff", "white", "rgb(255,255,255)", "rgb(255, 255, 255)"}
 USER_INPUT_COLOR = "var(--user-input-color, #CAD2FF)"
 LOW_CONTRAST_TERMINAL_VALUES = {"#000080", "#0000aa", "#0000cd", "#0000ff", "blue"}
@@ -409,13 +399,6 @@ def env_value(*names: str, default: str = "") -> str:
     return default
 
 
-def env_flag(*names: str, default: bool = False) -> bool:
-    value = env_value(*names, default="").strip().lower()
-    if not value:
-        return default
-    return value in {"1", "true", "yes", "on"}
-
-
 def default_owner_label() -> str:
     hostname = socket.gethostname().strip().lower()
     if not hostname:
@@ -525,57 +508,6 @@ def tmux_session_option(config: Config, session: str, key: str, value: str | Non
         tmux(config, ["set-option", "-q", "-t", session, key, value], timeout=2); return value
     res = tmux(config, ["show-options", "-qv", "-t", session, key], timeout=2); return res.stdout.strip() if res.returncode == 0 else ""
 
-def claude_project_dir(cwd: str) -> Path:
-    return CLAUDE_PROJECTS_ROOT / re.sub(r"[^A-Za-z0-9]", "-", cwd)
-
-
-def process_start_epoch(pid: int) -> float:
-    res = run_cmd(["ps", "-o", "etimes=", "-p", str(pid)], timeout=2)
-    if res.returncode != 0: return 0.0
-    try: return time.time() - float(res.stdout.strip())
-    except ValueError: return 0.0
-
-
-def claude_pane_start_ts(config: Config) -> float:
-    pane_pid = get_pane_pid(config)
-    if pane_pid is None: return 0.0
-    pids = [pid for pid, cmd in descendants(pane_pid, process_table()) if agent_profile_matches_cmd(CLAUDE_PROFILE, cmd)]
-    return min((ts for pid in pids if (ts := process_start_epoch(pid))), default=0.0)
-
-
-def live_claude_transcript_id(config: Config) -> str:
-    # Claude Code does not keep its transcript open, so the codex fd scan cannot
-    # tell which session a pane is writing; the newest transcript in the pane
-    # cwd's project dir touched since the pane's claude process started is the
-    # next best live signal. Returns "" when nothing has been written yet.
-    started = claude_pane_start_ts(config); cwd = get_pane_cwd(config)
-    if not started or not cwd: return ""
-    try: candidates = [(path.stat().st_mtime, path.stem) for path in claude_project_dir(cwd).glob("*.jsonl") if not path.name.startswith("agent-") and path.stat().st_mtime >= started - 5.0]
-    except OSError: return ""
-    return max(candidates, default=(0.0, ""))[1]
-
-
-def active_claude_session_map(config: Config) -> dict[str, str]:
-    # The stamp hook only fires for claudes the owner launched; a claude relaunched
-    # by hand from the surviving pane shell leaves the stamp pointing at the exited
-    # session, which used to surface the live conversation as a shadow card. The
-    # live transcript scan overrides such a stale stamp; stamped panes claim their
-    # ids first so a same-cwd live scan cannot steal an id a hook already pinned.
-    active: dict[str, str] = {}
-    relaunched: list[tuple[str, str, str]] = []
-    for name in tmux_sessions(config):
-        target = Config(name, config.token, config.pane_width)
-        if agent_profile_in_pane(target) is not CLAUDE_PROFILE: continue
-        stamped = tmux_session_option(config, name, "@faryo_agent_session_id") or tmux_session_option(config, name, "@faryo_agent_id")
-        live = live_claude_transcript_id(target)
-        if live and live != stamped: relaunched.append((name, live, stamped))
-        elif stamped: active[stamped] = name
-    for name, live, stamped in relaunched:
-        if live not in active: active[live] = name
-        elif stamped and stamped not in active: active[stamped] = name
-    return active
-
-
 def agent_state_rows(sql: str, params: tuple[Any, ...]) -> list[dict[str, Any]]:
     if not AGENT_STATE_DB.exists(): return []
     try:
@@ -635,49 +567,6 @@ def path_under_root(path_value: str | None, root_value: str | None) -> bool:
     try: return bool(path_value and root_value and Path(path_value).expanduser().resolve().is_relative_to(Path(root_value).expanduser().resolve()))
     except OSError: return False
 
-
-def claude_command_text(text: str) -> bool:
-    return text.startswith(("<local-command-caveat>", "<local-command-stdout>", "<command-name>", "<command-message>"))
-
-
-def claude_history_items(history_root: str | None = None) -> list[dict[str, Any]]:
-    if not CLAUDE_PROJECTS_ROOT.exists(): return []
-    try: paths = sorted((path for path in CLAUDE_PROJECTS_ROOT.glob("**/*.jsonl") if path.is_file() and not path.name.startswith("agent-")), key=lambda path: path.stat().st_mtime, reverse=True)
-    except OSError: return []
-    items = []; git_labels: dict[str, str] = {}
-    for path in paths:
-        sidechain = False
-        interactive = False
-        try:
-            stat = path.stat(); session_id = path.stem; cwd = ""; title = ""; last_prompt = ""
-            with path.open(encoding="utf-8", errors="replace") as fh:
-                for line in fh:
-                    try: row = json.loads(line)
-                    except json.JSONDecodeError: continue
-                    if not isinstance(row, dict): continue
-                    if row.get("isSidechain") is True:
-                        sidechain = True
-                        break
-                    session_id = str(row.get("sessionId") or row.get("session_id") or session_id)
-                    cwd = str(row.get("cwd") or cwd)
-                    message = row.get("message") if isinstance(row.get("message"), dict) else row
-                    content = message.get("content") if isinstance(message, dict) else ""
-                    if isinstance(content, list): content = " ".join(str(part.get("text", "") if isinstance(part, dict) else part) for part in content)
-                    text = " ".join(str(content).split())
-                    if row.get("type") == "mode": interactive = True
-                    elif row.get("type") == "custom-title": title = str(row.get("customTitle") or title).strip()[:80]
-                    elif row.get("type") == "last-prompt":
-                        value = str(row.get("lastPrompt") or "").strip()
-                        if value and not claude_command_text(value): last_prompt = value[:80]
-                    elif not title and (row.get("type") == "user" or message.get("role") == "user") and text and not claude_command_text(text): title = text[:80]
-        except OSError:
-            continue
-        if sidechain or not interactive: continue
-        if not (title or last_prompt): continue
-        if history_root is not None and not path_under_root(cwd, history_root): continue
-        updated_at = _dt.datetime.fromtimestamp(stat.st_mtime, _dt.timezone.utc).astimezone().isoformat(timespec="seconds")
-        items.append({"id": session_id, "title": session_title_topic(title or last_prompt, short_path(cwd) or session_id or "Untitled session"), "gitLabel": session_git_label(cwd, git_labels, False), "cwd": short_path(cwd), "createdAt": "", "updatedAt": updated_at, "updatedTs": stat.st_mtime, "historyPath": path.as_posix(), "rolloutPath": "", "model": "", "reasoningEffort": "", "source": "claude-code", "tmuxSession": "", "active": False, "managed": False})
-    return items
 
 def codex_session_item(config: Config, item: dict[str, Any], index_titles: dict[str, str], git_labels: dict[str, str], tmux_session: str = "") -> dict[str, Any]:
     cwd = str(item.get("cwd") or "")
@@ -755,7 +644,7 @@ def active_agent_session_items(config: Config, history_root: str | None = None, 
         cwd = get_pane_cwd(target)
         if history_root is not None and not path_under_root(cwd, history_root):
             continue
-        thread = active_agent_thread(target, cwd) if profile is CODEX_PROFILE else None
+        thread = active_agent_thread(target, cwd)
         thread_id = str((thread or {}).get("id") or tmux_session_option(config, name, "@faryo_agent_session_id") or name)
         updated_ts = session_created_ts(target); updated_at = iso_from_ts(updated_ts) if updated_ts else ""
         title = tmux_session_option(config, name, "@faryo_session_title") or (codex_thread_title(thread, short_path(cwd) or name, index_titles) if thread else short_path(cwd) or name)
@@ -768,26 +657,13 @@ def agent_session_page(config: Config, limit: int, offset: int = 0, history_root
     page_limit = max(1, limit); start = max(0, offset)
     codex_state = active_codex_thread_state(config)
     active, excluded_ids = active_agent_session_items(config, history_root, codex_state)
-    active_ids = {str(item.get("id") or "") for item in active}
-    # Claude history remains compatible but is intentionally outside the Codex
-    # pagination fast path used by this personal deployment.
-    claude = [item for item in claude_history_items(history_root) if str(item.get("id") or "") not in active_ids]
-    if claude:
-        codex, codex_total = codex_history_page(config, start + page_limit, 0, history_root, excluded_ids)
-        history = sorted([*codex, *claude], key=lambda item: float(item.get("updatedTs") or 0), reverse=True)
-        sessions = history[start:start + page_limit]
-    else:
-        sessions, codex_total = codex_history_page(config, page_limit, start, history_root, excluded_ids)
-    return {"activeSessions": active, "sessions": sessions, "historyTotal": codex_total + len(claude), "historyOffset": start, "historyLimit": page_limit}
+    sessions, history_total = codex_history_page(config, page_limit, start, history_root, excluded_ids)
+    return {"activeSessions": active, "sessions": sessions, "historyTotal": history_total, "historyOffset": start, "historyLimit": page_limit}
 
 
 def agent_session_items(config: Config, history_root: str | None = None) -> list[dict[str, Any]]:
     items = codex_history_items(config, history_root)
     seen_tmux = {item.get("tmuxSession") for item in items if item.get("tmuxSession")}
-    active = active_claude_session_map(config)
-    for item in claude_history_items(history_root):
-        if tmux_session := active.get(str(item.get("id") or "")): item.update({"tmuxSession": tmux_session, "active": True, "managed": managed_session(config, tmux_session), "agentRunning": agent_session_running(config, tmux_session)}); seen_tmux.add(tmux_session)
-        items.append(item)
     git_labels: dict[str, str] = {}
     for name in tmux_sessions(config):
         if name in seen_tmux: continue
@@ -803,32 +679,15 @@ def agent_session_items(config: Config, history_root: str | None = None) -> list
     return sorted(items, key=lambda item: float(item.get("updatedTs") or 0), reverse=True)
 
 
-def split_agent_session_items(items: list[dict[str, Any]], limit: int, offset: int = 0) -> dict[str, Any]:
-    active = [item for item in items if item.get("tmuxSession")]
-    history = [item for item in items if not item.get("tmuxSession")]
-    page_limit = max(1, limit)
-    start = max(0, offset)
-    return {
-        "activeSessions": active,
-        "sessions": history[start:start + page_limit],
-        "historyTotal": len(history),
-        "historyOffset": start,
-        "historyLimit": page_limit,
-    }
-
-
 def codex_thread_by_id(thread_id: str) -> dict[str, Any] | None:
     rows = codex_rows("id = ? AND source IN ('cli', 'vscode') AND COALESCE(archived, 0) = 0", (thread_id,), 1)
     return rows[0] if rows else None
 
 
 def agent_launch_executable(command: str) -> str:
-    if command == "codex":
-        configured = os.environ.get("FARYO_CODEX_BIN", "").strip()
-        if configured:
-            return str(Path(configured).expanduser())
-    if command == "claude" and CLAUDE_DEEPSEEK_LAUNCHER and CLAUDE_DEEPSEEK_LAUNCHER.is_file():
-        return str(CLAUDE_DEEPSEEK_LAUNCHER)
+    configured = os.environ.get("FARYO_CODEX_BIN", "").strip() if command == "codex" else ""
+    if configured:
+        return str(Path(configured).expanduser())
     return shutil.which(command) or command
 
 
@@ -850,34 +709,18 @@ def codex_app_server_argv(*args: str) -> list[str]:
     return [str(executable), *args]
 
 
-CLAUDE_STAMP_HOOK = APP_DIR.parent / "scripts" / "claude-session-stamp.sh"
-
-
-def claude_stamp_settings() -> str:
-    return json.dumps({"hooks": {"SessionStart": [{"hooks": [{"type": "command", "command": CLAUDE_STAMP_HOOK.as_posix()}]}]}})
-
-
 def start_agent_runtime(config: Config, cwd: Path, command: str, args: list[str], max_running: int = 0, wait_ready: bool = True, agent_id: str = "", title: str = "") -> str:
-    env_args: list[str] = []
-    if command == "claude":
-        args = [*args, "--dangerously-skip-permissions", "--settings", claude_stamp_settings()]
-        # Pane-level env (new-session -e), not a launch-string prefix: the prefix
-        # would only cover the first claude, while a claude relaunched by hand from
-        # the surviving shell must also stay out of the alternate screen so tmux
-        # scrollback keeps accumulating for capture.
-        env_args = ["-e", "CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN=1"]
     with RUNTIME_LOCK:
         if max_running and active_agent_count(config) >= max_running: raise OwnerError("running agent limit reached", HTTPStatus.CONFLICT)
         name = f"faryo-{_dt.datetime.now():%m%d-%H%M%S}-{secrets.token_hex(2)}"; executable = agent_launch_executable(command)
         shell = shutil.which("zsh") or "/usr/bin/zsh"; launch = f"{shlex.join([executable, *args])}; exec {shlex.quote(shell)} -l"
-        res = tmux(config, ["new-session", "-d", "-s", name, "-c", str(cwd), *env_args, shell, "-lc", launch], timeout=5)
+        res = tmux(config, ["new-session", "-d", "-s", name, "-c", str(cwd), shell, "-lc", launch], timeout=5)
         if res.returncode != 0: raise OwnerError(res.stderr.strip() or "tmux session start failed", HTTPStatus.INTERNAL_SERVER_ERROR)
         if source := AGENT_SOURCE_BY_COMMAND.get(command): tmux_session_option(config, name, "@faryo_agent_source", source)
         if title:
             tmux_session_option(config, name, "@faryo_session_title", clean_session_title(title))
         if agent_id:
             tmux_session_option(config, name, "@faryo_agent_session_id", agent_id)
-            if command == "claude": tmux_session_option(config, name, "@faryo_agent_id", agent_id)
     if not wait_ready:
         return name
     target = Config(name, config.token, config.pane_width); deadline = time.monotonic() + 10.0
@@ -900,18 +743,9 @@ def resume_codex_thread_session(config: Config, thread_id: str, max_running: int
         cwd = Path(str(thread.get("cwd") or Path.home())).expanduser(); cwd = cwd if cwd.is_dir() else Path.home()
         return start_agent_runtime(config, cwd, "codex", ["resume", clean_id], max_running, agent_id=clean_id)
 
-def resume_claude_session(config: Config, session_id: str, max_running: int = 0, history_root: str | None = None) -> str:
-    if not (clean_id := clean_agent_session_id(session_id)): raise OwnerError("invalid claude session id")
-    with RUNTIME_LOCK:
-        if active := active_claude_session_map(config).get(clean_id): return active
-        if not (item := next((item for item in claude_history_items(history_root) if item.get("id") == clean_id), None)): raise OwnerError("claude session not found", HTTPStatus.NOT_FOUND)
-        cwd = Path(str(item.get("cwd") or Path.home())).expanduser(); cwd = cwd if cwd.is_dir() else Path.home(); return start_agent_runtime(config, cwd, "claude", ["--resume", clean_id], max_running, wait_ready=False, agent_id=clean_id)
-
 def resume_agent_session(config: Config, session_id: str, source: str, max_running: int = 0, history_root: str | None = None) -> str:
     if source == "codex-cli":
         return resume_codex_thread_session(config, session_id, max_running, history_root)
-    if source == "claude-code":
-        return resume_claude_session(config, session_id, max_running, history_root)
     raise OwnerError("unsupported agent source", HTTPStatus.BAD_REQUEST)
 
 def target_config(config: Config, session: str | None) -> Config:
@@ -967,11 +801,7 @@ def bounded_max_running(payload: dict[str, Any]) -> int:
 
 
 def agent_tail_ignorable(line: str, profile: AgentProfile) -> bool:
-    if agent_meta_line(line, profile):
-        return True
-    if profile is not CLAUDE_PROFILE:
-        return False
-    return bool(profile.prompt_hint_re.match(line) or SEPARATOR_RE.match(line) or SEPARATOR_OUTPUT_RE.match(line) or LONG_SEPARATOR_RE.search(line))
+    return agent_meta_line(line, profile)
 
 
 def agent_ready_for_input(config: Config, profile: AgentProfile = CODEX_PROFILE) -> bool:
@@ -1138,20 +968,8 @@ def agent_profile_in_pane(config: Config) -> AgentProfile | None:
     return None
 
 
-def is_agent_cmd(cmd: str) -> bool:
-    return any(agent_profile_matches_cmd(profile, cmd) for profile in AGENT_PROFILES)
-
-
 def agent_profile_matches_cmd(profile: AgentProfile, cmd: str) -> bool:
-    return is_codex_cli_cmd(cmd) if profile is CODEX_PROFILE else is_named_tui_cmd(cmd, profile.process_names)
-
-
-def is_named_tui_cmd(cmd: str, names: set[str]) -> bool:
-    parts = cmd.lower().strip().split()
-    if not parts:
-        return False
-    executable = Path(parts[0]).name
-    return executable in names or executable.removesuffix(".exe") in names
+    return profile is CODEX_PROFILE and is_codex_cli_cmd(cmd)
 
 
 def codex_cli_in_pane(config: Config) -> bool:
@@ -1437,137 +1255,6 @@ def codex_rollout_context_usage(event: Any) -> dict[str, int | float] | None:
     if not isinstance(payload, dict) or payload.get("type") != "token_count":
         return None
     return codex_context_usage_from_info(payload.get("info"))
-
-
-CLAUDE_CONTEXT_WINDOW = 1_000_000
-
-
-def claude_status_meta(history_path: str | None) -> dict[str, Any]:
-    if not history_path:
-        return {}
-    path = Path(history_path).expanduser()
-    if not path.exists():
-        return {}
-
-    model = None
-    usage: dict[str, Any] | None = None
-    try:
-        with path.open("r", encoding="utf-8", errors="replace") as fh:
-            for line in fh:
-                try:
-                    event = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                if not isinstance(event, dict) or event.get("isSidechain"):
-                    continue
-                message = event.get("message")
-                if not isinstance(message, dict):
-                    continue
-                if message.get("model"):
-                    model = str(message["model"])
-                value = message.get("usage")
-                if isinstance(value, dict) and any(value.get(key) for key in ("input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens")):
-                    usage = value
-    except OSError:
-        return {}
-
-    meta: dict[str, Any] = {"model": model}
-    if usage:
-        input_tokens = sum(int(usage.get(key) or 0) for key in ("input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens"))
-        if input_tokens > 0:
-            meta["contextUsage"] = {
-                "inputTokens": input_tokens,
-                "usedTokens": input_tokens,
-                "contextWindow": CLAUDE_CONTEXT_WINDOW,
-                "contextWindowSource": "configured-fallback",
-                "percent": round((input_tokens / CLAUDE_CONTEXT_WINDOW) * 100, 1),
-            }
-    return meta
-
-
-CLAUDE_CREDENTIALS_PATH = Path("~/.claude/.credentials.json").expanduser()
-CLAUDE_USAGE_URL = "https://api.anthropic.com/api/oauth/usage"
-_claude_rate_limit_cache: dict[str, Any] | None = None
-_claude_rate_limit_cache_at = 0.0
-_claude_rate_limit_lock = threading.Lock()
-_claude_rate_limit_refreshing = False
-
-
-def fetch_claude_rate_limits(timeout: float = 6.0) -> dict[str, Any] | None:
-    try:
-        token = json.loads(CLAUDE_CREDENTIALS_PATH.read_text(encoding="utf-8"))["claudeAiOauth"]["accessToken"]
-    except (OSError, KeyError, TypeError, ValueError):
-        return None
-    request = urllib.request.Request(CLAUDE_USAGE_URL, headers={"Authorization": f"Bearer {token}", "anthropic-beta": "oauth-2025-04-20"})
-    try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
-            data = json.loads(response.read().decode("utf-8", "replace"))
-    except (OSError, ValueError):
-        return None
-    if not isinstance(data, dict):
-        return None
-
-    weekly_all = None
-    weekly_scoped = None
-    for limit in data.get("limits") or []:
-        if not isinstance(limit, dict):
-            continue
-        if limit.get("kind") == "weekly_all":
-            weekly_all = limit
-        elif limit.get("kind") == "weekly_scoped":
-            weekly_scoped = limit
-    if not isinstance(weekly_all, dict):
-        return None
-    try:
-        result: dict[str, Any] = {"usedPercent": round(float(weekly_all["percent"]), 1)}
-    except (KeyError, TypeError, ValueError):
-        return None
-    if isinstance(weekly_scoped, dict):
-        try:
-            result["scopedPercent"] = round(float(weekly_scoped["percent"]), 1)
-        except (KeyError, TypeError, ValueError):
-            pass
-        else:
-            scope_model = (weekly_scoped.get("scope") or {}).get("model") or {}
-            result["scopedLabel"] = str(scope_model.get("display_name") or "Model")
-    return result
-
-
-def refresh_claude_rate_limit_cache() -> None:
-    global _claude_rate_limit_cache, _claude_rate_limit_cache_at, _claude_rate_limit_refreshing
-    fresh = None
-    try:
-        fresh = fetch_claude_rate_limits()
-    except Exception:
-        # Usage telemetry must never take down the Owner or permanently wedge
-        # future refreshes. The next status request will retry in a new thread.
-        pass
-    finally:
-        with _claude_rate_limit_lock:
-            if fresh is not None:
-                _claude_rate_limit_cache = fresh
-                _claude_rate_limit_cache_at = time.monotonic()
-            _claude_rate_limit_refreshing = False
-
-
-def cached_claude_rate_limits() -> dict[str, Any] | None:
-    global _claude_rate_limit_refreshing
-    now = time.monotonic()
-    launch_refresh = False
-    with _claude_rate_limit_lock:
-        if _claude_rate_limit_cache is not None and now - _claude_rate_limit_cache_at < RATE_LIMIT_CACHE_TTL:
-            return _claude_rate_limit_cache
-        if not _claude_rate_limit_refreshing:
-            _claude_rate_limit_refreshing = True
-            launch_refresh = True
-        cached = _claude_rate_limit_cache
-    if launch_refresh:
-        try:
-            threading.Thread(target=refresh_claude_rate_limit_cache, name="faryo-claude-rate-limit", daemon=True).start()
-        except Exception:
-            with _claude_rate_limit_lock:
-                _claude_rate_limit_refreshing = False
-    return cached
 
 
 def send_app_server_message(process: subprocess.Popen[str], message: dict[str, Any]) -> bool:
@@ -2457,10 +2144,6 @@ def codex_queued_followup_count(capture: str, text: str) -> int:
     return compact_capture_for_probe("\n".join(queued_lines)).count(probe)
 
 
-def codex_queued_followup_contains(capture: str, text: str) -> bool:
-    return codex_queued_followup_count(capture, text) > 0
-
-
 def release_version() -> str:
     global RELEASE_VERSION_CACHE
     if RELEASE_VERSION_CACHE is not None:
@@ -2642,31 +2325,17 @@ def status_payload(config: Config) -> dict[str, Any]:
         fast_status = "off"
     cwd = get_pane_cwd(config) if tmux_alive else None
     thread = active_agent_thread(config, cwd) if tmux_alive else None
-    claude_item = None
-    context_usage = None
+    context_usage = latest_context_usage(thread.get("rollout_path") if thread else None)
     weekly_rate_limit = None
-    if profile is CLAUDE_PROFILE:
-        claude_id = tmux_session_option(config, config.session, "@faryo_agent_id")
-        claude_item = next((item for item in claude_history_items() if item.get("id") == claude_id), None)
-        claude_meta = claude_status_meta(claude_item.get("historyPath") if claude_item else None)
-        model = model or claude_meta.get("model")
-        context_usage = claude_meta.get("contextUsage")
-        if tmux_alive:
-            try:
-                weekly_rate_limit = cached_claude_rate_limits()
-            except Exception:
-                weekly_rate_limit = None
-    else:
-        context_usage = latest_context_usage(thread.get("rollout_path") if thread else None)
-        if tmux_alive and profile is CODEX_PROFILE:
-            try:
-                weekly_rate_limit = cached_weekly_rate_limit()
-            except Exception:
-                weekly_rate_limit = None
+    if tmux_alive and profile is CODEX_PROFILE:
+        try:
+            weekly_rate_limit = cached_weekly_rate_limit()
+        except Exception:
+            weekly_rate_limit = None
     agent_active = profile is not None
     agent_running = bool(agent_active and not agent_ready_for_input(config, capture_profile))
     target_alive = tmux_alive
-    session_title = codex_thread_title(thread, str(thread.get("id") or "Untitled session")) if thread else (claude_item.get("title") if claude_item else None)
+    session_title = codex_thread_title(thread, str(thread.get("id") or "Untitled session")) if thread else None
     return {
         "ok": tmux_alive,
         "tmuxAlive": tmux_alive,
@@ -2683,7 +2352,7 @@ def status_payload(config: Config) -> dict[str, Any]:
         "fastStatus": fast_status,
         "gitStatus": git_status(session_git_cwd(config, config.session, cwd)),
         "sessionTitle": session_title,
-        "sessionId": (thread.get("id") if thread else None) or (claude_item.get("id") if claude_item else None),
+        "sessionId": thread.get("id") if thread else None,
         "contextUsage": context_usage,
         "weeklyRateLimit": weekly_rate_limit,
         "agentRunning": agent_running,
@@ -2804,14 +2473,6 @@ def project_slug(value: Any) -> str:
 
 def project_workbench_enabled() -> bool:
     return env_value("FARYO_PROJECT_WORKBENCH_ENABLE", default="1").strip().lower() not in {"0", "false", "no", "off"}
-
-
-def project_item_stage(item: dict[str, Any]) -> str:
-    return wb_state.item_stage(item)
-
-
-def project_item_status(stage: str) -> str:
-    return wb_state.item_status(stage)
 
 
 def clean_project_item(item: dict[str, Any], index: int) -> dict[str, str]:
@@ -3700,8 +3361,7 @@ def send_text(config: Config, text: str, client_message_id: str | None = None) -
                 if res.returncode != 0:
                     raise OwnerError(res.stderr.strip() or "tmux load-buffer failed", HTTPStatus.INTERNAL_SERVER_ERROR)
                 paste_args = ["paste-buffer", "-d", "-r", "-b", buffer_name, "-t", tmux_target(config)]
-                if profile is not CLAUDE_PROFILE:
-                    paste_args.insert(2, "-p")
+                paste_args.insert(2, "-p")
                 res = tmux(config, paste_args, timeout=3)
                 if res.returncode != 0:
                     raise OwnerError(res.stderr.strip() or "tmux paste-buffer failed", HTTPStatus.INTERNAL_SERVER_ERROR)
@@ -4050,8 +3710,7 @@ class Handler(SimpleHTTPRequestHandler):
                 if not command:
                     raise OwnerError("invalid launch command")
                 title = clean_session_title(payload.get("title"))
-                agent_id = str(uuid.uuid4()) if command == "claude" else ""; args = ["--session-id", agent_id] if agent_id else []
-                name = start_agent_runtime(self.config, cwd, command, args, bounded_max_running(payload), wait_ready=False, agent_id=agent_id, title=title)
+                name = start_agent_runtime(self.config, cwd, command, [], bounded_max_running(payload), wait_ready=False, title=title)
                 self.write_json({"ok": True, "session": name, "updatedAt": now_iso()})
                 return
             if parsed.path == "/api/agent/cleanup-idle":

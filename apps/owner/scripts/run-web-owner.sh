@@ -20,5 +20,5 @@ exec env FARYO_OWNER_TOKEN="$FARYO_OWNER_TOKEN" \
   FARYO_PROJECT_WORKBENCH_PROJECTS_ROOT="${FARYO_PROJECT_WORKBENCH_PROJECTS_ROOT:-}" \
   FARYO_PROJECT_WORKBENCH_ALLOWED_ROOTS="${FARYO_PROJECT_WORKBENCH_ALLOWED_ROOTS:-}" \
   FARYO_CODEX_BIN="${FARYO_CODEX_BIN:-}" \
-  PATH="$HOME/.local/share/npm-global/bin:$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH" \
+  PATH="$HOME/.local/share/npm-global/bin:$HOME/.local/bin:/usr/local/bin:$PATH" \
   "$FARYO_PYTHON" server.py --session "$FARYO_OWNER_DIRECT_SESSION" --host "$FARYO_OWNER_HOST" --port "$FARYO_OWNER_PORT"

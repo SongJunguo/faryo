@@ -16,7 +16,7 @@ Faryo values small, readable changes.
 Run the source validation check before opening a change:
 
 ```bash
-scripts/package-client.sh check
+scripts/check-source.sh
 ```
 
 ## Style

@@ -21,23 +21,9 @@ class AgentSessionTest(unittest.TestCase):
         self.assertEqual(server.clean_owner_label(encoded), "Ubuntu 工作站")
         self.assertEqual(server.clean_owner_label("Safe%0D%0AInjected"), "SafeInjected")
 
-    def test_split_keeps_every_active_session_outside_history_pagination(self):
-        active = [
-            {"id": "active-old", "tmuxSession": "desktop", "updatedTs": 1},
-            {"id": "active-new", "tmuxSession": "managed", "updatedTs": 100},
-        ]
-        history = [
-            {"id": f"history-{index}", "tmuxSession": "", "updatedTs": 90 - index}
-            for index in range(23)
-        ]
-
-        result = server.split_agent_session_items([active[1], *history, active[0]], 10, 10)
-
-        self.assertEqual([item["id"] for item in result["activeSessions"]], ["active-new", "active-old"])
-        self.assertEqual([item["id"] for item in result["sessions"]], [f"history-{index}" for index in range(10, 20)])
-        self.assertEqual(result["historyTotal"], 23)
-        self.assertEqual(result["historyOffset"], 10)
-        self.assertEqual(result["historyLimit"], 10)
+    def test_only_codex_is_a_supported_agent_launcher(self):
+        self.assertEqual(server.clean_agent_launch_command("codex"), "codex")
+        self.assertIsNone(server.clean_agent_launch_command("claude"))
 
     def test_unmanaged_codex_tmux_is_discovered_as_active(self):
         with (
@@ -65,8 +51,6 @@ class AgentSessionTest(unittest.TestCase):
     def test_workspace_history_scope_hides_unmapped_desktop_agent(self):
         with (
             mock.patch.object(server, "codex_history_items", return_value=[]),
-            mock.patch.object(server, "active_claude_session_map", return_value={}),
-            mock.patch.object(server, "claude_history_items", return_value=[]),
             mock.patch.object(server, "tmux_sessions", return_value=["desktop"]),
             mock.patch.object(server, "agent_profile_in_pane", return_value=server.CODEX_PROFILE),
             mock.patch.object(server, "get_pane_cwd", return_value="/private/project"),
@@ -82,7 +66,6 @@ class AgentSessionTest(unittest.TestCase):
         with (
             mock.patch.object(server, "active_codex_thread_state", return_value=({}, set())),
             mock.patch.object(server, "active_agent_session_items", return_value=(active, {"live"})),
-            mock.patch.object(server, "claude_history_items", return_value=[]),
             mock.patch.object(server, "codex_history_page", return_value=(page, 437)) as history_page,
         ):
             result = server.agent_session_page(self.config, 10, 390, "/workspace")

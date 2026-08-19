@@ -27,7 +27,7 @@
 
 ## 2. 明确排除
 
-- 不开发或调优 Claude Code 路径；本轮只保证既有 Claude 代码不被破坏。
+- 只开发和验证 Codex 路径；后续源码清理已正式移除不再维护的 Claude 兼容层。
 - 本计划不修改 Codex 权限参数或当时的 Access/MFA 选择；操作者后来单独把外层 Access
   延长为 7 天，内层 Gateway Cookie 仍为 24 小时。
 - 不修改任何 Codex tmux 窗口宽高，不调用 `resize-window`。

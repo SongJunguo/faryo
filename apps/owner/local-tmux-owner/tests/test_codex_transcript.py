@@ -24,10 +24,6 @@ class CodexTranscriptTest(unittest.TestCase):
             server._rate_limit_cache = None
             server._rate_limit_cache_at = 0.0
             server._rate_limit_refreshing = False
-        with server._claude_rate_limit_lock:
-            server._claude_rate_limit_cache = None
-            server._claude_rate_limit_cache_at = 0.0
-            server._claude_rate_limit_refreshing = False
 
     def test_context_usage_uses_agent_reported_total_and_window(self):
         event = {
@@ -427,39 +423,6 @@ class CodexTranscriptTest(unittest.TestCase):
         self.assertEqual(result["usedPercent"], 42.0)
         self.assertEqual(result["windowDurationMins"], 10_080)
 
-    def test_claude_rate_limit_cache_starts_only_one_background_refresh(self):
-        started = []
-
-        class FakeThread:
-            def __init__(self, *, target, name, daemon):
-                self.target = target
-                self.name = name
-                self.daemon = daemon
-
-            def start(self):
-                started.append(self)
-
-        with mock.patch.object(server.threading, "Thread", FakeThread):
-            self.assertIsNone(server.cached_claude_rate_limits())
-            self.assertIsNone(server.cached_claude_rate_limits())
-
-        self.assertEqual(len(started), 1)
-        self.assertEqual(started[0].name, "faryo-claude-rate-limit")
-
-    def test_claude_rate_limit_thread_start_failure_allows_retry(self):
-        class BrokenThread:
-            def __init__(self, *, target, name, daemon):
-                pass
-
-            def start(self):
-                raise RuntimeError("thread unavailable")
-
-        with mock.patch.object(server.threading, "Thread", BrokenThread):
-            self.assertIsNone(server.cached_claude_rate_limits())
-
-        with server._claude_rate_limit_lock:
-            self.assertFalse(server._claude_rate_limit_refreshing)
-
     def test_rate_limit_refresh_failure_does_not_wedge_future_attempts(self):
         with server._rate_limit_lock:
             server._rate_limit_refreshing = True
@@ -468,15 +431,6 @@ class CodexTranscriptTest(unittest.TestCase):
         with server._rate_limit_lock:
             self.assertFalse(server._rate_limit_refreshing)
             self.assertIsNone(server._rate_limit_cache)
-
-    def test_claude_rate_limit_refresh_failure_does_not_wedge_future_attempts(self):
-        with server._claude_rate_limit_lock:
-            server._claude_rate_limit_refreshing = True
-        with mock.patch.object(server, "fetch_claude_rate_limits", side_effect=RuntimeError("transient")):
-            server.refresh_claude_rate_limit_cache()
-        with server._claude_rate_limit_lock:
-            self.assertFalse(server._claude_rate_limit_refreshing)
-            self.assertIsNone(server._claude_rate_limit_cache)
 
     def test_live_tail_starts_at_the_latest_turn_and_redacts_account(self):
         capture = (

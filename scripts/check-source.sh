@@ -4,45 +4,25 @@ set -euo pipefail
 usage() {
   cat <<'USAGE'
 Usage:
-  scripts/package-client.sh check
-  scripts/package-client.sh deb
-  scripts/package-client.sh macos-tar
-  scripts/package-client.sh release
+  scripts/check-source.sh
 
-Builds endpoint-side Faryo packages. The client package is named faryo and
-intentionally excludes the gateway server.
-
-Targets:
-  check    Run release syntax checks used by CI.
-  deb      Build dist/faryo_<version>_<arch>.deb.
-  macos-tar Build dist/faryo_<version>_macos.tar.gz.
-  release  Run checks, build endpoint packages, and write dist/SHA256SUMS.
-
-Environment:
-  FARYO_PACKAGE_VERSION  Override version, defaults to apps/owner/RELEASE.
-  FARYO_PACKAGE_OUT      Output directory, defaults to dist/.
-  FARYO_DEB_ARCH         Debian architecture, defaults to all.
+Runs the maintained source, browser-bundle, and runtime-contract checks. Binary
+package builders were removed when this fork became source-deployment only.
 USAGE
 }
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TARGET="${1:-}"
-PACKAGE="faryo"
-VERSION="${FARYO_PACKAGE_VERSION:-$(awk -F= '$1 == "version" {print $2}' "$ROOT/apps/owner/RELEASE" | sed 's/^v//')}"
-OUT_DIR="${FARYO_PACKAGE_OUT:-$ROOT/dist}"
 
-[[ "$TARGET" == "-h" || "$TARGET" == "--help" || -z "$TARGET" ]] && { usage; exit 0; }
-if [[ -z "$VERSION" || "$VERSION" == *[!0-9A-Za-z.+:~_-]* ]]; then
-  echo "invalid package version: $VERSION" >&2
-  exit 2
-fi
+[[ "$TARGET" == "-h" || "$TARGET" == "--help" ]] && { usage; exit 0; }
+[[ -z "$TARGET" ]] || { echo "unsupported argument: $TARGET" >&2; usage >&2; exit 2; }
 
-WORK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/faryo-package.XXXXXX")"
+WORK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/faryo-check.XXXXXX")"
 trap 'rm -rf "$WORK_DIR"' EXIT
 
 release_checks() {
   bash -n \
-    "$ROOT/scripts/package-client.sh" \
+    "$ROOT/scripts/check-source.sh" \
     "$ROOT"/scripts/*.sh \
     "$ROOT"/apps/owner/scripts/*.sh \
     "$ROOT"/apps/owner/local-tmux-owner/tests/*.sh \
@@ -54,7 +34,6 @@ release_checks() {
     "$ROOT/apps/gateway/scripts/generate-gateway-auth-config.py"
   for js_file in \
     "$ROOT/apps/owner/local-tmux-owner/static/compact-rules-codex.js" \
-    "$ROOT/apps/owner/local-tmux-owner/static/compact-rules-claude.js" \
     "$ROOT/apps/owner/local-tmux-owner/static/event-stream.js" \
     "$ROOT/apps/owner/local-tmux-owner/static/internal-annotations.js" \
     "$ROOT/apps/owner/local-tmux-owner/static/local-file-view.js" \
@@ -85,16 +64,16 @@ release_checks() {
   python3 - "$ROOT" <<'PY'
 from pathlib import Path
 import json
-import plistlib
 import re
 import sys
 root = Path(sys.argv[1])
 index = (root / "apps/owner/local-tmux-owner/static/index.html").read_text(encoding="utf-8")
 gateway = (root / "apps/gateway/server/server.py").read_text(encoding="utf-8")
 assert "compact-rules-codex.js" in index, "index.html must load compact-rules-codex.js"
-assert "compact-rules-claude.js" in index, "index.html must load compact-rules-claude.js"
 assert "compact-rules-codex.js" in gateway, "gateway must allow compact-rules-codex.js"
-assert "compact-rules-claude.js" in gateway, "gateway must allow compact-rules-claude.js"
+assert "compact-rules-claude.js" not in index, "retired Claude rules must not return to the production page"
+assert "compact-rules-claude.js" not in gateway, "Gateway must not proxy retired Claude rules"
+assert 'NEW_SESSION_COMMANDS = {"codex"}' in gateway, "Gateway must expose only the maintained Codex launcher"
 assert "stable-blocks.js" in index, "index.html must load stable-blocks.js"
 assert "stable-blocks.js" in gateway, "gateway must allow stable-blocks.js"
 assert "question-navigator.js" in index, "index.html must load question-navigator.js"
@@ -158,8 +137,24 @@ assert "--bg: #0F1115" in appearance and "--accent: #7188FF" in appearance, "sha
 assert "--bg: #F6F7F9" in appearance and "--accent: #5369E7" in appearance, "shared light palette must match Owner"
 assert "Files to session" in gateway and "Send to…" in gateway, "Gateway must expose explicit file-to-session controls"
 assert "No handoff package" not in gateway, "Gateway must not expose unexplained handoff copy"
-with (root / "deploy/launchd/dev.faryo.owner.keepalive.plist").open("rb") as fh:
-    plistlib.load(fh)
+for retired in (
+    "apps/owner/local-tmux-owner/static/compact-rules-claude.js",
+    "apps/owner/scripts/claude-session-stamp.sh",
+    "scripts/package-client.sh",
+    "scripts/install-macos-owner.sh",
+    "scripts/status-runtime.sh",
+    "deploy/launchd/dev.faryo.owner.keepalive.plist",
+    "docs/assets/ui-targets",
+    "docs/launch/faryo-1.0.0.md",
+    "RELEASE",
+    "apps/gateway/RELEASE",
+    "apps/owner/local-tmux-owner/static/pet/pet-carrying.png",
+    "apps/owner/local-tmux-owner/static/pet/pet-idle.png",
+    "apps/owner/local-tmux-owner/static/pet/pet-offline.png",
+    "apps/owner/local-tmux-owner/static/pet/pet-resting.png",
+    "apps/owner/local-tmux-owner/static/pet/pet-working.png",
+):
+    assert not (root / retired).exists(), f"retired source returned: {retired}"
 PY
   local portal_check="$WORK_DIR/faryo-portal-check.js"
   python3 - "$ROOT" "$portal_check" <<'PY'
@@ -175,116 +170,4 @@ PY
   node --check "$portal_check"
 }
 
-stage_client_payload() {
-  local dest="$1"
-  install -d "$dest/opt/faryo/apps"
-  rsync -a --exclude='__pycache__/' --exclude='*.pyc' "$ROOT/apps/shared/" "$dest/opt/faryo/apps/shared/"
-  install -m 0644 "$ROOT/LICENSE" "$dest/opt/faryo/LICENSE"
-  rsync -a \
-    --exclude='__pycache__/' \
-    --exclude='*.pyc' \
-    --exclude='.pytest_cache/' \
-    --exclude='.agents/' \
-    --exclude='.codex/' \
-    --exclude='.gitignore' \
-    --exclude='config/faryo.env' \
-    --exclude='config/.gitignore' \
-    --exclude='state/' \
-    "$ROOT/apps/owner/" "$dest/opt/faryo/apps/owner/"
-}
-
-assert_no_gateway_payload() {
-  local path="$1"
-  if find "$path" \( -type f -o -type l \) -print | grep -E '/apps/gateway/|faryo-gateway' >/dev/null; then
-    echo "client package contains gateway files" >&2
-    return 1
-  fi
-}
-
-build_deb() {
-  local arch="${FARYO_DEB_ARCH:-all}"
-  local pkg_root="$WORK_DIR/${PACKAGE}_${VERSION}_${arch}"
-  install -d "$pkg_root/DEBIAN" "$pkg_root/usr/lib/systemd/user" "$pkg_root/usr/share/doc/faryo" "$OUT_DIR"
-  stage_client_payload "$pkg_root"
-  install -m 0644 "$ROOT/LICENSE" "$pkg_root/usr/share/doc/faryo/copyright"
-  sed \
-    -e 's|@FARYO_ROOT@|/opt/faryo|g' \
-    -e 's|@FARYO_HOME@|%h/.faryo|g' \
-    "$ROOT/deploy/user-systemd/faryo-owner-keepalive.service" \
-    > "$pkg_root/usr/lib/systemd/user/faryo-owner-keepalive.service"
-  install -m 0644 "$ROOT/deploy/user-systemd/faryo-owner-keepalive.timer" "$pkg_root/usr/lib/systemd/user/faryo-owner-keepalive.timer"
-  assert_no_gateway_payload "$pkg_root"
-
-  cat > "$pkg_root/DEBIAN/control" <<CONTROL
-Package: $PACKAGE
-Version: $VERSION
-Section: utils
-Priority: optional
-Architecture: $arch
-Maintainer: Faryo Local <faryo-local@localhost>
-Depends: bash, python3, tmux, curl, zsh
-Recommends: git, openssh-client
-Description: Faryo endpoint runtime
- Local tmux-backed endpoint runtime for Faryo.
- This client package intentionally excludes the gateway server.
-CONTROL
-
-  local deb="$OUT_DIR/${PACKAGE}_${VERSION}_${arch}.deb"
-  dpkg-deb --root-owner-group --build "$pkg_root" "$deb" >/dev/null
-  if dpkg-deb -c "$deb" | grep -E '/apps/gateway/|faryo-gateway' >/dev/null; then
-    rm -f "$deb"
-    echo "client package contains gateway files" >&2
-    return 1
-  fi
-  printf '%s\n' "$deb"
-}
-
-build_macos_tar() {
-  local payload="${PACKAGE}_${VERSION}_macos"
-  local pkg_root="$WORK_DIR/$payload"
-  install -d "$pkg_root/apps" "$pkg_root/scripts" "$pkg_root/deploy/launchd" "$OUT_DIR"
-  rsync -a --exclude='__pycache__/' --exclude='*.pyc' "$ROOT/apps/shared/" "$pkg_root/apps/shared/"
-  rsync -a \
-    --exclude='__pycache__/' \
-    --exclude='*.pyc' \
-    --exclude='.pytest_cache/' \
-    --exclude='.agents/' \
-    --exclude='.codex/' \
-    --exclude='.gitignore' \
-    --exclude='config/faryo.env' \
-    --exclude='config/.gitignore' \
-    --exclude='state/' \
-    "$ROOT/apps/owner/" "$pkg_root/apps/owner/"
-  install -m 0755 "$ROOT/scripts/install-macos-owner.sh" "$pkg_root/scripts/install-macos-owner.sh"
-  install -m 0644 "$ROOT/deploy/launchd/dev.faryo.owner.keepalive.plist" "$pkg_root/deploy/launchd/dev.faryo.owner.keepalive.plist"
-  install -m 0644 "$ROOT/README.md" "$pkg_root/README.md"
-  install -m 0644 "$ROOT/LICENSE" "$pkg_root/LICENSE"
-  install -m 0644 "$ROOT/SECURITY.md" "$pkg_root/SECURITY.md"
-  install -m 0644 "$ROOT/CONTRIBUTING.md" "$pkg_root/CONTRIBUTING.md"
-  install -m 0644 "$ROOT/RELEASE" "$pkg_root/RELEASE"
-
-  local tarball="$OUT_DIR/${PACKAGE}_${VERSION}_macos.tar.gz"
-  tar -C "$WORK_DIR" -czf "$tarball" "$payload"
-  printf '%s\n' "$tarball"
-}
-
-build_release() {
-  release_checks
-  local deb
-  local macos_tar
-  deb="$(build_deb)"
-  macos_tar="$(build_macos_tar)"
-  dpkg-deb -I "$deb" >/dev/null
-  dpkg-deb -c "$deb" >/dev/null
-  tar -tzf "$macos_tar" >/dev/null
-  (cd "$OUT_DIR" && sha256sum "$(basename "$deb")" "$(basename "$macos_tar")" > SHA256SUMS)
-  printf '%s\n%s\n%s\n' "$deb" "$macos_tar" "$OUT_DIR/SHA256SUMS"
-}
-
-case "$TARGET" in
-  check) release_checks ;;
-  deb|linux-deb) build_deb ;;
-  macos-tar) build_macos_tar ;;
-  release) build_release ;;
-  *) echo "unsupported target: $TARGET" >&2; usage >&2; exit 2 ;;
-esac
+release_checks

@@ -9,6 +9,8 @@
 
 ## Completed or maintenance mode
 
+- [`codebase-cleanup-plan.md`](codebase-cleanup-plan.md)：收敛为 Ubuntu/Linux + Codex
+  单一生产路径，删除不可达资源、旧兼容层和未验证打包链。
 - [`codex-reliability-hardening-plan.md`](codex-reliability-hardening-plan.md)：Codex 长会话、
   可靠发送、安全流式认证、历史分页和内部引用展示加固。
 - [`deepseek-inspired-ui-plan.md`](deepseek-inspired-ui-plan.md)：DeepSeek Harness 启发的
