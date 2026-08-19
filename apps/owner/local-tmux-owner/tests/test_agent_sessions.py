@@ -15,6 +15,9 @@ import server
 class AgentSessionTest(unittest.TestCase):
     def setUp(self):
         self.config = server.Config("owner", "test-token", 145)
+        with server._codex_session_index_lock:
+            server._codex_session_index_cache = {}
+            server._codex_session_index_signature = None
 
     def test_percent_encoded_unicode_owner_label_is_restored_safely(self):
         encoded = "Ubuntu%20%E5%B7%A5%E4%BD%9C%E7%AB%99"
@@ -52,6 +55,49 @@ class AgentSessionTest(unittest.TestCase):
     def test_new_managed_session_uses_the_first_available_faryo_number(self):
         with mock.patch.object(server, "tmux_sessions", return_value=["codex", "faryo1", "faryo3", "faryo-legacy"]):
             self.assertEqual(server.next_faryo_session_name(self.config), "faryo2")
+
+    def test_codex_session_index_cache_reloads_after_rename_append(self):
+        with tempfile.TemporaryDirectory() as root:
+            index = Path(root) / "session_index.jsonl"
+            index.write_text('{"id":"thread-a","thread_name":"Initial topic"}\n', encoding="utf-8")
+            with mock.patch.object(server, "CODEX_SESSION_INDEX", index):
+                self.assertEqual(server.codex_session_index_titles(), {"thread-a": "Initial topic"})
+                with index.open("a", encoding="utf-8") as stream:
+                    stream.write('{"id":"thread-a","thread_name":"Renamed topic"}\n')
+                self.assertEqual(server.codex_session_index_titles(), {"thread-a": "Renamed topic"})
+
+    def test_explicit_codex_rename_beats_managed_tmux_startup_title(self):
+        thread = {"id": "thread-a", "title": "First prompt", "cwd": "/workspace", "updated_at": 1}
+        with (
+            mock.patch.object(server, "tmux_session_option", return_value="Startup title"),
+            mock.patch.object(server, "session_git_label", return_value=""),
+            mock.patch.object(server, "managed_session", return_value=True),
+            mock.patch.object(server, "agent_session_running", return_value=False),
+        ):
+            item = server.codex_session_item(
+                self.config,
+                thread,
+                {"thread-a": "Renamed topic"},
+                {},
+                "faryo1",
+            )
+
+        self.assertEqual(item["title"], "Renamed topic")
+        self.assertEqual(item["tmuxSession"], "faryo1")
+
+    def test_capture_metadata_exposes_only_explicit_codex_thread_name(self):
+        with mock.patch.object(server, "codex_session_index_titles", return_value={"thread-a": "Renamed topic"}):
+            self.assertEqual(server.codex_capture_session_metadata("thread-a"), {
+                "sessionId": "thread-a",
+                "sessionTitle": "Renamed topic",
+            })
+            self.assertEqual(server.codex_capture_session_metadata("thread-b"), {"sessionId": "thread-b"})
+
+    def test_capture_event_digest_changes_when_only_thread_name_changes(self):
+        before = server.capture_event_digest("same transcript", "", {"sessionTitle": "Initial topic"})
+        after = server.capture_event_digest("same transcript", "", {"sessionTitle": "Renamed topic"})
+
+        self.assertNotEqual(before, after)
 
     def test_directory_browser_lists_only_allowed_visible_directories(self):
         with tempfile.TemporaryDirectory() as root:

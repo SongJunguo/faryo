@@ -133,6 +133,11 @@ micromark -> mdast -> CommonMark/GFM/math nodes -> safe HTML -> KaTeX
 - Shows agent-reported context used/window and weekly quota when available.
 - Preserves the main reading position during structured refreshes.
 - Preserves manual scroll inside an expanded Live tmux panel.
+- Mirrors all 46 slash commands visible in the validated Codex CLI, with
+  descriptions, categories, risk cues, fuzzy lookup, keyboard navigation, and
+  a repeatable isolated-PTY drift check.
+- Reflects Codex `/rename` changes in the page title and session cards without
+  renaming the underlying tmux session or requiring a reload.
 - Provides Chat/Raw views, attachments, approve, interrupt, page navigation,
   session switching, and a return-to-latest control.
 - Does not resize Codex or tmux windows; real tmux clients remain the source of
@@ -237,7 +242,7 @@ or an equivalent exact-identity layer.
 
 The `main` branch was revalidated on 2026-08-19 with privacy-safe fixtures:
 
-- source checks plus 62 Owner and 48 Gateway Python tests;
+- source checks plus 66 Owner and 48 Gateway Python tests;
 - a 20-message browser delivery matrix including Chinese, multiline Markdown,
   TeX, attachment, offline/background recovery, and failed-draft cases;
 - a two-session retry/delayed-response isolation test;
@@ -255,6 +260,8 @@ The `main` branch was revalidated on 2026-08-19 with privacy-safe fixtures:
   by exact cleanup of the test session;
 - a real `faryo1` start in the browser-selected recent directory, with a forged
   directory credential rejected as HTTP 400 and the test session cleaned;
+- an isolated `codex-cli 0.148.0` PTY inventory matching all 46 visible slash
+  commands, plus desktop/mobile completion and real `/rename` title sync;
 - Owner/Gateway health and unchanged dimensions for every pre-existing Codex
   tmux session after deployment.
 - desktop and mobile Gateway checks with exactly one Codex launcher and three

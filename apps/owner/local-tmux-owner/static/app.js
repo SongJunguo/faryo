@@ -26,6 +26,7 @@
   const eventStreamParser = window.FaryoEventStream || {};
   const stableBlocks = window.FaryoStableBlocks || {};
   const questionNavigatorApi = window.FaryoQuestionNavigator || {};
+  const codexCommandApi = window.FaryoCodexCommands || {};
   const runtimeCompactRules = {
     userPromptRe: /^\s*›\s+/,
     compactBlocks: (text) => [{ kind: 'output', text: text || 'No output yet' }],
@@ -57,7 +58,6 @@
     'Tap folder to switch sessions',
     'Set font on home',
   ];
-  const COMMAND_SUGGESTIONS = ['/permissions', '/model', '/rename', '/new', 'codex', 'codex resume', 'codex --yolo'];
   let captureRefreshInFlight = false, pendingCaptureRefreshLines = null, pendingDeferredCapture = null, activeCaptureRefreshController = null, captureRefreshRunId = 0;
   let statusRefreshInFlight = false, activeStatusRefreshController = null, statusRefreshRunId = 0, statusRefreshTimer = null;
   let eventStreamController = null, eventStreamRunId = 0, eventRetryTimer = null, captureFallbackTimer = null, eventRetryDelayMs = 1800, liveState = 'fallback';
@@ -98,6 +98,7 @@
   let activeSurfacePanel = null, panelReturnFocus = null;
   const restoringLivePanels = new WeakSet();
   let questionNavigatorController = null;
+  let commandSuggestionIndex = 0, commandSuggestionSignature = '';
   if (typeof questionNavigatorApi.createController === 'function') {
     try {
       questionNavigatorController = questionNavigatorApi.createController({
@@ -290,12 +291,77 @@
     }
     return items;
   }
-  function commandMatches() { const q = promptInput.value.trimStart().toLowerCase(); if (/^cd(\s.*)?$/.test(q)) return recentDirCommands().filter((v) => v.toLowerCase().startsWith(q) && v.toLowerCase() !== q).slice(0, 5); return (/^\/[a-z]*$/.test(q) || (q.length >= 2 && 'codex'.startsWith(q)) || /^codex(?:\s+[-\w]+){0,3}\s*$/.test(q)) ? COMMAND_SUGGESTIONS.filter((v) => v.startsWith(q) && v !== q).slice(0, 5) : []; }
-  function applyCommandSuggestion(value) { promptInput.value = value; promptInput.focus(); promptInput.setSelectionRange(value.length, value.length); autosize(); updateSendVisibility(); renderCommandSuggestions(); return true; }
-  function renderCommandSuggestions() { const items = commandMatches(); if (!commandSuggest) return; commandSuggest.classList.toggle('hidden', !items.length); commandSuggest.innerHTML = items.map((v) => `<button type="button" data-value="${escapeHtml(v)}">${escapeHtml(v)}</button>`).join(''); }
-  function handleCommandSuggestionKey(event) { const [value] = commandMatches(); if ((event.key === 'Tab' || event.key === 'Enter') && value) { event.preventDefault(); return applyCommandSuggestion(value); } if (event.key === 'Escape') commandSuggest?.classList.add('hidden'); return false; }
+  function commandMatches() {
+    if (typeof codexCommandApi.match !== 'function') return [];
+    const query = promptInput.value.trimStart().toLowerCase();
+    return codexCommandApi.match(promptInput.value, { recentDirectories: query.startsWith('cd') ? recentDirCommands() : [], limit: 64 });
+  }
+  function applyCommandSuggestion(item) {
+    const value = String(item?.value || item || '');
+    if (!value) return false;
+    promptInput.value = value;
+    promptInput.focus();
+    promptInput.setSelectionRange(value.length, value.length);
+    commandSuggestionIndex = 0;
+    commandSuggestionSignature = '';
+    persistPromptDraft();
+    autosize();
+    updateSendVisibility();
+    renderCommandSuggestions();
+    return true;
+  }
+  function renderCommandSuggestions() {
+    const items = commandMatches();
+    if (!commandSuggest) return;
+    const signature = `${promptInput.value}\n${items.map((item) => item.value).join('\n')}`;
+    if (signature !== commandSuggestionSignature) {
+      commandSuggestionSignature = signature;
+      commandSuggestionIndex = 0;
+    }
+    commandSuggestionIndex = Math.min(commandSuggestionIndex, Math.max(0, items.length - 1));
+    commandSuggest.classList.toggle('hidden', !items.length);
+    commandSuggest.setAttribute('aria-activedescendant', items.length ? `command-option-${commandSuggestionIndex}` : '');
+    if (!items.length) {
+      commandSuggest.replaceChildren();
+      return;
+    }
+    const summary = promptInput.value.trimStart() === '/' ? `<div class="command-suggest-summary">${items.length} Codex commands · ↑↓ to explore</div>` : '';
+    commandSuggest.innerHTML = summary + items.map((item, index) => {
+      const selected = index === commandSuggestionIndex;
+      const label = item.matchedAlias || item.command || item.value;
+      const aliases = !item.matchedAlias && item.aliases?.length ? ` · ${item.aliases.join(', ')}` : '';
+      const hint = item.argumentHint ? ` ${item.argumentHint}` : '';
+      const risk = item.risk ? `<span class="command-risk">${escapeHtml(item.risk)}</span>` : '';
+      return `<button id="command-option-${index}" type="button" role="option" aria-selected="${selected}" data-index="${index}" class="${selected ? 'selected' : ''}"><span class="command-suggest-main"><strong>${escapeHtml(label)}${escapeHtml(hint)}</strong><small>${escapeHtml(item.description || '')}</small></span><span class="command-suggest-meta">${escapeHtml(item.category || 'Command')}${escapeHtml(aliases)}${risk}</span></button>`;
+    }).join('');
+  }
+  function handleCommandSuggestionKey(event) {
+    const items = commandMatches();
+    if ((event.key === 'ArrowDown' || event.key === 'ArrowUp') && items.length) {
+      event.preventDefault();
+      const delta = event.key === 'ArrowDown' ? 1 : -1;
+      commandSuggestionIndex = (commandSuggestionIndex + delta + items.length) % items.length;
+      renderCommandSuggestions();
+      requestAnimationFrame(() => commandSuggest?.querySelector('.selected')?.scrollIntoView({ block: 'nearest' }));
+      return true;
+    }
+    const item = items[commandSuggestionIndex] || items[0];
+    if ((event.key === 'Tab' || event.key === 'Enter') && item) {
+      event.preventDefault();
+      return applyCommandSuggestion(item);
+    }
+    if (event.key === 'Escape') {
+      commandSuggest?.classList.add('hidden');
+      commandSuggestionSignature = '';
+    }
+    return false;
+  }
   commandSuggest?.addEventListener('mousedown', (event) => event.preventDefault());
-  commandSuggest?.addEventListener('click', (event) => { const value = event.target.closest('button')?.dataset.value; if (value) applyCommandSuggestion(value); });
+  commandSuggest?.addEventListener('click', (event) => {
+    const index = Number(event.target.closest('button')?.dataset.index);
+    const item = commandMatches()[index];
+    if (item) applyCommandSuggestion(item);
+  });
   for (const id of ['petControl', 'dockPlusBtn']) $(id)?.addEventListener('pointerdown', (event) => event.preventDefault());
 
   function updateSendVisibility() {
@@ -921,6 +987,7 @@
     const keepBottom = isNearBottom();
     const capture = JSON.parse(event.data || '{}');
     setLiveState('live');
+    if (capture.sessionTitle) renderSessionLabel(capture.sessionTitle);
     if (Object.prototype.hasOwnProperty.call(capture, 'agentRunning')) {
       const nextRunning = Boolean(capture.agentRunning);
       if (nextRunning !== agentRunning) {
@@ -1165,6 +1232,38 @@
     $('draftState').title = cwdText;
   }
 
+  function updateCachedSessionTitle(sessionLabel) {
+    try {
+      const cached = JSON.parse(sessionStorage.getItem(WORKBENCH_CACHE_KEY) || 'null');
+      if (!cached?.data) return;
+      const route = routeBase.replace('/', '');
+      let changed = false;
+      for (const collection of [cached.data.sessions, cached.data.activeSessions]) {
+        if (!Array.isArray(collection)) continue;
+        for (const item of collection) {
+          if (String(item?.tmuxSession || '') !== selectedSession) continue;
+          if (route && item?.route && String(item.route) !== route) continue;
+          if (item.title === sessionLabel) continue;
+          item.title = sessionLabel;
+          changed = true;
+        }
+      }
+      if (!changed) return;
+      sessionStorage.setItem(WORKBENCH_CACHE_KEY, JSON.stringify(cached));
+      if (activeSurfacePanel === sessionMenu) renderSessionMenu(cached.data, false);
+    } catch (_err) {}
+  }
+
+  function renderSessionLabel(value, { syncCache = true } = {}) {
+    const sessionLabel = String(value || '').replace(/\s+/g, ' ').trim();
+    if (!sessionLabel) return;
+    $('topicText').textContent = leadingText(sessionLabel, 18);
+    $('sessionTitle').title = `${$('ownerText').textContent || 'TMUX'} · ${sessionLabel}`;
+    if ($('detailsSession')) $('detailsSession').textContent = sessionLabel;
+    document.title = `${sessionLabel} · Faryo`;
+    if (syncCache) updateCachedSessionTitle(sessionLabel);
+  }
+
   function renderStatus(data) {
     const model = data.model || `tmux:${data.session || 'unknown'}`;
     const ownerLabel = data.ownerLabel || 'TMUX';
@@ -1173,17 +1272,15 @@
     const weeklyRateLimit = data.weeklyRateLimit || {};
     const sessionLabel = data.sessionTitle || data.sessionId || 'session unknown';
     const modelLabel = compactModelLabel(model, data.fastStatus);
+    selectedSession = data.session || selectedSession;
     $('ownerText').textContent = ownerLabel;
-    $('topicText').textContent = leadingText(sessionLabel, 18);
-    $('sessionTitle').title = `${ownerLabel} · ${sessionLabel}`;
+    renderSessionLabel(sessionLabel);
     $('modelText').textContent = modelLabel;
     $('modelText').title = model;
     const quotaText = renderQuotaStatus(weeklyRateLimit);
     $('subTitle').title = `${contextText} · ${quotaText} · ${model}${data.fastStatus ? ` · fast:${data.fastStatus}` : ''}`;
-    selectedSession = data.session || selectedSession;
     updateFolderLabel(data);
     updateStatusPill(data.gitStatus);
-    if ($('detailsSession')) $('detailsSession').textContent = sessionLabel;
     if ($('detailsOwner')) $('detailsOwner').textContent = ownerLabel;
     if ($('detailsModel')) $('detailsModel').textContent = modelLabel;
     if ($('detailsGit')) $('detailsGit').textContent = phasePill.textContent || 'git --';
@@ -1929,6 +2026,7 @@
       const format = outputMode === 'compact' ? '' : '&format=html';
       const capture = await api(apiPath(`/api/capture?lines=${lines}${format}`), { signal: controller.signal });
       if (runId !== captureRefreshRunId) return;
+      if (capture.sessionTitle) renderSessionLabel(capture.sessionTitle);
       if (Object.prototype.hasOwnProperty.call(capture, 'agentRunning')) {
         agentRunning = Boolean(capture.agentRunning);
         updatePetControl();
@@ -2213,7 +2311,10 @@
   $('upBtn').addEventListener('click', () => navKey('/api/up'));
   $('downBtn').addEventListener('click', () => navKey('/api/down'));
 
-  if (headerStatusVisible()) refreshStatus().catch((err) => setError(userErrorMessage(err)));
+  // Fetch one complete metadata snapshot even when the persisted header state
+  // is collapsed. Periodic status polling remains gated by header visibility;
+  // lightweight capture/SSE metadata keeps `/rename` live after this point.
+  refreshStatus().catch((err) => setError(userErrorMessage(err)));
   refreshCapture(currentCaptureLines()).catch((err) => setError(userErrorMessage(err)));
   startEventStream();
   document.documentElement.dataset.faryoAppReady = '1';

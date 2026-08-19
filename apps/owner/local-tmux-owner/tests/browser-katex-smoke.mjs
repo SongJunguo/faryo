@@ -41,6 +41,7 @@ const privacySafe = process.env.FARYO_SMOKE_PRIVACY_SAFE === '1';
 const expectStructured = process.env.FARYO_SMOKE_EXPECT_STRUCTURED === '1';
 const debugLayout = process.env.FARYO_SMOKE_DEBUG_LAYOUT === '1';
 const checkOwnerLayout = process.env.FARYO_SMOKE_CHECK_OWNER_LAYOUT === '1';
+const checkCommandSuggestions = process.env.FARYO_SMOKE_CHECK_COMMANDS === '1';
 const checkAstFixture = process.env.FARYO_SMOKE_CHECK_AST_FIXTURE === '1';
 const checkQuestionNavigator = process.env.FARYO_SMOKE_CHECK_QUESTION_NAV === '1';
 const forceRenderFailure = process.env.FARYO_SMOKE_FORCE_RENDER_FAILURE === '1';
@@ -56,6 +57,7 @@ const uiScreenshotPanel = process.env.FARYO_SMOKE_UI_PANEL || '';
 const uiScreenshotFocus = process.env.FARYO_SMOKE_UI_FOCUS || '';
 const expectedTex = JSON.parse(process.env.FARYO_SMOKE_EXPECT_TEX || '[]');
 const expectedOutput = process.env.FARYO_SMOKE_EXPECT_OUTPUT || '';
+const expectedSessionTitle = process.env.FARYO_SMOKE_EXPECT_SESSION_TITLE || '';
 const minMatrixRows = Number(process.env.FARYO_SMOKE_MIN_MATRIX_ROWS || 0);
 const minKatex = Number(process.env.FARYO_SMOKE_MIN_KATEX ?? 2);
 const minDisplay = Number(process.env.FARYO_SMOKE_MIN_DISPLAY ?? 1);
@@ -563,6 +565,10 @@ try {
               details: String(document.getElementById('detailsContext')?.textContent || '').trim(),
               title: String(document.getElementById('ctxText')?.title || '').trim(),
             },
+            sessionTitleMatches: !${JSON.stringify(expectedSessionTitle)} || (
+              String(document.getElementById('detailsSession')?.textContent || '').trim() === ${JSON.stringify(expectedSessionTitle)}
+              && String(document.getElementById('sessionTitle')?.title || '').includes(${JSON.stringify(expectedSessionTitle)})
+            ),
           },
           katexStylesheetLoaded: [...document.styleSheets].some((sheet) => String(sheet.href || '').includes('/katex')),
           katexAssetUrls: ${JSON.stringify(privacySafe)}
@@ -607,6 +613,9 @@ try {
   }
   if (state.ownerTokenDomCount) {
     throw new Error(`Owner token appeared in ${state.ownerTokenDomCount} DOM attributes`);
+  }
+  if (expectedSessionTitle && !state.ownerLayout?.sessionTitleMatches) {
+    throw new Error('Owner session title did not match the expected Codex thread name');
   }
   if (state.ownerTokenInLocation || state.ownerTokenEventUrlCount) {
     throw new Error(`Owner token remained in browser navigation or event-stream URLs: ${JSON.stringify({ location: state.ownerTokenInLocation, eventUrls: state.ownerTokenEventUrlCount })}`);
@@ -830,6 +839,55 @@ try {
     const geometries = [focused, blurred].filter(Boolean);
     if (!beforeFocus || geometries.some((item) => Math.abs(item.width - beforeFocus.width) > 1 || Math.abs(item.height - beforeFocus.height) > 1)) {
       throw new Error(`Owner composer changed geometry across focus/blur: ${JSON.stringify({ beforeFocus, focused, blurred })}`);
+    }
+
+    if (checkCommandSuggestions) {
+      const commandResult = await send('Runtime.evaluate', {
+        expression: `(() => {
+          const input = document.getElementById('promptInput');
+          const popup = document.getElementById('commandSuggest');
+          const shell = document.querySelector('.prompt-shell');
+          if (!input || !popup || !shell) return { ready: false };
+          const original = input.value;
+          const shellBefore = shell.getBoundingClientRect();
+          input.value = '/';
+          input.dispatchEvent(new Event('input', { bubbles: true }));
+          const buttons = [...popup.querySelectorAll('button')];
+          const popupRect = popup.getBoundingClientRect();
+          const firstSelected = popup.querySelector('button.selected')?.dataset.index || '';
+          input.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }));
+          const secondSelected = popup.querySelector('button.selected')?.dataset.index || '';
+          input.value = '/ren';
+          input.dispatchEvent(new Event('input', { bubbles: true }));
+          input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
+          const renameValue = input.value;
+          input.value = original;
+          input.dispatchEvent(new Event('input', { bubbles: true }));
+          const shellAfter = shell.getBoundingClientRect();
+          return {
+            ready: true,
+            count: buttons.length,
+            hasDescriptions: buttons.every((button) => Boolean(button.querySelector('small')?.textContent)),
+            hasExport: buttons.some((button) => button.textContent.includes('/export')),
+            hasSubagents: buttons.some((button) => button.textContent.includes('/subagents')),
+            hasYolo: buttons.some((button) => button.textContent.includes('--yolo')),
+            firstSelected,
+            secondSelected,
+            renameValue,
+            popupWithinViewport: popupRect.left >= -1 && popupRect.right <= innerWidth + 1 && popupRect.height <= innerHeight * 0.59 + 2,
+            shellStable: Math.abs(shellBefore.width - shellAfter.width) <= 1 && Math.abs(shellBefore.height - shellAfter.height) <= 1,
+          };
+        })()`,
+        returnByValue: true,
+      });
+      const commandState = commandResult.result?.value || {};
+      if (!commandState.ready || commandState.count !== 46 || !commandState.hasDescriptions
+        || !commandState.hasExport || !commandState.hasSubagents || commandState.hasYolo
+        || commandState.firstSelected !== '0' || commandState.secondSelected !== '1'
+        || commandState.renameValue !== '/rename ' || !commandState.popupWithinViewport
+        || !commandState.shellStable) {
+        throw new Error(`Owner Codex command completion is wrong: ${JSON.stringify(commandState)}`);
+      }
     }
 
     const homeInteractionResult = await send('Runtime.evaluate', {

@@ -196,6 +196,20 @@ FARYO_START_PYTHON=/path/to/project/python \
   apps/owner/local-tmux-owner/tests/start-codex-runtime.sh
 ```
 
+The command inventory check opens only the `/` popup in a temporary fixed-size
+tmux, scrolls without submitting a command, compares the current CLI with the
+versioned browser metadata, then confirms every existing Codex window kept its
+original geometry:
+
+```bash
+apps/owner/local-tmux-owner/tests/codex-command-inventory.sh
+```
+
+The browser palette exposes descriptions, categories, argument hints and risk
+cues. Codex's explicit `session_index.jsonl` thread name takes precedence over a
+managed tmux startup label, so `/rename` propagates through capture/SSE and the
+Gateway session list without changing the tmux session name.
+
 `FARYO_START_DIRECTORY_ROOTS` is an `os.pathsep`/colon-separated list used only
 by the authenticated directory picker and start validation. Owner canonicalizes
 each selected path, lists directories only, hides dot-directories, rejects

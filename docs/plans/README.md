@@ -5,13 +5,13 @@
 
 ## Active
 
-- [`codex-command-completion-plan.md`](codex-command-completion-plan.md)：从当前 Codex CLI
-  的真实命令面板建立完整、版本可审计的网页命令提示。
 - [`copy-fidelity-plan.md`](copy-fidelity-plan.md)：修复回答、选择区和公式复制时的
   Markdown/TeX 格式损坏。
 
 ## Completed or maintenance mode
 
+- [`codex-command-completion-plan.md`](codex-command-completion-plan.md)：从当前 Codex CLI
+  的真实命令面板建立 46 项、版本可审计的网页命令提示，并同步 `/rename` 标题。
 - [`start-codex-runtime-plan.md`](start-codex-runtime-plan.md)：Gateway `Start Codex`
   的真实就绪、`faryoN` 命名和安全图形目录选择。
 - [`full-history-navigation-plan.md`](full-history-navigation-plan.md)：单会话完整 turn 索引、

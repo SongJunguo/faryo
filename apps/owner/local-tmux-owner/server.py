@@ -290,6 +290,9 @@ _codex_rollout_path_locks: dict[str, threading.Lock] = {}
 _codex_history_cache: dict[str, dict[str, Any]] = {}
 _codex_history_cache_lock = threading.Lock()
 _codex_history_path_locks: dict[str, threading.Lock] = {}
+_codex_session_index_cache: dict[str, str] = {}
+_codex_session_index_signature: tuple[int, int, int, int] | None = None
+_codex_session_index_lock = threading.Lock()
 # Sending is serialized per tmux session because a pane has only one composer.
 # Exact message-id locks keep reuse deterministic across sessions.  Both lock
 # registries are reference-counted so unrelated sends cannot collide and idle
@@ -549,30 +552,59 @@ def codex_count(where: str, params: tuple[Any, ...]) -> int:
 
 
 def codex_session_index_titles() -> dict[str, str]:
-    if not CODEX_SESSION_INDEX.exists(): return {}
-    titles: dict[str, str] = {}
+    """Return Codex's explicit thread names without rescanning an unchanged index."""
+    global _codex_session_index_cache, _codex_session_index_signature
     try:
-        with CODEX_SESSION_INDEX.open(encoding="utf-8", errors="replace") as fh:
-            for line in fh:
-                try:
-                    row = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                if not isinstance(row, dict):
-                    continue
-                thread_id = str(row.get("id") or "").strip()
-                title = session_index_title(row.get("thread_name"))
-                if thread_id and title:
-                    titles[thread_id] = title
+        stat = CODEX_SESSION_INDEX.stat()
+        signature = (stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns)
     except OSError:
+        with _codex_session_index_lock:
+            _codex_session_index_cache = {}
+            _codex_session_index_signature = None
         return {}
-    return titles
+    with _codex_session_index_lock:
+        if signature == _codex_session_index_signature:
+            return dict(_codex_session_index_cache)
+        titles: dict[str, str] = {}
+        try:
+            with CODEX_SESSION_INDEX.open(encoding="utf-8", errors="replace") as fh:
+                for line in fh:
+                    try:
+                        row = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    if not isinstance(row, dict):
+                        continue
+                    thread_id = str(row.get("id") or "").strip()
+                    title = session_index_title(row.get("thread_name"))
+                    if thread_id and title:
+                        titles[thread_id] = title
+        except OSError:
+            return dict(_codex_session_index_cache)
+        _codex_session_index_cache = titles
+        _codex_session_index_signature = signature
+        return dict(titles)
 
 
 def codex_thread_title(thread: dict[str, Any], fallback: str = "Untitled session", index_titles: dict[str, str] | None = None) -> str:
     thread_id = str(thread.get("id") or "").strip()
     titles = index_titles if index_titles is not None else codex_session_index_titles()
     return titles.get(thread_id) or session_title_topic(thread.get("title"), fallback)
+
+
+def codex_capture_session_metadata(thread_id: str) -> dict[str, str]:
+    """Metadata that may change without changing the conversation transcript."""
+    clean_id = str(thread_id or "").strip()
+    if not clean_id:
+        return {}
+    payload = {"sessionId": clean_id}
+    if title := codex_session_index_titles().get(clean_id):
+        payload["sessionTitle"] = title
+    return payload
+
+
+def capture_event_digest(text: str, live_text: str, session_metadata: dict[str, str]) -> int:
+    return hash((text, live_text, session_metadata.get("sessionTitle", "")))
 
 
 def path_under_root(path_value: str | None, root_value: str | None) -> bool:
@@ -585,9 +617,11 @@ def codex_session_item(config: Config, item: dict[str, Any], index_titles: dict[
     thread_id = str(item.get("id") or "")
     updated_ts = parse_sqlite_timestamp(item.get("updated_at"))
     fallback = short_path(cwd) or thread_id or "Untitled session"
-    title = codex_thread_title(item, fallback, index_titles)
-    if tmux_session:
-        title = tmux_session_option(config, tmux_session, "@faryo_session_title") or title
+    # A title supplied while launching a tmux session is only a startup
+    # fallback.  `/rename` is authoritative once Codex appends an explicit
+    # thread name to session_index.jsonl.
+    startup_title = tmux_session_option(config, tmux_session, "@faryo_session_title") if tmux_session else ""
+    title = index_titles.get(thread_id) or startup_title or codex_thread_title(item, fallback, index_titles)
     return {"id": thread_id, "title": title, "gitLabel": session_git_label(session_git_cwd(config, tmux_session, cwd), git_labels, bool(tmux_session)), "cwd": short_path(cwd), "createdAt": item.get("created_at") or "", "updatedAt": item.get("updated_at") or "", "updatedTs": updated_ts, "rolloutPath": item.get("rollout_path") or "", "model": item.get("model") or "", "reasoningEffort": item.get("reasoning_effort") or "", "source": "codex-cli", "tmuxSession": tmux_session, "active": bool(tmux_session), "managed": bool(tmux_session and managed_session(config, tmux_session)), "agentRunning": agent_session_running(config, tmux_session)}
 
 
@@ -659,7 +693,7 @@ def active_agent_session_items(config: Config, history_root: str | None = None, 
         thread = active_agent_thread(target, cwd)
         thread_id = str((thread or {}).get("id") or tmux_session_option(config, name, "@faryo_agent_session_id") or name)
         updated_ts = session_created_ts(target); updated_at = iso_from_ts(updated_ts) if updated_ts else ""
-        title = tmux_session_option(config, name, "@faryo_session_title") or (codex_thread_title(thread, short_path(cwd) or name, index_titles) if thread else short_path(cwd) or name)
+        title = index_titles.get(thread_id) or tmux_session_option(config, name, "@faryo_session_title") or (codex_thread_title(thread, short_path(cwd) or name, index_titles) if thread else short_path(cwd) or name)
         items.append({"id": thread_id, "title": title, "gitLabel": session_git_label(session_git_cwd(config, name, cwd), git_labels), "cwd": short_path(cwd), "createdAt": "", "updatedAt": updated_at, "updatedTs": updated_ts, "rolloutPath": (thread or {}).get("rollout_path") or "", "model": (thread or {}).get("model") or "", "reasoningEffort": (thread or {}).get("reasoning_effort") or "", "source": profile.source, "tmuxSession": name, "active": True, "managed": managed_session(config, name), "agentRunning": agent_session_running(config, name)})
         seen_tmux.add(name)
     return sorted(items, key=lambda item: float(item.get("updatedTs") or 0), reverse=True), set(active_codex) | superseded
@@ -676,7 +710,7 @@ def agent_session_page(config: Config, limit: int, offset: int = 0, history_root
 def agent_session_items(config: Config, history_root: str | None = None) -> list[dict[str, Any]]:
     items = codex_history_items(config, history_root)
     seen_tmux = {item.get("tmuxSession") for item in items if item.get("tmuxSession")}
-    git_labels: dict[str, str] = {}
+    git_labels: dict[str, str] = {}; index_titles = codex_session_index_titles()
     for name in tmux_sessions(config):
         if name in seen_tmux: continue
         target = target_config(config, name)
@@ -686,7 +720,7 @@ def agent_session_items(config: Config, history_root: str | None = None) -> list
         if history_root is not None and not path_under_root(cwd, history_root): continue
         thread = active_agent_thread(target, cwd) or {}; thread_id = str(thread.get("id") or name)
         updated_ts = session_created_ts(target); updated_at = iso_from_ts(updated_ts) if updated_ts else ""
-        title = tmux_session_option(config, name, "@faryo_session_title") or (codex_thread_title(thread, short_path(cwd) or name) if thread else short_path(cwd) or name)
+        title = index_titles.get(thread_id) or tmux_session_option(config, name, "@faryo_session_title") or (codex_thread_title(thread, short_path(cwd) or name, index_titles) if thread else short_path(cwd) or name)
         items.append({"id": thread_id, "title": title, "gitLabel": session_git_label(session_git_cwd(config, name, cwd), git_labels), "cwd": short_path(cwd), "createdAt": "", "updatedAt": updated_at, "updatedTs": updated_ts, "rolloutPath": "", "model": "", "reasoningEffort": "", "source": profile.source, "tmuxSession": name, "active": True, "managed": managed_session(config, name), "agentRunning": agent_session_running(config, name)})
     return sorted(items, key=lambda item: float(item.get("updatedTs") or 0), reverse=True)
 
@@ -3948,7 +3982,7 @@ class Handler(SimpleHTTPRequestHandler):
                     "updatedAt": now_iso(),
                 }
                 if thread_id:
-                    payload["sessionId"] = thread_id
+                    payload.update(codex_capture_session_metadata(thread_id))
                 if live_text:
                     payload["liveText"] = live_text
                 if want_html:
@@ -4042,13 +4076,14 @@ class Handler(SimpleHTTPRequestHandler):
                             text, thread_id, capture_source = structured
                             if agent_running:
                                 live_text = codex_live_tail(terminal_text)
-                    digest = hash((text, live_text))
+                    session_metadata = codex_capture_session_metadata(thread_id)
+                    digest = capture_event_digest(text, live_text, session_metadata)
                     if digest != last_hash or agent_running != last_running:
                         last_hash = digest
                         last_running = agent_running
                         payload = {"ok": True, "text": text, "agentRunning": agent_running, "agentSource": capture_profile.source, "agentProfile": capture_profile.key, "captureSource": capture_source, "updatedAt": now_iso()}
                         if thread_id:
-                            payload["sessionId"] = thread_id
+                            payload.update(session_metadata)
                         if live_text:
                             payload["liveText"] = live_text
                         if not self.send_event("capture", payload):

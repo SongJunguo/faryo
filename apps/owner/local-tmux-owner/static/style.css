@@ -105,8 +105,16 @@ footer.status-collapsed.auto-expanded { padding-top: 8px; }
 .key-nav button { min-height: 26px; min-width: 38px; padding: 0 10px; border-radius: 9px; line-height: 1; }
 .composer { position: relative; background: transparent; border: 0; border-radius: 0; padding: 0; }
 .command-dock { display: flex; align-items: flex-end; justify-content: center; gap: 8px; min-width: 0; }
-.command-suggest { position: absolute; left: 50%; bottom: calc(100% + 8px); z-index: 10; width: min(74vw, 360px); display: grid; gap: 4px; padding: 6px; border: 1px solid color-mix(in srgb, var(--accent) 28%, var(--line)); border-radius: 14px; background: var(--dock-menu-bg); box-shadow: var(--dock-menu-shadow); transform: translateX(-50%); backdrop-filter: blur(16px) saturate(1.1); }
-.command-suggest button { min-height: 34px; padding: 0 9px; border-radius: 10px; background: transparent; color: var(--text); font-size: calc(13px + var(--font-step)); text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.command-suggest { position: absolute; left: 50%; bottom: calc(100% + 8px); z-index: 10; width: min(92vw, 620px); max-height: min(58vh, 520px); display: grid; gap: 4px; padding: 6px; overflow: auto; overscroll-behavior: contain; scrollbar-gutter: stable; border: 1px solid color-mix(in srgb, var(--accent) 28%, var(--line)); border-radius: 14px; background: var(--dock-menu-bg); box-shadow: var(--dock-menu-shadow); transform: translateX(-50%); backdrop-filter: blur(16px) saturate(1.1); }
+.command-suggest-summary { position: sticky; top: -6px; z-index: 1; padding: 8px 10px 7px; background: color-mix(in srgb, var(--dock-menu-bg) 94%, transparent); color: var(--muted); font-size: calc(10px + var(--font-step)); font-weight: 750; letter-spacing: .02em; backdrop-filter: blur(16px); }
+.command-suggest button { min-height: 48px; display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 10px; padding: 7px 10px; border: 1px solid transparent; border-radius: 10px; background: transparent; color: var(--text); font-size: calc(13px + var(--font-step)); text-align: left; }
+.command-suggest button.selected, .command-suggest button:hover, .command-suggest button:focus-visible { border-color: color-mix(in srgb, var(--accent) 36%, var(--line)); background: color-mix(in srgb, var(--accent) 11%, var(--panel2)); outline: none; }
+.command-suggest-main { min-width: 0; display: grid; gap: 2px; }
+.command-suggest-main strong, .command-suggest-main small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.command-suggest-main strong { color: var(--text); font-family: var(--mono); font-size: calc(13px + var(--font-step)); }
+.command-suggest-main small { color: var(--muted); font-size: calc(11px + var(--font-step)); }
+.command-suggest-meta { max-width: 180px; color: var(--muted); font-size: calc(10px + var(--font-step)); text-align: right; }
+.command-risk { display: block; margin-top: 2px; color: var(--danger); font-weight: 760; }
 .prompt-shell {
   position: relative; flex: 0 1 auto; width: calc(100vw - 128px); min-width: 0; min-height: 46px; display: flex; align-items: flex-end; gap: 8px;
   margin-left: 54px; margin-right: 54px;
@@ -1007,6 +1015,10 @@ html[data-faryo-ui="workbench-v2"] :is(button, a, textarea):focus-visible {
 }
 
 @media (max-width: 420px) {
+  .command-suggest { width: calc(100vw - 16px); max-height: min(54vh, 440px); scrollbar-gutter: auto; }
+  .command-suggest button { grid-template-columns: minmax(0, 1fr); gap: 3px; }
+  .command-suggest-meta { max-width: none; overflow: hidden; text-align: left; text-overflow: ellipsis; white-space: nowrap; }
+  .command-risk { display: inline; margin: 0 0 0 5px; }
   html[data-faryo-ui="workbench-v2"] .meta-main { gap: 4px; }
   html[data-faryo-ui="workbench-v2"] .quota-bars { display: none; }
   html[data-faryo-ui="workbench-v2"] #ctxText { font-size: calc(11px + var(--font-step)); }

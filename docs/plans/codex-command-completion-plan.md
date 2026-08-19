@@ -1,7 +1,7 @@
 # Faryo Codex Command Completion Plan
 
 更新时间：2026-08-19
-状态：排队中；等待 Start Codex Runtime 完成后开始
+状态：已完成并部署；进入 Codex CLI 升级后的清单漂移维护
 
 ## 问题基线
 
@@ -15,6 +15,8 @@ Owner 输入框目前只硬编码少量 slash/launch 建议。用户输入 `/` �
 3. 支持前缀、模糊匹配、键盘上下选择、Tab/Enter 补全和 Escape 关闭。
 4. 手机触控候选可滚动，不遮挡输入框、不改变 composer 固定大尺寸。
 5. Codex 升级后能够用可重复实验重新生成/核对命令清单，而不是继续手工遗漏。
+6. `/rename` 执行成功后，活动页标题、会话切换器和 Gateway 会话卡片自动采用 Codex
+   的最新线程名；不要求刷新页面，也不重命名或重建 tmux 会话。
 
 ## 命令发现方法
 
@@ -38,6 +40,19 @@ Owner 输入框目前只硬编码少量 slash/launch 建议。用户输入 `/` �
 - 不记录账号、配额、模型列表、工作区或命令历史；
 - 普通自然语言输入和 `cd` 最近目录提示继续正常工作。
 
+## `/rename` 同步缺陷基线
+
+2026-08-19 的真实会话证据表明，Codex 已把新名称追加到
+`~/.codex/session_index.jsonl`，Faryo 页面仍显示旧名称。根因有两层：
+
+- 页面标题只随 `/api/status` 更新，页眉折叠后状态轮询停止；
+- 活动会话列表优先使用启动时写入 tmux 的静态 `@faryo_session_title`，覆盖了 Codex
+  后续写入的动态线程名。
+
+修复采用“Codex 显式线程名 > 启动期临时标题 > SQLite 初始题目”的优先级，并在结构化
+capture/SSE 负载中携带线程名；线程名变化本身必须触发一个 capture 事件。tmux
+`session_name` 和 pane 几何均保持不变。
+
 ## 测试矩阵
 
 1. 数据清单与隔离 PTY 快照逐项一致，无缺失、重复或失效别名；
@@ -47,6 +62,8 @@ Owner 输入框目前只硬编码少量 slash/launch 建议。用户输入 `/` �
 5. 危险/状态相关命令有清晰标识但不自动运行；
 6. 390x844 与 1440x900 布局、焦点、composer 高度和草稿保持；
 7. 现有发送、附件、公式、历史和问题导航回归。
+8. 匿名线程执行等价的 rename 元数据追加后，即使页眉折叠且正文未变化，SSE 仍推送
+   新标题；活动会话卡和详情面板同步更新，现有 tmux 名称、宽高不变。
 
 ## 验收标准
 
@@ -55,3 +72,26 @@ Owner 输入框目前只硬编码少量 slash/launch 建议。用户输入 `/` �
 - 候选交互在手机与桌面浏览器通过；
 - 不新增外部运行依赖、不泄露本地状态、不降低权限安全；
 - 完成后记录命令数量、差异、提交和浏览器证据，并移入 Completed。
+
+## 完成证据
+
+- 被测 `codex-cli 0.148.0`，Linux x86_64 原生二进制 SHA-256 为
+  `ac2cfed85fb647d61e0150b8548102b330e4799d9d81ad5d354de701edf6b074`；
+- 隔离的 160x50 临时 tmux 只打开 `/` 面板并滚动，不提交任何命令；得到 46 个当前
+  可见命令，`codex-command-inventory.sh` 与版本化清单逐项一致；
+- 条件命令没有错误混入 Linux 当前面板；`/btw`、`/pet`、`/quit` 作为官方别名附着于
+  主命令，当前面板真实显示的 `/subagents` 保留为独立候选；
+- 候选包含说明、类别、参数形状和风险标签，支持前缀、子序列/说明搜索、ArrowUp/Down、
+  Tab/Enter、Escape、鼠标和触控；原有 `codex --yolo` 建议已删除；
+- Codex 显式 rename 现在优先于 tmux 启动期标题；capture 与 SSE 携带标题，标题变化即使
+  正文不变也会产生事件；页眉折叠时仍能同步；
+- Owner 66 项、Gateway 48 项 Python 测试及全部 JavaScript 测试通过；
+- 1440x900 与 390x844 Chrome 验证 46 个候选、滚动边界、键盘选择、`/rename ` 参数
+  骨架和 composer 尺寸；真实已重命名会话的 status 与 DOM 标题一致；
+- 部署后 Owner/Gateway 健康，所有既有 Codex tmux 窗口尺寸与实验前完全一致。
+
+可重复执行清单漂移检查：
+
+```bash
+apps/owner/local-tmux-owner/tests/codex-command-inventory.sh
+```
