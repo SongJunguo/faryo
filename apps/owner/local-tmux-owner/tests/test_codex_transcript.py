@@ -18,6 +18,9 @@ class CodexTranscriptTest(unittest.TestCase):
     def setUp(self):
         with server._codex_rollout_cache_lock:
             server._codex_rollout_cache.clear()
+        with server._codex_history_cache_lock:
+            server._codex_history_cache.clear()
+            server._codex_history_path_locks.clear()
 
     def tearDown(self):
         with server._rate_limit_lock:
@@ -244,6 +247,89 @@ class CodexTranscriptTest(unittest.TestCase):
         self.assertNotIn("internal instructions", first)
         self.assertEqual(second.count("› Show the model"), 1)
         self.assertIn("› Next question", second)
+
+    def test_full_history_page_indexes_every_question_and_pages_backward(self):
+        events = []
+        for index in range(40):
+            events.extend((
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": [{"type": "input_text", "text": f"question {index}"}],
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": [{"type": "output_text", "text": f"answer {index}\n\\[x_{{{index}}}=u\\]"}],
+                    },
+                },
+                {"type": "response_item", "payload": {"type": "function_call", "name": "ignored"}},
+            ))
+        with tempfile.TemporaryDirectory() as root:
+            history = Path(root) / "rollout.jsonl"
+            history.write_text("\n".join(json.dumps(event) for event in events) + "\n", encoding="utf-8")
+
+            latest = server.codex_conversation_history_page(str(history), limit=12)
+            previous = server.codex_conversation_history_page(str(history), limit=12, cursor=latest["olderCursor"])
+            around = server.codex_conversation_history_page(str(history), limit=12, around=0)
+
+        self.assertEqual(latest["totalTurns"], 40)
+        self.assertEqual((latest["start"], latest["end"]), (28, 40))
+        self.assertEqual(len(latest["questions"]), 40)
+        self.assertEqual(len({item["key"] for item in latest["questions"]}), 40)
+        self.assertEqual([item["index"] for item in latest["turns"]], list(range(28, 40)))
+        self.assertIn("\\[x_{39}=u\\]", latest["turns"][-1]["text"])
+        self.assertEqual((previous["start"], previous["end"]), (16, 28))
+        self.assertEqual((around["start"], around["end"]), (0, 12))
+        self.assertEqual(around["questions"][0]["preview"], "question 0")
+        self.assertNotIn(str(history), json.dumps(latest))
+
+    def test_full_history_index_waits_for_complete_records_and_expires_old_cursor(self):
+        def message(role, text):
+            return {
+                "type": "response_item",
+                "payload": {
+                    "type": "message",
+                    "role": role,
+                    "content": [{"type": "input_text" if role == "user" else "output_text", "text": text}],
+                },
+            }
+
+        with tempfile.TemporaryDirectory() as root:
+            history = Path(root) / "rollout.jsonl"
+            initial = [message("user", "one"), message("assistant", "answer one"), message("user", "two")]
+            history.write_text("\n".join(json.dumps(event) for event in initial) + "\n", encoding="utf-8")
+            first = server.codex_conversation_history_page(str(history))
+            old_cursor = server.codex_history_cursor(first["revision"], 1)
+
+            pending = json.dumps(message("user", "three"))
+            split_at = len(pending) // 2
+            with history.open("a", encoding="utf-8") as handle:
+                handle.write(pending[:split_at])
+            partial = server.codex_conversation_history_page(str(history))
+            with history.open("a", encoding="utf-8") as handle:
+                handle.write(pending[split_at:] + "\n" + json.dumps(message("assistant", "answer three")) + "\n")
+            appended = server.codex_conversation_history_page(str(history))
+
+            replacement = Path(root) / "replacement.jsonl"
+            replacement.write_text(json.dumps(message("user", "replacement")) + "\n", encoding="utf-8")
+            replacement.replace(history)
+            replaced = server.codex_conversation_history_page(str(history))
+            with self.assertRaises(server.OwnerError) as expired:
+                server.codex_conversation_history_page(str(history), cursor=old_cursor)
+
+        self.assertEqual(first["totalTurns"], 2)
+        self.assertEqual(partial["totalTurns"], 2)
+        self.assertEqual(appended["totalTurns"], 3)
+        self.assertEqual(first["revision"], appended["revision"])
+        self.assertEqual(replaced["totalTurns"], 1)
+        self.assertNotEqual(first["revision"], replaced["revision"])
+        self.assertEqual(expired.exception.status, server.HTTPStatus.CONFLICT)
 
     def test_rollout_parser_waits_for_a_complete_jsonl_record(self):
         event = {

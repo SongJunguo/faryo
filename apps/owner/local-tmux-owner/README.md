@@ -65,13 +65,13 @@ GFM/math grammar. Raw remains terminal evidence. If both structured sources are
 unavailable, the tmux fallback deliberately avoids guessing damaged formula
 boundaries and displays a warning.
 
-Structured history treats the requested line count as a soft rendering budget.
-Formula-heavy Markdown can have hundreds of short source lines without being a
-large browser payload, so the Owner targets the 12 most recent complete turns
-available inside its bounded rollout tail instead of allowing one long answer
-to hide the whole recent conversation. A separate 512 KiB hard character
-ceiling keeps this exception bounded; the newest complete turn is always
-retained even when it alone exceeds that ceiling.
+Structured history serves at most 12 recent complete turns in the initial
+capture. A separate full-history index records only displayable message byte
+boundaries and truncated user previews, not tool-event bodies. The authenticated
+`/api/conversation-history` endpoint uses revision-bound cursors to load older
+pages or a page around a selected question. A 512 KiB recent-transcript ceiling
+and a 2 MiB history-page target keep mobile responses bounded; a single complete
+turn is not split merely to satisfy the target.
 
 Compact Chat plans stable content keys for top-level conversation blocks and
 reconciles those elements instead of replacing the entire output DOM. All but
@@ -81,16 +81,15 @@ switches and highlighter revisions; it is never persisted to browser storage.
 Live tmux remains outside that frozen history and restores its own scroll
 snapshot before the next paint.
 
-When at least two structured user turns are visible, Compact Chat prepares a
-question rail at the right edge. It stays visually hidden during normal reading,
-appears temporarily after a fast user wheel/swipe, and remains available while
-hovered or keyboard-focused. Each marker is derived from an existing stable
-user block, carries an accessible truncated label, and jumps within the
-browser's conversation scroller only. The active marker follows manual
-scrolling; a live append reuses existing markers and does not move the reading
-position. On narrow screens it overlays the extreme edge without reserving
-permanent content width. The rail is absent in Raw mode and stores neither
-question text nor navigation state.
+When at least two structured user turns exist, Compact Chat prepares a question
+rail at the right edge from the complete server index. Dashed markers represent
+unloaded turns. Selecting one fetches its page before jumping; a deliberate
+scroll near the top fetches one older page and restores the same reading anchor.
+The rail stays visually hidden during normal reading, appears temporarily after
+a fast wheel/swipe, and remains available while hovered or keyboard-focused.
+Live tail refreshes reuse already loaded pages and markers. On narrow screens it
+overlays the extreme edge without reserving permanent width. The rail is absent
+in Raw mode and stores neither previews nor navigation state in browser storage.
 
 The Faryo logo in the Owner header is a same-origin link to the Gateway home
 page. It deliberately drops the current token and session query. The adjacent
@@ -175,6 +174,16 @@ same-text drafts stay isolated, and neither temporary tmux window is resized:
 ```bash
 FARYO_DELIVERY_PYTHON=/path/to/project/python \
   apps/owner/local-tmux-owner/tests/browser-session-send-isolation.sh
+```
+
+The full-history browser matrix creates an anonymous 40-turn rollout and a
+temporary Codex-shaped tmux runtime. It verifies a 12-turn first page, all 40
+markers, top cursor preload with a stable anchor, lazy oldest-page loading,
+eventual 40/40 DOM completeness, KaTeX on loaded pages, and unchanged tmux size:
+
+```bash
+FARYO_HISTORY_PYTHON=/path/to/project/python \
+  apps/owner/local-tmux-owner/tests/browser-full-history.sh
 ```
 
 Persistent send receipts can be verified across a real Owner process restart

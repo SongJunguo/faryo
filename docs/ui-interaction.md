@@ -76,11 +76,12 @@ pretend that damaged tmux text is complete Markdown.
 
 ## Long Conversations
 
-The structured transcript uses a soft line budget plus hard tail/character
-bounds. A formula-heavy answer may exceed the line target without causing every
-prior turn to disappear.
+The initial structured transcript contains at most 12 recent complete turns.
+Owner maintains a revision-bound index for all user turns and serves older
+content through authenticated cursor pages. Tool events and rollout paths never
+enter that index response.
 
-When at least two user turns are visible, Faryo prepares a right-edge question
+When at least two user turns are indexed, Faryo prepares a right-edge question
 rail:
 
 - hidden and non-interactive during normal reading;
@@ -88,6 +89,9 @@ rail:
 - auto-hidden after scrolling stops;
 - held open while hovered or keyboard-focused;
 - click, Arrow keys, Home, and End jump between questions;
+- unloaded markers use a distinct dashed state and fetch their page before jump;
+- deliberate top scrolling loads one older page while preserving the visible
+  block anchor;
 - the active marker follows the reading anchor and selects the final question at
   the bottom;
 - mobile display overlays the extreme edge and never reserves permanent content
@@ -173,8 +177,8 @@ The maintained matrix includes:
 - 390x844 mobile Chrome;
 - 1440x900 desktop Microsoft Edge;
 - structured Markdown/GFM/KaTeX/Shiki;
-- 13-question reveal, auto-hide, click/keyboard jump, stable append, and unchanged
-  content width;
+- 40-question complete index, bounded first page, cursor preload, lazy jump,
+  eventual full DOM loading, auto-hide, stable append, and unchanged width;
 - offline/background recovery and 20-message exact delivery;
 - cross-session retry/delayed-response isolation;
 - protected files/images, CSP, and safe render fallback;
@@ -182,4 +186,5 @@ The maintained matrix includes:
 
 Detailed evidence is maintained in
 [`plans/deepseek-inspired-ui-plan.md`](plans/deepseek-inspired-ui-plan.md) and
-[`plans/codex-reliability-hardening-plan.md`](plans/codex-reliability-hardening-plan.md).
+[`plans/codex-reliability-hardening-plan.md`](plans/codex-reliability-hardening-plan.md),
+plus [`plans/full-history-navigation-plan.md`](plans/full-history-navigation-plan.md).

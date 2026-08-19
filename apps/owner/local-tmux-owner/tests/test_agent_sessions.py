@@ -76,6 +76,17 @@ class AgentSessionTest(unittest.TestCase):
         self.assertEqual(result["historyTotal"], 437)
         self.assertEqual(result["historyOffset"], 390)
 
+    def test_session_and_conversation_history_pagers_keep_distinct_contracts(self):
+        with (
+            mock.patch.object(server, "codex_history_filter", return_value=("1 = 1", ())),
+            mock.patch.object(server, "codex_count", return_value=0),
+            mock.patch.object(server, "codex_rows", return_value=[]),
+        ):
+            sessions, total = server.codex_history_page(self.config, 10, 20, "/workspace", {"live"})
+
+        self.assertEqual((sessions, total), ([], 0))
+        self.assertIsNot(server.codex_history_page, server.codex_conversation_history_page)
+
     def test_codex_history_filter_scopes_and_excludes_active_threads(self):
         where, params = server.codex_history_filter("/workspace/project", {"live-b", "live-a"})
 

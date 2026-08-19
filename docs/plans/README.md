@@ -5,10 +5,15 @@
 
 ## Active
 
-当前没有未完成的实施计划。新工作先在本节登记，再开始大范围修改。
+- [`start-codex-runtime-plan.md`](start-codex-runtime-plan.md)：修复 Gateway 主页
+  `Start Codex` 无法创建后台 tmux/Codex 运行时的问题。
+- [`codex-command-completion-plan.md`](codex-command-completion-plan.md)：从当前 Codex CLI
+  的真实命令面板建立完整、版本可审计的网页命令提示。
 
 ## Completed or maintenance mode
 
+- [`full-history-navigation-plan.md`](full-history-navigation-plan.md)：单会话完整 turn 索引、
+  游标分页、旧历史懒加载和全问题导航。
 - [`codebase-cleanup-plan.md`](codebase-cleanup-plan.md)：收敛为 Ubuntu/Linux + Codex
   单一生产路径，删除不可达资源、旧兼容层和未验证打包链。
 - [`codex-reliability-hardening-plan.md`](codex-reliability-hardening-plan.md)：Codex 长会话、

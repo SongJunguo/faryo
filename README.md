@@ -72,8 +72,9 @@ or support claims.
 - Reads finalized user/assistant messages incrementally from Codex rollout JSONL.
 - Uses Codex App Server only as a compatibility fallback and tmux capture as
   conservative terminal evidence.
-- Keeps recent complete turns within explicit tail, line, and character budgets.
-  Formula-heavy answers cannot silently hide the entire recent conversation.
+- Keeps the initial payload to at most 12 recent complete turns, then exposes
+  older turns through a revision-bound cursor API. Formula-heavy answers cannot
+  silently erase the complete question index.
 - Separates stable conversation history from the transient `Live from tmux`
   execution panel.
 
@@ -97,12 +98,15 @@ micromark -> mdast -> CommonMark/GFM/math nodes -> safe HTML -> KaTeX
 
 ### Long-conversation navigation
 
-- Builds a right-edge marker for each visible user question.
+- Builds a right-edge marker for every indexed user question, including turns
+  that have not yet been loaded into the DOM.
 - Stays hidden during normal reading and appears only after a fast user
   wheel/swipe.
 - Auto-hides after scrolling stops, while hover and keyboard focus keep it
   available.
 - Supports click, arrow keys, Home, and End for jumping between questions.
+- Lazily loads the required page when an unloaded marker is selected and loads
+  one older page near the top while preserving the current reading anchor.
 - Overlays the extreme mobile edge without reserving permanent blank space or
   changing conversation width.
 - Reuses stable marker DOM during live appends and stores no question text or
@@ -227,7 +231,7 @@ or an equivalent exact-identity layer.
 
 The `main` branch was revalidated on 2026-08-19 with privacy-safe fixtures:
 
-- source checks plus 53 Owner and 45 Gateway Python tests;
+- source checks plus 56 Owner and 45 Gateway Python tests;
 - a 20-message browser delivery matrix including Chinese, multiline Markdown,
   TeX, attachment, offline/background recovery, and failed-draft cases;
 - a two-session retry/delayed-response isolation test;
@@ -235,8 +239,10 @@ The `main` branch was revalidated on 2026-08-19 with privacy-safe fixtures:
 - fast-scroll question-rail reveal, auto-hide, keyboard navigation, stable live
   append, and unchanged conversation width;
 - local Markdown/KaTeX/Shiki, authenticated resources, CSP, and safe fallback;
-- a real structured Codex session with 12 question markers without recording its
-  conversation text;
+- an anonymous 40-turn history with a bounded 12-turn first page, cursor preload,
+  lazy oldest-page jump, eventual 40/40 completeness, and no tmux resize;
+- a private real structured Codex session with `14 total = 14 markers = 14 loaded`
+  using count-only diagnostics that never record its conversation text;
 - a 263.3 MiB rollout cold-read check at about 0.0025 s and 41.5 MiB process peak
   RSS on the validated workstation;
 - Owner/Gateway health and unchanged dimensions for five active Codex tmux

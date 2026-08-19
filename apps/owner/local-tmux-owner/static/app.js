@@ -85,6 +85,15 @@
   }
   let gatewayCsrfToken = '';
   let selectedSession = params.get('session') || '';
+  const HISTORY_PAGE_TURNS = 12;
+  const HISTORY_REFRESH_MIN_MS = 2500;
+  let conversationHistory = {
+    revision: '', sessionId: '', totalTurns: 0, questions: [], turns: new Map(),
+    loadedStart: null, loadedEnd: 0, olderCursor: '', initialized: false,
+  };
+  let historyLoadPromise = null, historyRequestController = null, historyRefreshTimer = null;
+  let historyRunId = 0, historyCaptureSignature = '', historyLastRefreshAt = 0;
+  let historyUserIntentUntil = 0, historyOlderLoadQueued = false;
   let submitInFlight = false, pendingSubmission = null;
   let activeSurfacePanel = null, panelReturnFocus = null;
   const restoringLivePanels = new WeakSet();
@@ -100,6 +109,7 @@
         preview: questionNavPreview,
         scroller: outputWrap,
         output,
+        resolveTarget: resolveQuestionTarget,
       });
     } catch (_error) {
       questionNavigatorController = null;
@@ -385,7 +395,11 @@
     });
   }
 
-  outputWrap.addEventListener('scroll', updateBottomButton, { passive: true });
+  outputWrap.addEventListener('scroll', () => { updateBottomButton(); maybeLoadOlderHistory(); }, { passive: true });
+  outputWrap.addEventListener('wheel', noteHistoryUserIntent, { passive: true });
+  outputWrap.addEventListener('touchstart', noteHistoryUserIntent, { passive: true });
+  outputWrap.addEventListener('touchmove', noteHistoryUserIntent, { passive: true });
+  outputWrap.addEventListener('pointerdown', noteHistoryUserIntent, { passive: true });
   bottomBtn.addEventListener('click', () => { if (!applyDeferredCapture(true)) scrollBottom(true); });
   output.addEventListener('toggle', (event) => {
     const panel = event.target.closest?.('.compact-live-terminal');
@@ -544,6 +558,220 @@
 
   function apiPath(path) {
     return selectedSession && path.startsWith('/api/') ? path + (path.includes('?') ? '&' : '?') + `session=${encodeURIComponent(selectedSession)}` : path;
+  }
+
+  function emptyConversationHistory() {
+    return {
+      revision: '', sessionId: '', totalTurns: 0, questions: [], turns: new Map(),
+      loadedStart: null, loadedEnd: 0, olderCursor: '', initialized: false,
+    };
+  }
+
+  function resetConversationHistory() {
+    historyRunId += 1;
+    historyRequestController?.abort();
+    historyRequestController = null;
+    historyLoadPromise = null;
+    if (historyRefreshTimer) clearTimeout(historyRefreshTimer);
+    historyRefreshTimer = null;
+    historyCaptureSignature = '';
+    historyLastRefreshAt = 0;
+    historyOlderLoadQueued = false;
+    conversationHistory = emptyConversationHistory();
+  }
+
+  function structuredCapture(capture) {
+    return capture?.captureSource === 'codex-jsonl' || capture?.captureSource === 'codex-app-server';
+  }
+
+  function loadedHistoryTurns() {
+    return [...conversationHistory.turns.values()].sort((left, right) => left.index - right.index);
+  }
+
+  function historyDisplayText() {
+    const turns = loadedHistoryTurns();
+    const blocks = [];
+    let previous = null;
+    for (const turn of turns) {
+      if (previous !== null && turn.index > previous + 1) {
+        const missing = turn.index - previous - 1;
+        blocks.push(`• … ${missing} earlier turn${missing === 1 ? '' : 's'} not loaded; use the question rail to fetch them …`);
+      }
+      blocks.push(String(turn.text || ''));
+      previous = turn.index;
+    }
+    return blocks.filter(Boolean).join('\n\n');
+  }
+
+  function mergedConversationCapture(capture) {
+    if (outputMode !== 'compact' || !structuredCapture(capture) || !conversationHistory.initialized
+      || !conversationHistory.turns.size
+      || (conversationHistory.sessionId && capture.sessionId && conversationHistory.sessionId !== capture.sessionId)) {
+      return capture;
+    }
+    return { ...capture, text: historyDisplayText(), historyTotalTurns: conversationHistory.totalTurns };
+  }
+
+  function historyAnchorSnapshot() {
+    const scrollerTop = outputWrap.getBoundingClientRect().top;
+    const child = [...output.children].find((element) => element.getBoundingClientRect().bottom > scrollerTop + 1);
+    return child ? {
+      key: child.dataset.faryoBlockKey || '',
+      top: child.getBoundingClientRect().top,
+      scrollTop: outputWrap.scrollTop,
+      scrollHeight: outputWrap.scrollHeight,
+    } : { key: '', top: 0, scrollTop: outputWrap.scrollTop, scrollHeight: outputWrap.scrollHeight };
+  }
+
+  function restoreHistoryAnchor(snapshot) {
+    if (!snapshot) return;
+    const apply = () => {
+      const target = snapshot.key
+        ? [...output.children].find((element) => element.dataset.faryoBlockKey === snapshot.key)
+        : null;
+      outputWrap.scrollTop = target
+        ? outputWrap.scrollTop + target.getBoundingClientRect().top - snapshot.top
+        : snapshot.scrollTop + Math.max(0, outputWrap.scrollHeight - snapshot.scrollHeight);
+      updateBottomButton();
+    };
+    requestAnimationFrame(() => {
+      apply();
+      requestAnimationFrame(apply);
+    });
+  }
+
+  function mergeConversationHistoryPage(data, expectedSessionId) {
+    const revision = String(data?.revision || '');
+    if (!revision) throw new Error('Conversation history revision is missing');
+    if (conversationHistory.revision && conversationHistory.revision !== revision) {
+      conversationHistory = emptyConversationHistory();
+    }
+    conversationHistory.revision = revision;
+    conversationHistory.sessionId = expectedSessionId || conversationHistory.sessionId;
+    conversationHistory.totalTurns = Number(data.totalTurns || 0);
+    conversationHistory.questions = Array.isArray(data.questions) ? data.questions.map((item, index) => ({
+      index: Number.isInteger(Number(item?.index)) ? Number(item.index) : index,
+      key: String(item?.key || `question-${index}`),
+      preview: String(item?.preview || 'Untitled question'),
+    })) : [];
+    for (const turn of data.turns || []) {
+      const index = Number(turn?.index);
+      if (!Number.isInteger(index) || index < 0) continue;
+      conversationHistory.turns.set(index, {
+        index,
+        key: String(turn.key || `question-${index}`),
+        preview: String(turn.preview || ''),
+        text: String(turn.text || ''),
+      });
+    }
+    const loaded = loadedHistoryTurns();
+    conversationHistory.loadedStart = loaded.length ? loaded[0].index : null;
+    conversationHistory.loadedEnd = loaded.length ? loaded[loaded.length - 1].index + 1 : 0;
+    if (Number(data.start) === conversationHistory.loadedStart) {
+      conversationHistory.olderCursor = String(data.olderCursor || '');
+    }
+    conversationHistory.initialized = true;
+  }
+
+  function loadedQuestionTarget(key) {
+    return [...output.querySelectorAll('.compact-block.user')]
+      .find((element) => element.dataset.faryoQuestionKey === key) || null;
+  }
+
+  async function loadConversationHistory(options = {}) {
+    const around = options.around !== undefined && options.around !== null
+      && Number.isInteger(Number(options.around)) ? Number(options.around) : null;
+    if (around !== null && conversationHistory.turns.has(around)) return conversationHistory.turns.get(around);
+    if (historyLoadPromise) {
+      try { await historyLoadPromise; } catch (_error) {}
+      if (around !== null && conversationHistory.turns.has(around)) return conversationHistory.turns.get(around);
+    }
+    const runId = historyRunId;
+    const session = selectedSession;
+    const expectedSessionId = String(lastCapture?.sessionId || conversationHistory.sessionId || '');
+    const query = new URLSearchParams({ limit: String(HISTORY_PAGE_TURNS) });
+    if (options.cursor) query.set('cursor', String(options.cursor));
+    if (around !== null) query.set('around', String(around));
+    const controller = new AbortController();
+    historyRequestController = controller;
+    const timeoutId = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+    const anchor = options.preserveAnchor ? historyAnchorSnapshot() : null;
+    const keepBottom = Boolean(options.latest && isNearBottom());
+    historyLoadPromise = (async () => {
+      const data = await api(apiPath(`/api/conversation-history?${query}`), { signal: controller.signal });
+      if (runId !== historyRunId || session !== selectedSession) return null;
+      mergeConversationHistoryPage(data, expectedSessionId);
+      historyLastRefreshAt = Date.now();
+      if (lastCapture && outputMode === 'compact') {
+        renderOutput(lastCapture);
+        if (anchor) restoreHistoryAnchor(anchor);
+        else if (keepBottom && Date.now() > historyUserIntentUntil) scrollBottom(true);
+      }
+      return data;
+    })();
+    try {
+      return await historyLoadPromise;
+    } catch (error) {
+      if (Number(error?.status) === 409) {
+        resetConversationHistory();
+        if (!options.retrying) return loadConversationHistory({ latest: true, retrying: true });
+      }
+      throw error;
+    } finally {
+      clearTimeout(timeoutId);
+      if (historyRequestController === controller) historyRequestController = null;
+      historyLoadPromise = null;
+      if (historyOlderLoadQueued) {
+        historyOlderLoadQueued = false;
+        setTimeout(maybeLoadOlderHistory, 0);
+      }
+    }
+  }
+
+  async function resolveQuestionTarget(question) {
+    if (loadedQuestionTarget(question?.key)) return true;
+    try {
+      await loadConversationHistory({ around: Number(question?.index) });
+    } catch (error) {
+      setError(userErrorMessage(error));
+      throw error;
+    }
+    return Boolean(loadedQuestionTarget(question?.key));
+  }
+
+  function scheduleConversationHistoryRefresh(capture, delay = 80) {
+    if (outputMode !== 'compact' || capture?.captureSource !== 'codex-jsonl') return;
+    if (conversationHistory.sessionId && capture.sessionId && conversationHistory.sessionId !== capture.sessionId) {
+      resetConversationHistory();
+    }
+    const text = String(capture.text || '');
+    const signature = `${capture.sessionId || ''}:${text.length}:${text.slice(-160)}`;
+    if (historyCaptureSignature === signature
+      && (conversationHistory.initialized || historyLoadPromise || historyRefreshTimer)) return;
+    historyCaptureSignature = signature;
+    if (historyRefreshTimer) clearTimeout(historyRefreshTimer);
+    const wait = Math.max(delay, HISTORY_REFRESH_MIN_MS - (Date.now() - historyLastRefreshAt));
+    historyRefreshTimer = setTimeout(() => {
+      historyRefreshTimer = null;
+      loadConversationHistory({ latest: true }).catch(handleBackgroundError);
+    }, wait);
+  }
+
+  function noteHistoryUserIntent() {
+    historyUserIntentUntil = Date.now() + 600;
+  }
+
+  function maybeLoadOlderHistory() {
+    if (Date.now() > historyUserIntentUntil || outputMode !== 'compact'
+      || !conversationHistory.initialized || !conversationHistory.olderCursor
+      || outputWrap.scrollTop > 120) return;
+    if (historyLoadPromise) {
+      historyOlderLoadQueued = true;
+      return;
+    }
+    historyUserIntentUntil = 0;
+    loadConversationHistory({ cursor: conversationHistory.olderCursor, preserveAnchor: true })
+      .catch(handleBackgroundError);
   }
 
   function localResourcePath(path) {
@@ -975,7 +1203,7 @@
     restorePromptDraft();
     autosize();
     updateSendVisibility();
-    history.replaceState(null, '', `${next.pathname}${next.search}${location.hash}`); sessionMenu.classList.add('hidden'); resetRefreshState(); clearMarkdownRenderCache(); closeEventStream(); lastCaptureSignature = ''; refreshStatus({ silent: true }).catch(handleBackgroundError); refreshCapture(currentCaptureLines(), { silent: true }).catch(handleBackgroundError); if (outputMode === 'compact') startEventStream();
+    history.replaceState(null, '', `${next.pathname}${next.search}${location.hash}`); sessionMenu.classList.add('hidden'); resetConversationHistory(); resetRefreshState(); clearMarkdownRenderCache(); closeEventStream(); lastCaptureSignature = ''; refreshStatus({ silent: true }).catch(handleBackgroundError); refreshCapture(currentCaptureLines(), { silent: true }).catch(handleBackgroundError); if (outputMode === 'compact') startEventStream();
   }
 
   function cachedWorkbench() {
@@ -1333,16 +1561,24 @@
       output.replaceChildren(fragment);
       metrics = { created: models.length, reused: 0, removed: 0, stable: 0 };
     }
+    const loadedQuestions = conversationHistory.initialized ? loadedHistoryTurns() : [];
+    let loadedQuestionIndex = 0;
     models.forEach((model, index) => {
       const node = output.children[index];
       if (!node) return;
       if (model.sourceIndex >= 0) node.dataset.sourceIndex = String(model.sourceIndex);
       else delete node.dataset.sourceIndex;
       if (model.kind === 'user') {
+        const historyTurn = loadedQuestions[loadedQuestionIndex++];
+        if (historyTurn?.key) node.dataset.faryoQuestionKey = historyTurn.key;
+        else delete node.dataset.faryoQuestionKey;
         node.dataset.faryoQuestionPreview = typeof questionNavigatorApi.previewText === 'function'
           ? questionNavigatorApi.previewText(model.text, 88)
           : String(model.text || '').replace(/^\s*›\s*/u, '').trim().slice(0, 88);
-      } else delete node.dataset.faryoQuestionPreview;
+      } else {
+        delete node.dataset.faryoQuestionKey;
+        delete node.dataset.faryoQuestionPreview;
+      }
     });
     const blocks = output.querySelectorAll('.compact-block.output');
     blocks.forEach((block, index) => {
@@ -1386,6 +1622,8 @@
   function renderOutput(capture) {
     const liveStateSnapshot = liveTerminalState();
     lastCapture = capture;
+    scheduleConversationHistoryRefresh(capture);
+    capture = mergedConversationCapture(capture);
     const text = capture.text || 'No output yet';
     const rules = compactRulesForCapture(capture);
     output.dataset.captureSource = String(capture.captureSource || '');
@@ -1394,11 +1632,11 @@
     needsConfirmUI = hasConfirmUI(text, rules);
     updateStatusLineAutoExpand();
     output.classList.toggle('compact-blocks', outputMode === 'compact');
-    const structuredCapture = capture.captureSource === 'codex-jsonl' || capture.captureSource === 'codex-app-server';
+    const isStructured = structuredCapture(capture);
     if (outputMode === 'compact') {
       try {
         renderCompactOutput(text, rules, {
-          mode: structuredCapture ? 'settled' : 'streaming',
+          mode: isStructured ? 'settled' : 'streaming',
         });
         delete output.dataset.renderFallback;
       } catch (_error) {
@@ -1409,14 +1647,17 @@
     }
     else if (capture.html && !parsedInternalAnnotations(text).citations.length) output.innerHTML = decorateMetaLines(capture.html, text);
     else renderPlainOutput(text, rules);
-    if (outputMode === 'compact' && capture.agentSource === 'codex-cli' && !structuredCapture) {
+    if (outputMode === 'compact' && capture.agentSource === 'codex-cli' && !isStructured) {
       output.insertAdjacentHTML('afterbegin', '<section class="compact-capture-warning" role="status">Structured Codex history is unavailable. Showing a terminal fallback; Markdown and formulas may be incomplete.</section>');
     }
     if (outputMode === 'compact' && capture.agentRunning && capture.liveText) {
       output.insertAdjacentHTML('beforeend', `<details class="compact-live-terminal" data-session="${escapeHtml(selectedSession || 'default')}"><summary class="compact-live-title"><span class="live-dot"></span><span>Live from tmux</span><span class="compact-live-state">Agent working</span></summary><pre>${escapeHtml(String(capture.liveText))}</pre></details>`);
     }
     restoreLiveTerminalState(liveStateSnapshot);
-    questionNavigatorController?.sync(outputMode === 'compact');
+    const indexedQuestions = isStructured && conversationHistory.initialized
+      ? conversationHistory.questions
+      : null;
+    questionNavigatorController?.sync(outputMode === 'compact', indexedQuestions);
     void hydrateProtectedImages(output);
   }
 

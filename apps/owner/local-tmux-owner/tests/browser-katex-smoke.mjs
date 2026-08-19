@@ -65,6 +65,8 @@ const minProtectedLinks = Number(process.env.FARYO_SMOKE_MIN_PROTECTED_LINKS || 
 const minProtectedImages = Number(process.env.FARYO_SMOKE_MIN_PROTECTED_IMAGES || 0);
 const minMemoryReferences = Number(process.env.FARYO_SMOKE_MIN_MEMORY_REFERENCES || 0);
 const minQuestionMarkers = Number(process.env.FARYO_SMOKE_MIN_QUESTION_MARKERS || 0);
+const expectedHistoryTurns = Number(process.env.FARYO_SMOKE_EXPECT_HISTORY_TURNS || 0);
+const historyRequiresFormula = process.env.FARYO_SMOKE_HISTORY_REQUIRE_FORMULA !== '0';
 const minRenderFallbacks = Number(process.env.FARYO_SMOKE_MIN_RENDER_FALLBACKS || 0);
 const maxBareTex = Number(process.env.FARYO_SMOKE_MAX_BARE_TEX ?? -1);
 const screenshotTex = process.env.FARYO_SMOKE_SCREENSHOT_TEX || expectedTex.at(-1) || '';
@@ -362,6 +364,13 @@ try {
         const promptShell = document.querySelector('.prompt-shell');
         const questionNavigator = document.getElementById('questionNavigator');
         const questionMarkers = [...document.querySelectorAll('#questionNavMarkers .question-nav-marker')];
+        const historyRequests = performance.getEntriesByType('resource')
+          .map((entry) => String(entry.name || ''))
+          .filter((url) => url.includes('/api/conversation-history'))
+          .map((url) => {
+            const parsed = new URL(url);
+            return parsed.searchParams.has('around') ? 'around' : (parsed.searchParams.has('cursor') ? 'cursor' : 'latest');
+          });
         const livePanel = output?.querySelector('.compact-live-terminal');
         const statusLine = document.querySelector('.status-line');
         const keyNav = document.querySelector('.key-nav');
@@ -506,6 +515,10 @@ try {
           },
           questionNavigation: {
             markerCount: questionMarkers.length,
+            loadedQuestionCount: output?.querySelectorAll('.compact-block.user').length || 0,
+            unloadedMarkerCount: questionMarkers.filter((marker) => marker.classList.contains('unloaded')).length,
+            historyRequestCount: historyRequests.length,
+            historyRequestKinds: historyRequests,
             current: String(document.getElementById('questionNavCurrent')?.textContent || ''),
             total: String(document.getElementById('questionNavTotal')?.textContent || ''),
             available: Boolean(questionNavigator && !questionNavigator.classList.contains('hidden') && questionNavigator.getClientRects().length),
@@ -609,6 +622,126 @@ try {
   }
   if (minQuestionMarkers > 0) {
     console.log(`faryo-browser-question-navigation-live=PASS markers=${state.questionNavigation.markerCount}`);
+  }
+  if (expectedHistoryTurns > 0) {
+    const initialLoaded = Number(state.questionNavigation?.loadedQuestionCount || 0);
+    if (state.questionNavigation?.markerCount !== expectedHistoryTurns
+      || Number(state.questionNavigation?.total || 0) !== expectedHistoryTurns
+      || initialLoaded <= 0 || initialLoaded >= expectedHistoryTurns
+      || Number(state.questionNavigation?.unloadedMarkerCount || 0) < 1
+      || state.questionNavigation?.historyRequestKinds?.filter((kind) => kind === 'latest').length !== 1) {
+      throw new Error(`Full-history index did not stay paged: ${JSON.stringify(state.questionNavigation)}`);
+    }
+    await delay(150);
+    await send('Runtime.evaluate', {
+      expression: `(() => {
+        const scroller = document.getElementById('outputWrap');
+        scroller.dispatchEvent(new WheelEvent('wheel', { deltaY: -120, bubbles: true }));
+        scroller.scrollTop = 0;
+        const anchor = document.querySelector('#output > [data-faryo-block-key]');
+        window.__faryoHistoryAnchor = anchor ? {
+          key: anchor.dataset.faryoBlockKey,
+          top: anchor.getBoundingClientRect().top,
+        } : null;
+        scroller.dispatchEvent(new Event('scroll'));
+      })()`,
+    });
+    let preloadedHistory = {};
+    for (let attempt = 0; attempt < 120; attempt += 1) {
+      await delay(100);
+      const result = await send('Runtime.evaluate', {
+        expression: `(() => {
+          const anchor = window.__faryoHistoryAnchor;
+          const target = anchor ? [...document.querySelectorAll('#output > [data-faryo-block-key]')]
+            .find((item) => item.dataset.faryoBlockKey === anchor.key) : null;
+          const requests = performance.getEntriesByType('resource').map((entry) => String(entry.name || ''));
+          const anchorDelta = target && anchor ? target.getBoundingClientRect().top - anchor.top : null;
+          return {
+            loadedQuestionCount: document.querySelectorAll('#output .compact-block.user').length,
+            cursorRequest: requests.some((url) => url.includes('/api/conversation-history') && /[?&]cursor=/.test(url)),
+            anchorPreserved: Boolean(target && Math.abs(anchorDelta) <= 3),
+            anchorDelta,
+            scrollTop: document.getElementById('outputWrap')?.scrollTop || 0,
+          };
+        })()`,
+        returnByValue: true,
+      });
+      preloadedHistory = result.result?.value || {};
+      if (preloadedHistory.loadedQuestionCount > initialLoaded
+        && preloadedHistory.cursorRequest && preloadedHistory.anchorPreserved) break;
+    }
+    if (preloadedHistory.loadedQuestionCount <= initialLoaded
+      || !preloadedHistory.cursorRequest || !preloadedHistory.anchorPreserved) {
+      throw new Error(`Full-history top preload failed: ${JSON.stringify(preloadedHistory)}`);
+    }
+    const needsAroundRequest = preloadedHistory.loadedQuestionCount < expectedHistoryTurns;
+    await send('Runtime.evaluate', {
+      expression: `document.querySelector('#questionNavMarkers .question-nav-marker')?.click()`,
+    });
+    let loadedHistory = {};
+    for (let attempt = 0; attempt < 120; attempt += 1) {
+      await delay(100);
+      const result = await send('Runtime.evaluate', {
+        expression: `(() => {
+          const markers = [...document.querySelectorAll('#questionNavMarkers .question-nav-marker')];
+          const first = markers[0];
+          const key = first?.dataset.questionKey || '';
+          const target = [...document.querySelectorAll('#output .compact-block.user')]
+            .find((item) => item.dataset.faryoQuestionKey === key);
+          const answer = target?.nextElementSibling?.classList.contains('output') ? target.nextElementSibling : null;
+          const historyRequests = performance.getEntriesByType('resource')
+            .map((entry) => String(entry.name || ''))
+            .filter((url) => url.includes('/api/conversation-history'));
+          return {
+            markerCount: markers.length,
+            loadedQuestionCount: document.querySelectorAll('#output .compact-block.user').length,
+            firstLoaded: Boolean(first && !first.classList.contains('unloaded') && target),
+            firstActive: first?.getAttribute('aria-current') === 'step',
+            formulaRendered: Boolean(answer?.querySelector('.katex')),
+            aroundRequest: historyRequests.some((url) => /[?&]around=0(?:&|$)/.test(url)),
+            pageHorizontalOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth + 1,
+          };
+        })()`,
+        returnByValue: true,
+      });
+      loadedHistory = result.result?.value || {};
+      if (loadedHistory.firstLoaded && loadedHistory.firstActive
+        && (!historyRequiresFormula || loadedHistory.formulaRendered)) break;
+    }
+    if (!loadedHistory.firstLoaded || !loadedHistory.firstActive
+      || (historyRequiresFormula && !loadedHistory.formulaRendered)
+      || (needsAroundRequest && !loadedHistory.aroundRequest) || loadedHistory.pageHorizontalOverflow
+      || loadedHistory.markerCount !== expectedHistoryTurns
+      || (needsAroundRequest
+        ? loadedHistory.loadedQuestionCount <= preloadedHistory.loadedQuestionCount
+        : loadedHistory.loadedQuestionCount < preloadedHistory.loadedQuestionCount)) {
+      throw new Error(`Full-history lazy loading failed: ${JSON.stringify(loadedHistory)}`);
+    }
+    let finalHistory = loadedHistory;
+    if (loadedHistory.loadedQuestionCount < expectedHistoryTurns) {
+      await send('Runtime.evaluate', {
+        expression: `document.querySelector('#questionNavMarkers .question-nav-marker.unloaded')?.click()`,
+      });
+      for (let attempt = 0; attempt < 120; attempt += 1) {
+        await delay(100);
+        const result = await send('Runtime.evaluate', {
+          expression: `(() => ({
+            markerCount: document.querySelectorAll('#questionNavMarkers .question-nav-marker').length,
+            unloadedMarkerCount: document.querySelectorAll('#questionNavMarkers .question-nav-marker.unloaded').length,
+            loadedQuestionCount: document.querySelectorAll('#output .compact-block.user').length,
+          }))()`,
+          returnByValue: true,
+        });
+        finalHistory = result.result?.value || {};
+        if (finalHistory.loadedQuestionCount === expectedHistoryTurns && finalHistory.unloadedMarkerCount === 0) break;
+      }
+    }
+    if (finalHistory.markerCount !== expectedHistoryTurns
+      || finalHistory.loadedQuestionCount !== expectedHistoryTurns
+      || finalHistory.unloadedMarkerCount !== 0) {
+      throw new Error(`Full-history eventual completeness failed: ${JSON.stringify(finalHistory)}`);
+    }
+    console.log(`faryo-browser-full-history=PASS total=${expectedHistoryTurns} initial=${initialLoaded} preloaded=${preloadedHistory.loadedQuestionCount} loaded=${finalHistory.loadedQuestionCount} lazy-oldest=PASS`);
   }
   if (checkOwnerLayout) {
     const layout = state.ownerLayout || {};

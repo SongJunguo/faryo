@@ -720,6 +720,22 @@ button.question-nav-marker {
   transition: width .14s ease, height .14s ease, border-color .14s ease, background .14s ease;
 }
 
+button.question-nav-marker.unloaded .question-nav-dot {
+  border-style: dashed;
+  background: transparent;
+  opacity: .72;
+}
+
+button.question-nav-marker.loading .question-nav-dot {
+  border-color: var(--accent);
+  animation: question-nav-loading .7s ease-in-out infinite alternate;
+}
+
+@keyframes question-nav-loading {
+  from { transform: scale(.82); opacity: .5; }
+  to { transform: scale(1.18); opacity: 1; }
+}
+
 button.question-nav-marker:hover .question-nav-dot,
 button.question-nav-marker:focus-visible .question-nav-dot {
   border-color: color-mix(in srgb, var(--accent) 64%, var(--muted));

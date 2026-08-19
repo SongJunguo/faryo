@@ -57,6 +57,8 @@
     }
 
     let targets = [];
+    let questions = [];
+    let indexedQuestions = null;
     let active = -1;
     let enabled = true;
     let updateFrame = 0;
@@ -64,6 +66,7 @@
     let scrollingTimer = 0;
     let flashTimer = 0;
     let flashTarget = null;
+    let loadingIndex = -1;
     let userScrollIntentUntil = 0;
     let lastScrollTop = Number(scroller.scrollTop || 0);
     let lastScrollAt = Number(view.performance?.now?.() || Date.now());
@@ -126,9 +129,12 @@
       if (navigator.classList.contains('hidden') || !targets.length) return;
       const scrollerRect = scroller.getBoundingClientRect();
       const anchor = scrollerRect.top + Math.min(150, Math.max(72, scrollerRect.height * 0.22));
-      const positions = targets.map((target) => target.getBoundingClientRect().top);
+      const loaded = targets.map((target, index) => ({ target, index })).filter((item) => item.target);
+      if (!loaded.length) return;
+      const positions = loaded.map((item) => item.target.getBoundingClientRect().top);
       const nearBottom = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 48;
-      setActive(nearBottom ? targets.length - 1 : activeIndex(positions, anchor));
+      const loadedIndex = nearBottom ? loaded.length - 1 : activeIndex(positions, anchor);
+      setActive(loaded[Math.max(0, loadedIndex)]?.index ?? 0);
     }
 
     function scheduleActiveUpdate() {
@@ -161,7 +167,10 @@
 
     function reset() {
       targets = [];
+      questions = [];
+      indexedQuestions = null;
       active = -1;
+      loadingIndex = -1;
       markers.replaceChildren();
       navigator.classList.add('hidden');
       navigator.classList.remove('is-scrolling', 'is-interacting');
@@ -176,19 +185,54 @@
       hidePreview();
     }
 
-    function sync(nextEnabled = true) {
+    function sync(nextEnabled = true, nextQuestions) {
       enabled = nextEnabled !== false;
       if (!enabled) { reset(); return; }
+      if (nextQuestions === null) {
+        indexedQuestions = null;
+      } else if (Array.isArray(nextQuestions)) {
+        indexedQuestions = nextQuestions.map((item, index) => ({
+          index: Number.isInteger(Number(item?.index)) ? Number(item.index) : index,
+          key: String(item?.key || `question-${index}`),
+          preview: previewText(item?.preview || '', 88),
+        }));
+      }
       const previousActiveKey = markers.querySelector('.question-nav-marker[aria-current="step"]')?.dataset.questionKey || '';
-      targets = [...output.querySelectorAll('.compact-block.user')];
-      if (targets.length < 2) { reset(); return; }
+      const renderedTargets = [...output.querySelectorAll('.compact-block.user')];
+      const renderedByKey = new Map(renderedTargets.map((target) => [
+        target.dataset.faryoQuestionKey || target.dataset.faryoBlockKey || '',
+        target,
+      ]));
+      if (indexedQuestions) {
+        questions = indexedQuestions;
+        targets = questions.map((question) => renderedByKey.get(question.key) || null);
+      } else {
+        targets = renderedTargets;
+        questions = renderedTargets.map((target, index) => ({
+          index,
+          key: target.dataset.faryoQuestionKey || target.dataset.faryoBlockKey || `question-${index}`,
+          preview: previewText(target.dataset.faryoQuestionPreview || target.textContent || '', 88),
+        }));
+      }
+      if (questions.length < 2) {
+        targets = [];
+        active = -1;
+        markers.replaceChildren();
+        navigator.classList.add('hidden');
+        navigator.setAttribute('aria-hidden', 'true');
+        if (current) current.textContent = '0';
+        if (total) total.textContent = String(questions.length);
+        hidePreview();
+        return;
+      }
 
       const existing = new Map([...markers.querySelectorAll('.question-nav-marker')]
         .map((button) => [button.dataset.questionKey, button]));
       const retained = new Set();
-      targets.forEach((target, index) => {
-        const key = target.dataset.faryoBlockKey || `question-${index}`;
-        const text = previewText(target.dataset.faryoQuestionPreview || target.textContent || '', 88);
+      questions.forEach((question, index) => {
+        const target = targets[index];
+        const key = question.key;
+        const text = question.preview;
         let button = existing.get(key);
         if (!button) {
           button = view.document.createElement('button');
@@ -202,10 +246,17 @@
         button.dataset.questionKey = key;
         button.dataset.questionIndex = String(index);
         button.dataset.questionPreview = text;
-        button.setAttribute('aria-label', `Question ${index + 1} of ${targets.length}: ${text}`);
+        button.classList.toggle('unloaded', !target);
+        button.classList.toggle('loading', loadingIndex === index);
+        button.setAttribute('aria-busy', loadingIndex === index ? 'true' : 'false');
+        button.setAttribute('aria-label', `Question ${index + 1} of ${questions.length}: ${text}`);
         button.title = text;
-        target.id = `faryo-question-${index + 1}`;
-        button.setAttribute('aria-controls', target.id);
+        if (target) {
+          target.id = `faryo-question-${index + 1}`;
+          button.setAttribute('aria-controls', target.id);
+        } else {
+          button.removeAttribute('aria-controls');
+        }
         markers.appendChild(button);
         retained.add(button);
       });
@@ -213,18 +264,33 @@
         if (!retained.has(button)) button.remove();
       }
 
-      if (total) total.textContent = String(targets.length);
+      if (total) total.textContent = String(questions.length);
       navigator.classList.remove('hidden');
       navigator.setAttribute('aria-hidden', 'false');
       const preservedIndex = previousActiveKey
         ? [...markers.querySelectorAll('.question-nav-marker')].findIndex((button) => button.dataset.questionKey === previousActiveKey)
         : -1;
-      setActive(preservedIndex >= 0 ? preservedIndex : (active >= 0 && active < targets.length ? active : 0), { reveal: false });
+      const firstLoaded = targets.findIndex(Boolean);
+      setActive(preservedIndex >= 0 ? preservedIndex : (active >= 0 && active < questions.length ? active : Math.max(0, firstLoaded)), { reveal: false });
       scheduleActiveUpdate();
     }
 
-    function jumpTo(index) {
-      const target = targets[index];
+    async function jumpTo(index) {
+      const requested = Math.max(0, Math.min(Number(index) || 0, questions.length - 1));
+      let target = targets[requested];
+      if (!target && typeof options.resolveTarget === 'function') {
+        loadingIndex = requested;
+        sync(enabled);
+        try {
+          await options.resolveTarget(questions[requested], requested);
+        } catch (_error) {
+          return false;
+        } finally {
+          loadingIndex = -1;
+          sync(enabled);
+        }
+        target = targets[requested];
+      }
       if (!target) return false;
       revealTemporarily();
       const scrollerRect = scroller.getBoundingClientRect();
@@ -234,7 +300,7 @@
       const reducedMotion = Boolean(view.matchMedia?.('(prefers-reduced-motion: reduce)').matches);
       if (typeof scroller.scrollTo === 'function') scroller.scrollTo({ top, behavior: reducedMotion ? 'auto' : 'smooth' });
       else scroller.scrollTop = top;
-      setActive(index);
+      setActive(requested);
       if (flashTarget) flashTarget.classList.remove('question-nav-flash');
       if (flashTimer) view.clearTimeout(flashTimer);
       flashTarget = target;
@@ -255,7 +321,7 @@
       const button = markerFromEvent(event);
       if (!button) return;
       event.preventDefault();
-      jumpTo(Number(button.dataset.questionIndex || 0));
+      void jumpTo(Number(button.dataset.questionIndex || 0));
     }
 
     function onPointerOver(event) {
@@ -283,13 +349,13 @@
       if (!button) return;
       const index = Number(button.dataset.questionIndex || 0);
       let next = null;
-      if (event.key === 'ArrowDown' || event.key === 'ArrowRight') next = Math.min(targets.length - 1, index + 1);
+      if (event.key === 'ArrowDown' || event.key === 'ArrowRight') next = Math.min(questions.length - 1, index + 1);
       else if (event.key === 'ArrowUp' || event.key === 'ArrowLeft') next = Math.max(0, index - 1);
       else if (event.key === 'Home') next = 0;
-      else if (event.key === 'End') next = targets.length - 1;
+      else if (event.key === 'End') next = questions.length - 1;
       if (next === null) return;
       event.preventDefault();
-      jumpTo(next);
+      void jumpTo(next);
       markers.querySelectorAll('.question-nav-marker')[next]?.focus();
     }
 
@@ -342,5 +408,5 @@
     return Object.freeze({ sync, reset, destroy, jumpTo, updateActive, get activeIndex() { return active; } });
   }
 
-  return Object.freeze({ version: '2', previewText, activeIndex, targetScrollTop, shouldRevealForScroll, createController });
+  return Object.freeze({ version: '3', previewText, activeIndex, targetScrollTop, shouldRevealForScroll, createController });
 });

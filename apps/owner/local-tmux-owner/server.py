@@ -62,8 +62,8 @@ APP_DIR = Path(__file__).resolve().parent
 STATIC_DIR = APP_DIR / "static"
 SHARED_STATIC_DIR = SHARED_DIR / "static"
 RELEASE_FILE = APP_DIR.parent / "RELEASE"
-AGENT_STATE_DB = Path.home() / ".codex" / "state_5.sqlite"
-CODEX_SESSION_INDEX = Path.home() / ".codex" / "session_index.jsonl"
+AGENT_STATE_DB = Path(os.environ.get("FARYO_CODEX_STATE_DB", str(Path.home() / ".codex" / "state_5.sqlite"))).expanduser()
+CODEX_SESSION_INDEX = Path(os.environ.get("FARYO_CODEX_SESSION_INDEX", str(Path.home() / ".codex" / "session_index.jsonl"))).expanduser()
 DEFAULT_SESSION = "__faryo_no_default__"
 DEFAULT_PORT = 8765
 SHARED_STATIC_FILES = {
@@ -100,7 +100,8 @@ CODEX_TRANSCRIPT_CACHE_TTL = 5.0
 # soft line budget must therefore never make the conversation look as if all
 # prior turns disappeared.  Keep a useful recent turn window, with a separate
 # hard character ceiling for mobile payload safety.
-CODEX_TRANSCRIPT_MIN_TURNS = 12
+CODEX_TRANSCRIPT_PAGE_TURNS = 12
+CODEX_TRANSCRIPT_MIN_TURNS = CODEX_TRANSCRIPT_PAGE_TURNS
 CODEX_TRANSCRIPT_CHAR_BUDGET = 512 * 1024
 CODEX_ROLLOUT_CACHE_LINE_BUDGET = CAPTURE_MAX_LINES * 2
 CODEX_ROLLOUT_CACHE_CHAR_BUDGET = 4 * 1024 * 1024
@@ -108,6 +109,11 @@ CODEX_ROLLOUT_CACHE_MIN_TURNS = CODEX_TRANSCRIPT_MIN_TURNS
 CODEX_ROLLOUT_CACHE_MAX_PATHS = 16
 CODEX_ROLLOUT_TAIL_SCAN_BYTES = 16 * 1024 * 1024
 CODEX_ROLLOUT_MAX_CATCHUP_BYTES = 8 * 1024 * 1024
+CODEX_HISTORY_PAGE_TURNS = CODEX_TRANSCRIPT_PAGE_TURNS
+CODEX_HISTORY_MAX_PAGE_TURNS = 24
+CODEX_HISTORY_PAGE_CHAR_BUDGET = 2 * 1024 * 1024
+CODEX_HISTORY_PREVIEW_CHARS = 88
+CODEX_HISTORY_INDEX_MAX_PATHS = CODEX_ROLLOUT_CACHE_MAX_PATHS
 THREAD_COLUMNS = "id, title, rollout_path, tokens_used, model, reasoning_effort, cwd, updated_at, source, thread_source"
 INTERACTIVE_CODEX_THREAD_SOURCES = {"cli", "vscode"}
 AGENT_SESSION_LIST_LIMIT = 20
@@ -278,6 +284,9 @@ _codex_thread_cache_lock = threading.Lock()
 _codex_rollout_cache: dict[str, dict[str, Any]] = {}
 _codex_rollout_cache_lock = threading.Lock()
 _codex_rollout_path_locks: dict[str, threading.Lock] = {}
+_codex_history_cache: dict[str, dict[str, Any]] = {}
+_codex_history_cache_lock = threading.Lock()
+_codex_history_path_locks: dict[str, threading.Lock] = {}
 # Sending is serialized per tmux session because a pane has only one composer.
 # Exact message-id locks keep reuse deterministic across sessions.  Both lock
 # registries are reference-counted so unrelated sends cannot collide and idle
@@ -1469,6 +1478,8 @@ def codex_thread_transcript(thread: dict[str, Any], max_lines: int) -> str:
     used_lines = 0
     used_chars = 0
     for turn in reversed(turns):
+        if len(selected) >= CODEX_TRANSCRIPT_PAGE_TURNS:
+            break
         turn_lines = turn.count("\n") + 1
         turn_chars = len(turn)
         if turn_exceeds_recent_budget(
@@ -1514,6 +1525,231 @@ def codex_rollout_message(event: Any) -> tuple[str, str] | None:
     return (role, text) if text else None
 
 
+def codex_history_preview(text: str, max_chars: int = CODEX_HISTORY_PREVIEW_CHARS) -> str:
+    compact = " ".join(str(text or "").split()) or "Untitled question"
+    limit = max(8, int(max_chars))
+    return compact if len(compact) <= limit else compact[:limit - 1] + "…"
+
+
+def codex_history_revision(identity: tuple[int, ...]) -> str:
+    value = ":".join(str(part) for part in identity).encode("ascii")
+    return hashlib.sha256(value).hexdigest()[:16]
+
+
+def codex_history_cursor(revision: str, before: int) -> str:
+    return f"{revision}.{max(0, int(before)):x}"
+
+
+def decode_codex_history_cursor(cursor: str, revision: str) -> int:
+    match = re.fullmatch(r"([0-9a-f]{16})\.([0-9a-f]+)", str(cursor or "").strip().lower())
+    if not match:
+        raise OwnerError("invalid conversation history cursor")
+    if not secrets.compare_digest(match.group(1), revision):
+        raise OwnerError("conversation history cursor expired", HTTPStatus.CONFLICT)
+    return int(match.group(2), 16)
+
+
+def store_codex_history_cache(key: str, state: dict[str, Any]) -> None:
+    with _codex_history_cache_lock:
+        _codex_history_cache.pop(key, None)
+        _codex_history_cache[key] = state
+        while len(_codex_history_cache) > CODEX_HISTORY_INDEX_MAX_PATHS:
+            _codex_history_cache.pop(next(iter(_codex_history_cache)))
+
+
+def cached_codex_history_state(key: str) -> dict[str, Any] | None:
+    with _codex_history_cache_lock:
+        state = _codex_history_cache.pop(key, None)
+        if state is not None:
+            _codex_history_cache[key] = state
+        return state
+
+
+def copy_codex_history_state(state: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "identity": state.get("identity"),
+        "revision": state.get("revision"),
+        "offset": int(state.get("offset") or 0),
+        "turns": [
+            {
+                "index": int(turn.get("index") or 0),
+                "key": str(turn.get("key") or ""),
+                "preview": str(turn.get("preview") or ""),
+                "records": [tuple(record) for record in turn.get("records") or []],
+            }
+            for turn in state.get("turns") or []
+        ],
+    }
+
+
+def append_codex_history_index(path: Path, state: dict[str, Any], target_size: int) -> None:
+    offset = int(state.get("offset") or 0)
+    complete_offset = offset
+    turns = state.setdefault("turns", [])
+    revision = str(state.get("revision") or "")
+    try:
+        with path.open("rb") as handle:
+            handle.seek(offset)
+            while handle.tell() < target_size:
+                start = handle.tell()
+                raw_line = handle.readline(target_size - start)
+                if not raw_line.endswith(b"\n"):
+                    break
+                complete_offset = handle.tell()
+                message, _usage = parse_codex_rollout_event(raw_line.rstrip(b"\n"))
+                if message is None:
+                    continue
+                role, text = message
+                if role == "user":
+                    index = len(turns)
+                    turns.append({
+                        "index": index,
+                        "key": f"q-{revision}-{index:x}",
+                        "preview": codex_history_preview(text),
+                        "records": [],
+                    })
+                if turns:
+                    turns[-1]["records"].append((start, complete_offset))
+    except OSError:
+        return
+    state["offset"] = complete_offset
+
+
+def codex_history_state(history_path: str | None) -> dict[str, Any] | None:
+    if not history_path:
+        return None
+    path = Path(history_path).expanduser()
+    key = str(path)
+    with _codex_history_cache_lock:
+        path_lock = _codex_history_path_locks.setdefault(key, threading.Lock())
+    with path_lock:
+        cached = cached_codex_history_state(key)
+        try:
+            stat = path.stat()
+        except OSError:
+            return copy_codex_history_state(cached) if cached else None
+        identity = (stat.st_dev, stat.st_ino)
+        offset = int(cached.get("offset") or 0) if cached else 0
+        reset_existing = cached is not None and (cached.get("identity") != identity or stat.st_size < offset)
+        if cached is None or reset_existing:
+            revision_seed = (*identity, stat.st_mtime_ns, stat.st_size) if reset_existing else identity
+            cached = {
+                "identity": identity,
+                "revision": codex_history_revision(revision_seed),
+                "offset": 0,
+                "turns": [],
+            }
+        if stat.st_size > int(cached.get("offset") or 0):
+            append_codex_history_index(path, cached, stat.st_size)
+        store_codex_history_cache(key, cached)
+        return copy_codex_history_state(cached)
+
+
+def codex_history_turn_text(handle: Any, turn: dict[str, Any]) -> str:
+    blocks: list[str] = []
+    for start, end in turn.get("records") or []:
+        try:
+            handle.seek(int(start))
+            raw_line = handle.read(max(0, int(end) - int(start))).rstrip(b"\n")
+        except OSError:
+            continue
+        message, _usage = parse_codex_rollout_event(raw_line)
+        if message is None:
+            continue
+        role, text = message
+        blocks.append(f"› {text}" if role == "user" else f"• {text}")
+    return "\n\n".join(blocks).strip()
+
+
+def codex_conversation_history_page(
+    history_path: str | None,
+    *,
+    limit: int = CODEX_HISTORY_PAGE_TURNS,
+    cursor: str = "",
+    around: int | None = None,
+) -> dict[str, Any]:
+    state = codex_history_state(history_path)
+    if not state or not history_path:
+        raise OwnerError("structured conversation history is unavailable", HTTPStatus.NOT_FOUND)
+    revision = str(state.get("revision") or "")
+    turns = list(state.get("turns") or [])
+    total = len(turns)
+    page_limit = max(1, min(int(limit), CODEX_HISTORY_MAX_PAGE_TURNS))
+    if cursor and around is not None:
+        raise OwnerError("choose either a history cursor or an around index")
+    if around is not None:
+        if around < 0 or around >= total:
+            raise OwnerError("conversation history index out of range")
+        start = max(0, around - page_limit // 2)
+        end = min(total, start + page_limit)
+        start = max(0, end - page_limit)
+    else:
+        end = decode_codex_history_cursor(cursor, revision) if cursor else total
+        end = max(0, min(total, end))
+        start = max(0, end - page_limit)
+
+    selected = turns[start:end]
+    path = Path(history_path).expanduser()
+    rendered: list[dict[str, Any]] = []
+    try:
+        with path.open("rb") as handle:
+            for turn in selected:
+                rendered.append({
+                    "index": int(turn["index"]),
+                    "key": str(turn["key"]),
+                    "preview": str(turn["preview"]),
+                    "text": codex_history_turn_text(handle, turn),
+                })
+    except OSError as exc:
+        raise OwnerError("structured conversation history is unavailable", HTTPStatus.NOT_FOUND) from exc
+
+    target_index = around if around is not None else max(start, end - 1)
+    while len(rendered) > 1 and sum(len(item["text"]) for item in rendered) > CODEX_HISTORY_PAGE_CHAR_BUDGET:
+        if around is None:
+            rendered.pop(0)
+        elif abs(rendered[0]["index"] - target_index) >= abs(rendered[-1]["index"] - target_index):
+            rendered.pop(0)
+        else:
+            rendered.pop()
+    if rendered:
+        start = int(rendered[0]["index"])
+        end = int(rendered[-1]["index"]) + 1
+
+    return {
+        "ok": True,
+        "source": "codex-jsonl",
+        "revision": revision,
+        "totalTurns": total,
+        "start": start,
+        "end": end,
+        "hasOlder": start > 0,
+        "hasNewer": end < total,
+        "olderCursor": codex_history_cursor(revision, start) if start > 0 else "",
+        "newerCursor": codex_history_cursor(revision, min(total, end + page_limit)) if end < total else "",
+        "questions": [
+            {"index": int(turn["index"]), "key": str(turn["key"]), "preview": str(turn["preview"])}
+            for turn in turns
+        ],
+        "turns": rendered,
+        "pageChars": sum(len(item["text"]) for item in rendered),
+        "oversized": any(len(item["text"]) > CODEX_HISTORY_PAGE_CHAR_BUDGET for item in rendered),
+        "updatedAt": now_iso(),
+    }
+
+
+def codex_history_page_for_config(
+    config: Config,
+    *,
+    limit: int = CODEX_HISTORY_PAGE_TURNS,
+    cursor: str = "",
+    around: int | None = None,
+) -> dict[str, Any]:
+    cwd = get_pane_cwd(config)
+    thread = active_agent_thread(config, cwd)
+    history_path = str(thread.get("rollout_path") or "") if thread else ""
+    return codex_conversation_history_page(history_path, limit=limit, cursor=cursor, around=around)
+
+
 def bounded_codex_rollout_messages(messages: list[tuple[str, str]]) -> list[tuple[str, str]]:
     """Keep recent complete turns within explicit line and character budgets."""
     turns: list[list[tuple[str, str]]] = []
@@ -1530,6 +1766,8 @@ def bounded_codex_rollout_messages(messages: list[tuple[str, str]]) -> list[tupl
     used_lines = 0
     used_chars = 0
     for turn in reversed(turns):
+        if len(selected) >= CODEX_TRANSCRIPT_PAGE_TURNS:
+            break
         turn_lines = sum(text.count("\n") + 1 for _role, text in turn)
         turn_chars = sum(len(text) for _role, text in turn)
         if turn_exceeds_recent_budget(
@@ -1626,7 +1864,8 @@ def initial_codex_rollout_state(path: Path, identity: tuple[int, int]) -> dict[s
                             message[0] == "user"
                             and context_usage is not None
                             and (
-                                char_budget >= CODEX_ROLLOUT_CACHE_CHAR_BUDGET
+                                turn_count >= CODEX_TRANSCRIPT_PAGE_TURNS
+                                or char_budget >= CODEX_ROLLOUT_CACHE_CHAR_BUDGET
                                 or (
                                     line_budget >= CODEX_ROLLOUT_CACHE_LINE_BUDGET
                                     and turn_count >= CODEX_ROLLOUT_CACHE_MIN_TURNS
@@ -1733,6 +1972,8 @@ def codex_message_transcript(messages: list[tuple[str, str]], max_lines: int) ->
     used_lines = 0
     used_chars = 0
     for turn_blocks in reversed(turns):
+        if len(selected) >= CODEX_TRANSCRIPT_PAGE_TURNS:
+            break
         turn = "\n\n".join(turn_blocks)
         turn_lines = turn.count("\n") + 1
         turn_chars = len(turn)
@@ -3527,6 +3768,23 @@ class Handler(SimpleHTTPRequestHandler):
                     items = self.agent_session_items()
                     payload = {"sessions": items[offset:offset + limit]}
                 self.write_json({"ok": True, **payload, "activeCount": active_agent_count(self.config), "updatedAt": now_iso()})
+                return
+            if parsed.path == "/api/conversation-history":
+                self.require_token(parsed)
+                query = parse_qs(parsed.query)
+                target = self.target_from_query(parsed)
+                try:
+                    limit = int(query.get("limit", [str(CODEX_HISTORY_PAGE_TURNS)])[0])
+                    around_value = query.get("around", [""])[0]
+                    around = int(around_value) if around_value != "" else None
+                except ValueError as exc:
+                    raise OwnerError("invalid conversation history pagination") from exc
+                self.write_json(codex_history_page_for_config(
+                    target,
+                    limit=limit,
+                    cursor=query.get("cursor", [""])[0],
+                    around=around,
+                ))
                 return
             if parsed.path == "/api/capture":
                 self.require_token(parsed)
