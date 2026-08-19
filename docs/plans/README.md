@@ -9,6 +9,8 @@
 
 ## Completed or maintenance mode
 
+- [`directory-picker-redesign-plan.md`](directory-picker-redesign-plan.md)：Start Codex 目录选择器
+  使用折叠面包屑、即时搜索、分组目录和固定主操作。
 - [`copy-fidelity-plan.md`](copy-fidelity-plan.md)：回答按钮、跨块选择与单公式复制使用
   内存中的原始 Markdown/TeX，并提供安全 HTML。
 - [`codex-command-completion-plan.md`](codex-command-completion-plan.md)：从当前 Codex CLI

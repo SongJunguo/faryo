@@ -258,41 +258,64 @@ try {
       await delay(50);
       cwdConfirmation = await evaluate(`(() => ({
         open: document.getElementById('modal')?.classList.contains('open'),
+        directoryMode: document.getElementById('modal')?.classList.contains('directory-mode'),
         title: document.getElementById('modalTitle')?.textContent || '',
-        choices: document.querySelectorAll('#modalChoices .choice-btn').length,
         body: document.getElementById('modalBody')?.textContent || '',
-        hasPath: [...document.querySelectorAll('#modalChoices .choice-btn span')].some((item) => item.textContent.trim().length > 0),
-        hasParent: [...document.querySelectorAll('#modalChoices .choice-btn strong')].some((item) => item.textContent.startsWith('↑ Parent folder')),
+        breadcrumbs: document.querySelectorAll('#directoryBreadcrumb .directory-crumb').length,
+        breadcrumbLabelsClean: [...document.querySelectorAll('#directoryBreadcrumb .directory-crumb')].every((item) => !item.textContent.includes('/')),
+        currentCrumb: document.querySelector('#directoryBreadcrumb .directory-crumb[aria-current="location"]')?.textContent || '',
+        backVisible: (() => { const item=document.getElementById('modalBack');return Boolean(item&&!item.hidden&&item.getClientRects().length); })(),
+        searchVisible: (() => { const item=document.getElementById('directorySearch');return Boolean(item&&item.getClientRects().length); })(),
+        sections: [...document.querySelectorAll('#modalChoices .directory-section')].map((item) => item.dataset.directorySection),
+        recentCount: document.querySelectorAll('#modalChoices .directory-row-recent').length,
+        folderCount: document.querySelectorAll('#modalChoices .directory-row-folder').length,
+        folderRowsHaveNoPaths: !document.querySelector('#modalChoices .directory-row-folder small'),
+        flatPrefixesAbsent: ![...document.querySelectorAll('#modalChoices strong')].some((item) => /^(?:Use this folder|Parent folder|Root ·|Recent ·|Folder ·)/.test(item.textContent)),
         hasCancel: [...document.querySelectorAll('#modalActions button')].some((item) => item.textContent === 'Cancel'),
+        hasPrimary: [...document.querySelectorAll('#modalActions button')].some((item) => item.textContent === 'Start Codex here'),
         cancelVisible: (() => { const item=[...document.querySelectorAll('#modalActions button')].find((button)=>button.textContent==='Cancel'),rect=item?.getBoundingClientRect();return Boolean(rect&&rect.top>=0&&rect.bottom<=innerHeight); })(),
         sheetContained: (() => { const rect=document.querySelector('#modal .sheet')?.getBoundingClientRect();return Boolean(rect&&rect.top>=0&&rect.bottom<=innerHeight); })(),
         listScrollable: (() => { const list=document.getElementById('modalChoices');return Boolean(list&&list.scrollHeight>list.clientHeight); })(),
+        listOverflowY: (() => { const list=document.getElementById('modalChoices');return list?getComputedStyle(list).overflowY:''; })(),
+        actionsBelowList: (() => { const list=document.getElementById('modalChoices')?.getBoundingClientRect(),actions=document.getElementById('modalActions')?.getBoundingClientRect();return Boolean(list&&actions&&list.bottom<=actions.top+1); })(),
+        noHorizontalOverflow: document.documentElement.scrollWidth<=document.documentElement.clientWidth+1,
       }))()`);
       if (cwdConfirmation?.title === 'Choose working directory') break;
     }
     if (!cwdConfirmation.open || cwdConfirmation.title !== 'Choose working directory'
-      || !cwdConfirmation.choices || !cwdConfirmation.hasPath || !cwdConfirmation.hasCancel
-      || !cwdConfirmation.hasParent || !cwdConfirmation.cancelVisible
-      || !cwdConfirmation.sheetContained || !cwdConfirmation.listScrollable) {
+      || !cwdConfirmation.directoryMode || !cwdConfirmation.breadcrumbs || cwdConfirmation.breadcrumbs > 4
+      || !cwdConfirmation.breadcrumbLabelsClean || !cwdConfirmation.currentCrumb
+      || !cwdConfirmation.backVisible || !cwdConfirmation.searchVisible
+      || !cwdConfirmation.sections.includes('folders') || cwdConfirmation.recentCount > 4
+      || !cwdConfirmation.folderCount || !cwdConfirmation.folderRowsHaveNoPaths
+      || !cwdConfirmation.flatPrefixesAbsent || !cwdConfirmation.hasCancel || !cwdConfirmation.hasPrimary
+      || !cwdConfirmation.cancelVisible || !cwdConfirmation.sheetContained || !cwdConfirmation.actionsBelowList
+      || !cwdConfirmation.noHorizontalOverflow
+      || !['auto', 'scroll'].includes(cwdConfirmation.listOverflowY)) {
       throw new Error(`Working-directory confirmation did not open: ${JSON.stringify(cwdConfirmation)}`);
     }
+    const searchState = await evaluate(`(() => {
+      const input=document.getElementById('directorySearch'),rows=[...document.querySelectorAll('#modalChoices .directory-row-folder')],label=rows[0]?.querySelector('strong')?.textContent||'',query=label.slice(0,Math.min(3,label.length));input.value=query;input.dispatchEvent(new Event('input',{bubbles:true}));const filtered=[...document.querySelectorAll('#modalChoices .directory-row-folder')];const ok=Boolean(query&&filtered.length&&filtered.length<=rows.length&&filtered.every(item=>item.textContent.toLowerCase().includes(query.toLowerCase())));input.value='';input.dispatchEvent(new Event('input',{bubbles:true}));return{ok,queryLength:query.length,restored:document.querySelectorAll('#modalChoices .directory-row-folder').length===rows.length};})()`);
+    if (!searchState.ok || !searchState.restored) throw new Error(`Working-directory search failed: ${JSON.stringify(searchState)}`);
     if (directoryScreenshotPath) {
       const screenshot = await send('Page.captureScreenshot', { format: 'png', fromSurface: true });
       await writeFile(directoryScreenshotPath, Buffer.from(screenshot.data, 'base64'));
     }
-    await evaluate("[...document.querySelectorAll('#modalChoices .choice-btn')].find((item) => item.querySelector('strong')?.textContent.startsWith('↑ Parent folder'))?.click()");
+    const expandedState = await evaluate(`(() => {const more=document.querySelector('#modalChoices .directory-more'),before=document.querySelectorAll('#modalChoices .directory-row-recent').length;if(!more)return{available:false,ok:true};more.click();const after=document.querySelectorAll('#modalChoices .directory-row-recent').length;return{available:true,ok:after>before,before,after};})()`);
+    if (!expandedState.ok) throw new Error(`Recent folders did not expand: ${JSON.stringify(expandedState)}`);
+    await evaluate("document.getElementById('modalBack')?.click()");
     let parentDirectory = {};
     for (let attempt = 0; attempt < 40; attempt += 1) {
       await delay(50);
       parentDirectory = await evaluate(`(() => ({
         title: document.getElementById('modalTitle')?.textContent || '',
-        body: document.getElementById('modalBody')?.textContent || '',
-        canSelect: document.querySelector('#modalChoices .choice-btn strong')?.textContent === 'Use this folder',
+        currentCrumb: document.querySelector('#directoryBreadcrumb .directory-crumb[aria-current="location"]')?.textContent || '',
+        canSelect: [...document.querySelectorAll('#modalActions button')].some((item) => item.textContent === 'Start Codex here'),
       }))()`);
-      if (parentDirectory.body && parentDirectory.body !== cwdConfirmation.body) break;
+      if (parentDirectory.currentCrumb && parentDirectory.currentCrumb !== cwdConfirmation.currentCrumb) break;
     }
     if (parentDirectory.title !== 'Choose working directory' || !parentDirectory.canSelect
-      || !parentDirectory.body || parentDirectory.body === cwdConfirmation.body) {
+      || !parentDirectory.currentCrumb || parentDirectory.currentCrumb === cwdConfirmation.currentCrumb) {
       throw new Error(`Parent-directory navigation failed: ${JSON.stringify(parentDirectory)}`);
     }
   }
@@ -364,12 +387,12 @@ try {
       await delay(50);
       directorySheet = await evaluate(`(() => ({
         title: document.getElementById('modalTitle')?.textContent || '',
-        ready: [...document.querySelectorAll('#modalChoices .choice-btn strong')].some((item) => item.textContent === 'Use this folder'),
+        ready: [...document.querySelectorAll('#modalActions button')].some((item) => item.textContent === 'Start Codex here'),
       }))()`);
       if (directorySheet?.ready) break;
     }
     if (!directorySheet.ready || directorySheet.title !== 'Choose working directory') throw new Error(`Start Codex directory sheet did not open: ${JSON.stringify(directorySheet)}`);
-    await evaluate("[...document.querySelectorAll('#modalChoices .choice-btn')].find((item) => item.querySelector('strong')?.textContent === 'Use this folder').click()");
+    await evaluate("[...document.querySelectorAll('#modalActions button')].find((item) => item.textContent === 'Start Codex here').click()");
     let launched = {};
     for (let attempt = 0; attempt < 250; attempt += 1) {
       await delay(100);

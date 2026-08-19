@@ -79,6 +79,13 @@ started desktop tmux sessions remain openable but protected from remote close.
 server-backed pagination with 10 records per page. Use Previous/Next or enter a
 page number and press Enter/Go to jump directly through long histories.
 
+`Start Codex` opens a dedicated working-directory picker. The picker defaults to
+the latest eligible cwd, groups deduplicated recent locations and child folders,
+collapses long breadcrumbs, filters the current page without recursive search,
+and keeps `Start Codex here` fixed outside the scrolling list. Directory choices
+still come from Owner, carry its HMAC selection token, and are revalidated by
+Owner before tmux starts.
+
 See [runbook.md](runbook.md) for Cloudflare Tunnel, first login, verification,
 and rollback instructions. Internet-facing deployments that can steer agents
 must also follow the [Gateway security hardening](../../docs/gateway-security-hardening.md)

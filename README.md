@@ -163,7 +163,8 @@ micromark -> mdast -> CommonMark/GFM/math nodes -> safe HTML -> KaTeX
   without exposing parser text.
 - New managed sessions use `faryo1`, `faryo2`, ... names. After choosing a
   workstation, an authenticated directory browser opens at the most recent cwd
-  and offers parent, configured roots, recent locations, and child folders.
+  with a compact breadcrumb, instant filtering, deduplicated Recent/Folders/
+  Locations groups, and a fixed `Start Codex here` action.
 - Injects Owner tokens server-side so public browser URLs do not contain them.
 
 ## Architecture
@@ -248,7 +249,7 @@ or an equivalent exact-identity layer.
 
 ## Current Validation
 
-The `main` branch was revalidated on 2026-08-19 with privacy-safe fixtures:
+The `main` branch was revalidated on 2026-08-20 with privacy-safe fixtures:
 
 - source checks plus 68 Owner and 50 Gateway Python tests;
 - a 20-message browser delivery matrix including Chinese, multiline Markdown,
@@ -268,6 +269,8 @@ The `main` branch was revalidated on 2026-08-19 with privacy-safe fixtures:
   by exact cleanup of the test session;
 - a real `faryo1` start in the browser-selected recent directory, with a forged
   directory credential rejected as HTTP 400 and the test session cleaned;
+- grouped directory-picker checks in 390x844 Chrome and 1440x900 Edge, including
+  search, parent navigation, collapsed breadcrumbs, fixed actions, start, and cleanup;
 - an isolated `codex-cli 0.148.0` PTY inventory matching all 46 visible slash
   commands, plus desktop/mobile completion and real `/rename` title sync;
 - exact Markdown/TeX copy fixtures and privacy-safe real-answer hash checks in
