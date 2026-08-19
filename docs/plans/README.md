@@ -5,11 +5,13 @@
 
 ## Active
 
-- [`source-only-ci-release-plan.md`](source-only-ci-release-plan.md)：建立 source-only CI、
-  Python/Node 运行时发现和 `v1.2.0` 发布链。
+当前没有未完成的实施计划；`v1.2.0` 已完成并发布。新的功能使用新的版本计划，不改写已发布
+tag。
 
 ## Completed or maintenance mode
 
+- [`source-only-ci-release-plan.md`](source-only-ci-release-plan.md)：source-only CI、Python/Node
+  运行时发现和已发布的 `v1.2.0` 发布链。
 - [`control-audit-session-state-plan.md`](control-audit-session-state-plan.md)：不记录正文的控制
   审计、明确会话状态和准确的 TUI Enter 文案。
 - [`tui-control-clarity-plan.md`](tui-control-clarity-plan.md)：方向键和 Enter 明确标为同一
