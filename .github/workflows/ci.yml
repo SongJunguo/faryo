@@ -1,0 +1,40 @@
+name: Source CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: source-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  source-check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+          cache: pip
+          cache-dependency-path: apps/gateway/requirements.txt
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Install Gateway dependencies
+        run: python -m pip install --disable-pip-version-check -r apps/gateway/requirements.txt
+
+      - name: Run canonical source checks
+        run: |
+          FARYO_PYTHON="$(command -v python)" \
+          FARYO_NODE_BIN="$(command -v node)" \
+            scripts/check-source.sh

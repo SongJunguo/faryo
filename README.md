@@ -191,6 +191,7 @@ control surface; the durable work remains in tmux and Codex's own history.
 
 - Ubuntu/Linux
 - Python 3.11 or newer; Python 3.13 is the validated project environment
+- Node.js 20 or newer for source validation; Node.js 24 is validated
 - `tmux`, `curl`, and `git`
 - Codex CLI
 - `bcrypt` for Gateway
@@ -282,14 +283,27 @@ The `main` branch was revalidated on 2026-08-20 with privacy-safe fixtures:
 - desktop and mobile Gateway checks with exactly one Codex launcher and three
   independently fetched 10-record history pages.
 
-Run the repository release checks with the selected project environment:
+Run the canonical source checks:
 
 ```bash
-PATH="$CONDA_PREFIX/bin:$PATH" scripts/check-source.sh
+scripts/check-source.sh
 ```
 
-This command validates source syntax, browser bundles, Owner tests, required
-runtime assets, and the absence of retired compatibility paths.
+The script discovers the active Conda environment, the named `faryo` Conda
+environment, and an installed NVM Node without requiring shell startup files.
+For CI or another explicit runtime, use:
+
+```bash
+FARYO_PYTHON=/path/to/python \
+FARYO_NODE_BIN=/path/to/node \
+  scripts/check-source.sh
+```
+
+This single command validates source syntax, browser bundles, all maintained
+Owner and Gateway tests, required runtime assets, and the absence of retired
+compatibility paths. Pull requests and pushes to `main` run the same source-only
+check; tagged releases publish GitHub source archives and release notes, not
+unmaintained binary packages.
 
 ## Security Boundary
 

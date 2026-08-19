@@ -5,7 +5,12 @@
 
 ## Active
 
-当前没有尚未实施的专项计划；已完成计划继续保留下方作为维护与回归入口。
+- [`source-only-ci-release-plan.md`](source-only-ci-release-plan.md)：建立 source-only CI、
+  Python/Node 运行时发现和 `v1.2.0` 发布链。
+- [`session-history-search-plan.md`](session-history-search-plan.md)：为数百条 Session History
+  增加隐私安全的服务端元数据搜索与过滤。
+- [`control-audit-session-state-plan.md`](control-audit-session-state-plan.md)：增加不记录正文的
+  控制审计、明确会话状态和准确的 TUI Enter 文案。
 
 ## Completed or maintenance mode
 

@@ -13,9 +13,31 @@ USAGE
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TARGET="${1:-}"
+# shellcheck source=runtime-env.sh
+source "$ROOT/scripts/runtime-env.sh"
 
 [[ "$TARGET" == "-h" || "$TARGET" == "--help" ]] && { usage; exit 0; }
 [[ -z "$TARGET" ]] || { echo "unsupported argument: $TARGET" >&2; usage >&2; exit 2; }
+
+PYTHON_BIN="$(faryo_resolve_python)"
+NODE_BIN="$(faryo_resolve_node)"
+export FARYO_PYTHON="$PYTHON_BIN" FARYO_NODE_BIN="$NODE_BIN" PYTHONDONTWRITEBYTECODE=1
+"$PYTHON_BIN" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 11) else 1)' || {
+  echo "Faryo requires Python 3.11 or newer: $PYTHON_BIN" >&2
+  exit 1
+}
+"$PYTHON_BIN" -c 'import bcrypt' >/dev/null 2>&1 || {
+  echo "Gateway dependency bcrypt is missing from: $PYTHON_BIN" >&2
+  echo "Install apps/gateway/requirements.txt in the selected environment." >&2
+  exit 1
+}
+"$NODE_BIN" -e 'process.exit(Number(process.versions.node.split(".")[0]) >= 20 ? 0 : 1)' || {
+  echo "Faryo source checks require Node.js 20 or newer: $NODE_BIN" >&2
+  exit 1
+}
+printf 'runtime: %s · %s\n' \
+  "$("$PYTHON_BIN" -c 'import platform; print("Python " + platform.python_version())')" \
+  "$("$NODE_BIN" --version)"
 
 WORK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/faryo-check.XXXXXX")"
 trap 'rm -rf "$WORK_DIR"' EXIT
@@ -27,7 +49,8 @@ release_checks() {
     "$ROOT"/apps/owner/scripts/*.sh \
     "$ROOT"/apps/owner/local-tmux-owner/tests/*.sh \
     "$ROOT"/apps/gateway/scripts/*.sh
-  python3 -m py_compile \
+  bash "$ROOT/scripts/runtime-env.test.sh"
+  "$PYTHON_BIN" -m py_compile \
     "$ROOT/apps/shared/pd_state.py" \
     "$ROOT/apps/owner/local-tmux-owner/server.py" \
     "$ROOT/apps/gateway/server/server.py" \
@@ -47,25 +70,26 @@ release_checks() {
     "$ROOT/apps/owner/local-tmux-owner/static/app.js" \
     "$ROOT/apps/gateway/server/static/projects.js"
   do
-    node --check "$js_file"
+    "$NODE_BIN" --check "$js_file"
   done
   while IFS= read -r js_file; do
-    node --check "$js_file"
+    "$NODE_BIN" --check "$js_file"
   done < <(find "$ROOT/apps/owner/local-tmux-owner/static/vendor/markdown-ast/highlight" -type f -name '*.js' -print | sort)
-  node --check "$ROOT/apps/owner/local-tmux-owner/tests/browser-katex-smoke.mjs"
-  node --check "$ROOT/apps/gateway/server/tests/browser-workbench-smoke.mjs"
-  node "$ROOT/apps/owner/local-tmux-owner/tests/markdown-ast-bundle.test.js"
-  node "$ROOT/apps/owner/local-tmux-owner/tests/internal-annotations.test.js"
-  node "$ROOT/apps/owner/local-tmux-owner/tests/event-stream.test.js"
-  node "$ROOT/apps/owner/local-tmux-owner/tests/stable-blocks.test.js"
-  node "$ROOT/apps/owner/local-tmux-owner/tests/question-navigator.test.js"
-  node "$ROOT/apps/owner/local-tmux-owner/tests/live-scroll.test.js"
-  node "$ROOT/apps/owner/local-tmux-owner/tests/compact-rules-codex.test.js"
-  node "$ROOT/apps/owner/local-tmux-owner/tests/codex-commands.test.js"
-  node "$ROOT/apps/owner/local-tmux-owner/tests/copy-fidelity.test.js"
-  node --test "$ROOT/apps/owner/local-tmux-owner/tests/terminal-delivery-receiver.test.mjs"
-  python3 -m unittest discover -s "$ROOT/apps/owner/local-tmux-owner/tests" -p 'test_*.py'
-  python3 - "$ROOT" <<'PY'
+  "$NODE_BIN" --check "$ROOT/apps/owner/local-tmux-owner/tests/browser-katex-smoke.mjs"
+  "$NODE_BIN" --check "$ROOT/apps/gateway/server/tests/browser-workbench-smoke.mjs"
+  "$NODE_BIN" "$ROOT/apps/owner/local-tmux-owner/tests/markdown-ast-bundle.test.js"
+  "$NODE_BIN" "$ROOT/apps/owner/local-tmux-owner/tests/internal-annotations.test.js"
+  "$NODE_BIN" "$ROOT/apps/owner/local-tmux-owner/tests/event-stream.test.js"
+  "$NODE_BIN" "$ROOT/apps/owner/local-tmux-owner/tests/stable-blocks.test.js"
+  "$NODE_BIN" "$ROOT/apps/owner/local-tmux-owner/tests/question-navigator.test.js"
+  "$NODE_BIN" "$ROOT/apps/owner/local-tmux-owner/tests/live-scroll.test.js"
+  "$NODE_BIN" "$ROOT/apps/owner/local-tmux-owner/tests/compact-rules-codex.test.js"
+  "$NODE_BIN" "$ROOT/apps/owner/local-tmux-owner/tests/codex-commands.test.js"
+  "$NODE_BIN" "$ROOT/apps/owner/local-tmux-owner/tests/copy-fidelity.test.js"
+  "$NODE_BIN" --test "$ROOT/apps/owner/local-tmux-owner/tests/terminal-delivery-receiver.test.mjs"
+  "$PYTHON_BIN" -m unittest discover -s "$ROOT/apps/owner/local-tmux-owner/tests" -p 'test_*.py'
+  "$PYTHON_BIN" -m unittest discover -s "$ROOT/apps/gateway/server/tests" -p 'test_*.py'
+  "$PYTHON_BIN" - "$ROOT" <<'PY'
 from pathlib import Path
 import json
 import re
@@ -73,6 +97,15 @@ import sys
 root = Path(sys.argv[1])
 index = (root / "apps/owner/local-tmux-owner/static/index.html").read_text(encoding="utf-8")
 gateway = (root / "apps/gateway/server/server.py").read_text(encoding="utf-8")
+ci_workflow = (root / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+release_workflow = (root / ".github/workflows/release.yml").read_text(encoding="utf-8")
+check_script = (root / "scripts/check-source.sh").read_text(encoding="utf-8")
+assert "pull_request:" in ci_workflow and "branches: [main]" in ci_workflow, "source CI must cover PR and main"
+assert "scripts/check-source.sh" in ci_workflow and "scripts/check-source.sh" in release_workflow, "CI and release must share source checks"
+assert "package-client.sh" not in release_workflow, "retired package workflow must not return"
+assert "faryo_${version}_all.deb" not in release_workflow and "macos.tar.gz" not in release_workflow, "release must remain source-only"
+assert "apps/gateway/server/tests" in check_script, "canonical checks must include Gateway tests"
+assert "faryo_resolve_python" in check_script and "faryo_resolve_node" in check_script, "canonical checks must resolve runtimes"
 assert "compact-rules-codex.js" in index, "index.html must load compact-rules-codex.js"
 assert "compact-rules-codex.js" in gateway, "gateway must allow compact-rules-codex.js"
 assert "compact-rules-claude.js" not in index, "retired Claude rules must not return to the production page"
@@ -165,7 +198,7 @@ for retired in (
     assert not (root / retired).exists(), f"retired source returned: {retired}"
 PY
   local portal_check="$WORK_DIR/faryo-portal-check.js"
-  python3 - "$ROOT" "$portal_check" <<'PY'
+  "$PYTHON_BIN" - "$ROOT" "$portal_check" <<'PY'
 from pathlib import Path
 import sys
 root = Path(sys.argv[1])
@@ -175,7 +208,7 @@ start = source.index('PORTAL_JS_TEMPLATE = """') + len('PORTAL_JS_TEMPLATE = """
 end = source.index('"""', start)
 out.write_text(source[start:end].replace("__LABELS_JS__", "{}"), encoding="utf-8")
 PY
-  node --check "$portal_check"
+  "$NODE_BIN" --check "$portal_check"
 }
 
 release_checks
