@@ -18,7 +18,7 @@
 
 ## 目标
 
-1. 顶部明确显示返回上级、标题和可横向滚动的当前位置面包屑。
+1. 顶部明确显示标题和当前位置面包屑；Folders 第一项用常见的 `..` 进入父目录。
 2. “在此文件夹新建”固定在底部，不随目录列表滚动。
 3. 最近目录、其他位置和子文件夹分组展示，不再使用一张平铺列表。
 4. 最近目录默认最多显示 4 个，去除当前目录、父目录、root 和重复路径；允许展开全部。
@@ -37,8 +37,8 @@
 ## 交互结构
 
 ```text
-←  Choose working directory                 Search
-   ~ / Code_for_Docker / current-project
+Choose working directory                    Search
+~ / Code_for_Docker / current-project
 
 Recent
   faryo                                               ›
@@ -46,6 +46,7 @@ Recent
   Show more
 
 Folders
+  ..                                  Parent folder
   apps                                                ›
   deploy                                              ›
   docs                                                ›
@@ -64,7 +65,7 @@ Cancel                         Start Codex in this folder
 1. 最近默认目录、父目录、root、子目录和空目录；
 2. 最近项去重、最多 4 项、展开/收起；
 3. 搜索匹配文件夹名与最近目录标签，清空后恢复分组；
-4. 返回上级、点击面包屑、点击 recent/location/folder；
+4. 点击 Folders 中的 `..`、面包屑、recent/location/folder；
 5. 固定主操作使用当前页面的最新签名 token；
 6. 取消、点击遮罩和 API 失败不创建会话；
 7. 390x844 Edge/Chrome 与 1440x900 Edge/Chrome，无水平溢出；
@@ -81,7 +82,7 @@ Cancel                         Start Codex in this folder
 
 ## 完成证据
 
-- 专用 `directory-mode` sheet 已替换通用平铺 choices；标题、返回、折叠面包屑、搜索和
+- 专用 `directory-mode` sheet 已替换通用平铺 choices；标题、`..` 父目录、折叠面包屑、搜索和
   底部操作不参与列表滚动；
 - 最近目录与当前/父/root/子目录按规范化路径去重，首屏最多 4 个并可展开；子目录仅显示
   名称，其他配置 root 单独进入 Locations；
@@ -90,7 +91,7 @@ Cancel                         Start Codex in this folder
 - 面包屑最多 4 项，中间层折叠为省略号，长 root 只显示目录名，不再露出半截绝对路径；
 - 390x844 Chrome 与 1440x900 Microsoft Edge 截图人工检查通过，面板无水平溢出，主操作
   固定在可视区底部；临时截图已删除，未写入公开仓库；
-- 浏览器自动化验证返回上级、面包屑、搜索、Recent 展开、Cancel、固定主操作、内容过长
+- 浏览器自动化验证 `..` 返回上级、面包屑、搜索、Recent 展开、Cancel、固定主操作、内容过长
   时可滚动以及内容较少时不制造无意义滚动；
 - 真实 Gateway 完成“选目录 -> Start Codex -> `faryoN` ready -> 页面资源就绪 -> 精确
   Close”，测试前后桌面 Codex 几何与既有会话集合一致；

@@ -164,7 +164,8 @@ micromark -> mdast -> CommonMark/GFM/math nodes -> safe HTML -> KaTeX
 - New managed sessions use `faryo1`, `faryo2`, ... names. After choosing a
   workstation, an authenticated directory browser opens at the most recent cwd
   with a compact breadcrumb, instant filtering, deduplicated Recent/Folders/
-  Locations groups, and a fixed `Start Codex here` action.
+  Locations groups, a conventional Folders-first `..` parent entry, and a fixed
+  `Start Codex here` action.
 - Injects Owner tokens server-side so public browser URLs do not contain them.
 
 ## Architecture

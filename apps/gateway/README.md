@@ -81,8 +81,9 @@ page number and press Enter/Go to jump directly through long histories.
 
 `Start Codex` opens a dedicated working-directory picker. The picker defaults to
 the latest eligible cwd, groups deduplicated recent locations and child folders,
-collapses long breadcrumbs, filters the current page without recursive search,
-and keeps `Start Codex here` fixed outside the scrolling list. Directory choices
+uses `..` as the first Folders row for parent navigation, collapses long
+breadcrumbs, filters the current page without recursive search, and keeps
+`Start Codex here` fixed outside the scrolling list. Directory choices
 still come from Owner, carry its HMAC selection token, and are revalidated by
 Owner before tmux starts.
 

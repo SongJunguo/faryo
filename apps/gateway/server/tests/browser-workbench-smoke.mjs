@@ -264,11 +264,12 @@ try {
         breadcrumbs: document.querySelectorAll('#directoryBreadcrumb .directory-crumb').length,
         breadcrumbLabelsClean: [...document.querySelectorAll('#directoryBreadcrumb .directory-crumb')].every((item) => !item.textContent.includes('/')),
         currentCrumb: document.querySelector('#directoryBreadcrumb .directory-crumb[aria-current="location"]')?.textContent || '',
-        backVisible: (() => { const item=document.getElementById('modalBack');return Boolean(item&&!item.hidden&&item.getClientRects().length); })(),
+        headerBackAbsent: !document.getElementById('modalBack'),
         searchVisible: (() => { const item=document.getElementById('directorySearch');return Boolean(item&&item.getClientRects().length); })(),
         sections: [...document.querySelectorAll('#modalChoices .directory-section')].map((item) => item.dataset.directorySection),
         recentCount: document.querySelectorAll('#modalChoices .directory-row-recent').length,
         folderCount: document.querySelectorAll('#modalChoices .directory-row-folder').length,
+        parentRowFirst: (() => { const section=document.querySelector('#modalChoices [data-directory-section="folders"]'),row=section?.querySelector('.directory-row');return Boolean(row?.classList.contains('directory-row-parent')&&row.querySelector('strong')?.textContent==='..'&&row.querySelector('small')?.textContent==='Parent folder'); })(),
         folderRowsHaveNoPaths: !document.querySelector('#modalChoices .directory-row-folder small'),
         flatPrefixesAbsent: ![...document.querySelectorAll('#modalChoices strong')].some((item) => /^(?:Use this folder|Parent folder|Root ·|Recent ·|Folder ·)/.test(item.textContent)),
         hasCancel: [...document.querySelectorAll('#modalActions button')].some((item) => item.textContent === 'Cancel'),
@@ -285,9 +286,9 @@ try {
     if (!cwdConfirmation.open || cwdConfirmation.title !== 'Choose working directory'
       || !cwdConfirmation.directoryMode || !cwdConfirmation.breadcrumbs || cwdConfirmation.breadcrumbs > 4
       || !cwdConfirmation.breadcrumbLabelsClean || !cwdConfirmation.currentCrumb
-      || !cwdConfirmation.backVisible || !cwdConfirmation.searchVisible
+      || !cwdConfirmation.headerBackAbsent || !cwdConfirmation.searchVisible
       || !cwdConfirmation.sections.includes('folders') || cwdConfirmation.recentCount > 4
-      || !cwdConfirmation.folderCount || !cwdConfirmation.folderRowsHaveNoPaths
+      || !cwdConfirmation.folderCount || !cwdConfirmation.parentRowFirst || !cwdConfirmation.folderRowsHaveNoPaths
       || !cwdConfirmation.flatPrefixesAbsent || !cwdConfirmation.hasCancel || !cwdConfirmation.hasPrimary
       || !cwdConfirmation.cancelVisible || !cwdConfirmation.sheetContained || !cwdConfirmation.actionsBelowList
       || !cwdConfirmation.noHorizontalOverflow
@@ -295,15 +296,15 @@ try {
       throw new Error(`Working-directory confirmation did not open: ${JSON.stringify(cwdConfirmation)}`);
     }
     const searchState = await evaluate(`(() => {
-      const input=document.getElementById('directorySearch'),rows=[...document.querySelectorAll('#modalChoices .directory-row-folder')],label=rows[0]?.querySelector('strong')?.textContent||'',query=label.slice(0,Math.min(3,label.length));input.value=query;input.dispatchEvent(new Event('input',{bubbles:true}));const filtered=[...document.querySelectorAll('#modalChoices .directory-row-folder')];const ok=Boolean(query&&filtered.length&&filtered.length<=rows.length&&filtered.every(item=>item.textContent.toLowerCase().includes(query.toLowerCase())));input.value='';input.dispatchEvent(new Event('input',{bubbles:true}));return{ok,queryLength:query.length,restored:document.querySelectorAll('#modalChoices .directory-row-folder').length===rows.length};})()`);
-    if (!searchState.ok || !searchState.restored) throw new Error(`Working-directory search failed: ${JSON.stringify(searchState)}`);
+      const input=document.getElementById('directorySearch'),rows=[...document.querySelectorAll('#modalChoices .directory-row-folder')],label=rows[0]?.querySelector('strong')?.textContent||'',query=label.slice(0,Math.min(3,label.length));input.value=query;input.dispatchEvent(new Event('input',{bubbles:true}));const filtered=[...document.querySelectorAll('#modalChoices .directory-row-folder')],parentVisible=Boolean(document.querySelector('#modalChoices .directory-row-parent'));const ok=Boolean(query&&filtered.length&&filtered.length<=rows.length&&filtered.every(item=>item.textContent.toLowerCase().includes(query.toLowerCase())));input.value='';input.dispatchEvent(new Event('input',{bubbles:true}));return{ok,parentVisible,queryLength:query.length,restored:document.querySelectorAll('#modalChoices .directory-row-folder').length===rows.length};})()`);
+    if (!searchState.ok || !searchState.parentVisible || !searchState.restored) throw new Error(`Working-directory search failed: ${JSON.stringify(searchState)}`);
     if (directoryScreenshotPath) {
       const screenshot = await send('Page.captureScreenshot', { format: 'png', fromSurface: true });
       await writeFile(directoryScreenshotPath, Buffer.from(screenshot.data, 'base64'));
     }
     const expandedState = await evaluate(`(() => {const more=document.querySelector('#modalChoices .directory-more'),before=document.querySelectorAll('#modalChoices .directory-row-recent').length;if(!more)return{available:false,ok:true};more.click();const after=document.querySelectorAll('#modalChoices .directory-row-recent').length;return{available:true,ok:after>before,before,after};})()`);
     if (!expandedState.ok) throw new Error(`Recent folders did not expand: ${JSON.stringify(expandedState)}`);
-    await evaluate("document.getElementById('modalBack')?.click()");
+    await evaluate("document.querySelector('#modalChoices .directory-row-parent')?.click()");
     let parentDirectory = {};
     for (let attempt = 0; attempt < 40; attempt += 1) {
       await delay(50);
