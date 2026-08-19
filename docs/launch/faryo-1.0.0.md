@@ -1,5 +1,10 @@
 # Faryo: mobile workbench for tmux-backed Codex and Claude sessions
 
+> **Historical upstream launch document.** This file records the 1.0-era product
+> and package scope; it is not the installation guide or support statement for
+> the current personal fork. Use the repository root `README.md` for the current
+> source-only Ubuntu/Linux Codex deployment.
+
 Faryo is a lightweight, self-hosted project and mobile workbench for terminal
 AI work.
 

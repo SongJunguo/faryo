@@ -40,9 +40,9 @@ these directories exist:
 ./scripts/status.sh
 ```
 
-## Install Acceptance
+## Deployment Acceptance
 
-Use the read-only diagnostic after installing or upgrading an endpoint:
+Use the read-only diagnostic after configuring or updating the source checkout:
 
 ```bash
 ./scripts/diagnose-owner-gateway.sh
@@ -50,7 +50,7 @@ Use the read-only diagnostic after installing or upgrading an endpoint:
 
 Read the result as layers, not one generic online/offline state:
 
-- Owner installed: package files and `~/.faryo/owner/config/faryo.env` exist.
+- Owner prepared: source scripts and `~/.faryo/owner/config/faryo.env` exist.
 - Owner reachable locally: `/health` on `127.0.0.1` returns OK.
 - Owner authenticated: `/api/status` returns `releaseVersion` with the Owner
   token.

@@ -8,7 +8,8 @@ credentials available to the operating-system user running the agents.
 
 ## Supported Version
 
-Security fixes target the latest released version.
+Security fixes in this fork target the current `main` source branch. The fork
+does not currently publish a maintained binary release.
 
 ## Deployment Rules
 
@@ -32,8 +33,8 @@ Security fixes target the latest released version.
 - Use separate Owner tokens for each route.
 - Treat an Owner token as control access to the local tmux session and supported
   local file previews.
-- Faryo does not silently override the operator's Codex or Claude permission
-  policy. If agents run without approvals or sandboxing, isolate them with a
+- Faryo does not silently override the operator's Codex permission policy. If
+  Codex runs without approvals or sandboxing, isolate it with a
   dedicated OS account, VM, or container when practical; otherwise a Gateway
   compromise can inherit that authority.
 - Do not use query-string Owner tokens as a public entry pattern. Gateway should
@@ -47,5 +48,6 @@ threat model, controls, residual risks, and deployment checklist.
 
 ## Reporting
 
-For now, report issues through a private maintainer channel or a GitHub security
-advisory once the public repository is enabled.
+Report issues through a private maintainer channel or a GitHub security
+advisory. Do not post credentials, private deployment details, or exploit data in
+a public issue.

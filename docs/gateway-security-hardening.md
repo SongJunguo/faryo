@@ -12,8 +12,8 @@ source trees, SSH or Git credentials, browser profiles, session cookies, and
 other user-readable files. Browser password stores may have additional keyring
 protection, but they must not be assumed safe after host-user compromise.
 
-Faryo deliberately does not rewrite an operator's Codex or Claude permission
-policy. Operators who choose approval-free or unsandboxed agents keep that
+Faryo deliberately does not rewrite an operator's Codex permission policy.
+Operators who choose approval-free or unsandboxed Codex sessions keep that
 workflow, and must compensate with stronger identity and host isolation.
 
 ## Required layers for public access
@@ -28,7 +28,7 @@ workflow, and must compensate with stronger identity and host isolation.
    explicitly, and configure no broad bypass. WebAuthn/passkeys remain the
    preferred higher-assurance option, but independent MFA is an operator choice
    rather than a Faryo runtime requirement. A lower-friction deployment may use
-   a 24-hour Access session with independent MFA disabled only while retaining
+   a longer Access session with independent MFA disabled only while retaining
    the exact identity allowlist and the separate Faryo password layer.
 4. Keep Faryo's password login as a separate inner layer. Use a unique password
    of at least 16 characters and remove any stale generated plaintext password

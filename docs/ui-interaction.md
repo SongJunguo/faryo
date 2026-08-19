@@ -1,201 +1,179 @@
 # Faryo UI Interaction Model
 
-Faryo is designed as a project and mobile workbench for terminal AI sessions.
+This document describes the maintained Ubuntu/Linux Codex UI in the current
+personal fork. It is an interaction contract, not a record of inherited platform
+or package capabilities.
 
-The UI should feel closer to a cockpit than a chat app. It gives the user quick
-access to project cards, owner decisions, route health, sessions, output,
-input, handoff packages, attachments, and agent controls while leaving the
-terminal runtime in `tmux`.
+## Product Shape
 
-Screenshots below are redacted examples. Session titles and project discussion
-content are replaced with representative labels.
+Faryo has two browser surfaces:
 
-<p>
-  <img src="assets/screenshots/faryo-projects-workbench-redacted.png" alt="Faryo Projects workbench showing project cards, Run, Import, Saved, and Decision Action Watch counts" width="250">
-  <img src="assets/screenshots/faryo-project-control-promo.png" alt="Faryo project control surface showing project cards routed to the same tmux session" width="250">
-  <img src="assets/screenshots/faryo-project-run-session-main.gif" alt="Faryo project queue Run action opening a live tmux-backed owner session" width="250">
-  <img src="assets/screenshots/faryo-same-session-handoff-walkthrough.gif" alt="Faryo same-session handoff walkthrough showing browser workbench and terminal session continuity" width="250">
-</p>
+1. **Gateway workbench** selects an active or resumable Codex session and applies
+   the public authentication/routing boundary.
+2. **Owner session view** reads and controls one existing tmux-backed Codex
+   session without changing its terminal dimensions.
 
-## UI Target Images
+The browser is a thin control surface. Durable conversation history belongs to
+Codex, live terminal state belongs to tmux, and runtime secrets stay below
+`~/.faryo/`.
 
-项目页 UI target（UI 目标图）统一放在 `docs/assets/ui-targets/`，包括项目总览大卡片和方向编辑面板的浅色/深色目标。
+## Gateway Workbench
 
-## Surfaces
+The authenticated Gateway home page keeps two session regions separate:
 
-### Projects Workbench
+- **Active Sessions** lists every recognized live Codex tmux pane, including
+  sessions started directly on the desktop.
+- **Session History** lists inactive resumable threads, uses server-backed pages
+  of 10 records, and supports Previous/Next plus direct page-number jumps.
 
-The Projects workbench is the project-level control surface.
+Only sessions created and stamped by Faryo expose remote Close. Desktop-created
+tmux sessions can be opened but are not remotely destroyed.
 
-It shows:
+Gateway route labels come from runtime configuration. Public browser requests
+never receive raw Owner tokens; Gateway injects them while proxying.
 
-- project cards
-- Decision, Action, and Watch counts
-- stage goals and owner review state
-- import, save, and run actions
-- a compact Faryo input dock for the active session route
+## Owner Session View
 
-The project deck is not a standalone issue tracker. Its job is to keep project
-state close to the live agent session that can execute the next action.
+The Owner page contains:
 
-### Gateway Workbench
+- workstation/session title and session switcher;
+- agent-reported context used/window and weekly quota when available;
+- git status and structured-source/connection details;
+- Compact Chat and Raw output modes;
+- attachments and a stable multiline composer;
+- approve, interrupt, terminal navigation, refresh, and return-to-latest
+  controls.
 
-The Gateway workbench is the first authenticated surface.
+Opening menus, details, Raw mode, or the question rail must never resize tmux or
+the Codex TUI.
 
-It shows:
+## Compact Chat
 
-- available routes such as HP, PC, and cloud endpoints
-- route health
-- active and recent sessions
-- pending handoff packages
-- new-session entry points
-- account and install controls
+Compact Chat is the default reading mode. It renders finalized Codex rollout
+messages as stable user/assistant blocks through the local Markdown AST, GFM,
+KaTeX, and Shiki pipeline.
 
-The workbench is for choosing where work should continue. It should not behave
-like a file manager or a general dashboard.
+Rules:
 
-### Owner Session View
+- raw HTML is escaped;
+- dangerous URL protocols are rejected;
+- TeX inside code stays literal;
+- wide formulas, tables, and code scroll inside their own containers;
+- a failed rich-render block falls back to safe plain text without stopping later
+  updates;
+- stable finalized blocks retain their DOM identity while the changing tail is
+  reconciled.
 
-The Owner session view is the control surface for one tmux-backed session.
+Raw mode remains available for terminal evidence. If structured Codex history is
+unavailable, Compact Chat must show an explicit fallback warning rather than
+pretend that damaged tmux text is complete Markdown.
 
-It shows:
+## Long Conversations
 
-- owner/route label
-- current topic/session title
-- model, context usage, and remaining weekly quota when available
-- git status when available
-- compact or raw terminal output
-- attachment preview
-- composer
-- agent controls
+The structured transcript uses a soft line budget plus hard tail/character
+bounds. A formula-heavy answer may exceed the line target without causing every
+prior turn to disappear.
 
-## Output Modes
+When at least two user turns are visible, Faryo prepares a right-edge question
+rail:
 
-### Compact
+- hidden and non-interactive during normal reading;
+- revealed temporarily by a fast user wheel/swipe;
+- auto-hidden after scrolling stops;
+- held open while hovered or keyboard-focused;
+- click, Arrow keys, Home, and End jump between questions;
+- the active marker follows the reading anchor and selects the final question at
+  the bottom;
+- mobile display overlays the extreme edge and never reserves permanent content
+  width;
+- live appends reuse existing marker nodes and preserve the main scroll position.
 
-Compact mode is the default mobile reading mode. It turns noisy terminal output
-into readable blocks for common Codex and Claude states.
+Question previews are truncated DOM-only labels. They are not written to local
+or session storage.
 
-Compact mode is agent-specific:
+## Main Scroll Contract
 
-- Codex rules are the most mature.
-- Claude rules exist but need more tuning across platforms and output states.
-- Generic shell output falls back to terminal-oriented rendering.
+- A reader at the bottom follows the latest content.
+- A reader who scrolls into history stays at that position during refreshes.
+- The return-to-latest control is visible when needed and must not cover a table,
+  formula, code block, or composer.
+- Programmatic refresh or initial scroll-to-bottom does not reveal the question
+  rail; only user scroll intent does.
 
-### Raw
+## Live from tmux
 
-Raw mode keeps the terminal evidence closer to its original form. It is useful
-when the user needs exact command output, logs, or terminal formatting.
+While Codex is working, Compact Chat may include a separate collapsible
+`Live from tmux` panel for transient execution evidence.
 
-While an agent is working, the compact view may append a bounded `Live from
-tmux` pane. Its scroll position follows terminal conventions: a pane already at
-the bottom continues following new output, while a user who scrolls upward
-keeps that reading position across live refreshes.
+- It is outside stable structured history.
+- A new/at-bottom panel follows terminal output.
+- A manually scrolled panel preserves its inner position across refreshes.
+- Its expansion preference is isolated per session.
+- Clicking the live card does not send interrupt; the explicit animated stop
+  control retains that action.
 
-## Input
+## Composer and Delivery
 
-The composer sends text into the active tmux pane.
+The composer keeps the same large base geometry across focus, blur, and mobile
+keyboard state, growing only with real multiline text.
 
-Design expectations:
+Submission rules:
 
-- mobile keyboard and system dictation should work naturally
-- sending one short instruction should be fast
-- long prompts should remain possible
-- attachments should become explicit file references in the session
+- one browser action creates one client message ID and immutable target-session
+  snapshot;
+- retry and late response handling never switch to a newly selected session;
+- a conflicting desktop TUI draft is not overwritten;
+- failed or ambiguous sends retain the browser draft;
+- Owner confirms Codex acceptance before clearing the draft;
+- a working Codex uses Tab for a queued follow-up, while an idle Codex uses Enter;
+- no-evidence recovery remains an explicit failure rather than a false success.
 
-Faryo does not own speech-to-text. It accepts the text produced by the user's
-preferred input method.
+Attachments remain associated with the submission that included them; a late
+response cannot clear a later session's independent draft or attachments.
 
-## Session Selection
+## Responsive Layout
 
-Session cards represent active or resumable work. A session card is not a copy
-of a chat; it is a pointer back to terminal-backed state.
+### Phone (360–430 px)
 
-Codex cards converge through Codex history and the active tmux process. Claude
-cards converge through Claude history and Faryo tmux metadata.
+- single reading column;
+- 10–12 px normal side padding;
+- stable large composer above the bottom safe area;
+- question rail overlays the extreme edge only while active;
+- tables, code, and display math use internal horizontal scrolling;
+- session/details panels cover the page instead of shrinking the conversation.
 
-The Gateway home page presents two distinct session regions:
+### Tablet/Desktop
 
-- `Active Sessions` always stays above history and lists all tmux panes with a
-  recognized live Codex or Claude process. Desktop-created panes are marked as
-  such and do not expose the Faryo-managed close action.
-- `Session History` contains only inactive, resumable conversations. It has its
-  own vertical scroll area and server-backed pages of 10 records. Previous/Next
-  move one page, while the page input accepts Enter or Go for a direct jump, so
-  active panes cannot disappear behind a long history display limit.
+- centered conversation axis around 748 px;
+- question rail appears outside that reading axis when space permits;
+- session/details panels remain overlays;
+- composer stays centered and does not expand to the full monitor width.
 
-## Files to Session (internal handoff packages)
+## Accessibility and Privacy
 
-The Gateway labels this workflow **Files to session**. Internally, a handoff
-package is the small manifest that carries selected work material into a target
-session; it does not create or copy a conversation.
+- Interactive controls use semantic buttons and visible focus states.
+- The question rail uses roving tabindex and accessible question labels.
+- Reduced-motion preference disables smooth/animated transitions.
+- Owner tokens are removed from the visible URL and are not written into resource
+  DOM attributes.
+- File/image previews use authenticated requests and temporary Blob URLs.
+- Internal memory annotations render as bounded cards and do not enter copied
+  answer text.
 
-A package can include:
+## Acceptance Matrix
 
-- prompt
-- notes
-- screenshots
-- files
-- intent
-- context
+The maintained matrix includes:
 
-Packages can be created from Gateway, received through the MCP bridge, and
-injected into a selected session.
+- 390x844 mobile Chrome;
+- 1440x900 desktop Microsoft Edge;
+- structured Markdown/GFM/KaTeX/Shiki;
+- 13-question reveal, auto-hide, click/keyboard jump, stable append, and unchanged
+  content width;
+- offline/background recovery and 20-message exact delivery;
+- cross-session retry/delayed-response isolation;
+- protected files/images, CSP, and safe render fallback;
+- unchanged Codex tmux dimensions before and after browser/deployment tests.
 
-## Same-Session File Transfer Walkthrough
-
-1. Start from an existing Owner machine `tmux` session that is already running
-   Codex, Claude Code, or a shell.
-2. Open the Faryo Gateway workbench from a phone or desktop browser.
-3. Select the route and the target live session. The browser talks to Gateway;
-   Gateway proxies to Owner; Owner controls the selected `tmux` pane.
-4. Review compact output from the target session. Use raw output only when exact
-   terminal evidence is needed.
-5. Send one short instruction from the workbench composer. The instruction
-   appears in the same live `tmux` session.
-6. Choose files or text from the Gateway workbench and send the generated
-   internal handoff package into the same target session. The session receives a `# Faryo Handoff Package`
-   block.
-7. Create an attachment handoff. Gateway uploads the file to the Owner inbox and
-   injects the attachment path into the same target session.
-8. Return to the desktop terminal and continue from that original session. No
-   second chat history or remote desktop session is created.
-
-Public proof assets:
-`assets/screenshots/faryo-project-run-session-main.gif` and
-`assets/screenshots/faryo-same-session-handoff-walkthrough.gif`.
-
-The GIFs are captured from the real Gateway workbench at a 393 x 917 mobile
-viewport. They show project Run dispatch, short input, text handoff, and
-attachment handoff landing in `tmux`-backed sessions. Hostnames, paths, git
-details, and private content are redacted.
-
-## Control Actions
-
-Faryo exposes common terminal-agent controls directly:
-
-- send
-- interrupt
-- approve
-- page up/down
-- resume
-- close session
-- attach file or image
-
-These controls keep mobile work practical without requiring the user to remember
-terminal shortcuts on a phone.
-
-## Platform Maturity
-
-The most refined UI path is Chrome/Android Chrome PWA with a Linux endpoint and
-Codex CLI.
-
-Supported but less tuned:
-
-- iOS Safari
-- macOS Owner endpoint
-- Claude Code compact states
-- generic shell TUIs
-
-Future UI work should focus on viewport behavior, background/foreground resume,
-keyboard/paste edges, and better Claude-specific compact rendering.
+Detailed evidence is maintained in
+[`plans/deepseek-inspired-ui-plan.md`](plans/deepseek-inspired-ui-plan.md) and
+[`plans/codex-reliability-hardening-plan.md`](plans/codex-reliability-hardening-plan.md).

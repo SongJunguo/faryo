@@ -60,7 +60,9 @@ but the default upload destination should come from the Faryo data directory.
 ## 5. Governance Parameters
 
 - Owner bind: `127.0.0.1:8765`.
-- Web capture: compact mode uses 320 lines; full mode uses 800 lines.
+- Web capture: compact/full requests use 320/800-line soft targets. Structured
+  Codex history may exceed them to retain complete recent turns, while separate
+  tail and character ceilings keep the payload bounded.
 - tmux history limit: default 500 lines.
 - Token: private runtime config, never committed to Git.
 - Product data root: default `~/.faryo/owner/data`.

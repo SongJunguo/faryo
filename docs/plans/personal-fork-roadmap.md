@@ -2,7 +2,7 @@
 
 计划索引：[`README.md`](README.md)
 
-更新时间：2026-08-15
+更新时间：2026-08-19
 
 当前主分支：`main`（原实施分支 `feature/deepseek-inspired-ui` 已于 2026-08-19 提升）
 
@@ -40,8 +40,9 @@
 | 结构化消息实时更新 | **P0 已完成** | 最终内容从有界增量 JSONL 读取；认证流式 fetch、10 秒心跳和轮询后备无需手动刷新 |
 | 内部引用与错误边界 | **已完成** | memory citation 显示为折叠说明且不暴露 UUID；单条 Markdown/KaTeX 失败安全降级，不中断后续更新 |
 | 历史服务端分页 | **已完成** | 单路由直接按 10 条目标页查询，活动 tmux 独立完整显示，40 页以上跳转不再读取所有前页 |
+| 长对话问题导航 | **已完成** | 快速滚动临时显示、自动隐藏、点击/键盘跳转；手机端不预留永久空白，实时追加不移动阅读位置 |
 | 本机开机自启 | 已完成 | user timer 已启用，`Linger=yes`；停止 Owner 后的自动恢复测试通过 |
-| 手机/Gateway/隧道 | 已部署 | Gateway 与 Owner 均仅监听回环地址；公网主路径位于精确身份限制的 Cloudflare Access 外层，采用 24 小时会话且关闭独立 MFA；仓库不保存允许身份或域名 |
+| 手机/Gateway/隧道 | 已部署 | Gateway 与 Owner 均仅监听回环地址；公网主路径位于精确身份限制的 Cloudflare Access 外层，Access 会话为 7 天、内层 Cookie 为 24 小时，独立 MFA 关闭；仓库不保存允许身份或域名 |
 
 已推送的个人 fork 提交：
 
@@ -55,7 +56,11 @@
 - `2a47821`：补齐研究常用语言的按需 Shiki 浏览器高亮。
 - `50a118e`：增加匿名精确投递、附件、恢复与 TUI 尺寸浏览器矩阵。
 - `e50d899`：普通聊天收起低频终端按键，真实审批提示按需展开。
-- `a603686`：将 Gateway 内层会话期限改为有界私有配置，并同步当前 24 小时宽松 Access 策略。
+- `a603686`：将 Gateway 内层会话期限改为有界私有配置；后续外层 Access 按操作者选择延长为 7 天，内层保持 24 小时。
+- `04f5ed1`、`ebc903e`、`dddc68e`：长会话、跨会话发送和公式密集历史可靠性加固。
+- `fdbe1ee`、`9c9bb05`、`a601eb4`：问题导航、自动隐藏和手机端零永久占位。
+- `d2c8be5`：完整功能线提升到 `main` 并删除冗余分支。
+- `876f259`：根 README 收敛为 source-only Ubuntu/Codex 维护范围。
 
 ## 阶段 1：可靠输入提交（P0，已完成）
 
@@ -163,8 +168,8 @@ Node 运行时或 CDN。
 
 ## 下一步
 
-进行用户实际长对话观感验收；后续维护继续以增量事件源为基础，不恢复每秒全量读取
-长历史。由于网页能够控制终端 Agent，公网长期使用必须保留受限 Cloudflare
+当前进入日常维护：继续以增量事件源为基础，不恢复每秒全量读取长历史；新增交互必须
+通过手机/桌面 Edge/Chrome、可靠发送和 tmux 尺寸回归。由于网页能够控制终端 Agent，公网长期使用必须保留受限 Cloudflare
 Access（或仅可信设备可达的私网 VPN）作为外层身份策略，不能由 Tunnel 或 Faryo
 单密码替代。
 
@@ -200,7 +205,7 @@ Access（或仅可信设备可达的私网 VPN）作为外层身份策略，不�
 - 匿名手机/桌面截图只在 `/tmp` 目检并已删除；公开仓库隐私与密钥模式扫描无命中。
 - 浏览器：Chrome 与 Edge 本地资源测试通过；分段函数、范数和至少两行矩阵结构的精确 KaTeX 检查通过。
 - 部署：`faryo-owner-keepalive.timer` 已启用；主动停止 Owner 后，keepalive 成功使用专用 Conda 环境恢复服务。
-- 发布：功能提交 `1892a1d` 已推送到个人 `origin/katex-feature`；原作者 `upstream` 未修改。
+- 发布（当时状态）：功能提交 `1892a1d` 曾推送到个人 `origin/katex-feature`；该开发线后来完整提升到 `main`，旧分支已删除，原作者 `upstream` 始终未修改。
 
 ### Gateway 与手机公网路径
 
@@ -209,12 +214,12 @@ Access（或仅可信设备可达的私网 VPN）作为外层身份策略，不�
 - Gateway 用户级 systemd 服务已完成启用、重启与健康检查；登录 Cookie、CSRF、登录限速和浏览器安全头均有回归覆盖。
 - 现有命名 Cloudflare Tunnel 在保留原有路由的前提下增加独立 Faryo hostname；公网 TLS、登录、真实结构化 Markdown/KaTeX 和一次性测试会话输入提交均通过。
 - 公网验证只使用通用测试文本；仓库中不记录真实域名、Token、密码、会话名、对话内容或本机绝对路径。
-- Cloudflare Tunnel 负责连通，不等于 Cloudflare Access。当前公网入口以覆盖完整 hostname 的两个精确邮箱规则限制身份，Access 应用会话为 24 小时，应用级独立 MFA 按低摩擦使用需求关闭；这是操作者明确确认的部署选择，不是待修复项，后续自动化不得擅自重新开启。Email One-time PIN、Google 和 GitHub 登录入口均可选且不强制跳转到单一提供商。无 `Everyone`、无 `Bypass`，并保留 Faryo 登录作为内层认证。真实邮箱和域名只存在于私有 Cloudflare 配置中。
+- Cloudflare Tunnel 负责连通，不等于 Cloudflare Access。当前公网入口以覆盖完整 hostname 的两个精确邮箱规则限制身份，Access 应用会话为 7 天，应用级独立 MFA 按低摩擦使用需求关闭；这是操作者明确确认的部署选择，不是待修复项，后续自动化不得擅自重新开启。Email One-time PIN、Google 和 GitHub 登录入口均可选且不强制跳转到单一提供商。无 `Everyone`、无 `Bypass`，并保留 Faryo 登录作为内层认证。真实邮箱和域名只存在于私有 Cloudflare 配置中。
 - 已增加隐私安全的公网验收脚本：它不接收或打印密码、Cookie、Token 与 hostname；只有确认请求先进入 Access 登录流程才返回通过，直接到达 Faryo 登录或无法判定都不会误报为安全。
-- Gateway 代码加固包含：所有浏览器写请求（含 Owner 代理）使用会话绑定 CSRF、登录限速使用可信代理提供的单值客户端地址、`__Host-` 严格 Cookie、nonce CSP 及已有安全响应头。内层登录期限现可由私有 `FARYO_GATEWAY_SESSION_HOURS` 在 `1`–`168` 小时内配置，默认 12 小时；当前个人部署与 Access 一致设为 24 小时。Agent 权限策略仍由操作者决定，Faryo 不强制降低 Codex/Claude 权限。
+- Gateway 代码加固包含：所有浏览器写请求（含 Owner 代理）使用会话绑定 CSRF、登录限速使用可信代理提供的单值客户端地址、`__Host-` 严格 Cookie、nonce CSP 及已有安全响应头。内层登录期限现可由私有 `FARYO_GATEWAY_SESSION_HOURS` 在 `1`–`168` 小时内配置，默认 12 小时；当前个人部署内层为 24 小时、外层 Access 为 7 天。Agent 权限策略仍由操作者决定，Faryo 不强制降低 Codex 权限。
 - Gateway user service 已以私有 24 小时配置重启；真实本地登录响应验证 `Max-Age=86400`，且 `Secure`、`HttpOnly`、`SameSite=Strict` 属性保持不变。该重启未改变任何既有 tmux 窗口尺寸。
 - 对 4 个真实 Agent 会话逐一执行 Owner 状态与 capture 读取，受控前后宽高完全不变；两个无进程占用的旧匿名 Chrome 测试 profile 已清理。
-- Gateway 首页已拆成两个独立区域：`Active Sessions` 始终显示所有实际运行 Codex/Claude 的 tmux（包括桌面直接启动的会话），`Session History` 排除活动项、独立滚动，并由服务端按 10 条一页提供 Previous/Next 和页码直达。只有 Faryo 管理的会话提供远程关闭，桌面 tmux 仅可打开查看，避免误关。
+- Gateway 首页已拆成两个独立区域：`Active Sessions` 始终显示所有实际运行 Codex 的 tmux（包括桌面直接启动的会话），`Session History` 排除活动项、独立滚动，并由服务端按 10 条一页提供 Previous/Next 和页码直达。只有 Faryo 管理的会话提供远程关闭，桌面 tmux 仅可打开查看，避免误关。
 - 运行会话上限与历史显示数量解耦；单机 TXY 默认允许 8 个存活 Agent TUI，并可通过私有 `FARYO_TXY_MAX_RUNNING` 在 1–32 范围内调整。
 
 ### 结构化来源加固

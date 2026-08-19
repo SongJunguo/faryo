@@ -1,8 +1,8 @@
 # Faryo Codex Reliability Hardening Plan
 
-更新时间：2026-08-18
+更新时间：2026-08-19
 
-状态：维护加固完成（2026-08-18）
+状态：维护加固完成（2026-08-19）
 
 当前主分支：`main`（原实施分支 `feature/deepseek-inspired-ui` 已于 2026-08-19 提升）
 
@@ -28,7 +28,8 @@
 ## 2. 明确排除
 
 - 不开发或调优 Claude Code 路径；本轮只保证既有 Claude 代码不被破坏。
-- 不修改 Codex/Claude 权限参数、Gateway Access 24 小时会话或独立 MFA 选择。
+- 本计划不修改 Codex 权限参数或当时的 Access/MFA 选择；操作者后来单独把外层 Access
+  延长为 7 天，内层 Gateway Cookie 仍为 24 小时。
 - 不修改任何 Codex tmux 窗口宽高，不调用 `resize-window`。
 - 不替换已经确认可用的复制按钮。
 - 不把完整 DeepSeek Harness/Cordis/React 运行时搬入 Faryo。

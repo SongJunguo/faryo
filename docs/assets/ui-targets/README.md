@@ -1,5 +1,9 @@
 # Faryo UI Target Images
 
+> These images are historical design inputs for the project-card UI. They are
+> not screenshots of the current Compact Chat acceptance surface. Current UI
+> behavior and evidence live in `docs/plans/deepseek-inspired-ui-plan.md`.
+
 这个目录存放 Faryo 项目页 UI target（UI 目标图），用于后续界面施工对齐，不作为运行时资源加载。
 
 ## 当前目标图

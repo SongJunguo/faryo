@@ -1,5 +1,9 @@
 # Faryo Gateway Architecture
 
+> **Scope note:** the maintained fork currently validates one local Ubuntu/Linux
+> Codex route. The HP/PC and multi-endpoint sections below document inherited
+> implementation capability; they are not current deployment acceptance claims.
+
 Faryo Gateway is the public entry layer. It owns public web access, login
 state, user-to-route authorization, path routing, the handoff workbench, and
 controlled headers injected into local execution endpoints.
@@ -9,15 +13,17 @@ controlled headers injected into local execution endpoints.
 ```text
 phone browser
   -> https://<your-faryo-domain>/
-  -> HTTPS edge (for example Cloudflare Tunnel or a reverse proxy)
+  -> identity-aware HTTPS edge
+  -> outbound tunnel or hardened reverse proxy
   -> Faryo Gateway 127.0.0.1:8780
   -> Faryo workbench
   -> /txy/?session=... /hp/?session=... /pc/?session=...
   -> Faryo local execution endpoint
 ```
 
-The phone talks only to Gateway. Owner tokens are not exposed to the browser;
-Gateway injects them by route when proxying upstream requests. HP, PC, and TXY
+The phone talks only to Gateway after the external identity check. Owner tokens
+are not exposed to the browser; Gateway injects them by route when proxying
+upstream requests. HP, PC, and TXY
 endpoints should use independent owner tokens.
 
 ## 2. Gateway Host Responsibilities

@@ -4,6 +4,10 @@ Faryo Gateway is the public gateway component. It handles the public web entry,
 login, route authorization, the handoff workbench, and proxying to available
 local execution surfaces.
 
+The maintained fork validates one Ubuntu/Linux Codex route. Multi-route support
+remains available in the implementation, but additional endpoint types are not
+part of the current acceptance matrix.
+
 ## Runtime Boundary
 
 Gateway does not own the local tmux execution surface. It only routes to owner
@@ -67,8 +71,8 @@ enabled route with `FARYO_TXY_MAX_RUNNING`, `FARYO_HP_MAX_RUNNING`, or
 HP/PC.
 
 The workbench keeps live agents and resumable history separate. `Active
-Sessions` includes every tmux pane currently running a recognized Codex or
-Claude process, including panes started directly on the endpoint. Only sessions
+Sessions` includes every tmux pane currently running a recognized Codex process,
+including panes started directly on the endpoint. Only sessions
 created and stamped by Faryo expose the remote `Close` action; externally
 started desktop tmux sessions remain openable but protected from remote close.
 `Session History` excludes those live sessions, scrolls independently, and uses

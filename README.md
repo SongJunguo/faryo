@@ -251,6 +251,7 @@ tools/              Development-only Markdown bundle builder
 - [Gateway setup](apps/gateway/README.md)
 - [Gateway runbook](apps/gateway/runbook.md)
 - [Gateway security hardening](docs/gateway-security-hardening.md)
+- [Current UI interaction contract](docs/ui-interaction.md)
 - [Current UI plan and evidence](docs/plans/deepseek-inspired-ui-plan.md)
 - [Codex reliability plan and evidence](docs/plans/codex-reliability-hardening-plan.md)
 - [Personal fork roadmap](docs/plans/personal-fork-roadmap.md)

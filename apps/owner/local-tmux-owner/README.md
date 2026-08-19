@@ -92,7 +92,7 @@ position. On narrow screens it overlays the extreme edge without reserving
 permanent content width. The rail is absent in Raw mode and stores neither
 question text nor navigation state.
 
-Owner does not resize tmux or the Codex/Claude TUI. Browser sends retain an
+Owner does not resize tmux or the Codex TUI. Browser sends retain an
 immutable target session and client message id across timeout recovery,
 confirmed submit delivery, idempotent retries, draft preservation on failure,
 and conflict response when a different desktop draft already occupies the TUI
@@ -196,8 +196,8 @@ consumed as private runtime input and is never printed.
 - Does not provide a general file-write API; uploads are written only to the
   configured Faryo inbox.
 - Local file preview is token-protected and limited to supported file suffixes.
-- `send` targets the controlled tmux pane and is intended for Codex, Claude,
-  shell TUIs, and similar terminal interfaces.
+- `send` targets the controlled tmux pane and is maintained for Codex; generic
+  terminal interfaces retain the conservative tmux path.
 - Should not bind directly to public or LAN addresses.
 
 Codex status reading is optional metadata for model, context, and rate-limit

@@ -8,21 +8,15 @@ Faryo values small, readable changes.
 - Prefer standard library code and existing shell tools.
 - Keep Owner local and loopback-first.
 - Keep Gateway responsible for public auth, routing, and policy.
-- Do not commit runtime config, tokens, password hashes, package artifacts, or
+- Do not commit runtime config, tokens, password hashes, binary artifacts, or
   generated caches.
 
 ## Checks
 
-Run the release check before opening a release-facing change:
+Run the source validation check before opening a change:
 
 ```bash
 scripts/package-client.sh check
-```
-
-For endpoint packaging changes, also run:
-
-```bash
-scripts/package-client.sh release
 ```
 
 ## Style

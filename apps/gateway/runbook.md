@@ -1,12 +1,16 @@
 # Faryo Gateway Runbook
 
+> **Maintained path:** use the single-route Ubuntu/Linux Codex setup first. HP/PC
+> reverse-tunnel procedures remain as inherited optional operations and are not
+> part of the current fork validation matrix.
+
 ## Deployment Boundary
 
 The recommended single-machine path is:
 
 ```text
 phone browser
-  -> public HTTPS edge
+  -> identity-aware HTTPS edge
   -> outbound tunnel
   -> Faryo Gateway 127.0.0.1:8780
   -> Faryo Owner 127.0.0.1:8765
@@ -23,9 +27,10 @@ configuration and is injected server-side.
 https://<your-faryo-domain>/
 ```
 
-Public access enters the Faryo login page first. After login, the user lands on
-the workbench and opens concrete execution sessions through route paths such as
-`/hp/?session=...`, `/pc/?session=...`, and `/txy/?session=...`.
+Public access must enter the identity-aware proxy first and the Faryo login page
+second. After both layers, the user lands on the workbench and opens a concrete
+execution session through the enabled route, for example
+`/txy/?session=...`.
 
 Bare `/hp/`, `/pc/`, and `/txy/` paths are not user entry points. Available
 routes come from the current user config. Owner tokens are injected only by

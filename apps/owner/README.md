@@ -4,6 +4,10 @@ Faryo Owner is the local execution component. It exposes a loopback-only web
 control surface for tmux-backed work sessions and is reached through Faryo
 Gateway or a configured reverse tunnel.
 
+The maintained fork validates Owner against an existing Ubuntu/Linux Codex TUI.
+Other inherited terminal profiles are compatibility paths, not current support
+claims.
+
 ## Runtime Boundary
 
 Owner does not own public login, domain routing, Caddy, or the gateway workbench.
@@ -36,19 +40,8 @@ The user-level timer template lives at:
 deploy/user-systemd/faryo-owner-keepalive.timer
 ```
 
-## Package Install
-
-Linux endpoint packages install Owner under `/opt/faryo` and provide the user
-systemd keepalive timer:
-
-```bash
-sudo dpkg -i faryo_<version>_all.deb
-systemctl --user daemon-reload
-systemctl --user enable --now faryo-owner-keepalive.timer
-```
-
 Use `/health` for liveness and `/api/status` for authenticated runtime checks.
-The status payload includes `releaseVersion` for endpoint upgrade acceptance.
+The status payload includes the source version for deployment acceptance.
 
 ## Joining Gateway
 
