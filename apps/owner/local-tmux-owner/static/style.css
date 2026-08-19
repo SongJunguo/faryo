@@ -10,6 +10,8 @@ header { z-index: 5; min-width: 0; max-width: 100%; overflow: hidden; padding: c
 .title-row > div:first-child { min-width: 0; flex: 1 1 auto; }
 .title-row strong { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: calc(15px + var(--font-step)); cursor: pointer; }
 .brand-title { display: inline-flex !important; align-items: center; gap: 6px; max-width: 100%; }
+.brand-home { flex: 0 0 auto; width: 32px; min-width: 32px; height: 32px; min-height: 32px; display: grid; place-items: center; border-radius: 10px; color: inherit; text-decoration: none; }
+.brand-home:hover { background: color-mix(in srgb, var(--accent) 10%, transparent); }
 .brand-logo { width: 18px; height: 18px; border-radius: 6px; flex: 0 0 auto; }
 #ownerText { flex: 0 0 auto; }
 #topicText { min-width: 0; max-width: min(42vw, 170px); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -452,6 +454,14 @@ html[data-faryo-ui="workbench-v2"] .brand-logo {
   box-shadow: 0 0 0 1px var(--owner-hairline);
 }
 
+html[data-faryo-ui="workbench-v2"] .brand-home {
+  width: 36px;
+  min-width: 36px;
+  height: 36px;
+  min-height: 36px;
+  border-radius: 11px;
+}
+
 html[data-faryo-ui="workbench-v2"] .title-row strong {
   font-size: calc(14px + var(--font-step));
   letter-spacing: -.01em;
@@ -891,14 +901,14 @@ html[data-faryo-ui="workbench-v2"] :is(button, a, textarea):focus-visible {
 
   html[data-faryo-ui="workbench-v2"] .brand-title {
     display: grid !important;
-    grid-template-columns: 22px minmax(0, 1fr);
+    grid-template-columns: 36px minmax(0, 1fr);
     grid-template-rows: auto auto;
     column-gap: 7px;
     row-gap: 0;
     line-height: 1.15;
   }
 
-  html[data-faryo-ui="workbench-v2"] .brand-logo {
+  html[data-faryo-ui="workbench-v2"] .brand-home {
     grid-row: 1 / span 2;
     align-self: center;
   }
@@ -927,7 +937,7 @@ html[data-faryo-ui="workbench-v2"] :is(button, a, textarea):focus-visible {
     line-height: normal;
   }
 
-  html[data-faryo-ui="workbench-v2"] header.collapsed .brand-logo {
+  html[data-faryo-ui="workbench-v2"] header.collapsed .brand-home {
     grid-row: auto;
   }
 

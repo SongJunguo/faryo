@@ -366,6 +366,8 @@ try {
         const statusLine = document.querySelector('.status-line');
         const keyNav = document.querySelector('.key-nav');
         const promptRect = promptShell?.getBoundingClientRect();
+        const homeLink = document.getElementById('homeBtn');
+        const homeRect = homeLink?.getBoundingClientRect();
         const visibleComposerControls = ['petControl', 'dockPlusBtn', 'sendBtn']
           .map((id) => document.getElementById(id))
           .filter((element) => element && !element.classList.contains('hidden'))
@@ -519,6 +521,14 @@ try {
           ownerLayout: {
             ui: String(document.documentElement.dataset.faryoUi || ''),
             outputWidth: Math.round(output?.getBoundingClientRect().width || 0),
+            home: homeLink && homeRect ? {
+              path: new URL(homeLink.href, location.href).pathname,
+              search: new URL(homeLink.href, location.href).search,
+              sameOrigin: new URL(homeLink.href, location.href).origin === location.origin,
+              target: homeLink.target,
+              width: Math.round(homeRect.width),
+              height: Math.round(homeRect.height),
+            } : null,
             prompt: promptRect ? {
               left: Math.round(promptRect.left),
               right: Math.round(promptRect.right),
@@ -610,6 +620,11 @@ try {
     if (!prompt || prompt.left < 7 || prompt.right > state.viewport.width - 7) {
       throw new Error(`Owner composer escaped the viewport: ${JSON.stringify({ viewport: state.viewport, prompt })}`);
     }
+    if (!layout.home || layout.home.path !== '/' || layout.home.search
+      || !layout.home.sameOrigin || layout.home.target
+      || layout.home.width < 32 || layout.home.height < 32) {
+      throw new Error(`Owner home link is missing or unsafe: ${JSON.stringify(layout.home)}`);
+    }
     if (state.viewport.width < 720 && prompt.width < state.viewport.width - 24) {
       throw new Error(`Mobile Owner composer is unexpectedly narrow: ${JSON.stringify({ viewport: state.viewport, prompt })}`);
     }
@@ -682,6 +697,39 @@ try {
     const geometries = [focused, blurred].filter(Boolean);
     if (!beforeFocus || geometries.some((item) => Math.abs(item.width - beforeFocus.width) > 1 || Math.abs(item.height - beforeFocus.height) > 1)) {
       throw new Error(`Owner composer changed geometry across focus/blur: ${JSON.stringify({ beforeFocus, focused, blurred })}`);
+    }
+
+    const homeInteractionResult = await send('Runtime.evaluate', {
+      expression: `(() => {
+        const home = document.getElementById('homeBtn');
+        const title = document.getElementById('sessionTitle');
+        const header = document.querySelector('header');
+        if (!home || !title || !header) return { ready: false };
+        const before = header.classList.contains('collapsed');
+        let navigationPrevented = false;
+        home.addEventListener('click', (event) => { event.preventDefault(); navigationPrevented = true; }, { once: true });
+        home.click();
+        const afterHome = header.classList.contains('collapsed');
+        document.getElementById('ownerText')?.click();
+        const afterTitle = header.classList.contains('collapsed');
+        document.getElementById('ownerText')?.click();
+        home.focus();
+        return {
+          ready: true,
+          navigationPrevented,
+          homePreservedHeader: afterHome === before,
+          titleToggledHeader: afterTitle !== before,
+          restoredHeader: header.classList.contains('collapsed') === before,
+          focusedHome: document.activeElement === home,
+        };
+      })()`,
+      returnByValue: true,
+    });
+    const homeInteraction = homeInteractionResult.result?.value || {};
+    if (!homeInteraction.ready || !homeInteraction.navigationPrevented
+      || !homeInteraction.homePreservedHeader || !homeInteraction.titleToggledHeader
+      || !homeInteraction.restoredHeader || !homeInteraction.focusedHome) {
+      throw new Error(`Owner home/title interaction is wrong: ${JSON.stringify(homeInteraction)}`);
     }
 
     const inspectPanel = async (action) => {

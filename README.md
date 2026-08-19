@@ -123,6 +123,8 @@ micromark -> mdast -> CommonMark/GFM/math nodes -> safe HTML -> KaTeX
 
 ### Workbench interaction
 
+- Uses the Faryo logo as a direct return to the Gateway home page while the
+  adjacent session title keeps its independent header-collapse action.
 - Keeps a large composer geometry across focus, blur, and mobile keyboard state.
 - Shows agent-reported context used/window and weekly quota when available.
 - Preserves the main reading position during structured refreshes.

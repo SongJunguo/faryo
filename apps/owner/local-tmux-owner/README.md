@@ -92,6 +92,11 @@ position. On narrow screens it overlays the extreme edge without reserving
 permanent content width. The rail is absent in Raw mode and stores neither
 question text nor navigation state.
 
+The Faryo logo in the Owner header is a same-origin link to the Gateway home
+page. It deliberately drops the current token and session query. The adjacent
+title still folds/unfolds the header; the folder and details controls retain
+their separate session-switching and status roles.
+
 Owner does not resize tmux or the Codex TUI. Browser sends retain an
 immutable target session and client message id across timeout recovery,
 confirmed submit delivery, idempotent retries, draft preservation on failure,

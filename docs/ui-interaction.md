@@ -36,6 +36,7 @@ never receive raw Owner tokens; Gateway injects them while proxying.
 
 The Owner page contains:
 
+- a Faryo logo link back to the Gateway home page;
 - workstation/session title and session switcher;
 - agent-reported context used/window and weekly quota when available;
 - git status and structured-source/connection details;
@@ -46,6 +47,11 @@ The Owner page contains:
 
 Opening menus, details, Raw mode, or the question rail must never resize tmux or
 the Codex TUI.
+
+Header actions remain deliberately separate: the logo returns home, the title
+folds/unfolds the header, the folder switches sessions, and the sliders open
+session details. Returning home uses same-origin `/` without carrying the Owner
+token or selected-session query.
 
 ## Compact Chat
 

@@ -53,6 +53,7 @@
     'Tap ↓ for latest',
     '⧉ copies last output',
     'Tap title to fold header',
+    'Tap the Faryo logo for home',
     'Tap version to fold footer',
     'Tap folder to switch sessions',
     'Set font on home',
@@ -1804,7 +1805,7 @@
 
   renderOutputModeButton();
   toggleClassState('header', 'collapsed', 'rdHeaderCollapsed'); toggleClassState('.app', 'header-collapsed', 'rdHeaderCollapsed'); syncStatusRefresh(false);
-  $('sessionTitle').addEventListener('click', () => { const on = !document.querySelector('header').classList.contains('collapsed'); toggleClassState('header', 'collapsed', 'rdHeaderCollapsed', on); toggleClassState('.app', 'header-collapsed', 'rdHeaderCollapsed', on); syncStatusRefresh(!on); });
+  $('sessionTitle').addEventListener('click', (event) => { if (event.target.closest('#homeBtn')) return; const on = !document.querySelector('header').classList.contains('collapsed'); toggleClassState('header', 'collapsed', 'rdHeaderCollapsed', on); toggleClassState('.app', 'header-collapsed', 'rdHeaderCollapsed', on); syncStatusRefresh(!on); });
   sessionMenu.addEventListener('click', (event) => {
     const button = event.target.closest('button');
     if (button?.hasAttribute('data-close-panel')) { closeSurfacePanels(); return; }
