@@ -7,21 +7,21 @@
 
 - [`source-only-ci-release-plan.md`](source-only-ci-release-plan.md)：建立 source-only CI、
   Python/Node 运行时发现和 `v1.2.0` 发布链。
-- [`session-history-search-plan.md`](session-history-search-plan.md)：为数百条 Session History
-  增加隐私安全的服务端元数据搜索与过滤。
-- [`clipboard-image-paste-plan.md`](clipboard-image-paste-plan.md)：让 Owner composer 直接粘贴
-  剪贴板图片并复用现有压缩、预览、上传和可靠发送链路。
-- [`chat-raw-mode-switch-plan.md`](chat-raw-mode-switch-plan.md)：隔离 Chat/Raw capture cache，
-  修复 Raw 切回 Chat 后仍显示终端原始内容的回归。
-- [`live-tmux-reading-copy-plan.md`](live-tmux-reading-copy-plan.md)：扩大当前轮次 Live 尾部，
-  稳定 DOM/滚动/文字选择，并增加显式复制。
-- [`tui-control-clarity-plan.md`](tui-control-clarity-plan.md)：将方向键和 Enter 明确标为同一
-  Codex TUI 的 Previous/Next/Choose 后备控制。
-- [`control-audit-session-state-plan.md`](control-audit-session-state-plan.md)：增加不记录正文的
-  控制审计、明确会话状态和准确的 TUI Enter 文案。
 
 ## Completed or maintenance mode
 
+- [`control-audit-session-state-plan.md`](control-audit-session-state-plan.md)：不记录正文的控制
+  审计、明确会话状态和准确的 TUI Enter 文案。
+- [`tui-control-clarity-plan.md`](tui-control-clarity-plan.md)：方向键和 Enter 明确标为同一
+  Codex TUI 的 Previous/Next/Choose 后备控制，并按需自动显示。
+- [`live-tmux-reading-copy-plan.md`](live-tmux-reading-copy-plan.md)：当前轮次 180 行 Live 尾部、
+  稳定 DOM/滚动/文字选择和显式复制。
+- [`chat-raw-mode-switch-plan.md`](chat-raw-mode-switch-plan.md)：隔离 Chat/Raw capture cache，
+  修复 Raw 切回 Chat 后仍显示终端原始内容的回归。
+- [`clipboard-image-paste-plan.md`](clipboard-image-paste-plan.md)：Owner composer 直接粘贴
+  剪贴板图片并复用现有压缩、预览、上传和可靠发送链路。
+- [`session-history-search-plan.md`](session-history-search-plan.md)：数百条 Session History 的
+  隐私安全服务端元数据搜索与过滤。
 - [`directory-picker-redesign-plan.md`](directory-picker-redesign-plan.md)：Start Codex 目录选择器
   使用折叠面包屑、即时搜索、分组目录和固定主操作。
 - [`copy-fidelity-plan.md`](copy-fidelity-plan.md)：回答按钮、跨块选择与单公式复制使用

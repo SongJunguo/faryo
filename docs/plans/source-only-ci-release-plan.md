@@ -1,7 +1,7 @@
 # Faryo Source-only CI and v1.2.0 Release Plan
 
 更新时间：2026-08-20
-状态：实现完成，等待三项联合发布
+状态：发布候选完成，等待 `v1.2.0` tag workflow
 
 ## 问题基线
 
@@ -88,5 +88,7 @@
   release notes。
 - 在 `PATH=/usr/bin:/bin` 且移除 Conda/NVM 环境变量后，canonical check 自动发现本机
   `faryo` Python 3.13.14 与 NVM Node 24.16.0，全部通过。
-- 版本号、`v1.2.0` notes、tag 与 GitHub Release 有意延后到另外两项功能共同验收以后，
-  以保证 tag 代表完整且可回滚的发布点。
+- `apps/owner/RELEASE` 与 source-only `docs/releases/v1.2.0.md` 已准备；tag 只在全部产品计划、
+  生产部署和浏览器矩阵通过后创建。
+- Source CI 已在 `12e8c6f`、`f36b68b`、`7a60ec4` 通过；当前候选统一检查为 Owner 76 项、
+  Gateway 63 项及全部维护中的 JavaScript/source contracts。
