@@ -124,19 +124,19 @@ const astFixtureSource = [
   '<img src=x onerror="globalThis.pwned=1">',
 ].join('\n');
 const uiFixtureSource = [
-  '## 结论',
+  '## Verified result',
   '',
-  '公式、表格、列表、引用和代码由同一个 AST 管线渲染；长内容应在自己的容器内滚动，而不是挤压整页。',
+  'Markdown, equations, tables, and code share one safe AST pipeline. Wide content scrolls inside its own container instead of squeezing the page.',
   '',
-  '| 算子 | 建议 |',
+  '| Integral operator | Rendering check |',
   '| --- | --- |',
-  '| \\(\\Psi_i=\\eta_i\\) | 精确恢复基准结构 |',
-  '| \\(\\Psi_i=e_i\\) | 标准误差积分 |',
-  '| \\(\\Psi_i=\\vartheta_{i,\\nu_i}(k_i)e_i\\) | 保留带下标的调度项，并允许这一列横向滚动 |',
-  '| \\(\\Psi_i=\\delta_i\\tanh(e_i/\\gamma_i)\\) | 非线性积分增益 |',
-  '| \\(\\Psi_i=e_i-\\sigma_i z_i\\) | 泄漏修正机制 |',
+  '| \\(\\Psi_i=\\eta_i\\) | Exact baseline structure |',
+  '| \\(\\Psi_i=e_i\\) | Standard error integral |',
+  '| \\(\\Psi_i=\\vartheta_{i,\\nu_i}(k_i)e_i\\) | Indexed scheduling remains intact |',
+  '| \\(\\Psi_i=\\delta_i\\tanh(e_i/\\gamma_i)\\) | Nonlinear integral gain |',
+  '| \\(\\Psi_i=e_i-\\sigma_i z_i\\) | Leakage modification |',
   '',
-  '> 宽公式保持单一数学布局，不拆成逐字符竖排文本。',
+  '> Wide equations keep one mathematical layout instead of collapsing into vertical characters.',
   '',
   '\\[',
   'd(t)=\\begin{cases}',
@@ -153,10 +153,10 @@ const uiFixtureSource = [
   'A=\\begin{bmatrix}1&2&3\\\\4&5&6\\end{bmatrix}.',
   '\\]',
   '',
-  '### 实现检查',
+  '### Rendering checks',
   '',
-  '- 行内代码 `render(markdown)` 不应触发公式解析。',
-  '- 围栏代码保持原始换行，并按需加载高亮语言。',
+  '- Inline code `render(markdown)` never triggers math parsing.',
+  '- Fenced code preserves whitespace and loads highlighting on demand.',
   '',
   astFence + 'ts',
   'const renderState = {',
@@ -1361,6 +1361,9 @@ try {
         text('detailsGit', 'git clean');
         text('detailsSource', 'structured history');
         text('detailsConnection', 'live');
+        text('versionToggle', 'Faryo main');
+        const prompt = document.getElementById('promptInput');
+        if (prompt) prompt.placeholder = 'Ask Codex about this result';
         const smokeSafeText = {
           ownerText: 'Ubuntu Workstation', topicText: 'Research session', draftState: 'Project workspace',
           ctxText: 'Ctx 42% · 108.5k/258k', quotaText: 'Week 58% left', modelText: 'Agent ready', phasePill: 'git clean',
@@ -1381,10 +1384,14 @@ try {
           const richOutput = window.FaryoMarkdownAst.render(${JSON.stringify(uiFixtureSource)});
           output.className = 'output compact-blocks';
           output.innerHTML = [
-            '<section class="compact-block user">请检查这一节的推导，并给出修改建议。</section>',
-            '<section class="compact-process-line">Read manuscript and compared the assumptions</section>',
-            '<section class="compact-block plan"><div class="compact-plan-title">Plan</div><div class="compact-plan-list"><div class="compact-plan-item">1. Verify the regularity assumptions</div><div class="compact-plan-item">2. Tighten the theorem wording</div></div></section>',
+            '<section class="compact-block user">Can you check whether this control argument is mathematically well posed?</section>',
+            '<section class="compact-block output"><div class="markdown-body"><p>Yes. The structured history preserves the original notation, so the assumptions and conclusion can be checked directly.</p></div></section>',
+            '<section class="compact-block user">Compare the admissible integral operators and render every equation clearly.</section>',
+            '<section class="compact-process-line">Read the manuscript and verified the regularity assumptions</section>',
+            '<section class="compact-block plan"><div class="compact-plan-title">Verification plan</div><div class="compact-plan-list"><div class="compact-plan-item">1. Check local Lipschitz regularity</div><div class="compact-plan-item">2. Check the growth condition</div></div></section>',
             '<section class="compact-block output"><div class="markdown-body">' + richOutput + '</div><button class="copy-output-block" type="button">⧉</button></section>',
+            '<section class="compact-block user">Keep the final equations and implementation code easy to revisit.</section>',
+            '<section class="compact-block output"><div class="markdown-body"><p>Done. Use the question rail to jump between these turns without losing your reading position.</p></div></section>',
             '<details class="compact-live-terminal" data-session="example" open><summary class="compact-live-title"><span class="live-dot"></span><span>Live from tmux</span><span class="compact-live-state">Agent working</span></summary><pre>Reviewing references…\\nRunning focused checks…\\nWaiting for the next structured update…</pre></details>',
           ].join('');
         }
@@ -1398,6 +1405,16 @@ try {
         }
         if (output?.isConnected) output.replaceWith(output.cloneNode(true));
         const renderedOutput = document.getElementById('output');
+        const questionNavigator = document.getElementById('questionNavigator');
+        const questionMarkers = document.getElementById('questionNavMarkers');
+        if (questionNavigator && questionMarkers) {
+          questionNavigator.classList.remove('hidden');
+          questionNavigator.classList.add('is-scrolling');
+          questionNavigator.setAttribute('aria-hidden', 'false');
+          questionMarkers.innerHTML = [0, 1, 2].map((index) => '<button type="button" class="question-nav-marker' + (index === 1 ? ' active' : '') + '" aria-current="' + (index === 1 ? 'step' : 'false') + '"><span class="question-nav-dot"></span></button>').join('');
+          text('questionNavCurrent', '2');
+          text('questionNavTotal', '3');
+        }
         const displays = [...(renderedOutput?.querySelectorAll('.katex-display') || [])];
         const tableScroll = renderedOutput?.querySelector('.markdown-table-scroll');
         const codeBlock = renderedOutput?.querySelector('.markdown-code-block');
