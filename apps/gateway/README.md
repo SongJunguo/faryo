@@ -80,7 +80,8 @@ server-backed pagination with 10 records per page. Use Previous/Next or enter a
 page number and press Enter/Go to jump directly through long histories.
 
 `Start Codex` opens a dedicated working-directory picker. The picker defaults to
-the latest eligible cwd, groups deduplicated recent locations and child folders,
+the latest eligible cwd, deduplicates shortcuts within Recent while keeping the
+complete canonical child list in Folders,
 uses `..` as the first Folders row for parent navigation, collapses long
 breadcrumbs, filters the current page without recursive search, and keeps
 `Start Codex here` fixed outside the scrolling list. Directory choices

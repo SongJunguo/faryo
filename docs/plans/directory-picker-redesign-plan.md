@@ -84,8 +84,8 @@ Cancel                         Start Codex in this folder
 
 - 专用 `directory-mode` sheet 已替换通用平铺 choices；标题、`..` 父目录、折叠面包屑、搜索和
   底部操作不参与列表滚动；
-- 最近目录与当前/父/root/子目录按规范化路径去重，首屏最多 4 个并可展开；子目录仅显示
-  名称，其他配置 root 单独进入 Locations；
+- 最近目录内部按规范化路径去重，并排除当前/父/root，首屏最多 4 个并可展开；子目录
+  始终完整保留在 Folders，即使同一路径也作为 Recent 快捷入口出现；
 - 当前页搜索可即时过滤 Recent、Locations 和 Folders，清空后恢复原分组；不发起递归
   API 或新增文件系统读取；
 - 面包屑最多 4 项，中间层折叠为省略号，长 root 只显示目录名，不再露出半截绝对路径；
@@ -93,6 +93,8 @@ Cancel                         Start Codex in this folder
   固定在可视区底部；临时截图已删除，未写入公开仓库；
 - 浏览器自动化验证 `..` 返回上级、面包屑、搜索、Recent 展开、Cancel、固定主操作、内容过长
   时可滚动以及内容较少时不制造无意义滚动；
+- 匿名重叠路径 fixture 验证同一目录在 Recent 中只出现一次、同时仍在 Folders 中出现
+  一次；搜索该名称时两个入口和 `..` 均保持可用；
 - 真实 Gateway 完成“选目录 -> Start Codex -> `faryoN` ready -> 页面资源就绪 -> 精确
   Close”，测试前后桌面 Codex 几何与既有会话集合一致；
 - Owner 68 项、Gateway 50 项 Python 测试和 `scripts/check-source.sh` 全部通过；历史、发送、

@@ -235,6 +235,37 @@ try {
     throw new Error(`Gateway API response handling is not robust: ${JSON.stringify(responseErrors)}`);
   }
 
+  const directoryOverlap = await evaluate(`(() => {
+    const data = {
+      path: '/workspace/parent',
+      parent: '/workspace',
+      roots: [{ path: '/workspace', displayPath: '/workspace' }],
+      directories: [
+        { name: 'shared-project', path: '/workspace/parent/shared-project' },
+        { name: 'other-project', path: '/workspace/parent/other-project' },
+      ],
+    };
+    const recent = [
+      { label: 'shared-project', value: '/workspace/parent/shared-project', path: '/workspace/parent/shared-project' },
+      { label: 'shared-project duplicate', value: '/workspace/parent/shared-project', path: '/workspace/parent/shared-project' },
+    ];
+    const model = directoryPickerModel(data, recent, '', false);
+    const filtered = directoryPickerModel(data, recent, 'shared', false);
+    return {
+      recentCopies: model.recent.filter((item) => item.path === '/workspace/parent/shared-project').length,
+      folderCopies: model.folders.filter((item) => item.path === '/workspace/parent/shared-project').length,
+      parentFirst: model.folders[0]?.label === '..',
+      filteredRecent: filtered.recent.some((item) => item.label === 'shared-project'),
+      filteredFolder: filtered.folders.some((item) => item.label === 'shared-project'),
+      filteredParent: filtered.folders[0]?.label === '..',
+    };
+  })()`);
+  if (directoryOverlap?.recentCopies !== 1 || directoryOverlap.folderCopies !== 1
+    || !directoryOverlap.parentFirst || !directoryOverlap.filteredRecent
+    || !directoryOverlap.filteredFolder || !directoryOverlap.filteredParent) {
+    throw new Error(`Recent shortcuts hid a real child folder: ${JSON.stringify(directoryOverlap)}`);
+  }
+
   await evaluate("document.querySelector('#newSessionSlot .launcher-card').click()");
   let launchConfirmation = {};
   for (let attempt = 0; attempt < 40; attempt += 1) {
