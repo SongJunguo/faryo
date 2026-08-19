@@ -1,427 +1,265 @@
 # Faryo
 
-Faryo is a lightweight project and mobile workbench for the same live
-`tmux`-backed Codex CLI, Claude Code, or shell session.
+Faryo is a self-hosted mobile and desktop workbench for controlling the same
+live `tmux`-backed Codex CLI session that is already running on an Ubuntu/Linux
+workstation.
 
-Use it to open a project deck, check what an agent is doing, send one
-instruction, approve or interrupt work, attach context, and return to the same
-desktop terminal session. It is not remote desktop, a hosted IDE, a browser
+It lets one trusted operator read structured Codex history, inspect live terminal
+activity, send follow-ups, attach files, approve or interrupt work, and return to
+the same desktop session. It is not remote desktop, a hosted IDE, a browser
 terminal, or a second AI chat history.
 
-This checkout is a personal fork that tracks the original project while carrying
-an unreleased, deployed Codex-focused workbench branch.
+This repository is a personal fork of
+[Snailflyer/faryo](https://github.com/Snailflyer/faryo). The original project is
+tracked as `upstream`; this fork is maintained at
+[SongJunguo/faryo](https://github.com/SongJunguo/faryo).
 
-- Upstream project: https://github.com/Snailflyer/faryo
-- Personal fork: https://github.com/SongJunguo/faryo
-- Current fork branch: `main`
+## Maintained Scope
 
-## Visual Proof
-
-<p>
-  <img src="docs/assets/screenshots/faryo-projects-workbench-redacted.png" alt="Faryo Projects workbench showing project cards, Run, Import, Saved, and Decision Action Watch counts" width="250">
-  <img src="docs/assets/screenshots/faryo-project-control-promo.png" alt="Faryo project control surface showing project cards routed to the same tmux session" width="250">
-  <img src="docs/assets/screenshots/faryo-project-run-session-main.gif" alt="Faryo project queue Run action opening a live tmux-backed owner session" width="250">
-  <img src="docs/assets/screenshots/faryo-same-session-handoff-walkthrough.gif" alt="Faryo same-session handoff walkthrough showing browser workbench and terminal session continuity" width="250">
-</p>
-
-The project workbench keeps project state, owner decisions, actions, watch
-items, and the live session route in one phone-sized surface. The project-run
-walkthrough shows a queued project action opening a live `tmux`-backed owner
-session. The same-session handoff walkthrough demonstrates the other half of the
-contract: browser actions return to the same live `tmux` session instead of
-creating a detached mobile chat or stale terminal copy.
-
-These redacted assets document the core project/session flow. The current fork's
-newer Compact Chat, formula rendering, and question-navigation behavior are
-described below; the screenshot set has not yet been regenerated for that UI.
-
-## Release and Fork Status
-
-The latest packaged upstream release remains:
-
-- Linux endpoint package: `faryo_1.1.4_all.deb`
-- macOS endpoint package: `faryo_1.1.4_macos.tar.gz`
-- Release page: https://github.com/Snailflyer/faryo/releases/tag/v1.1.4
-- Launch guide: [docs/launch/faryo-1.0.0.md](docs/launch/faryo-1.0.0.md)
-- Troubleshooting:
-  [docs/launch/faryo-1.0.0.md#troubleshooting--deployment-verification](docs/launch/faryo-1.0.0.md#troubleshooting--deployment-verification)
-
-The personal fork's current branch is deployed from source and is newer than
-that package. As of 2026-08-19 it adds:
-
-- Workbench v2 with a stable large composer and responsive Owner/Gateway UI.
-- Local CommonMark/GFM/KaTeX/Shiki rendering with no production CDN dependency.
-- Incremental Codex rollout history with bounded long-session memory use.
-- A fast-scroll question rail for jumping between user turns without reserving
-  permanent mobile layout space.
-- Confirmed, idempotent web-to-Codex delivery across timeout, restart, and
-  session-switch races.
-- Agent-reported context use, actual context window, and weekly quota status.
-
-These fork enhancements do not yet have a separate package tag. Installing the
-upstream v1.1.4 package alone will not install the unreleased branch features.
-
-## Use It For
-
-- check a long-running terminal AI task from a phone
-- send a short follow-up without opening a raw terminal
-- approve, interrupt, attach files, or hand off notes
-- keep phone and desktop on the same `tmux` session history
-- read long Markdown/TeX answers and jump quickly between prior questions
-- keep project decisions, action items, and watch items close to the live agent
-  session that will execute them
-
-Best-supported path:
+The current `main` branch is source-deployed and Codex-focused. Its maintained
+acceptance path is:
 
 ```text
-Linux endpoint
-  + tmux
-  + Codex CLI
-  + current Chrome or Microsoft Edge on desktop/mobile
+Ubuntu/Linux workstation
+  -> tmux
+  -> Codex CLI
+  -> Faryo Owner on loopback
+  -> Faryo Gateway on loopback
+  -> Cloudflare Tunnel + Access (or another hardened HTTPS edge)
+  -> current Chrome or Microsoft Edge on phone/desktop
 ```
 
-Current Chrome and Edge have both passed phone and desktop viewport regression.
-macOS Owner packaging, iOS Safari, Claude Code session discovery, and generic
-shell TUIs remain supported but less polished.
+This fork does **not** currently publish or maintain binary release packages.
+Historical distribution and non-Codex platform paths may remain in the tree for
+upstream compatibility, but they are not part of this fork's current validation
+or support claims.
 
-## Quickstart
+## Current Functionality
 
-```bash
-curl -LO https://github.com/Snailflyer/faryo/releases/download/v1.1.4/faryo_1.1.4_all.deb
-sudo dpkg -i faryo_1.1.4_all.deb
-systemctl --user daemon-reload
-systemctl --user enable --now faryo-owner-keepalive.timer
-mkdir -p ~/.faryo/owner/config
-cp /opt/faryo/apps/owner/config/faryo.env.example ~/.faryo/owner/config/faryo.env
-$EDITOR ~/.faryo/owner/config/faryo.env
-curl --noproxy '*' http://127.0.0.1:8765/health
+### Structured Codex conversation
+
+- Reads finalized user/assistant messages incrementally from Codex rollout JSONL.
+- Uses Codex App Server only as a compatibility fallback and tmux capture as
+  conservative terminal evidence.
+- Keeps recent complete turns within explicit tail, line, and character budgets.
+  Formula-heavy answers cannot silently hide the entire recent conversation.
+- Separates stable conversation history from the transient `Live from tmux`
+  execution panel.
+
+### Markdown, formulas, and code
+
+Compact Chat uses one local rendering pipeline:
+
+```text
+micromark -> mdast -> CommonMark/GFM/math nodes -> safe HTML -> KaTeX
 ```
 
-Those package commands install the upstream release. To use the current fork
-features, deploy the personal fork's `main` source branch and follow the
-[Owner](apps/owner/README.md) and [Gateway](apps/gateway/README.md) component
-guides.
+- Supports GFM tables, task lists, strikethrough, autolinks, CJK punctuation,
+  `$...$`, `$$...$$`, `\(...\)`, and `\[...\]`.
+- Keeps TeX inside code literal and lets wide formulas, tables, and code scroll
+  inside their own containers.
+- Uses local KaTeX CSS/fonts and lazy local Shiki language chunks; production
+  rendering does not require a CDN or Node process.
+- Escapes raw HTML, restricts URL protocols, and runs KaTeX with `trust: false`.
+- Falls back per message to safe plain text when rich rendering fails, without
+  stopping later live updates.
 
-- [Troubleshooting & Deployment Verification](docs/launch/faryo-1.0.0.md#troubleshooting--deployment-verification)
+### Long-conversation navigation
 
-Owner should bind to `127.0.0.1`. Public access should go through Gateway, which
-injects Owner tokens server-side so browsers do not receive raw Owner tokens.
-For a locally managed Cloudflare Tunnel deployment, see the
-[Gateway runbook](apps/gateway/runbook.md).
+- Builds a right-edge marker for each visible user question.
+- Stays hidden during normal reading and appears only after a fast user
+  wheel/swipe.
+- Auto-hides after scrolling stops, while hover and keyboard focus keep it
+  available.
+- Supports click, arrow keys, Home, and End for jumping between questions.
+- Overlays the extreme mobile edge without reserving permanent blank space or
+  changing conversation width.
+- Reuses stable marker DOM during live appends and stores no question text or
+  navigation state in browser storage.
 
-## How It Works
+### Reliable browser-to-Codex delivery
 
-Faryo has two small components:
+- Keeps an immutable session, message ID, text, and attachment snapshot across
+  retries.
+- Serializes one tmux composer per session without blocking unrelated sessions.
+- Confirms Codex submission from exact rollout, new queue, or safe idle-composer
+  evidence instead of treating every cleared input as success.
+- Persists minimal `pasted`/`accepted` idempotency state with mode-`600` files;
+  message bodies and rollout paths are not stored.
+- Returns an explicit ambiguous failure when evidence is insufficient, without
+  re-pasting or blindly sending another key.
+- Preserves browser and TUI drafts after conflicts, timeouts, or failed sends.
+
+### Workbench interaction
+
+- Keeps a large composer geometry across focus, blur, and mobile keyboard state.
+- Shows agent-reported context used/window and weekly quota when available.
+- Preserves the main reading position during structured refreshes.
+- Preserves manual scroll inside an expanded Live tmux panel.
+- Provides Chat/Raw views, attachments, approve, interrupt, page navigation,
+  session switching, and a return-to-latest control.
+- Does not resize Codex or tmux windows; real tmux clients remain the source of
+  terminal dimensions and wrapping.
+
+### Gateway session management
+
+- Keeps active tmux-backed Codex sessions separate from resumable history.
+- Shows every recognized active Codex pane, including desktop-started sessions.
+- Keeps history server-paginated at 10 records per page with Previous/Next and
+  direct page-number navigation.
+- Allows remote Close only for sessions that Faryo created and stamped.
+- Injects Owner tokens server-side so public browser URLs do not contain them.
+
+## Architecture
 
 ```text
 phone / desktop browser
-  -> Faryo Gateway
-  -> Owner endpoint
-  -> tmux session
-  -> Codex, Claude, or shell TUI
+  -> identity-aware HTTPS edge
+  -> Faryo Gateway (127.0.0.1:8780)
+  -> Faryo Owner   (127.0.0.1:8765)
+  -> existing tmux pane
+  -> Codex CLI
 ```
 
-`apps/gateway` is the public workbench. It owns login, route authorization,
-endpoint health, session selection, handoff packages, and proxying to Owner
-endpoints. It also renders the project deck, owner decisions, action queues,
-watch items, and run handoffs that route approved work back to the selected
-live session. Owner tokens are injected server-side and are not exposed to the
-browser.
+Gateway owns public login, route authorization, session/history navigation, and
+proxying. Owner owns the local structured capture, tmux controls, attachments,
+and Codex-specific delivery state machine. The browser is a thin authenticated
+control surface; the durable work remains in tmux and Codex's own history.
 
-`apps/owner` is the local execution surface. It binds to loopback, controls a
-target `tmux` pane, captures terminal output, sends text, uploads attachments to
-a configured inbox, and discovers resumable Codex/Claude history. For Codex it
-prefers the durable rollout JSONL as the structured Markdown/TeX source, while
-keeping tmux capture as live execution evidence and a conservative fallback.
+## Source Deployment
 
-The browser UI stays thin. It renders the workbench, sends commands, uploads
-attachments, and switches sessions; it does not replace the terminal runtime.
+### Requirements
 
-The endpoint package intentionally includes only Owner. Gateway is source
-deployed because it is the public routing and policy layer.
+- Ubuntu/Linux
+- Python 3.11 or newer; Python 3.13 is the validated project environment
+- `tmux`, `curl`, and `git`
+- Codex CLI
+- `bcrypt` for Gateway
+- current Chrome or Microsoft Edge
+- a public HTTPS edge only when remote access is required
 
-## Endpoint Fit
-
-Faryo is built around a lightweight browser workbench, but endpoints and
-browsers do not behave identically.
-
-The most refined path today is:
-
-```text
-Linux endpoint
-  + tmux
-  + Codex CLI
-  + current Chrome or Microsoft Edge on desktop/mobile
-```
-
-That path has received the most tuning for mobile viewport behavior, PWA use,
-structured Markdown/TeX, compact output, command input, attachment handling,
-session switching, reliable delivery, and Codex history convergence.
-
-Supported but less heavily polished paths:
-
-- macOS Owner packaging through the launchd installer.
-- iOS Safari as a browser surface.
-- Claude Code session discovery and compact rendering.
-- Generic shell TUIs controlled through tmux capture/send.
-
-These paths are usable, but they may need additional refinement around browser
-viewport behavior, backgrounding, paste/input edge cases, compact rendering, and
-agent-specific session history mapping.
-
-## Agent Convergence
-
-Faryo treats "session convergence" as the process of making four things line up:
-
-```text
-active tmux session
-  + visible terminal process
-  + agent history record
-  + workbench session card
-```
-
-Different agents expose different state, so Faryo uses different convergence
-rules.
-
-Codex is the most mature integration:
-
-- reads the Codex local session database
-- incrementally reads finalized user/assistant messages from rollout JSONL
-- filters internal and subagent branches from normal history
-- maps every active Codex tmux process, including desktop-started panes, back to
-  the current Codex thread
-- resumes sessions through `codex resume`
-- applies Codex-specific compact output rules
-- exposes agent-reported context use/window and provider weekly quota when
-  available
-
-Claude is supported with a different path:
-
-- reads Claude project JSONL history
-- combines Faryo tmux metadata with live-process/transcript discovery so
-  desktop-started Claude panes can also appear as active
-- resumes sessions through Claude session IDs
-- applies Claude-specific compact output rules
-
-Claude convergence is intentionally separate from Codex convergence. It is not
-as heavily tuned yet, especially across macOS, iOS Safari, and less common
-Claude output states.
-
-Generic shell sessions are controlled through tmux only. They can be captured,
-viewed, and sent input, but they do not have Codex/Claude-style semantic history
-convergence.
-
-## UI Interaction Model
-
-Faryo's UI is a workbench, not a document editor or chat clone. The main screen
-is optimized for repeated mobile checks and short control actions. Screenshots
-near the top are redacted examples.
-
-Core interactions:
-
-- Workbench first: Gateway opens to route status, project cards, all recognized
-  active agent tmux panes, a separate 10-record paginated history, and pending
-  handoff packages.
-- Project deck: project cards keep decisions, action items, watch items,
-  stage goals, and owner review close to the session that can execute them.
-- Run queue: approved project actions can be dispatched back to the live Faryo
-  session instead of becoming a disconnected task list.
-- Session cards: each card represents a resumable agent session or active tmux
-  session. Opening a card routes the browser to that endpoint and session.
-- Compact Chat: the default view renders stable user/assistant blocks through a
-  local AST pipeline with CommonMark, GFM tables, KaTeX math, and lazy Shiki
-  highlighting. Raw terminal evidence remains separately available.
-- Long history: formula-heavy answers do not hide all prior turns. The recent
-  window targets 12 complete turns within bounded rollout-tail and character
-  budgets.
-- Question navigation: a right-edge marker rail appears only after a fast
-  wheel/swipe, then auto-hides. It jumps between visible user questions without
-  changing the mobile content width.
-- Raw output: full terminal capture is available when exact terminal evidence is
-  needed.
-- Latest control: when the user scrolls up, live refreshes preserve the reading
-  position; the latest control returns to the newest output on demand.
-- Live tmux: transient execution output is kept in a separate collapsible panel
-  whose inner scroll position survives refreshes.
-- Composer: the bottom input sends text into the active tmux pane. It works well
-  with mobile keyboards and system dictation, keeps its expanded geometry after
-  blur, and preserves drafts on ambiguous or failed sends.
-- Delivery confirmation: browser retries keep the original session and message
-  identity. Owner confirms paste/submit evidence, persists minimal idempotency
-  state without message bodies, and does not turn an ambiguous 504 into a false
-  success.
-- Attachments: images and files can be uploaded into the configured inbox and
-  referenced in the active session.
-- Handoff packages: prompts, notes, screenshots, and files can be picked up and
-  injected into a selected session.
-- Agent controls: interrupt, approve, page up/down, resume, and close actions
-  are exposed as direct controls instead of hidden terminal shortcuts.
-- Thin state: the browser remembers display preferences, but the work session
-  itself remains in tmux and the agent history store.
-- Runtime status: context used/window and weekly quota are shown when Codex
-  reports them; missing metadata does not disable the control surface.
-
-The UI intentionally avoids heavyweight panels and IDE-style layout. It should
-feel fast enough to open, inspect, dictate a command, attach context, and leave.
-
-## Core Features
-
-- Project workbench with project cards, owner decisions, action items, watch
-  items, stage goals, and run queue handoff.
-- Mobile-first PWA workbench with compact and raw terminal views.
-- Local CommonMark/GFM/KaTeX/Shiki rendering with safe fallbacks.
-- Incremental, bounded Codex rollout history and fast-scroll question navigation.
-- Shared session history across phone and desktop through the same `tmux`
-  session.
-- Confirmed, idempotent delivery with draft protection and cross-session
-  isolation.
-- Codex and Claude session discovery, resume, interrupt, and approval controls.
-- Multi-endpoint routing for local machines and cloud endpoints.
-- Handoff packages for prompts, notes, images, and files.
-- Lightweight attachment handling with local inbox paths.
-- No browser automation, no remote desktop stack, and no database server in the
-  runtime path.
-
-## Current Fork Validation
-
-The deployed personal-fork `main` branch was revalidated on
-2026-08-19 with privacy-safe fixtures:
-
-- Release checks plus 56 Owner and 44 Gateway Python tests pass.
-- A 20-message browser delivery matrix covers short, Chinese, multiline,
-  Markdown, TeX, attachment, offline/background recovery, and failed-draft
-  behavior.
-- A separate two-session browser test proves retry and delayed responses stay
-  bound to the original target session.
-- 390x844 mobile Chrome and 1440x900 desktop Edge pass the 13-question rail,
-  keyboard navigation, fast-scroll reveal, auto-hide, stable live append, local
-  Markdown/KaTeX/Shiki, and no-horizontal-overflow checks.
-- A real structured Codex session exposes 12 question markers in both mobile and
-  desktop browser checks without printing or saving conversation text.
-- Cold initialization of a 263.3 MiB rollout remains bounded at about 0.0025 s
-  and 41.5 MiB process peak RSS on the validated Linux host.
-- Owner/Gateway health, public Access redirection, and before/after dimensions
-  for five active Codex tmux sessions pass after deployment.
-
-The detailed, continuously updated evidence lives in the
-[UI plan](docs/plans/deepseek-inspired-ui-plan.md) and
-[Codex reliability plan](docs/plans/codex-reliability-hardening-plan.md).
-
-## Current Fork Documentation
-
-- [Owner runtime and Compact Chat](apps/owner/local-tmux-owner/README.md)
-- [Gateway setup](apps/gateway/README.md) and [runbook](apps/gateway/runbook.md)
-- [Gateway security hardening](docs/gateway-security-hardening.md)
-- [Personal fork roadmap](docs/plans/personal-fork-roadmap.md)
-- [All implementation plans](docs/plans/README.md)
-
-## Runtime State
-
-Source code lives in this repository. Runtime configuration and secrets do not.
-
-```text
-~/.faryo/
-  gateway/
-    config/faryo.env
-    config/gateway-auth.json
-    state/
-    logs/
-  owner/
-    config/faryo.env
-    data/
-```
-
-Example configuration files live under:
-
-```text
-apps/gateway/config/faryo.env.example
-apps/owner/config/faryo.env.example
-```
-
-## Requirements
-
-Owner endpoint:
-
-- Python 3.11 or newer
-- `tmux`
-- `curl`
-- `zsh`
-- optional: `git`, `openssh-client`, Codex CLI, Claude Code
-
-Gateway:
-
-- Python 3.11 or newer
-- `bcrypt`
-- a public HTTPS edge such as Cloudflare Tunnel, Caddy, or nginx
-
-## Packaging
-
-Endpoint releases are built from `apps/owner/RELEASE`.
+Create an isolated environment rather than modifying Conda base:
 
 ```bash
-scripts/package-client.sh check
-scripts/package-client.sh release
+git clone https://github.com/SongJunguo/faryo.git
+cd faryo
+
+conda create -n faryo python=3.13
+conda activate faryo
+python -m pip install -r apps/gateway/requirements.txt
 ```
 
-The release target builds:
-
-```text
-dist/faryo_<version>_all.deb
-dist/faryo_<version>_macos.tar.gz
-dist/SHA256SUMS
-```
-
-Install the Linux endpoint package on an Owner machine:
+Initialize private Owner configuration with the Gateway URL that will be used by
+the deployment:
 
 ```bash
-sudo dpkg -i dist/faryo_<version>_all.deb
-systemctl --user daemon-reload
-systemctl --user enable --now faryo-owner-keepalive.timer
+FARYO_PYTHON="$CONDA_PREFIX/bin/python" \
+FARYO_PROJECT_WORKBENCH_GATEWAY_URL="https://gateway.example" \
+  ./apps/owner/scripts/init-owner-env.sh
 ```
 
-After configuration, the Owner health and status endpoints should answer on
-loopback. `releaseVersion` in `/api/status` is the endpoint version to use for
-upgrade acceptance.
+Then initialize a single local Gateway route and start both services:
+
+```bash
+FARYO_PYTHON="$CONDA_PREFIX/bin/python" \
+FARYO_GATEWAY_ROUTE=txy \
+  ./apps/gateway/scripts/init-local-gateway.sh
+
+./apps/owner/scripts/start-web-owner.sh
+./apps/gateway/scripts/install-user-service.sh
+```
+
+The initializer writes private runtime state below `~/.faryo/`. Review the
+generated mode-`600` files, change the initial Gateway password, and never commit
+tokens, password hashes, Cookie secrets, tunnel credentials, or real domains.
+
+Verify the loopback services:
+
+```bash
+curl --noproxy '*' -fsS http://127.0.0.1:8765/health
+curl --noproxy '*' -fsS http://127.0.0.1:8780/login >/dev/null
+```
+
+For remote access, follow the [Gateway runbook](apps/gateway/runbook.md) and
+[security hardening guide](docs/gateway-security-hardening.md). A Cloudflare
+Tunnel is transport only; protect the complete hostname with Cloudflare Access
+or an equivalent exact-identity layer.
+
+## Current Validation
+
+The `main` branch was revalidated on 2026-08-19 with privacy-safe fixtures:
+
+- release checks plus 56 Owner and 44 Gateway Python tests;
+- a 20-message browser delivery matrix including Chinese, multiline Markdown,
+  TeX, attachment, offline/background recovery, and failed-draft cases;
+- a two-session retry/delayed-response isolation test;
+- 390x844 mobile Chrome and 1440x900 desktop Edge long-conversation tests;
+- fast-scroll question-rail reveal, auto-hide, keyboard navigation, stable live
+  append, and unchanged conversation width;
+- local Markdown/KaTeX/Shiki, authenticated resources, CSP, and safe fallback;
+- a real structured Codex session with 12 question markers without recording its
+  conversation text;
+- a 263.3 MiB rollout cold-read check at about 0.0025 s and 41.5 MiB process peak
+  RSS on the validated workstation;
+- Owner/Gateway health and unchanged dimensions for five active Codex tmux
+  sessions after deployment.
+
+Run the repository release checks with the selected project environment:
+
+```bash
+PATH="$CONDA_PREFIX/bin:$PATH" scripts/package-client.sh check
+```
+
+The check target validates source syntax, browser bundles, Owner tests, and
+required runtime asset inclusion. It does not mean that this fork currently
+publishes a binary package.
+
+## Security Boundary
+
+Faryo can steer Codex with the permissions of the operating-system user running
+Owner. Treat it as a remote administration surface.
+
+- Bind Owner and Gateway only to loopback/private interfaces.
+- Never expose Owner directly to the Internet.
+- Put identity-aware access in front of the complete Gateway hostname.
+- Use exact identities or a small managed group; configure no broad bypass.
+- Keep the inner Faryo password/Cookie layer enabled.
+- Treat Access session duration/MFA and the inner Faryo Cookie as independent,
+  operator-selected controls.
+- Use OS, VM, or container isolation when the Codex user must not read personal
+  browser, SSH, Git, or other workstation data.
+- Keep runtime secrets and private conversations outside Git and logs.
+
+See [SECURITY.md](SECURITY.md) and
+[Gateway Security Hardening](docs/gateway-security-hardening.md).
 
 ## Repository Layout
 
 ```text
-apps/gateway/       Public gateway, login, routing, and handoff workbench
-apps/owner/         Local tmux-backed execution endpoint
+apps/owner/         Loopback tmux/Codex execution endpoint
+apps/gateway/       Authenticated routing and session/history workbench
 apps/shared/        Shared state and browser appearance helpers
-docs/               Product, launch, release, UI, and client sync notes
+docs/               Security, deployment, and implementation plans
 deploy/             Runtime unit templates
-scripts/            Packaging, endpoint install, and verification tools
-tools/              Development-only bundle builders and checks
+scripts/            Source checks and maintenance scripts
+tools/              Development-only Markdown bundle builder
 ```
 
-## Security Model
+## Documentation
 
-Faryo is designed for a trusted operator running their own endpoints.
+- [Owner runtime and Compact Chat](apps/owner/local-tmux-owner/README.md)
+- [Gateway setup](apps/gateway/README.md)
+- [Gateway runbook](apps/gateway/runbook.md)
+- [Gateway security hardening](docs/gateway-security-hardening.md)
+- [Current UI plan and evidence](docs/plans/deepseek-inspired-ui-plan.md)
+- [Codex reliability plan and evidence](docs/plans/codex-reliability-hardening-plan.md)
+- [Personal fork roadmap](docs/plans/personal-fork-roadmap.md)
 
-- Owner should bind only to `127.0.0.1`.
-- Public access should go through Gateway.
-- Gateway itself should also bind to loopback when reached through a local
-  reverse proxy or outbound tunnel.
-- Tokens, password hashes, cookie secrets, and runtime env files are private
-  runtime state.
-- File preview and attachment APIs are token-protected and constrained by
-  supported file types.
-- Gateway bridge URL attachments reject private, loopback, link-local,
-  multicast, reserved, and unresolved hosts.
-- Internet-facing deployments should place an identity-aware layer such as
-  Cloudflare Access in front of the complete Gateway hostname, use exact
-  identities or a small managed group, and configure no broad bypass.
-- Access session duration/MFA and the inner Faryo cookie are independent,
-  operator-selected controls. A tunnel by itself is transport, not
-  authentication.
-- Faryo can steer an agent running with the permissions of the Owner OS user;
-  treat it as a remote administration surface, not an ordinary content site.
+## Upstream and License
 
-See `SECURITY.md` and
-[Gateway Security Hardening](docs/gateway-security-hardening.md) for disclosure
-and deployment guidance.
+The original Faryo project is maintained by
+[Snailflyer](https://github.com/Snailflyer/faryo). This fork preserves the
+upstream remote for comparison but pushes personal changes only to
+[SongJunguo/faryo](https://github.com/SongJunguo/faryo).
 
-## License
-
-Faryo is released under the MIT License. See `LICENSE`.
+Faryo is released under the MIT License. See [LICENSE](LICENSE).
