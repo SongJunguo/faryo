@@ -39,6 +39,8 @@ release_checks() {
     "$ROOT/apps/owner/local-tmux-owner/static/local-file-view.js" \
     "$ROOT/apps/owner/local-tmux-owner/static/stable-blocks.js" \
     "$ROOT/apps/owner/local-tmux-owner/static/question-navigator.js" \
+    "$ROOT/apps/owner/local-tmux-owner/static/codex-commands.js" \
+    "$ROOT/apps/owner/local-tmux-owner/static/copy-fidelity.js" \
     "$ROOT/apps/owner/local-tmux-owner/static/vendor/markdown-ast/markdown-ast.min.js" \
     "$ROOT/apps/owner/local-tmux-owner/static/live-scroll.js" \
     "$ROOT/apps/shared/static/appearance.js" \
@@ -59,6 +61,8 @@ release_checks() {
   node "$ROOT/apps/owner/local-tmux-owner/tests/question-navigator.test.js"
   node "$ROOT/apps/owner/local-tmux-owner/tests/live-scroll.test.js"
   node "$ROOT/apps/owner/local-tmux-owner/tests/compact-rules-codex.test.js"
+  node "$ROOT/apps/owner/local-tmux-owner/tests/codex-commands.test.js"
+  node "$ROOT/apps/owner/local-tmux-owner/tests/copy-fidelity.test.js"
   node --test "$ROOT/apps/owner/local-tmux-owner/tests/terminal-delivery-receiver.test.mjs"
   python3 -m unittest discover -s "$ROOT/apps/owner/local-tmux-owner/tests" -p 'test_*.py'
   python3 - "$ROOT" <<'PY'
@@ -78,6 +82,8 @@ assert "stable-blocks.js" in index, "index.html must load stable-blocks.js"
 assert "stable-blocks.js" in gateway, "gateway must allow stable-blocks.js"
 assert "question-navigator.js" in index, "index.html must load question-navigator.js"
 assert "question-navigator.js" in gateway, "gateway must allow question-navigator.js"
+assert "codex-commands.js" in index and "codex-commands.js" in gateway, "Codex command inventory must be loaded and proxied"
+assert "copy-fidelity.js" in index and "copy-fidelity.js" in gateway, "copy fidelity must be loaded and proxied"
 assert "internal-annotations.js" in index, "index.html must load internal annotation formatting"
 assert "internal-annotations.js" in gateway, "gateway must proxy internal annotation formatting"
 assert "event-stream.js" in index, "index.html must load the authenticated event-stream parser"
@@ -132,6 +138,8 @@ assert "contextWindowSource === 'agent-reported'" in app, "Owner must distinguis
 assert "usedTokens" in app and "contextWindow" in app, "Owner must show actual context token counts"
 assert "sendWithDeliveryRecovery" in app, "Owner must reconcile ambiguous send responses idempotently"
 assert "button.textContent = '⧉'" in app, "confirmed output copy button must remain unchanged"
+assert "copyFidelity?.handleCopy(event)" in app, "Compact Chat selections must use source-faithful copy"
+assert "compactOutputSources" not in app and "dataset.sourceIndex" not in app, "retired copy source indexing must not return"
 appearance = (root / "apps/shared/static/appearance.css").read_text(encoding="utf-8")
 assert "--bg: #0F1115" in appearance and "--accent: #7188FF" in appearance, "shared dark palette must match Owner"
 assert "--bg: #F6F7F9" in appearance and "--accent: #5369E7" in appearance, "shared light palette must match Owner"

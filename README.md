@@ -138,6 +138,10 @@ micromark -> mdast -> CommonMark/GFM/math nodes -> safe HTML -> KaTeX
   a repeatable isolated-PTY drift check.
 - Reflects Codex `/rename` changes in the page title and session cards without
   renaming the underlying tmux session or requiring a reload.
+- Copies full answers and multi-message selections from in-memory original
+  Markdown, and copies a selected formula as one original TeX expression
+  instead of KaTeX's visual/MathML layers. Safe rich HTML is included when the
+  browser supports it; Raw, code, and input selections keep native behavior.
 - Provides Chat/Raw views, attachments, approve, interrupt, page navigation,
   session switching, and a return-to-latest control.
 - Does not resize Codex or tmux windows; real tmux clients remain the source of
@@ -266,6 +270,8 @@ The `main` branch was revalidated on 2026-08-19 with privacy-safe fixtures:
   directory credential rejected as HTTP 400 and the test session cleaned;
 - an isolated `codex-cli 0.148.0` PTY inventory matching all 46 visible slash
   commands, plus desktop/mobile completion and real `/rename` title sync;
+- exact Markdown/TeX copy fixtures and privacy-safe real-answer hash checks in
+  Ubuntu Chrome and Microsoft Edge at 1440x900 and 390x844;
 - Owner/Gateway health and unchanged dimensions for every pre-existing Codex
   tmux session after deployment.
 - desktop and mobile Gateway checks with exactly one Codex launcher and three
@@ -318,6 +324,7 @@ tools/              Development-only Markdown bundle builder
 - [Gateway runbook](apps/gateway/runbook.md)
 - [Gateway security hardening](docs/gateway-security-hardening.md)
 - [Current UI interaction contract](docs/ui-interaction.md)
+- [Implementation plans and validation evidence](docs/plans/README.md)
 - [Current UI plan and evidence](docs/plans/deepseek-inspired-ui-plan.md)
 - [Codex reliability plan and evidence](docs/plans/codex-reliability-hardening-plan.md)
 - [Codebase cleanup scope and evidence](docs/plans/codebase-cleanup-plan.md)

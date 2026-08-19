@@ -5,11 +5,12 @@
 
 ## Active
 
-- [`copy-fidelity-plan.md`](copy-fidelity-plan.md)：修复回答、选择区和公式复制时的
-  Markdown/TeX 格式损坏。
+当前没有尚未实施的专项计划；已完成计划继续保留下方作为维护与回归入口。
 
 ## Completed or maintenance mode
 
+- [`copy-fidelity-plan.md`](copy-fidelity-plan.md)：回答按钮、跨块选择与单公式复制使用
+  内存中的原始 Markdown/TeX，并提供安全 HTML。
 - [`codex-command-completion-plan.md`](codex-command-completion-plan.md)：从当前 Codex CLI
   的真实命令面板建立 46 项、版本可审计的网页命令提示，并同步 `/rename` 标题。
 - [`start-codex-runtime-plan.md`](start-codex-runtime-plan.md)：Gateway `Start Codex`

@@ -377,7 +377,10 @@ try {
         launched = await evaluate(`(() => {
           const route = location.pathname.split('/').filter(Boolean)[0] || '';
           const session = new URLSearchParams(location.search).get('session') || '';
-          const uiReady = document.documentElement.dataset.faryoAppReady === '1' && typeof window.FaryoCodexCommands?.match === 'function';
+          const uiReady = document.documentElement.dataset.faryoAppReady === '1'
+            && document.documentElement.dataset.faryoCopy === 'ready'
+            && typeof window.FaryoCodexCommands?.match === 'function'
+            && typeof window.FaryoCopyFidelity?.create === 'function';
           return { route, session, uiReady, ready: /^(?:hp|pc|txy)$/.test(route) && /^faryo[1-9][0-9]*$/.test(session) && uiReady };
         })()`);
       } catch (_error) {

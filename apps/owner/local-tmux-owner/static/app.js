@@ -27,6 +27,11 @@
   const stableBlocks = window.FaryoStableBlocks || {};
   const questionNavigatorApi = window.FaryoQuestionNavigator || {};
   const codexCommandApi = window.FaryoCodexCommands || {};
+  const copyFidelityApi = window.FaryoCopyFidelity || {};
+  const copyFidelity = typeof copyFidelityApi.create === 'function'
+    ? copyFidelityApi.create({ root: output, parseMarkdown: (source) => markdownRenderer.parse(source) })
+    : null;
+  document.documentElement.dataset.faryoCopy = copyFidelity ? 'ready' : 'unavailable';
   const runtimeCompactRules = {
     userPromptRe: /^\s*›\s+/,
     compactBlocks: (text) => [{ kind: 'output', text: text || 'No output yet' }],
@@ -64,7 +69,6 @@
   let petSending = false, petSendTimer = null, petStopping = false, petStopTimer = null, agentRunning = false, lastPetPhase = '';
   let outputActivity = 0, outputActivityTimer = null, lastCaptureSignature = '', lastCapture = null;
   let outputMode = 'compact', fullLocked = false, fullRefreshTimer = null, preserveErrorUntil = 0, seenInitialPageShow = false, needsConfirmUI = false, errorTimer = null, currentPromptTip = '';
-  let compactOutputSources = [];
   let markdownRenderRevision = 0, highlighterRenderFrame = 0;
   const markdownHtmlCache = new Map();
   let pendingAttachments = [];
@@ -504,14 +508,14 @@
     const copy = event.target.closest('.copy-output-block');
     if (copy) {
       const block = copy.closest('.compact-block.output');
-      const sourceIndex = Number(block?.dataset.sourceIndex);
-      const hasSource = Number.isInteger(sourceIndex) && sourceIndex >= 0 && sourceIndex < compactOutputSources.length;
-      const source = hasSource ? compactOutputSources[sourceIndex] : '';
-      const clone = !hasSource && block ? block.cloneNode(true) : null;
-      clone && clone.querySelector('.copy-output-block')?.remove();
-      const text = source || clone?.innerText || '';
-      try { await navigator.clipboard.writeText(text.trim()); copy.textContent = '✓'; setTimeout(() => { if (copy.isConnected) copy.textContent = '⧉'; }, 900); }
-      catch (err) { setError('Copy failed'); }
+      const payload = copyFidelity?.payloadForBlock(block);
+      const copied = payload ? await copyFidelity.write(payload) : false;
+      if (copied) {
+        copy.textContent = '✓';
+        setTimeout(() => { if (copy.isConnected) copy.textContent = '⧉'; }, 900);
+      } else {
+        setError('Copy failed');
+      }
       return;
     }
     const image = event.target.closest('.chat-image-thumb');
@@ -525,6 +529,9 @@
       showImageLightbox(markdownImage.currentSrc || markdownImage.src || '', markdownImage.alt || 'Image preview');
       return;
     }
+  });
+  document.addEventListener('copy', (event) => {
+    if (outputMode === 'compact') copyFidelity?.handleCopy(event);
   });
   window.addEventListener('faryo-markdown-highlighter-ready', () => {
     markdownRenderRevision += 1;
@@ -1621,9 +1628,13 @@
         signature: `fallback-${index}-${String(block.text ?? '')}`,
         stable: false,
       }));
-    compactOutputSources = [];
     for (const model of models) {
-      model.sourceIndex = model.kind === 'output' ? compactOutputSources.push(copyableOutputText(model.text)) - 1 : -1;
+      model.copySource = model.kind === 'output'
+        ? copyableOutputText(model.text)
+        : model.kind === 'user'
+          ? String(model.text || '').replace(rules.userPromptRe, '').trim()
+          : '';
+      model.renderSource = ['output', 'user'].includes(model.kind) ? copyableOutputText(model.text) : '';
     }
     const createNode = (model) => {
       if (model.kind === 'process') {
@@ -1660,11 +1671,14 @@
     }
     const loadedQuestions = conversationHistory.initialized ? loadedHistoryTurns() : [];
     let loadedQuestionIndex = 0;
+    copyFidelity?.beginRender();
     models.forEach((model, index) => {
       const node = output.children[index];
       if (!node) return;
-      if (model.sourceIndex >= 0) node.dataset.sourceIndex = String(model.sourceIndex);
-      else delete node.dataset.sourceIndex;
+      if (['output', 'user'].includes(model.kind)) {
+        copyFidelity?.bindBlock(node, { source: model.copySource, renderSource: model.renderSource, kind: model.kind });
+        node.dataset.faryoCopyBound = copyFidelity ? 'true' : 'false';
+      }
       if (model.kind === 'user') {
         const historyTurn = loadedQuestions[loadedQuestionIndex++];
         if (historyTurn?.key) node.dataset.faryoQuestionKey = historyTurn.key;

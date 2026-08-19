@@ -210,6 +210,19 @@ cues. Codex's explicit `session_index.jsonl` thread name takes precedence over a
 managed tmux startup label, so `/rename` propagates through capture/SSE and the
 Gateway session list without changing the tmux session name.
 
+Compact Chat copy uses a render-lifetime WeakMap rather than reconstructing text
+from KaTeX DOM. The answer button and complete selected blocks preserve original
+Markdown; a selected equation preserves its original TeX delimiters; partial
+cross-block selections use a bounded structural serializer. Internal references,
+Live tmux, buttons, local resource targets, and KaTeX's duplicate accessibility
+tree are excluded. No answer source is placed in a DOM attribute or browser
+storage. The browser regression is enabled with:
+
+```bash
+FARYO_SMOKE_CHECK_COPY_FIDELITY=1 \
+  node apps/owner/local-tmux-owner/tests/browser-katex-smoke.mjs
+```
+
 `FARYO_START_DIRECTORY_ROOTS` is an `os.pathsep`/colon-separated list used only
 by the authenticated directory picker and start validation. Owner canonicalizes
 each selected path, lists directories only, hides dot-directories, rejects

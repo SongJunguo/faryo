@@ -1,7 +1,7 @@
 # Faryo Copy Fidelity Plan
 
 更新时间：2026-08-19
-状态：排队中；等待 Codex Command Completion 完成后开始
+状态：已完成并部署；进入浏览器兼容性维护
 
 ## 已报告问题
 
@@ -56,3 +56,35 @@ KaTeX DOM 同时包含视觉 HTML、MathML 辅助层和原始 TeX annotation。�
 - 手工复制后粘贴到纯文本与 Markdown 编辑器均保持可读公式源码；
 - 浏览器 DOM 中不新增完整回答 source 属性，不泄露 Token、路径或内部注解；
 - 完成后记录根因、各浏览器能力、测试数量和提交，并移入 Completed。
+
+## 根因与实现
+
+- 回答按钮原本已优先读取内存 source，但鼠标框选/手机长按仍使用浏览器对 KaTeX
+  视觉 HTML + MathML 的默认序列化，因此出现上下标拆散、矩阵重复和公式定界符丢失；
+- 新的 `copy-fidelity.js` 为当前渲染轮次建立 WeakMap：稳定消息 block 映射到去除内部
+  annotation 的原始 Markdown，KaTeX 节点映射到 Markdown AST position 对应的原始 TeX；
+- 原始回答不写入 DOM attribute、storage 或日志；DOM 仅保留 `ready/bound` 布尔健康标记；
+- 完整 block 和跨完整消息复制原始 source；部分首尾 block 通过 Range 裁剪并把相交公式
+  扩展为完整 TeX，再用受限 Markdown serializer 恢复段落、标题、列表、表格和代码围栏；
+- 单公式选择直接复制原始 `\(...\)`、`\[...]`、`$...$` 或 `$$...$$`；KaTeX
+  annotation 只在 AST 映射缺失时回退；
+- `text/html` 删除全部 data/style 属性、本地链接目标、图片资源、KaTeX 双层 DOM、内部
+  memory 卡、Live tmux 和操作按钮；公式以安全 `<code>` TeX 表示；
+- 选择位于嵌套代码块、Raw 视图、输入框或 Compact Chat 外时不接管系统复制；没有
+  `clipboardData` 时不调用 `preventDefault()`，保留浏览器默认路径；
+- Compact Chat 的根元素历史上是 `<pre id="output">`；代码块判断现已明确排除这个外层
+  容器，只把其内部真实 `pre/code` 当作代码选择，避免误判所有对话选区。
+
+## 完成证据
+
+- 匿名 fixture 对回答按钮 source、完整回答、user+assistant+Live 跨区、部分文字到公式、
+  单公式、表格、列表、代码围栏和 memory card 做逐字节比较，全部通过；
+- 代码块选区与缺少剪贴板对象的事件保持浏览器默认行为；安全 HTML 包含表格结构且不含
+  source attribute、内部 metadata、Live 内容、Token 或本地路径；
+- 真实公式回答只返回非零字节数、64 位 SHA-256 形状和布尔结构检查；正文不进入测试
+  输出或公开文档；单公式 annotation 只出现一次；
+- Ubuntu Google Chrome 与 Microsoft Edge 均通过 1440x900、390x844 两种视口；回答
+  按钮、框选与公式三条路径一致；
+- Owner 68 项、Gateway 50 项 Python 测试以及全部 JavaScript 测试通过；Markdown、KaTeX、
+  全历史、命令面板、发送与 Start Codex 联合回归通过；
+- 部署测试前后所有既有 Codex tmux 几何不变，且没有残留测试会话。

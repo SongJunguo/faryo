@@ -42,6 +42,7 @@ const expectStructured = process.env.FARYO_SMOKE_EXPECT_STRUCTURED === '1';
 const debugLayout = process.env.FARYO_SMOKE_DEBUG_LAYOUT === '1';
 const checkOwnerLayout = process.env.FARYO_SMOKE_CHECK_OWNER_LAYOUT === '1';
 const checkCommandSuggestions = process.env.FARYO_SMOKE_CHECK_COMMANDS === '1';
+const checkCopyFidelity = process.env.FARYO_SMOKE_CHECK_COPY_FIDELITY === '1';
 const checkAstFixture = process.env.FARYO_SMOKE_CHECK_AST_FIXTURE === '1';
 const checkQuestionNavigator = process.env.FARYO_SMOKE_CHECK_QUESTION_NAV === '1';
 const forceRenderFailure = process.env.FARYO_SMOKE_FORCE_RENDER_FAILURE === '1';
@@ -126,6 +127,30 @@ const astFixtureSource = [
   astFence,
   '',
   '<img src=x onerror="globalThis.pwned=1">',
+].join('\n');
+const copyFixtureUser = 'Can you preserve \\(q(t)\\) when this question is copied?';
+const copyFixtureAnswer = [
+  '## Copy result',
+  '',
+  'For \\(x_i^2\\), keep the original TeX.',
+  '',
+  '\\[',
+  'd(t)=\\begin{cases}',
+  '-1,&t<1,\\\\',
+  '1,&t\\ge1.',
+  '\\end{cases}',
+  '\\]',
+  '',
+  '| Item | Formula |',
+  '| --- | --- |',
+  '| state | \\(x_i\\) |',
+  '',
+  '- Preserve lists.',
+  '- Preserve formulas.',
+  '',
+  astFence + 'tex',
+  '\\[literal code\\]',
+  astFence,
 ].join('\n');
 const uiFixtureSource = [
   '## Verified result',
@@ -1181,6 +1206,212 @@ try {
       throw new Error('AST fixture table did not scroll inside its mobile container: ' + JSON.stringify(fixtureState));
     }
     console.log('faryo-browser-ast-fixture=PASS markdown=GFM math=KaTeX highlight=Shiki');
+  }
+
+  if (checkCopyFidelity) {
+    const copyResult = await send('Runtime.evaluate', {
+      expression: `(() => {
+        const root = document.createElement('div');
+        root.id = 'faryo-copy-fixture';
+        const user = document.createElement('section');
+        user.className = 'compact-block user';
+        user.innerHTML = '<div class="markdown-body">' + window.FaryoMarkdownAst.render(${JSON.stringify(copyFixtureUser)}) + '</div>';
+        const answer = document.createElement('section');
+        answer.className = 'compact-block output';
+        answer.innerHTML = '<div class="markdown-body">' + window.FaryoMarkdownAst.render(${JSON.stringify(copyFixtureAnswer)}) + '</div><details class="memory-reference-card"><summary>Memory references</summary><div>private metadata</div></details><button class="copy-output-block">⧉</button>';
+        const live = document.createElement('details');
+        live.className = 'compact-live-terminal';
+        live.innerHTML = '<summary>Live from tmux</summary><pre>private live text</pre>';
+        root.append(user, answer, live);
+        document.body.appendChild(root);
+        const controller = window.FaryoCopyFidelity.create({ root, parseMarkdown: (source) => window.FaryoMarkdownAst.parse(source) });
+        controller.beginRender();
+        controller.bindBlock(user, { source: ${JSON.stringify(copyFixtureUser)}, renderSource: ${JSON.stringify(copyFixtureUser)}, kind: 'user' });
+        controller.bindBlock(answer, { source: ${JSON.stringify(copyFixtureAnswer)}, renderSource: ${JSON.stringify(copyFixtureAnswer)}, kind: 'output' });
+
+        const outputRange = document.createRange();
+        outputRange.selectNodeContents(answer);
+        const outputPayload = controller.payloadForRange(outputRange);
+
+        const crossRange = document.createRange();
+        crossRange.setStartBefore(user);
+        crossRange.setEndAfter(live);
+        const crossPayload = controller.payloadForRange(crossRange);
+
+        const inlineFormula = answer.querySelector('.katex');
+        const formulaText = (() => {
+          const walker = document.createTreeWalker(inlineFormula, NodeFilter.SHOW_TEXT);
+          return walker.nextNode();
+        })();
+        const formulaRange = document.createRange();
+        formulaRange.selectNodeContents(inlineFormula);
+        const formulaPayload = controller.payloadForRange(formulaRange, {
+          anchorNode: formulaText,
+          focusNode: formulaText,
+        });
+
+        const paragraph = answer.querySelector('p');
+        const paragraphText = [...paragraph.childNodes].find((node) => node.nodeType === Node.TEXT_NODE);
+        const formulaEndText = (() => {
+          const walker = document.createTreeWalker(inlineFormula, NodeFilter.SHOW_TEXT);
+          let node = null, last = null;
+          while ((node = walker.nextNode())) last = node;
+          return last;
+        })();
+        const partialRange = document.createRange();
+        partialRange.setStart(paragraphText, 0);
+        partialRange.setEnd(formulaEndText, Math.min(1, formulaEndText.length));
+        const partialPayload = controller.payloadForRange(partialRange);
+
+        const code = answer.querySelector('pre code') || answer.querySelector('pre');
+        const codeRange = document.createRange();
+        codeRange.selectNodeContents(code);
+        const codePayload = controller.payloadForRange(codeRange);
+
+        const copied = {};
+        const selection = getSelection();
+        selection.removeAllRanges();
+        selection.addRange(crossRange);
+        let prevented = false;
+        const intercepted = controller.handleCopy({
+          clipboardData: { setData(type, value) { copied[type] = value; } },
+          preventDefault() { prevented = true; },
+        });
+        let fallbackPrevented = false;
+        const defaultPreserved = controller.handleCopy({
+          clipboardData: null,
+          preventDefault() { fallbackPrevented = true; },
+        }) === false && !fallbackPrevented;
+        selection.removeAllRanges();
+
+        const sourceInAttribute = [...root.querySelectorAll('*')].some((element) => [...element.attributes]
+          .some((attribute) => attribute.value.includes('begin{cases}') || attribute.value.includes('Copy result')));
+        const state = {
+          moduleReady: typeof window.FaryoCopyFidelity?.create === 'function',
+          outputExact: outputPayload?.plain === ${JSON.stringify(copyFixtureAnswer)},
+          crossExact: crossPayload?.plain === ${JSON.stringify(`${copyFixtureUser}\n\n${copyFixtureAnswer}`)},
+          formulaExact: formulaPayload?.plain === ${JSON.stringify('\\(x_i^2\\)')},
+          formulaKind: formulaPayload?.kind || '',
+          partialHasTex: partialPayload?.plain?.includes(${JSON.stringify('\\(x_i^2\\)')}) || false,
+          partialFormulaCopies: (partialPayload?.plain?.split('x_i^2').length || 1) - 1,
+          codeDefaultPreserved: codePayload === null,
+          intercepted,
+          prevented,
+          defaultPreserved,
+          eventPlainExact: copied['text/plain'] === ${JSON.stringify(`${copyFixtureUser}\n\n${copyFixtureAnswer}`)},
+          eventHtmlSafe: Boolean(copied['text/html'])
+            && !/data-|private metadata|private live text|begin%7Bcases%7D/i.test(copied['text/html'])
+            && copied['text/html'].includes('<table>')
+            && copied['text/html'].includes(${JSON.stringify('<code>\\(x_i^2\\)</code>')}),
+          noSourceAttribute: !sourceInAttribute,
+        };
+        root.remove();
+        return state;
+      })()`,
+      returnByValue: true,
+    });
+    if (copyResult.exceptionDetails) {
+      throw new Error(copyResult.exceptionDetails.exception?.description || copyResult.exceptionDetails.text || 'Copy fixture evaluation failed');
+    }
+    const copyState = copyResult.result?.value || {};
+    if (!copyState.moduleReady || !copyState.outputExact || !copyState.crossExact
+      || !copyState.formulaExact || copyState.formulaKind !== 'formula'
+      || !copyState.partialHasTex || copyState.partialFormulaCopies !== 1
+      || !copyState.codeDefaultPreserved || !copyState.intercepted || !copyState.prevented || !copyState.defaultPreserved
+      || !copyState.eventPlainExact || !copyState.eventHtmlSafe || !copyState.noSourceAttribute) {
+      throw new Error(`Copy fidelity fixture failed: ${JSON.stringify(copyState)}`);
+    }
+    console.log('faryo-browser-copy-fidelity=PASS block=exact formula=tex selection=structured');
+
+    const realCopyResult = await send('Runtime.evaluate', {
+      expression: `(async () => {
+        const output = document.getElementById('output');
+        const block = [...(output?.querySelectorAll(':scope > .compact-block.output') || [])].reverse()
+          .find((item) => item.querySelector('.katex'));
+        const formula = block?.querySelector('.katex');
+        if (!block || !formula) return { ready: false };
+        const dispatch = (range) => {
+          const copied = {};
+          const selection = getSelection();
+          selection.removeAllRanges();
+          selection.addRange(range);
+          const event = new Event('copy', { bubbles: true, cancelable: true });
+          Object.defineProperty(event, 'clipboardData', { value: { setData(type, value) { copied[type] = value; } } });
+          document.dispatchEvent(event);
+          selection.removeAllRanges();
+          return { copied, prevented: event.defaultPrevented };
+        };
+        const formulaRange = document.createRange();
+        formulaRange.selectNodeContents(formula);
+        const formulaCopy = dispatch(formulaRange);
+        const blockRange = document.createRange();
+        blockRange.selectNodeContents(block);
+        const blockCopy = dispatch(blockRange);
+        const copyButton = output.querySelector('.copy-output-block');
+        const buttonBlock = copyButton?.closest('.compact-block.output');
+        let buttonExact = false;
+        if (copyButton && buttonBlock) {
+          const expectedRange = document.createRange();
+          expectedRange.selectNodeContents(buttonBlock);
+          const expectedPlain = String(dispatch(expectedRange).copied['text/plain'] || '');
+          let writtenPlain = '';
+          const previousClipboard = Object.getOwnPropertyDescriptor(navigator, 'clipboard');
+          Object.defineProperty(navigator, 'clipboard', {
+            configurable: true,
+            value: {
+              async write(items) { writtenPlain = await (await items[0].getType('text/plain')).text(); },
+              async writeText(value) { writtenPlain = String(value); },
+            },
+          });
+          copyButton.click();
+          await new Promise((resolve) => setTimeout(resolve, 180));
+          if (previousClipboard) Object.defineProperty(navigator, 'clipboard', previousClipboard);
+          else delete navigator.clipboard;
+          buttonExact = Boolean(expectedPlain && writtenPlain === expectedPlain);
+        }
+        const formulaPlain = String(formulaCopy.copied['text/plain'] || '');
+        const blockPlain = String(blockCopy.copied['text/plain'] || '');
+        const blockHtml = String(blockCopy.copied['text/html'] || '');
+        const annotation = String(formula.querySelector('annotation[encoding="application/x-tex"]')?.textContent || '');
+        const digest = [...new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(blockPlain)))]
+          .map((value) => value.toString(16).padStart(2, '0')).join('');
+        const attributeLengths = [...output.querySelectorAll('*')].flatMap((element) => [...element.attributes].map((attribute) => attribute.value.length));
+        return {
+          ready: true,
+          controller: document.documentElement.dataset.faryoCopy || '',
+          blockBound: block.dataset.faryoCopyBound || '',
+          chatMode: document.getElementById('refreshBtn')?.classList.contains('mode-active') || false,
+          formulaPrevented: formulaCopy.prevented,
+          formulaDelimited: [${JSON.stringify('\\(')}, ${JSON.stringify('\\[')}, '$$', '$'].some((prefix) => formulaPlain.startsWith(prefix)),
+          formulaMatchesAnnotation: Boolean(annotation && formulaPlain.includes(annotation)),
+          formulaCopies: annotation ? formulaPlain.split(annotation).length - 1 : 0,
+          blockPrevented: blockCopy.prevented,
+          buttonExact,
+          blockLength: blockPlain.length,
+          blockHashLength: digest.length,
+          blockHasTex: [${JSON.stringify('\\(')}, ${JSON.stringify('\\[')}, '$$'].some((marker) => blockPlain.includes(marker)),
+          internalTagsAbsent: !blockPlain.toLowerCase().includes('<oai-mem-citation'),
+          htmlSafe: Boolean(blockHtml)
+            && !/(?:data-faryo|token=|katex-mathml|memory-reference-card|compact-live-terminal)/i.test(blockHtml),
+          maxAttributeLength: Math.max(0, ...attributeLengths),
+        };
+      })()`,
+      awaitPromise: true,
+      returnByValue: true,
+    });
+    if (realCopyResult.exceptionDetails) {
+      throw new Error(realCopyResult.exceptionDetails.exception?.description || realCopyResult.exceptionDetails.text || 'Real copy evaluation failed');
+    }
+    const realCopy = realCopyResult.result?.value || {};
+    if (!realCopy.ready || realCopy.controller !== 'ready' || realCopy.blockBound !== 'true' || !realCopy.chatMode
+      || !realCopy.formulaPrevented || !realCopy.formulaDelimited
+      || !realCopy.formulaMatchesAnnotation || realCopy.formulaCopies !== 1
+      || !realCopy.blockPrevented || !realCopy.buttonExact || realCopy.blockLength < 1 || realCopy.blockHashLength !== 64
+      || !realCopy.blockHasTex || !realCopy.internalTagsAbsent || !realCopy.htmlSafe
+      || realCopy.maxAttributeLength > 512) {
+      throw new Error(`Real copy fidelity check failed: ${JSON.stringify(realCopy)}`);
+    }
+    console.log(`faryo-browser-copy-real=PASS block-bytes=${realCopy.blockLength} sha256=present formula=tex-only`);
   }
 
   if (checkQuestionNavigator) {
