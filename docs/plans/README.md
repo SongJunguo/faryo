@@ -9,6 +9,10 @@
   Python/Node 运行时发现和 `v1.2.0` 发布链。
 - [`session-history-search-plan.md`](session-history-search-plan.md)：为数百条 Session History
   增加隐私安全的服务端元数据搜索与过滤。
+- [`clipboard-image-paste-plan.md`](clipboard-image-paste-plan.md)：让 Owner composer 直接粘贴
+  剪贴板图片并复用现有压缩、预览、上传和可靠发送链路。
+- [`chat-raw-mode-switch-plan.md`](chat-raw-mode-switch-plan.md)：隔离 Chat/Raw capture cache，
+  修复 Raw 切回 Chat 后仍显示终端原始内容的回归。
 - [`control-audit-session-state-plan.md`](control-audit-session-state-plan.md)：增加不记录正文的
   控制审计、明确会话状态和准确的 TUI Enter 文案。
 

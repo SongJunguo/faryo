@@ -42,4 +42,18 @@ assert.match(tableBlocks[0].text, /\| Operator \| Recommendation \|/);
 assert.equal(rules.isMarkdownTableLine('| Operator | Recommendation |'), true);
 assert.equal(rules.isMarkdownTableLine('| command output continuation'), false);
 
+const editedFile = [
+  '• Edited apps/example.py',
+  '  41 +def updated_value():',
+  '  42 +    return 42',
+  '  39 -    return 0',
+  '1 file changed, 2 insertions(+), 1 deletion(-)',
+].join('\n');
+const editBlocks = rules.compactBlocks(editedFile);
+assert.equal(editBlocks.length, 1);
+assert.equal(editBlocks[0].kind, 'process');
+const editSummary = rules.processSummaryCard(editBlocks[0].text);
+assert.match(editSummary, /Editing files|Diff summary/);
+assert.doesNotMatch(editSummary, /return 42/);
+
 console.log('compact-rules-codex tests passed');

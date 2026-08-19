@@ -172,7 +172,7 @@ self.addEventListener('activate',(event)=>{event.waitUntil(caches.keys().then((k
 self.addEventListener('fetch',()=>{});
 """
 
-OWNER_STATIC_FILES = {"appearance.css", "appearance.js", "app.js", "style.css", "index.html", "event-stream.js", "internal-annotations.js", "local-file-view.js", "stable-blocks.js", "question-navigator.js", "live-scroll.js", "compact-rules-codex.js", "codex-commands.js", "copy-fidelity.js"}
+OWNER_STATIC_FILES = {"appearance.css", "appearance.js", "app.js", "style.css", "index.html", "event-stream.js", "internal-annotations.js", "local-file-view.js", "stable-blocks.js", "question-navigator.js", "live-scroll.js", "compact-rules-codex.js", "codex-commands.js", "copy-fidelity.js", "clipboard-images.js"}
 OWNER_STATIC_PREFIXES = ("icons/", "pet/", "vendor/katex/", "vendor/markdown-ast/")
 GATEWAY_STATIC_FILES = {
     "projects.css": "text/css; charset=utf-8",

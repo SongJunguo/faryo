@@ -42,6 +42,11 @@ folders; the selected canonical path is signed and revalidated by Owner.
 Gateway route labels come from runtime configuration. Public browser requests
 never receive raw Owner tokens; Gateway injects them while proxying.
 
+Chat and Raw keep separate capture caches. Raw intentionally replaces the
+conversation area with the complete terminal, so it has no nested `Live from
+tmux` card. Returning to Chat must synchronously restore structured Markdown/TeX
+and then resume the independently collapsible Live panel.
+
 ## Owner Session View
 
 The Owner page contains:
@@ -138,6 +143,11 @@ While Codex is working, Compact Chat may include a separate collapsible
 
 The composer keeps the same large base geometry across focus, blur, and mobile
 keyboard state, growing only with real multiline text.
+
+An image pasted while the composer is focused enters the same attachment queue
+as Attach/drag-and-drop, with immediate thumbnail, progress and remove controls.
+Faryo reads clipboard data only from that user-triggered paste event, keeps any
+`text/plain` from the same event, and leaves ordinary text paste native.
 
 Submission rules:
 

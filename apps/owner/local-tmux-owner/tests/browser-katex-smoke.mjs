@@ -18,8 +18,10 @@ const sendMatrix = Array.isArray(rawSendMatrix) ? rawSendMatrix.map((item, index
       || `FARYO_DELIVERY_ACK_${String(index + 1).padStart(2, '0')} sha256=${digest}`,
   };
 }) : rawSendMatrix;
-const attachmentName = process.env.FARYO_SMOKE_ATTACHMENT_NAME || '';
-const attachmentContent = process.env.FARYO_SMOKE_ATTACHMENT_CONTENT || '';
+const attachmentViaClipboard = process.env.FARYO_SMOKE_CLIPBOARD_IMAGE === '1';
+const clipboardPngBase64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
+const attachmentName = process.env.FARYO_SMOKE_ATTACHMENT_NAME || (attachmentViaClipboard ? 'anonymous-clipboard.png' : '');
+const attachmentContent = process.env.FARYO_SMOKE_ATTACHMENT_CONTENT || (attachmentViaClipboard ? clipboardPngBase64 : '');
 const attachmentPrompt = process.env.FARYO_SMOKE_ATTACHMENT_PROMPT || '';
 const attachmentExpectedOutput = process.env.FARYO_SMOKE_ATTACHMENT_EXPECT_OUTPUT || '';
 const checkRecovery = process.env.FARYO_SMOKE_CHECK_RECOVERY === '1';
@@ -43,6 +45,7 @@ const debugLayout = process.env.FARYO_SMOKE_DEBUG_LAYOUT === '1';
 const checkOwnerLayout = process.env.FARYO_SMOKE_CHECK_OWNER_LAYOUT === '1';
 const checkCommandSuggestions = process.env.FARYO_SMOKE_CHECK_COMMANDS === '1';
 const checkCopyFidelity = process.env.FARYO_SMOKE_CHECK_COPY_FIDELITY === '1';
+const checkModeSwitch = process.env.FARYO_SMOKE_CHECK_MODE_SWITCH === '1';
 const checkRefreshLatest = process.env.FARYO_SMOKE_CHECK_REFRESH_LATEST === '1';
 const checkAstFixture = process.env.FARYO_SMOKE_CHECK_AST_FIXTURE === '1';
 const checkQuestionNavigator = process.env.FARYO_SMOKE_CHECK_QUESTION_NAV === '1';
@@ -77,6 +80,7 @@ const screenshotTex = process.env.FARYO_SMOKE_SCREENSHOT_TEX || expectedTex.at(-
 const loginUser = process.env.FARYO_SMOKE_LOGIN_USER || '';
 const loginPasswordFile = process.env.FARYO_SMOKE_LOGIN_PASSWORD_FILE || '';
 const loginPassword = loginPasswordFile ? (await readFile(loginPasswordFile, 'utf8')).trim() : '';
+const authCookie = process.env.FARYO_SMOKE_AUTH_COOKIE || '';
 const hostResolverRules = process.env.FARYO_SMOKE_HOST_RESOLVER_RULES || 'MAP * ~NOTFOUND, EXCLUDE 127.0.0.1';
 const chromeBin = process.env.CHROME_BIN || '/usr/bin/google-chrome';
 const astFence = String.fromCharCode(96).repeat(3);
@@ -326,6 +330,12 @@ try {
 
   await send('Page.enable');
   await send('Runtime.enable');
+  await send('Network.enable');
+  if (authCookie) {
+    const separator = authCookie.indexOf('=');
+    if (separator <= 0) throw new Error('FARYO_SMOKE_AUTH_COOKIE must be name=value');
+    await send('Network.setExtraHTTPHeaders', { headers: { Cookie: authCookie } });
+  }
   if (['light', 'dark', 'system'].includes(smokeTheme)) {
     await send('Page.addScriptToEvaluateOnNewDocument', {
       source: `localStorage.setItem('faryoTheme', ${JSON.stringify(smokeTheme)});`,
@@ -513,7 +523,7 @@ try {
           };
         });
         return {
-          domReady: Boolean(output && document.getElementById('promptInput') && document.documentElement.dataset.faryoAppReady === '1'),
+          domReady: Boolean(output && document.getElementById('promptInput') && document.documentElement.dataset.faryoAppReady === '1' && document.documentElement.dataset.faryoClipboardPaste === 'ready'),
           ready: katexCount >= ${minKatex} && displayCount >= ${minDisplay} && markdownCount >= 1,
           katexCount,
           displayCount,
@@ -1180,6 +1190,49 @@ try {
 
     console.log('faryo-browser-katex-smoke=PASS');
     if (debugLayout) console.log(`faryo-browser-katex-layout=${JSON.stringify(state)}`);
+  }
+
+  if (checkModeSwitch) {
+    const beforeMode = await send('Runtime.evaluate', {
+      expression: `(() => ({source:document.getElementById('output')?.dataset.captureSource||'',compactBlocks:document.querySelectorAll('#output .compact-block').length,markdown:document.querySelectorAll('#output .markdown-body').length,atChat:document.getElementById('refreshBtn')?.classList.contains('mode-active')||false}))()`,
+      returnByValue: true,
+    });
+    const before = beforeMode.result?.value || {};
+    if (!before.atChat || !before.compactBlocks || !before.markdown) throw new Error(`Chat mode was not rich before mode switch: ${JSON.stringify(before)}`);
+    await send('Runtime.evaluate', { expression: `document.getElementById('dockFullBtn').click()` });
+    let raw = {};
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      await delay(50);
+      const result = await send('Runtime.evaluate', {
+        expression: `(() => ({active:document.getElementById('dockFullBtn')?.classList.contains('mode-active')||false,compactClass:document.getElementById('output')?.classList.contains('compact-blocks')||false,compactBlocks:document.querySelectorAll('#output .compact-block').length}))()`,
+        returnByValue: true,
+      });
+      raw = result.result?.value || {};
+      if (raw.active && !raw.compactClass && !raw.compactBlocks) break;
+    }
+    if (!raw.active || raw.compactClass || raw.compactBlocks) throw new Error(`Raw mode did not replace Compact Chat: ${JSON.stringify(raw)}`);
+    const immediateResult = await send('Runtime.evaluate', {
+      expression: `(() => {document.getElementById('refreshBtn').click();return{active:document.getElementById('refreshBtn')?.classList.contains('mode-active')||false,compactClass:document.getElementById('output')?.classList.contains('compact-blocks')||false,compactBlocks:document.querySelectorAll('#output .compact-block').length,markdown:document.querySelectorAll('#output .markdown-body').length,source:document.getElementById('output')?.dataset.captureSource||''};})()`,
+      returnByValue: true,
+    });
+    const immediate = immediateResult.result?.value || {};
+    if (!immediate.active || !immediate.compactClass || !immediate.compactBlocks || !immediate.markdown || immediate.source !== before.source) {
+      throw new Error(`Raw to Chat did not restore the compact cache synchronously: ${JSON.stringify({ before, immediate })}`);
+    }
+    let settled = immediate;
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      await delay(50);
+      const result = await send('Runtime.evaluate', {
+        expression: `(() => ({active:document.getElementById('refreshBtn')?.classList.contains('mode-active')||false,compactClass:document.getElementById('output')?.classList.contains('compact-blocks')||false,compactBlocks:document.querySelectorAll('#output .compact-block').length,markdown:document.querySelectorAll('#output .markdown-body').length,source:document.getElementById('output')?.dataset.captureSource||'',processPre:document.querySelectorAll('#output .compact-process-line pre').length}))()`,
+        returnByValue: true,
+      });
+      settled = result.result?.value || {};
+      if (settled.active && settled.compactClass && settled.compactBlocks && settled.markdown && settled.source === before.source) break;
+    }
+    if (!settled.active || !settled.compactClass || !settled.compactBlocks || !settled.markdown || settled.source !== before.source || settled.processPre) {
+      throw new Error(`Chat mode did not remain rich after refresh: ${JSON.stringify({ before, settled })}`);
+    }
+    console.log(`faryo-browser-mode-switch=PASS source=${settled.source||'fallback'} raw-to-chat=rich`);
   }
 
   if (checkAstFixture) {
@@ -2122,19 +2175,32 @@ try {
   }
 
   if (attachmentName) {
-    await send('Runtime.evaluate', {
-      expression: `(() => {
-        const input = document.getElementById('attachmentInput');
-        const transfer = new DataTransfer();
-        transfer.items.add(new File(
-          [${JSON.stringify(attachmentContent)}],
-          ${JSON.stringify(attachmentName)},
-          { type: 'text/markdown' },
-        ));
-        input.files = transfer.files;
-        input.dispatchEvent(new Event('change', { bubbles: true }));
-      })()`,
-    });
+    if (attachmentViaClipboard) {
+      const nativeTextPaste = await send('Runtime.evaluate', {
+        expression: `(() => {const input=document.getElementById('promptInput'),event=new Event('paste',{bubbles:true,cancelable:true});Object.defineProperty(event,'clipboardData',{value:{items:[{kind:'string',type:'text/plain'}],files:[],getData:(type)=>type==='text/plain'?'plain text':''}});input.dispatchEvent(event);return{prevented:event.defaultPrevented,previews:document.querySelectorAll('#attachmentPreview .attachment-thumb').length};})()`,
+        returnByValue: true,
+      });
+      if (nativeTextPaste.result?.value?.prevented || nativeTextPaste.result?.value?.previews) {
+        throw new Error('Plain-text clipboard paste was intercepted');
+      }
+      await send('Runtime.evaluate', {
+        expression: `(() => {const input=document.getElementById('promptInput'),binary=atob(${JSON.stringify(attachmentContent)}),bytes=Uint8Array.from(binary,char=>char.charCodeAt(0)),file=new File([bytes],${JSON.stringify(attachmentName)},{type:'image/png'}),event=new Event('paste',{bubbles:true,cancelable:true});Object.defineProperty(event,'clipboardData',{value:{items:[{kind:'file',type:'image/png',getAsFile:()=>file}],files:[file],getData:(type)=>type==='text/plain'?'anonymous clipboard caption':''}});input.dispatchEvent(event);window.__faryoClipboardPasteDefaultPrevented=event.defaultPrevented;})()`,
+      });
+    } else {
+      await send('Runtime.evaluate', {
+        expression: `(() => {
+          const input = document.getElementById('attachmentInput');
+          const transfer = new DataTransfer();
+          transfer.items.add(new File(
+            [${JSON.stringify(attachmentContent)}],
+            ${JSON.stringify(attachmentName)},
+            { type: 'text/markdown' },
+          ));
+          input.files = transfer.files;
+          input.dispatchEvent(new Event('change', { bubbles: true }));
+        })()`,
+      });
+    }
 
     let uploadState = {};
     for (let attempt = 0; attempt < 120; attempt += 1) {
@@ -2147,6 +2213,9 @@ try {
             ready: Boolean(thumb?.classList.contains('ready')),
             failed: Boolean(thumb?.classList.contains('error')),
             errorText: document.getElementById('errorBox')?.innerText || '',
+            previewCount: document.querySelectorAll('#attachmentPreview .attachment-thumb').length,
+            inputValue: document.getElementById('promptInput')?.value || '',
+            pastePrevented: Boolean(window.__faryoClipboardPasteDefaultPrevented),
           };
         })()`,
         returnByValue: true,
@@ -2156,6 +2225,9 @@ try {
     }
     if (!uploadState.found || !uploadState.ready || uploadState.failed || uploadState.errorText) {
       throw new Error(`Faryo browser attachment upload failed: ${JSON.stringify(uploadState)}`);
+    }
+    if (attachmentViaClipboard && (uploadState.previewCount !== 1 || uploadState.inputValue !== 'anonymous clipboard caption' || !uploadState.pastePrevented)) {
+      throw new Error(`Faryo clipboard image paste failed: ${JSON.stringify(uploadState)}`);
     }
 
     await send('Runtime.evaluate', {
@@ -2197,7 +2269,7 @@ try {
       if (attachmentAckFound) break;
     }
     if (!attachmentAckFound) throw new Error('Faryo browser attachment ACK did not appear without reload');
-    console.log('faryo-browser-attachment-upload=PASS kind=markdown');
+    console.log(`faryo-browser-attachment-upload=PASS kind=${attachmentViaClipboard ? 'clipboard-image' : 'markdown'}`);
     console.log('faryo-browser-attachment-send=PASS reloads=0');
   }
 

@@ -28,6 +28,11 @@
   const questionNavigatorApi = window.FaryoQuestionNavigator || {};
   const codexCommandApi = window.FaryoCodexCommands || {};
   const copyFidelityApi = window.FaryoCopyFidelity || {};
+  const clipboardImageApi = window.FaryoClipboardImages || {};
+  document.documentElement.dataset.faryoClipboardPaste = (
+    typeof clipboardImageApi.filesFromClipboard === 'function'
+    && typeof clipboardImageApi.insertText === 'function'
+  ) ? 'ready' : 'unavailable';
   const copyFidelity = typeof copyFidelityApi.create === 'function'
     ? copyFidelityApi.create({ root: output, parseMarkdown: (source) => markdownRenderer.parse(source) })
     : null;
@@ -67,7 +72,7 @@
   let statusRefreshInFlight = false, activeStatusRefreshController = null, statusRefreshRunId = 0, statusRefreshTimer = null;
   let eventStreamController = null, eventStreamRunId = 0, eventRetryTimer = null, captureFallbackTimer = null, eventRetryDelayMs = 1800, liveState = 'fallback';
   let petSending = false, petSendTimer = null, petStopping = false, petStopTimer = null, agentRunning = false, lastPetPhase = '';
-  let outputActivity = 0, outputActivityTimer = null, lastCaptureSignature = '', lastCapture = null;
+  let outputActivity = 0, outputActivityTimer = null, lastCaptureSignature = '', lastCapture = null, lastCompactCapture = null, lastFullCapture = null;
   let outputMode = 'compact', fullLocked = false, fullRefreshTimer = null, preserveErrorUntil = 0, seenInitialPageShow = false, needsConfirmUI = false, errorTimer = null, currentPromptTip = '';
   let markdownRenderRevision = 0, highlighterRenderFrame = 0;
   const markdownHtmlCache = new Map();
@@ -573,11 +578,11 @@
   window.addEventListener('faryo-markdown-highlighter-ready', () => {
     markdownRenderRevision += 1;
     clearMarkdownRenderCache();
-    if (!lastCapture || outputMode !== 'compact' || highlighterRenderFrame) return;
+    if (!lastCompactCapture || outputMode !== 'compact' || highlighterRenderFrame) return;
     highlighterRenderFrame = requestAnimationFrame(() => {
       highlighterRenderFrame = 0;
       const keepBottom = isNearBottom();
-      renderOutput(lastCapture);
+      renderOutput(lastCompactCapture);
       if (keepBottom) scrollBottom(true);
     });
   });
@@ -798,7 +803,7 @@
     }
     const runId = historyRunId;
     const session = selectedSession;
-    const expectedSessionId = String(lastCapture?.sessionId || conversationHistory.sessionId || '');
+    const expectedSessionId = String(lastCompactCapture?.sessionId || conversationHistory.sessionId || '');
     const query = new URLSearchParams({ limit: String(HISTORY_PAGE_TURNS) });
     if (options.cursor) query.set('cursor', String(options.cursor));
     if (around !== null) query.set('around', String(around));
@@ -812,8 +817,8 @@
       if (runId !== historyRunId || session !== selectedSession) return null;
       mergeConversationHistoryPage(data, expectedSessionId);
       historyLastRefreshAt = Date.now();
-      if (lastCapture && outputMode === 'compact') {
-        renderOutput(lastCapture);
+      if (lastCompactCapture && outputMode === 'compact') {
+        renderOutput(lastCompactCapture);
         if (anchor) restoreHistoryAnchor(anchor);
         else if (initialLatestScrollPending && options.latest) applyInitialLatestScroll(true);
         else if (keepBottom && Date.now() > historyUserIntentUntil) scrollBottom(true);
@@ -1349,7 +1354,17 @@
     restorePromptDraft();
     autosize();
     updateSendVisibility();
-    history.replaceState(null, '', `${next.pathname}${next.search}${location.hash}`); sessionMenu.classList.add('hidden'); resetConversationHistory(); resetRefreshState(); clearMarkdownRenderCache(); closeEventStream(); lastCaptureSignature = ''; refreshStatus({ silent: true }).catch(handleBackgroundError); refreshCapture(currentCaptureLines(), { silent: true }).catch(handleBackgroundError); if (outputMode === 'compact') startEventStream();
+    history.replaceState(null, '', `${next.pathname}${next.search}${location.hash}`);
+    sessionMenu.classList.add('hidden');
+    resetConversationHistory();
+    resetRefreshState();
+    clearMarkdownRenderCache();
+    closeEventStream();
+    lastCaptureSignature = '';
+    lastCapture = lastCompactCapture = lastFullCapture = null;
+    refreshStatus({ silent: true }).catch(handleBackgroundError);
+    refreshCapture(currentCaptureLines(), { silent: true }).catch(handleBackgroundError);
+    if (outputMode === 'compact') startEventStream();
   }
 
   function cachedWorkbench() {
@@ -1775,6 +1790,8 @@
   function renderOutput(capture) {
     const liveStateSnapshot = liveTerminalState();
     lastCapture = capture;
+    if (outputMode === 'compact') lastCompactCapture = capture;
+    else lastFullCapture = capture;
     scheduleConversationHistoryRefresh(capture);
     capture = mergedConversationCapture(capture);
     const text = capture.text || 'No output yet';
@@ -1874,14 +1891,28 @@
     $('dockPlusBtn')?.setAttribute('aria-expanded', nextOpen ? 'true' : 'false');
   }
 
+  function renderModeLoading(mode) {
+    const compact = mode === 'compact';
+    output.classList.toggle('compact-blocks', compact);
+    output.dataset.captureSource = '';
+    output.dataset.agentSource = '';
+    output.innerHTML = compact
+      ? '<section class="compact-block output"><div class="markdown-body">Loading conversation…</div></section>'
+      : 'Loading raw terminal…';
+    questionNavigatorController?.sync(false, null);
+  }
+
   async function setOutputMode(mode) {
     const togglingFull = mode === 'full' && outputMode === 'full';
     const wasNearBottom = isNearBottom();
+    const targetCapture = mode === 'compact' ? lastCompactCapture : lastFullCapture;
     resetRefreshState();
     fullLocked = togglingFull ? !fullLocked : false;
     outputMode = mode;
     renderOutputModeButton();
-    if (lastCapture) { renderOutput(lastCapture); if (wasNearBottom) scrollBottom(true); }
+    if (targetCapture) renderOutput(targetCapture);
+    else renderModeLoading(mode);
+    if (wasNearBottom) scrollBottom(true);
     closeDockMenu();
     setFullRefresh(false);
     if (outputMode === 'compact') {
@@ -2181,6 +2212,29 @@
       setBusy(false);
     }
   }
+  promptInput.addEventListener('paste', (event) => {
+    const images = typeof clipboardImageApi.filesFromClipboard === 'function'
+      ? clipboardImageApi.filesFromClipboard(event.clipboardData)
+      : [];
+    if (!images.length) return;
+    event.preventDefault();
+    const pastedText = typeof clipboardImageApi.plainTextFromClipboard === 'function'
+      ? clipboardImageApi.plainTextFromClipboard(event.clipboardData)
+      : '';
+    if (pastedText && typeof clipboardImageApi.insertText === 'function') {
+      const inserted = clipboardImageApi.insertText(
+        promptInput.value,
+        promptInput.selectionStart,
+        promptInput.selectionEnd,
+        pastedText,
+      );
+      promptInput.value = inserted.value;
+      promptInput.setSelectionRange(inserted.selectionStart, inserted.selectionStart);
+      promptInput.dispatchEvent(new Event('input', { bubbles: true }));
+    }
+    closeDockMenu();
+    uploadAttachments(images).catch((err) => setError(userErrorMessage(err)));
+  });
   function hasDraggedFiles(event) {
     return event.dataTransfer && Array.from(event.dataTransfer.types || []).includes('Files');
   }

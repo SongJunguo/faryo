@@ -64,6 +64,7 @@ release_checks() {
     "$ROOT/apps/owner/local-tmux-owner/static/question-navigator.js" \
     "$ROOT/apps/owner/local-tmux-owner/static/codex-commands.js" \
     "$ROOT/apps/owner/local-tmux-owner/static/copy-fidelity.js" \
+    "$ROOT/apps/owner/local-tmux-owner/static/clipboard-images.js" \
     "$ROOT/apps/owner/local-tmux-owner/static/vendor/markdown-ast/markdown-ast.min.js" \
     "$ROOT/apps/owner/local-tmux-owner/static/live-scroll.js" \
     "$ROOT/apps/shared/static/appearance.js" \
@@ -86,6 +87,7 @@ release_checks() {
   "$NODE_BIN" "$ROOT/apps/owner/local-tmux-owner/tests/compact-rules-codex.test.js"
   "$NODE_BIN" "$ROOT/apps/owner/local-tmux-owner/tests/codex-commands.test.js"
   "$NODE_BIN" "$ROOT/apps/owner/local-tmux-owner/tests/copy-fidelity.test.js"
+  "$NODE_BIN" "$ROOT/apps/owner/local-tmux-owner/tests/clipboard-images.test.js"
   "$NODE_BIN" --test "$ROOT/apps/owner/local-tmux-owner/tests/terminal-delivery-receiver.test.mjs"
   "$PYTHON_BIN" -m unittest discover -s "$ROOT/apps/owner/local-tmux-owner/tests" -p 'test_*.py'
   "$PYTHON_BIN" -m unittest discover -s "$ROOT/apps/gateway/server/tests" -p 'test_*.py'
@@ -121,6 +123,7 @@ assert "question-navigator.js" in index, "index.html must load question-navigato
 assert "question-navigator.js" in gateway, "gateway must allow question-navigator.js"
 assert "codex-commands.js" in index and "codex-commands.js" in gateway, "Codex command inventory must be loaded and proxied"
 assert "copy-fidelity.js" in index and "copy-fidelity.js" in gateway, "copy fidelity must be loaded and proxied"
+assert "clipboard-images.js" in index and "clipboard-images.js" in gateway, "clipboard image paste must be loaded and proxied"
 assert "internal-annotations.js" in index, "index.html must load internal annotation formatting"
 assert "internal-annotations.js" in gateway, "gateway must proxy internal annotation formatting"
 assert "event-stream.js" in index, "index.html must load the authenticated event-stream parser"
@@ -176,6 +179,10 @@ assert "usedTokens" in app and "contextWindow" in app, "Owner must show actual c
 assert "sendWithDeliveryRecovery" in app, "Owner must reconcile ambiguous send responses idempotently"
 assert "button.textContent = '⧉'" in app, "confirmed output copy button must remain unchanged"
 assert "copyFidelity?.handleCopy(event)" in app, "Compact Chat selections must use source-faithful copy"
+assert "promptInput.addEventListener('paste'" in app, "Owner composer must handle user-triggered image paste"
+assert "navigator.clipboard.read(" not in app, "Owner must not read the clipboard outside a paste event"
+assert "lastCompactCapture" in app and "lastFullCapture" in app and "renderModeLoading" in app, "Chat and Raw must keep isolated capture caches"
+assert "renderOutput(lastCapture)" not in app, "compact callbacks must not replay a Raw capture"
 assert "compactOutputSources" not in app and "dataset.sourceIndex" not in app, "retired copy source indexing must not return"
 appearance = (root / "apps/shared/static/appearance.css").read_text(encoding="utf-8")
 assert "--bg: #0F1115" in appearance and "--accent: #7188FF" in appearance, "shared dark palette must match Owner"

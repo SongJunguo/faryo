@@ -130,6 +130,10 @@ micromark -> mdast -> CommonMark/GFM/math nodes -> safe HTML -> KaTeX
 - Uses the Faryo logo as a direct return to the Gateway home page while the
   adjacent session title keeps its independent header-collapse action.
 - Keeps a large composer geometry across focus, blur, and mobile keyboard state.
+- Accepts a user-triggered clipboard image paste directly in the composer,
+  preserves accompanying plain text, and reuses the existing compressed upload,
+  thumbnail, removal, attachment-limit, and idempotent-send path without asking
+  for persistent clipboard access.
 - Shows agent-reported context used/window and weekly quota when available.
 - Opens fresh, reloaded, and newly selected conversations at the latest output.
 - Preserves the main reading position during structured refreshes.
@@ -145,6 +149,9 @@ micromark -> mdast -> CommonMark/GFM/math nodes -> safe HTML -> KaTeX
   browser supports it; Raw, code, and input selections keep native behavior.
 - Provides Chat/Raw views, attachments, approve, interrupt, page navigation,
   session switching, and a return-to-latest control.
+- Keeps independent Chat and Raw capture caches, so returning from the full
+  terminal view synchronously restores rendered Markdown/TeX and its separate
+  `Live from tmux` panel instead of replaying terminal code in the conversation.
 - Does not resize Codex or tmux windows; real tmux clients remain the source of
   terminal dimensions and wrapping.
 
@@ -260,7 +267,10 @@ The `main` branch was revalidated on 2026-08-20 with privacy-safe fixtures:
 
 - source checks plus 72 Owner and 51 Gateway Python tests;
 - a 20-message browser delivery matrix including Chinese, multiline Markdown,
-  TeX, attachment, offline/background recovery, and failed-draft cases;
+  TeX, clipboard-image attachment, offline/background recovery, and failed-draft
+  cases at mobile and desktop sizes;
+- structured-JSONL and tmux-fallback Raw→Chat matrices, plus real deployed
+  390x844 and 1440x900 checks that restore rich Chat without a reload;
 - a two-session retry/delayed-response isolation test;
 - 390x844 mobile Chrome and 1440x900 desktop Edge long-conversation tests;
 - fast-scroll question-rail reveal, auto-hide, keyboard navigation, stable live

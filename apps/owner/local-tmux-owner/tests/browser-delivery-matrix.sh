@@ -91,9 +91,8 @@ smoke_env=(
 )
 if [[ "$attachment_smoke" == 1 ]]; then
   smoke_env+=(
-    'FARYO_SMOKE_ATTACHMENT_NAME=anonymous-delivery.md'
-    'FARYO_SMOKE_ATTACHMENT_CONTENT=# Anonymous delivery fixture'
-    'FARYO_SMOKE_ATTACHMENT_PROMPT=Submit the anonymous attachment once.'
+    'FARYO_SMOKE_CLIPBOARD_IMAGE=1'
+    'FARYO_SMOKE_ATTACHMENT_PROMPT=Submit the anonymous clipboard image once.'
     'FARYO_SMOKE_ATTACHMENT_EXPECT_OUTPUT=FARYO_DELIVERY_ACK_21'
   )
 fi

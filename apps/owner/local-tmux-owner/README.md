@@ -65,6 +65,11 @@ GFM/math grammar. Raw remains terminal evidence. If both structured sources are
 unavailable, the tmux fallback deliberately avoids guessing damaged formula
 boundaries and displays a warning.
 
+Chat and Raw cache their last successful captures independently. Raw replaces
+the output area with complete terminal evidence; returning to Chat immediately
+replays only the structured/compact capture and restores the separate Live tmux
+panel before the next network refresh arrives.
+
 Structured history serves at most 12 recent complete turns in the initial
 capture. A separate full-history index records only displayable message byte
 boundaries and truncated user previews, not tool-event bodies. The authenticated
@@ -163,9 +168,10 @@ scroll-to-latest control that overlaps the focused rich-output element.
 
 The anonymous delivery matrix starts an isolated loopback Owner and temporary
 tmux receiver, sends 20 exact-content short/Chinese/multiline/Markdown/TeX
-messages, uploads one Markdown attachment, verifies network/background catch-up
-without reload, checks failed-draft preservation and approval-control expansion,
-and removes all test state:
+messages, pastes one anonymous PNG through a real browser clipboard event,
+preserves clipboard text, uploads and submits the image exactly once, verifies
+network/background catch-up without reload, checks failed-draft preservation and
+approval-control expansion, and removes all test state:
 
 ```bash
 FARYO_DELIVERY_PYTHON=/path/to/project/python \
