@@ -289,6 +289,19 @@ tools/              Development-only Markdown bundle builder
 - [Codex reliability plan and evidence](docs/plans/codex-reliability-hardening-plan.md)
 - [Personal fork roadmap](docs/plans/personal-fork-roadmap.md)
 
+## Inspiration and Acknowledgements
+
+Faryo's modern agent-workbench direction was inspired in part by
+[DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness). Its
+math-delimiter and CJK-friendly Markdown compatibility extensions are adapted
+from [a pinned DeepSeek Harness revision](https://github.com/deepseek-ai/deepseek-harness/tree/47f943859bef60e4160492346772ded9b24f765a)
+under the MIT License.
+
+Faryo remains an independent project and is not affiliated with or endorsed by
+DeepSeek. No DeepSeek branding or product assets are included. Complete
+attribution and license information is available in the
+[bundled third-party notices](apps/owner/local-tmux-owner/static/vendor/markdown-ast/THIRD_PARTY_NOTICES.md).
+
 ## Upstream and License
 
 The original Faryo project is maintained by
