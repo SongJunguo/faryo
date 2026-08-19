@@ -43,6 +43,7 @@ const debugLayout = process.env.FARYO_SMOKE_DEBUG_LAYOUT === '1';
 const checkOwnerLayout = process.env.FARYO_SMOKE_CHECK_OWNER_LAYOUT === '1';
 const checkCommandSuggestions = process.env.FARYO_SMOKE_CHECK_COMMANDS === '1';
 const checkCopyFidelity = process.env.FARYO_SMOKE_CHECK_COPY_FIDELITY === '1';
+const checkRefreshLatest = process.env.FARYO_SMOKE_CHECK_REFRESH_LATEST === '1';
 const checkAstFixture = process.env.FARYO_SMOKE_CHECK_AST_FIXTURE === '1';
 const checkQuestionNavigator = process.env.FARYO_SMOKE_CHECK_QUESTION_NAV === '1';
 const forceRenderFailure = process.env.FARYO_SMOKE_FORCE_RENDER_FAILURE === '1';
@@ -656,6 +657,93 @@ try {
   }
   if (minQuestionMarkers > 0) {
     console.log(`faryo-browser-question-navigation-live=PASS markers=${state.questionNavigation.markerCount}`);
+  }
+  if (checkRefreshLatest) {
+    await send('Runtime.evaluate', {
+      expression: `(() => {
+        history.scrollRestoration = 'auto';
+        sessionStorage.setItem('faryoSmokeReloadLatest', String(Date.now()));
+        const scroller = document.getElementById('outputWrap');
+        if (scroller) scroller.scrollTop = 0;
+      })()`,
+    });
+    await send('Page.reload', { ignoreCache: true });
+    let refreshedLatest = {};
+    for (let attempt = 0; attempt < 160; attempt += 1) {
+      await delay(100);
+      try {
+        const result = await send('Runtime.evaluate', {
+          expression: `(() => {
+            const scroller = document.getElementById('outputWrap');
+            const output = document.getElementById('output');
+            const maximum = scroller ? Math.max(0, scroller.scrollHeight - scroller.clientHeight) : 0;
+            const distance = scroller ? Math.max(0, maximum - scroller.scrollTop) : -1;
+            return {
+              appReady: document.documentElement.dataset.faryoAppReady === '1',
+              reloadMarker: Boolean(sessionStorage.getItem('faryoSmokeReloadLatest')),
+              structured: ['codex-jsonl', 'codex-app-server'].includes(String(output?.dataset.captureSource || '')),
+              questionKeys: output?.querySelectorAll('[data-faryo-question-key]').length || 0,
+              scrollable: Boolean(scroller && maximum > 100),
+              distance,
+              atBottom: distance <= 4,
+              latestButtonHidden: document.getElementById('bottomBtn')?.classList.contains('hidden') || false,
+            };
+          })()`,
+          returnByValue: true,
+        });
+        if (result.exceptionDetails) continue;
+        refreshedLatest = result.result?.value || {};
+      } catch (_error) {
+        refreshedLatest = {};
+      }
+      if (refreshedLatest.appReady && refreshedLatest.structured && refreshedLatest.questionKeys
+        && refreshedLatest.scrollable && refreshedLatest.atBottom) break;
+    }
+    await delay(650);
+    const settledResult = await send('Runtime.evaluate', {
+      expression: `(() => {
+        const scroller = document.getElementById('outputWrap');
+        const maximum = scroller ? Math.max(0, scroller.scrollHeight - scroller.clientHeight) : 0;
+        const distance = scroller ? Math.max(0, maximum - scroller.scrollTop) : -1;
+        return { distance, atBottom: distance <= 4, latestButtonHidden: document.getElementById('bottomBtn')?.classList.contains('hidden') || false };
+      })()`,
+      returnByValue: true,
+    });
+    const settledLatest = settledResult.result?.value || {};
+    if (!refreshedLatest.appReady || !refreshedLatest.reloadMarker || !refreshedLatest.structured
+      || !refreshedLatest.questionKeys || !refreshedLatest.scrollable || !refreshedLatest.atBottom
+      || !settledLatest.atBottom || !settledLatest.latestButtonHidden) {
+      throw new Error(`Reload did not settle at the latest conversation output: ${JSON.stringify({ refreshedLatest, settledLatest })}`);
+    }
+    const manualSetup = await send('Runtime.evaluate', {
+      expression: `(() => {
+        const scroller = document.getElementById('outputWrap');
+        const maximum = scroller ? Math.max(0, scroller.scrollHeight - scroller.clientHeight) : 0;
+        const target = Math.max(1, Math.round(maximum * 0.3));
+        scroller?.dispatchEvent(new WheelEvent('wheel', { deltaY: -240, bubbles: true }));
+        if (scroller) scroller.scrollTop = target;
+        window.__faryoRefreshManualTarget = target;
+        document.getElementById('detailsRefreshBtn')?.click();
+        return { maximum, target };
+      })()`,
+      returnByValue: true,
+    });
+    await delay(1200);
+    const manualResult = await send('Runtime.evaluate', {
+      expression: `(() => {
+        const scroller = document.getElementById('outputWrap');
+        const target = Number(window.__faryoRefreshManualTarget || 0);
+        const maximum = scroller ? Math.max(0, scroller.scrollHeight - scroller.clientHeight) : 0;
+        return { target, scrollTop: scroller?.scrollTop || 0, delta: Math.abs((scroller?.scrollTop || 0) - target), nearBottom: Boolean(scroller && maximum - scroller.scrollTop < 80) };
+      })()`,
+      returnByValue: true,
+    });
+    const manual = manualResult.result?.value || {};
+    if (Number(manualSetup.result?.value?.maximum || 0) <= 100 || !manual.target
+      || manual.delta > 2 || manual.nearBottom) {
+      throw new Error(`Manual reading position moved after refresh: ${JSON.stringify(manual)}`);
+    }
+    console.log('faryo-browser-refresh-latest=PASS reload=bottom settled=bottom manual=preserved');
   }
   if (expectedHistoryTurns > 0) {
     const initialLoaded = Number(state.questionNavigation?.loadedQuestionCount || 0);

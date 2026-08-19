@@ -98,6 +98,7 @@
   let historyLoadPromise = null, historyRequestController = null, historyRefreshTimer = null;
   let historyRunId = 0, historyCaptureSignature = '', historyLastRefreshAt = 0;
   let historyUserIntentUntil = 0, historyOlderLoadQueued = false;
+  let initialLatestScrollPending = true, initialLatestScrollTimer = null;
   let submitInFlight = false, pendingSubmission = null;
   let activeSurfacePanel = null, panelReturnFocus = null;
   const restoringLivePanels = new WeakSet();
@@ -398,7 +399,8 @@
     const previousScrollTop = outputWrap.scrollTop;
     pendingDeferredCapture = null;
     renderOutput(capture);
-    if (keepBottom) scrollBottom(true);
+    if (initialLatestScrollPending) applyInitialLatestScroll(capture?.captureSource !== 'codex-jsonl');
+    else if (keepBottom) scrollBottom(true);
     else requestAnimationFrame(() => {
       outputWrap.scrollTop = previousScrollTop;
       updateBottomButton();
@@ -412,6 +414,41 @@
         updateBottomButton();
       });
     }
+  }
+
+  function beginInitialLatestScroll() {
+    initialLatestScrollPending = true;
+    if (initialLatestScrollTimer) clearTimeout(initialLatestScrollTimer);
+    initialLatestScrollTimer = null;
+  }
+
+  function cancelInitialLatestScroll() {
+    initialLatestScrollPending = false;
+    if (initialLatestScrollTimer) clearTimeout(initialLatestScrollTimer);
+    initialLatestScrollTimer = null;
+  }
+
+  function applyInitialLatestScroll(final = false) {
+    if (!initialLatestScrollPending || Date.now() <= historyUserIntentUntil) return false;
+    const apply = () => {
+      if (!initialLatestScrollPending || Date.now() <= historyUserIntentUntil) return;
+      outputWrap.scrollTop = outputWrap.scrollHeight;
+      updateBottomButton();
+    };
+    requestAnimationFrame(() => {
+      apply();
+      requestAnimationFrame(apply);
+    });
+    if (final) {
+      if (initialLatestScrollTimer) clearTimeout(initialLatestScrollTimer);
+      initialLatestScrollTimer = setTimeout(() => {
+        if (!initialLatestScrollPending || Date.now() <= historyUserIntentUntil) return;
+        apply();
+        initialLatestScrollPending = false;
+        initialLatestScrollTimer = null;
+      }, 500);
+    }
+    return true;
   }
 
   function livePanelStorageKey(session = selectedSession) {
@@ -769,7 +806,7 @@
     historyRequestController = controller;
     const timeoutId = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
     const anchor = options.preserveAnchor ? historyAnchorSnapshot() : null;
-    const keepBottom = Boolean(options.latest && isNearBottom());
+    const keepBottom = Boolean(initialLatestScrollPending || (options.latest && isNearBottom()));
     historyLoadPromise = (async () => {
       const data = await api(apiPath(`/api/conversation-history?${query}`), { signal: controller.signal });
       if (runId !== historyRunId || session !== selectedSession) return null;
@@ -778,6 +815,7 @@
       if (lastCapture && outputMode === 'compact') {
         renderOutput(lastCapture);
         if (anchor) restoreHistoryAnchor(anchor);
+        else if (initialLatestScrollPending && options.latest) applyInitialLatestScroll(true);
         else if (keepBottom && Date.now() > historyUserIntentUntil) scrollBottom(true);
       }
       return data;
@@ -789,6 +827,7 @@
         resetConversationHistory();
         if (!options.retrying) return loadConversationHistory({ latest: true, retrying: true });
       }
+      if (options.latest && initialLatestScrollPending) applyInitialLatestScroll(true);
       throw error;
     } finally {
       clearTimeout(timeoutId);
@@ -816,6 +855,7 @@
     if (outputMode !== 'compact' || capture?.captureSource !== 'codex-jsonl') return;
     if (conversationHistory.sessionId && capture.sessionId && conversationHistory.sessionId !== capture.sessionId) {
       resetConversationHistory();
+      beginInitialLatestScroll();
     }
     const text = String(capture.text || '');
     const signature = `${capture.sessionId || ''}:${text.length}:${text.slice(-160)}`;
@@ -831,6 +871,7 @@
   }
 
   function noteHistoryUserIntent() {
+    cancelInitialLatestScroll();
     historyUserIntentUntil = Date.now() + 600;
   }
 
@@ -1302,6 +1343,7 @@
     persistPromptDraft();
     persistPendingSubmission();
     selectedSession = session;
+    beginInitialLatestScroll();
     closeSurfacePanels({ restoreFocus: false });
     pendingSubmission = null;
     restorePromptDraft();
@@ -2333,7 +2375,7 @@
   startEventStream();
   document.documentElement.dataset.faryoAppReady = '1';
   window.addEventListener('pageshow', handlePageShow);
-  window.addEventListener('pagehide', () => { cancelActiveRefreshes(); closeEventStream(); setCaptureFallback(false); setStatusRefresh(false); setFullRefresh(false); });
+  window.addEventListener('pagehide', () => { cancelInitialLatestScroll(); cancelActiveRefreshes(); closeEventStream(); setCaptureFallback(false); setStatusRefresh(false); setFullRefresh(false); });
   document.addEventListener('visibilitychange', () => {
     setStatusRefresh(!document.hidden && headerStatusVisible());
     if (document.hidden) { cancelActiveRefreshes(); closeEventStream(); setCaptureFallback(false); setFullRefresh(false); }

@@ -131,6 +131,7 @@ micromark -> mdast -> CommonMark/GFM/math nodes -> safe HTML -> KaTeX
   adjacent session title keeps its independent header-collapse action.
 - Keeps a large composer geometry across focus, blur, and mobile keyboard state.
 - Shows agent-reported context used/window and weekly quota when available.
+- Opens fresh, reloaded, and newly selected conversations at the latest output.
 - Preserves the main reading position during structured refreshes.
 - Preserves manual scroll inside an expanded Live tmux panel.
 - Mirrors all 46 slash commands visible in the validated Codex CLI, with

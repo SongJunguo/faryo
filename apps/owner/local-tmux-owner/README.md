@@ -91,6 +91,12 @@ Live tail refreshes reuse already loaded pages and markers. On narrow screens it
 overlays the extreme edge without reserving permanent width. The rail is absent
 in Raw mode and stores neither previews nor navigation state in browser storage.
 
+A fresh page load, explicit reload, or session switch follows the latest output
+through the initial capture/history race. Browser scroll restoration is not used
+as evidence of reading intent. Wheel, touch, or pointer interaction cancels that
+initial follow state immediately, so later capture and history refreshes preserve
+the reader's manual position.
+
 The Faryo logo in the Owner header is a same-origin link to the Gateway home
 page. It deliberately drops the current token and session query. The adjacent
 title still folds/unfolds the header; the folder and details controls retain

@@ -111,6 +111,8 @@ or session storage.
 
 ## Main Scroll Contract
 
+- A fresh load, explicit browser reload, or session switch starts at the latest
+  conversation output after the first structured history page settles.
 - A reader at the bottom follows the latest content.
 - A reader who scrolls into history stays at that position during refreshes.
 - The return-to-latest control is visible when needed and must not cover a table,
