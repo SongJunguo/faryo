@@ -112,6 +112,8 @@ assert "faryo_resolve_python" in check_script and "faryo_resolve_node" in check_
 assert 'id="historySearchInput"' in gateway and 'data-history-period="7d"' in gateway, "Gateway must expose metadata history search"
 assert "agent_history_text_matches" in owner_server and "codex_conversation_history_page" not in owner_server[owner_server.index("def codex_history_page("):owner_server.index("def codex_history_items(")], "session search must not scan conversation history"
 assert "safe_path = urlparse(self.path).path" in owner_server, "Owner logs must omit private query strings"
+assert "append_control_audit" in gateway and 'id="securityActivity"' in gateway, "Gateway must expose body-free control auditing"
+assert '"starting", "running", "waiting", "exited", "desktop", "resumable"' in gateway, "Gateway must expose explicit session lifecycle states"
 assert "compact-rules-codex.js" in index, "index.html must load compact-rules-codex.js"
 assert "compact-rules-codex.js" in gateway, "gateway must allow compact-rules-codex.js"
 assert "compact-rules-claude.js" not in index, "retired Claude rules must not return to the production page"
@@ -162,6 +164,7 @@ for grammar in ("python", "latex", "lean", "matlab", "markdown", "yaml", "html",
     assert any(Path(relative).name.startswith(grammar + "-") for relative in manifest_paths), f"missing lazy Shiki grammar: {grammar}"
 assert (root / "tools/markdown-engine/package-lock.json").is_file(), "AST Markdown build must have a lockfile"
 app = (root / "apps/owner/local-tmux-owner/static/app.js").read_text(encoding="utf-8")
+stable_blocks_source = (root / "apps/owner/local-tmux-owner/static/stable-blocks.js").read_text(encoding="utf-8")
 assert "stableBlocks.reconcile(output, models, createNode)" in app, "Compact Chat must reconcile stable DOM blocks"
 assert "headers['X-Owner-Token'] = ownerToken" in app, "Owner API calls must include the token header"
 assert "sessionStorage.setItem(OWNER_TOKEN_STORAGE_KEY" in app, "direct Owner auth must survive same-tab refresh without URL persistence"
@@ -183,6 +186,9 @@ assert "promptInput.addEventListener('paste'" in app, "Owner composer must handl
 assert "navigator.clipboard.read(" not in app, "Owner must not read the clipboard outside a paste event"
 assert "lastCompactCapture" in app and "lastFullCapture" in app and "renderModeLoading" in app, "Chat and Raw must keep isolated capture caches"
 assert "renderOutput(lastCapture)" not in app, "compact callbacks must not replay a Raw capture"
+assert 'id="approveSmallBtn"' in index and '>Enter Choose</button>' in index and 'Codex menu' in index, "terminal selection controls must explain their TUI scope"
+assert "CODEX_LIVE_TAIL_LINES = 180" in owner_server, "Live tmux must keep the bounded long tail"
+assert "faryoTransient" in stable_blocks_source and "selectionInsideLivePanel" in app and "compact-live-copy" in app, "Live tmux DOM, selection, and copy must remain stable"
 assert "compactOutputSources" not in app and "dataset.sourceIndex" not in app, "retired copy source indexing must not return"
 appearance = (root / "apps/shared/static/appearance.css").read_text(encoding="utf-8")
 assert "--bg: #0F1115" in appearance and "--accent: #7188FF" in appearance, "shared dark palette must match Owner"

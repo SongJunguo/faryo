@@ -137,7 +137,9 @@ micromark -> mdast -> CommonMark/GFM/math nodes -> safe HTML -> KaTeX
 - Shows agent-reported context used/window and weekly quota when available.
 - Opens fresh, reloaded, and newly selected conversations at the latest output.
 - Preserves the main reading position during structured refreshes.
-- Preserves manual scroll inside an expanded Live tmux panel.
+- Keeps up to 180 lines from the current turn in an expanded Live tmux panel,
+  preserves the same DOM node and manual scroll position, pauses updates while
+  its text is selected, and offers one-click copy of the visible terminal text.
 - Mirrors all 46 slash commands visible in the validated Codex CLI, with
   descriptions, categories, risk cues, fuzzy lookup, keyboard navigation, and
   a repeatable isolated-PTY drift check.
@@ -147,8 +149,11 @@ micromark -> mdast -> CommonMark/GFM/math nodes -> safe HTML -> KaTeX
   Markdown, and copies a selected formula as one original TeX expression
   instead of KaTeX's visual/MathML layers. Safe rich HTML is included when the
   browser supports it; Raw, code, and input selections keep native behavior.
-- Provides Chat/Raw views, attachments, approve, interrupt, page navigation,
-  session switching, and a return-to-latest control.
+- Provides Chat/Raw views, attachments, interrupt, TUI navigation, page
+  navigation, session switching, and a return-to-latest control.
+- Shows contextual `Codex menu` controls as `Previous`, `Next`, and `Enter
+  Choose` only while a TUI choice is pending; these send exact keys, auto-hide
+  after Enter, and never claim unconditional approval.
 - Keeps independent Chat and Raw capture caches, so returning from the full
   terminal view synchronously restores rendered Markdown/TeX and its separate
   `Live from tmux` panel instead of replaying terminal code in the conversation.
@@ -159,6 +164,9 @@ micromark -> mdast -> CommonMark/GFM/math nodes -> safe HTML -> KaTeX
 
 - Keeps active tmux-backed Codex sessions separate from resumable history.
 - Shows every recognized active Codex pane, including desktop-started sessions.
+- Labels sessions from process-tree and TUI evidence as Starting, Running,
+  Waiting, Exited, Desktop, Resumable, or Archived; a bash wrapper cannot hide
+  its Codex descendant, and an exited managed shell remains safely closable.
 - Keeps history server-paginated at 10 records per page with Previous/Next and
   direct page-number navigation.
 - Searches hundreds of inactive sessions server-side by normalized title,
@@ -179,6 +187,10 @@ micromark -> mdast -> CommonMark/GFM/math nodes -> safe HTML -> KaTeX
   shortcuts, canonical Folders/Locations groups, a conventional Folders-first
   `..` parent entry, and a fixed `Start Codex here` action.
 - Injects Owner tokens server-side so public browser URLs do not contain them.
+- Records body-free control metadata in a private mode-600, 7-day/5000-row
+  audit using HMAC-pseudonymous targets. Security activity is scoped to the
+  signed-in user/routes; prompts, answers, titles, paths, raw IDs and credentials
+  are never audit fields.
 
 ## Architecture
 
@@ -265,12 +277,15 @@ or an equivalent exact-identity layer.
 
 The `main` branch was revalidated on 2026-08-20 with privacy-safe fixtures:
 
-- source checks plus 72 Owner and 51 Gateway Python tests;
+- source checks plus 76 Owner and 63 Gateway Python tests;
 - a 20-message browser delivery matrix including Chinese, multiline Markdown,
   TeX, clipboard-image attachment, offline/background recovery, and failed-draft
   cases at mobile and desktop sizes;
 - structured-JSONL and tmux-fallback Raw→Chat matrices, plus real deployed
   390x844 and 1440x900 checks that restore rich Chat without a reload;
+- an isolated continuously updating Live terminal at 390x844 and 1440x900,
+  verifying the 180-line bound, stable DOM/scroll, selection-aware update pause,
+  deferred flush, explicit copy, and unchanged tmux geometry;
 - a two-session retry/delayed-response isolation test;
 - 390x844 mobile Chrome and 1440x900 desktop Edge long-conversation tests;
 - fast-scroll question-rail reveal, auto-hide, keyboard navigation, stable live
@@ -298,6 +313,11 @@ The `main` branch was revalidated on 2026-08-20 with privacy-safe fixtures:
   independently fetched 10-record history pages, server-side title/folder
   search, date filtering, URL restoration, stale-request cancellation, and no
   filtered snapshot persistence.
+- body-free audit tests for every maintained control action, CSRF denial,
+  HMAC targets, mode-600 retention/rotation, user/route scope, I/O failure and
+  revoke-all auth epochs; production Start→ready→Close leaves no test tmux.
+- explicit Starting/Running/Waiting/Exited/Desktop/Resumable state fixtures and
+  real workbench state counts, with Enter labelled as a TUI selection key.
 
 Run the canonical source checks:
 

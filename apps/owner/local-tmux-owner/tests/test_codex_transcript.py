@@ -554,7 +554,7 @@ class CodexTranscriptTest(unittest.TestCase):
         self.assertIn("Account: <redacted>", tail)
         self.assertNotIn("person@example.com", tail)
 
-    def test_live_shell_tail_drops_prior_status_panels(self):
+    def test_live_shell_tail_keeps_the_complete_current_turn(self):
         capture = (
             "› previous question\n"
             "│ Account: person@example.com (Plus)\n"
@@ -564,7 +564,17 @@ class CodexTranscriptTest(unittest.TestCase):
 
         tail = server.codex_live_tail(capture)
 
-        self.assertEqual("• Running sleep 4\n• Working (1s • esc to interrupt)", tail)
+        self.assertIn("› previous question", tail)
+        self.assertIn("Account: <redacted>", tail)
+        self.assertIn("• Running sleep 4", tail)
+
+    def test_live_tail_keeps_at_most_the_configured_long_window(self):
+        capture = "› current question\n" + "\n".join(f"• activity {index}" for index in range(240))
+
+        tail = server.codex_live_tail(capture)
+
+        self.assertEqual(len(tail.splitlines()), server.CODEX_LIVE_TAIL_LINES)
+        self.assertIn("activity 239", tail)
 
 
 if __name__ == "__main__":

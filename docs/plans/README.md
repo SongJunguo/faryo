@@ -13,6 +13,10 @@
   剪贴板图片并复用现有压缩、预览、上传和可靠发送链路。
 - [`chat-raw-mode-switch-plan.md`](chat-raw-mode-switch-plan.md)：隔离 Chat/Raw capture cache，
   修复 Raw 切回 Chat 后仍显示终端原始内容的回归。
+- [`live-tmux-reading-copy-plan.md`](live-tmux-reading-copy-plan.md)：扩大当前轮次 Live 尾部，
+  稳定 DOM/滚动/文字选择，并增加显式复制。
+- [`tui-control-clarity-plan.md`](tui-control-clarity-plan.md)：将方向键和 Enter 明确标为同一
+  Codex TUI 的 Previous/Next/Choose 后备控制。
 - [`control-audit-session-state-plan.md`](control-audit-session-state-plan.md)：增加不记录正文的
   控制审计、明确会话状态和准确的 TUI Enter 文案。
 

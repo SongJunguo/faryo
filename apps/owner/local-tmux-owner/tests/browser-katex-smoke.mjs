@@ -590,6 +590,10 @@ try {
             statusCollapsed: Boolean(statusLine?.classList.contains('collapsed')),
             statusAutoExpanded: Boolean(statusLine?.classList.contains('auto-expanded')),
             keyNavVisible: Boolean(keyNav && keyNav.getClientRects().length),
+            enterControl: {
+              label: String(document.getElementById('approveSmallBtn')?.textContent || '').trim(),
+              aria: String(document.getElementById('approveSmallBtn')?.getAttribute('aria-label') || ''),
+            },
             livePanel: livePanel ? { open: Boolean(livePanel.open), session: String(livePanel.dataset.session || '') } : null,
             weeklyQuota: {
               label: String(document.getElementById('quotaText')?.textContent || '').trim(),
@@ -919,6 +923,9 @@ try {
       || (expectKeyNavVisible && !layout.statusAutoExpanded)) {
       throw new Error(`Owner terminal control visibility is wrong: ${JSON.stringify({ expectedKeyNavState, layout })}`);
     }
+    if (layout.enterControl?.label !== 'Enter Choose' || !layout.enterControl?.aria.includes('current Codex TUI option')) {
+      throw new Error(`Owner Enter control is ambiguous: ${JSON.stringify(layout.enterControl)}`);
+    }
     const keyNavResult = await send('Runtime.evaluate', {
       expression: `(() => {
         const line = document.querySelector('.status-line');
@@ -935,8 +942,18 @@ try {
       returnByValue: true,
     });
     const keyNavState = keyNavResult.result?.value || {};
-    if (!keyNavState.expandedVisible || keyNavState.restoredVisible !== expectKeyNavVisible) {
+    if (keyNavState.expandedVisible !== expectKeyNavVisible || keyNavState.restoredVisible !== expectKeyNavVisible) {
       throw new Error(`Owner terminal controls did not follow the approval expansion state: ${JSON.stringify(keyNavState)}`);
+    }
+    if (expectKeyNavVisible) {
+      const enterHideResult = await send('Runtime.evaluate', {
+        expression: `(() => {document.getElementById('approveSmallBtn')?.click();const nav=document.querySelector('.key-nav'),line=document.querySelector('.status-line');return{aria:nav?.getAttribute('aria-hidden')||'',visible:Boolean(nav&&nav.getClientRects().length),classVisible:Boolean(line?.classList.contains('tui-controls-visible'))};})()`,
+        returnByValue: true,
+      });
+      const enterHide = enterHideResult.result?.value || {};
+      if (enterHide.aria !== 'true' || enterHide.visible || enterHide.classVisible) {
+        throw new Error(`Owner Enter control did not auto-hide optimistically: ${JSON.stringify(enterHide)}`);
+      }
     }
 
     const measurePrompt = async (action = '') => {
@@ -1212,24 +1229,24 @@ try {
     }
     if (!raw.active || raw.compactClass || raw.compactBlocks) throw new Error(`Raw mode did not replace Compact Chat: ${JSON.stringify(raw)}`);
     const immediateResult = await send('Runtime.evaluate', {
-      expression: `(() => {document.getElementById('refreshBtn').click();return{active:document.getElementById('refreshBtn')?.classList.contains('mode-active')||false,compactClass:document.getElementById('output')?.classList.contains('compact-blocks')||false,compactBlocks:document.querySelectorAll('#output .compact-block').length,markdown:document.querySelectorAll('#output .markdown-body').length,source:document.getElementById('output')?.dataset.captureSource||''};})()`,
+      expression: `(() => {document.getElementById('refreshBtn').click();return{active:document.getElementById('refreshBtn')?.classList.contains('mode-active')||false,compactClass:document.getElementById('output')?.classList.contains('compact-blocks')||false,compactBlocks:document.querySelectorAll('#output .compact-block').length,markdown:document.querySelectorAll('#output .markdown-body').length,source:document.getElementById('output')?.dataset.captureSource||'',liveOpen:Boolean(document.querySelector('#output .compact-live-terminal[open]'))};})()`,
       returnByValue: true,
     });
     const immediate = immediateResult.result?.value || {};
-    if (!immediate.active || !immediate.compactClass || !immediate.compactBlocks || !immediate.markdown || immediate.source !== before.source) {
+    if (!immediate.active || !immediate.compactClass || !immediate.compactBlocks || !immediate.markdown || immediate.source !== before.source || immediate.liveOpen) {
       throw new Error(`Raw to Chat did not restore the compact cache synchronously: ${JSON.stringify({ before, immediate })}`);
     }
     let settled = immediate;
     for (let attempt = 0; attempt < 100; attempt += 1) {
       await delay(50);
       const result = await send('Runtime.evaluate', {
-        expression: `(() => ({active:document.getElementById('refreshBtn')?.classList.contains('mode-active')||false,compactClass:document.getElementById('output')?.classList.contains('compact-blocks')||false,compactBlocks:document.querySelectorAll('#output .compact-block').length,markdown:document.querySelectorAll('#output .markdown-body').length,source:document.getElementById('output')?.dataset.captureSource||'',processPre:document.querySelectorAll('#output .compact-process-line pre').length}))()`,
+        expression: `(() => ({active:document.getElementById('refreshBtn')?.classList.contains('mode-active')||false,compactClass:document.getElementById('output')?.classList.contains('compact-blocks')||false,compactBlocks:document.querySelectorAll('#output .compact-block').length,markdown:document.querySelectorAll('#output .markdown-body').length,source:document.getElementById('output')?.dataset.captureSource||'',processPre:document.querySelectorAll('#output .compact-process-line pre').length,liveOpen:Boolean(document.querySelector('#output .compact-live-terminal[open]'))}))()`,
         returnByValue: true,
       });
       settled = result.result?.value || {};
       if (settled.active && settled.compactClass && settled.compactBlocks && settled.markdown && settled.source === before.source) break;
     }
-    if (!settled.active || !settled.compactClass || !settled.compactBlocks || !settled.markdown || settled.source !== before.source || settled.processPre) {
+    if (!settled.active || !settled.compactClass || !settled.compactBlocks || !settled.markdown || settled.source !== before.source || settled.processPre || settled.liveOpen) {
       throw new Error(`Chat mode did not remain rich after refresh: ${JSON.stringify({ before, settled })}`);
     }
     console.log(`faryo-browser-mode-switch=PASS source=${settled.source||'fallback'} raw-to-chat=rich`);
@@ -1841,21 +1858,28 @@ try {
             return { ready: false, opening: true };
           }
           const pane = panel?.querySelector('pre');
-          if (!pane || pane.scrollHeight <= pane.clientHeight) return { ready: false };
+          if (!pane) return { ready: false, panel: Boolean(panel), panelOpen: Boolean(panel?.open), captureSource: document.getElementById('output')?.dataset.captureSource || '' };
+          if (pane.scrollHeight <= pane.clientHeight) {
+            pane.style.height = '72px';
+            pane.style.maxHeight = '72px';
+          }
+          if (pane.scrollHeight <= pane.clientHeight) return { ready: false, panel: true, panelOpen: Boolean(panel.open), scrollHeight: pane.scrollHeight, clientHeight: pane.clientHeight, lineCount: pane.textContent.split('\\n').length };
           const maximum = pane.scrollHeight - pane.clientHeight;
           const target = Math.max(1, Math.floor(maximum / 3));
           const initialNearBottom = maximum - pane.scrollTop < 48;
           pane.scrollTop = target;
           pane.dataset.faryoSmokeScroll = 'waiting';
           window.__faryoSmokeLiveScrollTarget = target;
-          return { ready: true, initialNearBottom };
+          window.__faryoSmokeLivePane = pane;
+          window.__faryoSmokeLiveRevision = Number(panel.dataset.liveRevision || 0);
+          return { ready: true, initialNearBottom, lineCount: pane.textContent.split('\\n').length };
         })()`,
         returnByValue: true,
       });
       liveScrollState = result.result?.value || {};
       if (liveScrollState.ready) break;
     }
-    if (!liveScrollState.ready) throw new Error('A scrollable Live from tmux pane did not appear');
+    if (!liveScrollState.ready) throw new Error(`A scrollable Live from tmux pane did not appear: ${JSON.stringify(liveScrollState)}`);
     if (!liveScrollState.initialNearBottom) throw new Error('A new Live from tmux pane did not start at the latest output');
 
     let preserved = {};
@@ -1863,15 +1887,14 @@ try {
       await delay(100);
       const result = await send('Runtime.evaluate', {
         expression: `(async () => {
-          let pane = document.querySelector('.compact-live-terminal pre');
-          const replaced = Boolean(pane && pane.dataset.faryoSmokeScroll !== 'waiting');
-          if (replaced) {
-            await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
-            pane = document.querySelector('.compact-live-terminal pre');
-          }
+          const panel = document.querySelector('.compact-live-terminal');
+          const pane = panel?.querySelector('pre');
+          const sameNode = Boolean(pane && pane === window.__faryoSmokeLivePane);
+          const updated = Number(panel?.dataset.liveRevision || 0) > Number(window.__faryoSmokeLiveRevision || 0);
           const target = Number(window.__faryoSmokeLiveScrollTarget || 0);
           return {
-            replaced,
+            updated,
+            sameNode,
             scrollTop: pane ? pane.scrollTop : -1,
             maximum: pane ? Math.max(0, pane.scrollHeight - pane.clientHeight) : -1,
             scrollHeight: pane ? pane.scrollHeight : -1,
@@ -1884,11 +1907,51 @@ try {
         returnByValue: true,
       });
       preserved = result.result?.value || {};
-      if (preserved.replaced) break;
+      if (preserved.updated) break;
     }
-    if (!preserved.replaced) throw new Error('Live from tmux did not refresh during the scroll test');
+    if (!preserved.updated) throw new Error('Live from tmux did not refresh during the scroll test');
+    if (!preserved.sameNode) throw new Error('Live from tmux replaced its DOM node during refresh');
     if (preserved.delta > 2 || preserved.delta < 0) throw new Error(`Live from tmux moved the reading position: ${JSON.stringify(preserved)}`);
-    console.log('faryo-browser-live-scroll=PASS initial=latest manual=preserved');
+
+    const selectionStarted = await send('Runtime.evaluate', {
+      expression: `(() => {const panel=document.querySelector('.compact-live-terminal'),pane=panel?.querySelector('pre'),node=pane?.firstChild;if(!panel||!pane||!node||!node.textContent)return false;const selection=getSelection(),range=document.createRange();range.setStart(node,0);range.setEnd(node,Math.min(12,node.textContent.length));selection.removeAllRanges();selection.addRange(range);window.__faryoSmokeSelectionRevision=Number(panel.dataset.liveRevision||0);window.__faryoSmokeSelectionText=selection.toString();return Boolean(window.__faryoSmokeSelectionText);})()`,
+      returnByValue: true,
+    });
+    if (!selectionStarted.result?.value) throw new Error('Live from tmux selection fixture could not start');
+    let selectionPaused = {};
+    for (let attempt = 0; attempt < 120; attempt += 1) {
+      await delay(100);
+      const result = await send('Runtime.evaluate', {
+        expression: `(() => {const panel=document.querySelector('.compact-live-terminal'),pane=panel?.querySelector('pre'),selection=getSelection();return{sameNode:pane===window.__faryoSmokeLivePane,revision:Number(panel?.dataset.liveRevision||0),initialRevision:Number(window.__faryoSmokeSelectionRevision||0),selectionStable:selection?.toString()===window.__faryoSmokeSelectionText,paused:String(panel?.querySelector('.compact-live-state')?.textContent||'').startsWith('Updates paused'),pending:typeof panel?.__faryoPendingLiveText==='string'};})()`,
+        returnByValue: true,
+      });
+      selectionPaused = result.result?.value || {};
+      if (selectionPaused.paused && selectionPaused.pending) break;
+    }
+    if (!selectionPaused.sameNode || !selectionPaused.selectionStable || !selectionPaused.paused || !selectionPaused.pending || selectionPaused.revision !== selectionPaused.initialRevision) {
+      throw new Error(`Live from tmux disturbed an active selection: ${JSON.stringify(selectionPaused)}`);
+    }
+    await send('Runtime.evaluate', { expression: `getSelection()?.removeAllRanges()` });
+    let selectionFlushed = {};
+    for (let attempt = 0; attempt < 80; attempt += 1) {
+      await delay(100);
+      const result = await send('Runtime.evaluate', {
+        expression: `(() => {const panel=document.querySelector('.compact-live-terminal'),pane=panel?.querySelector('pre');return{sameNode:pane===window.__faryoSmokeLivePane,revision:Number(panel?.dataset.liveRevision||0),initialRevision:Number(window.__faryoSmokeSelectionRevision||0),pending:typeof panel?.__faryoPendingLiveText==='string',copyReady:Boolean(panel?.querySelector('.compact-live-copy'))};})()`,
+        returnByValue: true,
+      });
+      selectionFlushed = result.result?.value || {};
+      if (selectionFlushed.revision > selectionFlushed.initialRevision && !selectionFlushed.pending) break;
+    }
+    if (!selectionFlushed.sameNode || selectionFlushed.revision <= selectionFlushed.initialRevision || selectionFlushed.pending || !selectionFlushed.copyReady) {
+      throw new Error(`Live from tmux did not flush after selection: ${JSON.stringify(selectionFlushed)}`);
+    }
+    const copyResult = await send('Runtime.evaluate', {
+      expression: `(async()=>{const button=document.querySelector('.compact-live-copy'),pane=document.querySelector('.compact-live-terminal pre'),descriptor=Object.getOwnPropertyDescriptor(navigator,'clipboard');let copied='';Object.defineProperty(navigator,'clipboard',{configurable:true,value:{writeText:async(value)=>{copied=String(value);}}});button?.click();await new Promise(resolve=>setTimeout(resolve,50));if(descriptor)Object.defineProperty(navigator,'clipboard',descriptor);else delete navigator.clipboard;return Boolean(button&&pane&&copied===pane.textContent);})()`,
+      awaitPromise: true,
+      returnByValue: true,
+    });
+    if (!copyResult.result?.value) throw new Error('Live from tmux copy button did not copy the visible terminal text');
+    console.log(`faryo-browser-live-scroll=PASS initial=latest lines=${liveScrollState.lineCount} manual=preserved selection=stable copy=ready`);
   }
 
   if (screenshotPath) {
@@ -2216,6 +2279,7 @@ try {
             previewCount: document.querySelectorAll('#attachmentPreview .attachment-thumb').length,
             inputValue: document.getElementById('promptInput')?.value || '',
             pastePrevented: Boolean(window.__faryoClipboardPasteDefaultPrevented),
+            keyNavVisible: Boolean(document.querySelector('.key-nav')?.getClientRects().length),
           };
         })()`,
         returnByValue: true,
@@ -2229,6 +2293,7 @@ try {
     if (attachmentViaClipboard && (uploadState.previewCount !== 1 || uploadState.inputValue !== 'anonymous clipboard caption' || !uploadState.pastePrevented)) {
       throw new Error(`Faryo clipboard image paste failed: ${JSON.stringify(uploadState)}`);
     }
+    if (uploadState.keyNavVisible) throw new Error('Attachment preview incorrectly revealed Codex TUI controls');
 
     await send('Runtime.evaluate', {
       expression: `(() => {

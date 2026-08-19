@@ -57,7 +57,7 @@
     'Type / for commands',
     'Type cd for recent dirs',
     'Ctrl/⌘ Enter sends',
-    'Tap Confirm to approve',
+    'Tap Enter for the TUI choice',
     'Raw shows terminal',
     'Tap Raw again to lock',
     'Tap ↓ for latest',
@@ -507,6 +507,92 @@
     });
   }
 
+  function selectionInsideLivePanel(panel) {
+    const selection = window.getSelection?.();
+    if (!panel || !selection || selection.isCollapsed) return false;
+    return panel.contains(selection.anchorNode) || panel.contains(selection.focusNode);
+  }
+
+  function liveLineCount(text) {
+    return String(text || '').split('\n').filter((line) => line.length).length;
+  }
+
+  function updateLivePanelLabel(panel, text, paused = false) {
+    const label = panel?.querySelector('.compact-live-state');
+    if (!label) return;
+    const lines = liveLineCount(text);
+    label.textContent = paused ? `Updates paused · ${lines} lines ready` : `Agent working · ${lines} lines`;
+  }
+
+  function createLiveTerminalPanel() {
+    const panel = document.createElement('details');
+    panel.className = 'compact-live-terminal';
+    panel.dataset.session = selectedSession || 'default';
+    panel.dataset.faryoTransient = 'live';
+    panel.dataset.liveRevision = '0';
+    panel.innerHTML = '<summary class="compact-live-title"><span class="live-dot"></span><span>Live from tmux</span><span class="compact-live-state">Agent working</span><button class="compact-live-copy" type="button" aria-label="Copy Live from tmux" title="Copy Live from tmux">⧉</button></summary><pre></pre>';
+    output.appendChild(panel);
+    return panel;
+  }
+
+  function commitLiveTerminalText(panel, text, state = null) {
+    const pre = panel?.querySelector('pre');
+    if (!pre) return;
+    const scrollState = state || liveTerminalState();
+    pre.textContent = String(text || '');
+    panel.__faryoPendingLiveText = null;
+    panel.__faryoPendingLiveRemoval = false;
+    panel.dataset.liveRevision = String(Number(panel.dataset.liveRevision || 0) + 1);
+    updateLivePanelLabel(panel, text, false);
+    restoreLiveTerminalState(scrollState);
+  }
+
+  function syncLiveTerminal(text, state = null) {
+    const value = String(text || '');
+    let panel = output.querySelector('.compact-live-terminal');
+    if (!value) {
+      if (!panel) return;
+      if (selectionInsideLivePanel(panel)) {
+        panel.__faryoPendingLiveRemoval = true;
+        const label = panel.querySelector('.compact-live-state');
+        if (label) label.textContent = 'Finished · selection held';
+      } else {
+        panel.remove();
+      }
+      return;
+    }
+    if (!panel) panel = createLiveTerminalPanel();
+    panel.dataset.session = selectedSession || 'default';
+    panel.__faryoPendingLiveRemoval = false;
+    const pre = panel.querySelector('pre');
+    if (pre?.textContent === value && !panel.__faryoPendingLiveText) return;
+    if (selectionInsideLivePanel(panel)) {
+      panel.__faryoPendingLiveText = value;
+      updateLivePanelLabel(panel, value, true);
+      return;
+    }
+    commitLiveTerminalText(panel, value, state);
+  }
+
+  function flushDeferredLiveTerminal() {
+    const panel = output.querySelector('.compact-live-terminal');
+    if (!panel || selectionInsideLivePanel(panel)) return;
+    if (panel.__faryoPendingLiveRemoval) {
+      panel.remove();
+      return;
+    }
+    if (typeof panel.__faryoPendingLiveText === 'string') {
+      const value = panel.__faryoPendingLiveText;
+      commitLiveTerminalText(panel, value, liveTerminalState());
+    }
+  }
+
+  let liveSelectionFlushTimer = null;
+  document.addEventListener('selectionchange', () => {
+    if (liveSelectionFlushTimer) clearTimeout(liveSelectionFlushTimer);
+    liveSelectionFlushTimer = setTimeout(flushDeferredLiveTerminal, 80);
+  });
+
   outputWrap.addEventListener('scroll', () => { updateBottomButton(); maybeLoadOlderHistory(); }, { passive: true });
   outputWrap.addEventListener('wheel', noteHistoryUserIntent, { passive: true });
   outputWrap.addEventListener('touchstart', noteHistoryUserIntent, { passive: true });
@@ -524,6 +610,20 @@
     if (panel.open) requestAnimationFrame(() => window.FaryoLiveScroll?.restore(panel.querySelector('pre'), null));
   }, true);
   output.addEventListener('click', async (event) => {
+    const liveCopy = event.target.closest('.compact-live-copy');
+    if (liveCopy) {
+      event.preventDefault();
+      event.stopPropagation();
+      const text = liveCopy.closest('.compact-live-terminal')?.querySelector('pre')?.textContent || '';
+      try {
+        await navigator.clipboard.writeText(text);
+        liveCopy.textContent = '✓';
+        setTimeout(() => { if (liveCopy.isConnected) liveCopy.textContent = '⧉'; }, 900);
+      } catch (_error) {
+        setError('Copy failed');
+      }
+      return;
+    }
     const protectedLink = event.target.closest('a[data-faryo-fetch-href]');
     if (protectedLink) {
       event.preventDefault();
@@ -1812,7 +1912,13 @@
       } catch (_error) {
         const parsed = parsedInternalAnnotations(text);
         output.dataset.renderFallback = 'true';
-        output.innerHTML = `<section class="compact-capture-warning" role="status">Rich conversation layout failed. Safe plain text remains available and live updates will continue.</section><section class="compact-block output"><pre class="capture-render-fallback">${escapeHtml(parsed.body || '')}</pre>${renderMemoryReferences(parsed.citations)}</section>`;
+        const livePanel = output.querySelector('[data-faryo-transient="live"]');
+        for (const child of Array.from(output.children)) {
+          if (child !== livePanel) child.remove();
+        }
+        const template = document.createElement('template');
+        template.innerHTML = `<section class="compact-capture-warning" role="status">Rich conversation layout failed. Safe plain text remains available and live updates will continue.</section><section class="compact-block output"><pre class="capture-render-fallback">${escapeHtml(parsed.body || '')}</pre>${renderMemoryReferences(parsed.citations)}</section>`;
+        output.insertBefore(template.content, livePanel || null);
       }
     }
     else if (capture.html && !parsedInternalAnnotations(text).citations.length) output.innerHTML = decorateMetaLines(capture.html, text);
@@ -1820,10 +1926,9 @@
     if (outputMode === 'compact' && capture.agentSource === 'codex-cli' && !isStructured) {
       output.insertAdjacentHTML('afterbegin', '<section class="compact-capture-warning" role="status">Structured Codex history is unavailable. Showing a terminal fallback; Markdown and formulas may be incomplete.</section>');
     }
-    if (outputMode === 'compact' && capture.agentRunning && capture.liveText) {
-      output.insertAdjacentHTML('beforeend', `<details class="compact-live-terminal" data-session="${escapeHtml(selectedSession || 'default')}"><summary class="compact-live-title"><span class="live-dot"></span><span>Live from tmux</span><span class="compact-live-state">Agent working</span></summary><pre>${escapeHtml(String(capture.liveText))}</pre></details>`);
+    if (outputMode === 'compact') {
+      syncLiveTerminal(capture.agentRunning && capture.liveText ? capture.liveText : '', liveStateSnapshot);
     }
-    restoreLiveTerminalState(liveStateSnapshot);
     const indexedQuestions = isStructured && conversationHistory.initialized
       ? conversationHistory.questions
       : null;
@@ -1904,9 +2009,11 @@
 
   async function setOutputMode(mode) {
     const togglingFull = mode === 'full' && outputMode === 'full';
+    const returningToChat = mode === 'compact' && outputMode !== 'compact';
     const wasNearBottom = isNearBottom();
     const targetCapture = mode === 'compact' ? lastCompactCapture : lastFullCapture;
     resetRefreshState();
+    if (returningToChat) persistLivePanelPreference(selectedSession, false);
     fullLocked = togglingFull ? !fullLocked : false;
     outputMode = mode;
     renderOutputModeButton();
@@ -1989,7 +2096,10 @@
 
   function updateStatusLineAutoExpand() {
     const on = pendingAttachments.length > 0 || needsConfirmUI;
-    document.querySelector('.status-line')?.classList.toggle('auto-expanded', on);
+    const statusLine = document.querySelector('.status-line');
+    statusLine?.classList.toggle('auto-expanded', on);
+    statusLine?.classList.toggle('tui-controls-visible', needsConfirmUI);
+    document.querySelector('.key-nav')?.setAttribute('aria-hidden', needsConfirmUI ? 'false' : 'true');
     document.querySelector('footer')?.classList.toggle('auto-expanded', on);
   }
 
@@ -2387,10 +2497,12 @@
   });
 
 
-  async function approve() {
+  async function chooseTuiOption() {
+    needsConfirmUI = false;
+    updateStatusLineAutoExpand();
     try { await postAction('/api/approve'); refreshCapture(currentCaptureLines(), { silent: true }).catch(handleBackgroundError); setTimeout(() => refreshCapture(currentCaptureLines(), { silent: true }).catch(handleBackgroundError), 500); } catch (err) { setError(userErrorMessage(err)); }
   }
-  $('approveSmallBtn').addEventListener('click', approve);
+  $('approveSmallBtn').addEventListener('click', chooseTuiOption);
   const statusCollapseKey = 'rdStatusCollapsedV2';
   const storedStatusCollapse = localStorage.getItem(statusCollapseKey);
   const initialStatusCollapsed = storedStatusCollapse === null ? true : storedStatusCollapse === '1';

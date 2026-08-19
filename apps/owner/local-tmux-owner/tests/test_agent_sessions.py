@@ -46,12 +46,23 @@ class AgentSessionTest(unittest.TestCase):
         with (
             mock.patch.object(server, "cleanup_managed_sessions") as cleanup,
             mock.patch.object(server, "tmux_sessions", return_value=["desktop", "managed", "shell"]),
-            mock.patch.object(server, "agent_in_pane", side_effect=lambda config: config.session != "shell"),
+            mock.patch.object(server, "agent_profile_in_pane", side_effect=lambda config: server.CODEX_PROFILE if config.session != "shell" else None),
+            mock.patch.object(server, "managed_session", return_value=False),
         ):
             count = server.active_agent_count(self.config)
 
         self.assertEqual(count, 2)
         cleanup.assert_called_once_with(self.config)
+
+    def test_active_limit_reserves_a_slot_while_managed_codex_is_starting(self):
+        with (
+            mock.patch.object(server, "cleanup_managed_sessions"),
+            mock.patch.object(server, "tmux_sessions", return_value=["faryo1"]),
+            mock.patch.object(server, "agent_profile_in_pane", return_value=None),
+            mock.patch.object(server, "managed_session", return_value=True),
+            mock.patch.object(server, "agent_session_lifecycle", return_value=("starting", False)),
+        ):
+            self.assertEqual(server.active_agent_count(self.config), 1)
 
     def test_new_managed_session_uses_the_first_available_faryo_number(self):
         with mock.patch.object(server, "tmux_sessions", return_value=["codex", "faryo1", "faryo3", "faryo-legacy"]):
@@ -147,6 +158,8 @@ class AgentSessionTest(unittest.TestCase):
         self.assertIn("/runtime/codex.js", launch[-1])
         session_option.assert_any_call(self.config, name, "@faryo_managed", "1")
         session_option.assert_any_call(self.config, name, "@faryo_launch_id", "web-launch-123")
+        self.assertTrue(any(call.args[2] == "@faryo_starting_at" and call.args[3] for call in session_option.call_args_list))
+        session_option.assert_any_call(self.config, name, "@faryo_starting_at", "")
         ensure_width.assert_called_once()
 
     def test_duplicate_launch_id_reuses_the_same_managed_session(self):
@@ -169,8 +182,57 @@ class AgentSessionTest(unittest.TestCase):
 
         self.assertEqual(name, "faryo7")
         active_count.assert_not_called()
-        tmux.assert_not_called()
+        self.assertFalse(any(call.args[1] and call.args[1][0] == "new-session" for call in tmux.call_args_list))
         ensure_width.assert_called_once()
+
+    def test_agent_session_lifecycle_uses_process_and_start_marker_evidence(self):
+        with mock.patch.object(server, "agent_ready_for_input", return_value=False):
+            self.assertEqual(
+                server.agent_session_lifecycle(self.config, "faryo1", server.CODEX_PROFILE, True),
+                ("running", True),
+            )
+            self.assertEqual(
+                server.agent_session_lifecycle(self.config, "desktop", server.CODEX_PROFILE, False),
+                ("desktop", True),
+            )
+        with mock.patch.object(server, "agent_ready_for_input", return_value=True):
+            self.assertEqual(
+                server.agent_session_lifecycle(self.config, "faryo1", server.CODEX_PROFILE, True),
+                ("waiting", False),
+            )
+        with (
+            mock.patch.object(server, "agent_profile_in_pane", return_value=None),
+            mock.patch.object(server, "tmux_session_option", return_value="1000"),
+        ):
+            self.assertEqual(server.agent_session_lifecycle(self.config, "faryo1", None, True, now=1010), ("starting", False))
+            self.assertEqual(server.agent_session_lifecycle(self.config, "faryo1", None, True, now=1100), ("exited", False))
+
+    def test_managed_shell_after_codex_exit_remains_visible_until_cleanup(self):
+        def option(_config, _session, key, _value=None):
+            return {
+                "@faryo_agent_session_id": "thread-exited",
+                "@faryo_agent_source": "codex-cli",
+                "@faryo_session_title": "Exited fixture",
+                "@faryo_starting_at": "",
+                "@faryo_git_root": "",
+            }.get(key, "")
+
+        with (
+            mock.patch.object(server, "tmux_sessions", return_value=["faryo1"]),
+            mock.patch.object(server, "agent_profile_in_pane", return_value=None),
+            mock.patch.object(server, "managed_session", return_value=True),
+            mock.patch.object(server, "get_pane_cwd", return_value="/workspace/project"),
+            mock.patch.object(server, "tmux_session_option", side_effect=option),
+            mock.patch.object(server, "session_created_ts", return_value=100),
+            mock.patch.object(server, "session_git_label", return_value=""),
+        ):
+            items, excluded = server.active_agent_session_items(self.config, codex_state=({}, set()))
+
+        self.assertEqual(len(items), 1)
+        self.assertEqual(items[0]["state"], "exited")
+        self.assertFalse(items[0]["agentRunning"])
+        self.assertEqual(items[0]["tmuxSession"], "faryo1")
+        self.assertIn("thread-exited", excluded)
 
     def test_agent_start_timeout_removes_the_empty_tmux(self):
         completed = server.subprocess.CompletedProcess(["tmux"], 0, "", "")

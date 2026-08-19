@@ -70,6 +70,12 @@ the output area with complete terminal evidence; returning to Chat immediately
 replays only the structured/compact capture and restores the separate Live tmux
 panel before the next network refresh arrives.
 
+Live tmux keeps at most 180 lines from the current user turn. Its `<details>` and
+`<pre>` nodes survive normal Compact Chat reconciliation, so manual scroll and
+browser selection remain anchored. New terminal text is held in memory while a
+selection is active, flushed when selection ends, and can also be copied with
+the panel's dedicated copy button.
+
 Structured history serves at most 12 recent complete turns in the initial
 capture. A separate full-history index records only displayable message byte
 boundaries and truncated user previews, not tool-event bodies. The authenticated

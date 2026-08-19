@@ -167,6 +167,7 @@ try {
       const style = historyList ? getComputedStyle(historyList) : null;
       const rootStyle = getComputedStyle(document.documentElement);
       const launchers = [...document.querySelectorAll('#newSessionSlot .launcher-card')];
+      const lifecycleStates = [...active, ...history].map((item) => item.dataset.state || '');
       const packageList = document.getElementById('packageList');
       window.__faryoHistoryPageOne = historySignature;
       return {
@@ -197,6 +198,8 @@ try {
         viewport: { width: innerWidth, height: innerHeight },
         pageHorizontalOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth + 1,
         historyToolsReady: Boolean(document.getElementById('historySearchInput') && document.querySelector('[data-history-period="7d"]') && document.querySelector('[data-history-archive="archived"]')),
+        lifecycleStatesValid: lifecycleStates.every((value) => ['starting','running','waiting','exited','desktop','resumable','archived'].includes(value)),
+        securityControlsReady: Boolean(document.getElementById('securityActivity') && document.getElementById('revokeSessions')),
       };
     })()`);
     if (first?.ready) break;
@@ -214,11 +217,30 @@ try {
   if (!first.launcherCount || !first.launcherLabelsClear) throw new Error('New-session launchers are unclear');
   if (!first.launcherIsCodexOnly) throw new Error('Retired agent launchers are still visible');
   if (!first.historyToolsReady || !first.firstHistoryTitle) throw new Error('Session History search controls are not ready');
+  if (!first.lifecycleStatesValid) throw new Error('Session cards do not expose explicit lifecycle states');
+  if (!first.securityControlsReady) throw new Error('Security activity controls are not available');
   const validPalettes = new Set(['#f6f7f9:#5369e7', '#0f1115:#7188ff']);
   if (!validPalettes.has(`${first.palette.bg}:${first.palette.accent}`)) throw new Error(`Unexpected shared palette: ${JSON.stringify(first.palette)}`);
   const expectedPalette = { light: '#f6f7f9:#5369e7', dark: '#0f1115:#7188ff' }[smokeTheme];
   if (expectedPalette && `${first.palette.bg}:${first.palette.accent}` !== expectedPalette) throw new Error(`Theme palette mismatch: ${JSON.stringify(first.palette)}`);
   if (first.pageHorizontalOverflow) throw new Error(`Gateway workbench overflowed horizontally: ${JSON.stringify(first.viewport)}`);
+
+  const lifecycleFixture = await evaluate(`(() => {const states=['starting','running','waiting','exited','desktop','resumable'],labels={starting:'Starting',running:'Running',waiting:'Waiting',exited:'Exited',desktop:'Desktop',resumable:'Resume'};return states.map(state=>{const active=!['resumable'].includes(state),card=sessionCard({id:'anonymous-thread',title:'Anonymous session',route:'txy',routeLabel:'Workstation',source:'codex-cli',tmuxSession:active?'anonymous-tmux':'',managed:active&&state!=='desktop',agentRunning:state==='running',state,updatedTs:1});return{state:card.dataset.state,label:card.querySelector('.session-meta')?.textContent.includes(labels[state])||false,close:Boolean(card.querySelector('.close-session'))};});})()`);
+  if (!Array.isArray(lifecycleFixture) || lifecycleFixture.some((item) => !item.label || item.state === 'desktop' && item.close || ['starting','running','waiting','exited'].includes(item.state) && !item.close)) {
+    throw new Error(`Session lifecycle cards are inconsistent: ${JSON.stringify(lifecycleFixture)}`);
+  }
+
+  await evaluate("document.getElementById('securityActivity').click()");
+  let activityPanel = {};
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    await delay(50);
+    activityPanel = await evaluate(`(() => ({open:document.getElementById('modal')?.classList.contains('open')||false,title:document.getElementById('modalTitle')?.textContent||'',privacy:document.getElementById('modalBody')?.textContent?.includes('Message text, titles and paths are never recorded')||false,rows:document.querySelectorAll('#modalChoices .activity-row').length,noHorizontalOverflow:document.documentElement.scrollWidth<=document.documentElement.clientWidth+1}))()`);
+    if (activityPanel?.open && activityPanel.title === 'Security activity') break;
+  }
+  if (!activityPanel.open || activityPanel.title !== 'Security activity' || !activityPanel.privacy || !activityPanel.rows || !activityPanel.noHorizontalOverflow) {
+    throw new Error(`Security activity panel failed: ${JSON.stringify(activityPanel)}`);
+  }
+  await evaluate("[...document.querySelectorAll('#modalActions button')].find((item)=>item.textContent==='Cancel')?.click()");
 
   const historyQuery = first.firstHistoryTitle.slice(0, Math.min(10, first.firstHistoryTitle.length));
   await evaluate(`(() => {const input=document.getElementById('historySearchInput');input.value=${JSON.stringify(historyQuery)};input.dispatchEvent(new Event('input',{bubbles:true}));})()`);

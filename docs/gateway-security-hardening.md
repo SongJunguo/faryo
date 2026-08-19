@@ -62,6 +62,12 @@ Gateway implements the following inner controls:
   restricted browser permissions, HSTS, and MIME sniffing protection;
 - server-side Owner-token injection, so public browser URLs do not contain Owner
   tokens.
+- a best-effort control audit at private Gateway state: mode `600`, seven-day or
+  5000-row retention, per-user/route read scope, HMAC-pseudonymous targets, and
+  no prompt, answer, title, cwd, raw session ID, token, Cookie, CSRF value, or IP
+  history;
+- separate sign-out and revoke-all-inner-sessions actions. Revocation advances
+  the account auth epoch and does not close Codex or tmux.
 
 ## Residual risks
 
@@ -98,6 +104,11 @@ Gateway implements the following inner controls:
   stop working after a password change.
 - Browser write operations work, while the same authenticated POST without a
   valid CSRF header returns `403`.
+- Private control audit is mode `600`; a denied fixture appears with an empty or
+  HMAC target, while its request body and raw identifier do not appear in the
+  file or Security activity API.
+- `Sign out this device` and `Revoke signed-in devices` remain distinct, and a
+  revoke test invalidates inner cookies without changing tmux sessions.
 - Content Security Policy is present and the browser console shows no blocked
   first-party application assets.
 - Runtime config, password hashes, tunnel credentials, tokens, domains, session

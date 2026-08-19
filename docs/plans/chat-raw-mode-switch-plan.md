@@ -58,3 +58,6 @@
   的同步首帧已有 compact/markdown DOM，稳定后 capture source 仍为 `codex-jsonl`，没有 Raw
   process `<pre>` 残留。
 - 部署与测试没有发送消息；全部真实 agent tmux window geometry 保持不变。
+- 用户进一步确认未收起的 `Explored/Edited/diff` 来自展开的 Live 终端，而非正式回答。
+  现在只有显式 Raw→Chat 会把该会话 Live preference 设为收起；普通实时刷新继续尊重用户
+  之后的手动展开和滚动位置。

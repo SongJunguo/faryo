@@ -90,7 +90,7 @@ CAPTURE_COMPACT_LINES = 320
 CAPTURE_FULL_LINES = 800
 CAPTURE_DEFAULT_LINES = CAPTURE_FULL_LINES
 CAPTURE_MAX_LINES = CAPTURE_FULL_LINES
-CODEX_LIVE_TAIL_LINES = 60
+CODEX_LIVE_TAIL_LINES = 180
 EVENT_STREAM_MAX_SECONDS = 75
 EVENT_STREAM_MAX_CONNECTIONS = 16
 EVENT_STREAM_HEARTBEAT_SECONDS = 10
@@ -125,6 +125,7 @@ AGENT_HISTORY_ARCHIVE_FILTERS = {"active", "archived", "all"}
 EMPTY_MANAGED_SESSION_TTL_SECONDS = 60
 MAX_MANAGED_AGENT_IDLE_SECONDS = 24 * 60 * 60
 AGENT_START_READY_TIMEOUT = 15.0
+AGENT_START_STATE_GRACE_SECONDS = 5.0
 START_DIRECTORY_MAX_ENTRIES = 160
 RUNTIME_LOCK = threading.RLock()
 RELEASE_VERSION_CACHE: str | None = None
@@ -625,7 +626,33 @@ def codex_session_item(config: Config, item: dict[str, Any], index_titles: dict[
     # thread name to session_index.jsonl.
     startup_title = tmux_session_option(config, tmux_session, "@faryo_session_title") if tmux_session else ""
     title = index_titles.get(thread_id) or startup_title or codex_thread_title(item, fallback, index_titles)
-    return {"id": thread_id, "title": title, "gitLabel": session_git_label(session_git_cwd(config, tmux_session, cwd), git_labels, bool(tmux_session)), "cwd": short_path(cwd), "createdAt": item.get("created_at") or "", "updatedAt": item.get("updated_at") or "", "updatedTs": updated_ts, "rolloutPath": item.get("rollout_path") or "", "model": item.get("model") or "", "reasoningEffort": item.get("reasoning_effort") or "", "source": "codex-cli", "tmuxSession": tmux_session, "active": bool(tmux_session), "managed": bool(tmux_session and managed_session(config, tmux_session)), "agentRunning": agent_session_running(config, tmux_session), "archived": bool(item.get("archived"))}
+    archived = bool(item.get("archived"))
+    managed = bool(tmux_session and managed_session(config, tmux_session))
+    state = "archived" if archived else "resumable"
+    agent_running = False
+    if tmux_session:
+        target = Config(tmux_session, config.token, config.pane_width)
+        profile = agent_profile_in_pane(target)
+        state, agent_running = agent_session_lifecycle(config, tmux_session, profile, managed)
+    return {
+        "id": thread_id,
+        "title": title,
+        "gitLabel": session_git_label(session_git_cwd(config, tmux_session, cwd), git_labels, bool(tmux_session)),
+        "cwd": short_path(cwd),
+        "createdAt": item.get("created_at") or "",
+        "updatedAt": item.get("updated_at") or "",
+        "updatedTs": updated_ts,
+        "rolloutPath": item.get("rollout_path") or "",
+        "model": item.get("model") or "",
+        "reasoningEffort": item.get("reasoning_effort") or "",
+        "source": "codex-cli",
+        "tmuxSession": tmux_session,
+        "active": bool(tmux_session),
+        "managed": managed,
+        "agentRunning": agent_running,
+        "state": state,
+        "archived": archived,
+    }
 
 
 def clean_agent_history_query(value: Any) -> str:
@@ -724,6 +751,7 @@ def codex_history_items(config: Config, history_root: str | None = None) -> list
 def active_agent_session_items(config: Config, history_root: str | None = None, codex_state: tuple[dict[str, str], set[str]] | None = None) -> tuple[list[dict[str, Any]], set[str]]:
     active_codex, superseded = codex_state or active_codex_thread_state(config)
     index_titles = codex_session_index_titles(); git_labels: dict[str, str] = {}; items: list[dict[str, Any]] = []
+    represented_ids: set[str] = set(active_codex) | superseded
     rows_by_id: dict[str, dict[str, Any]] = {}
     if active_codex:
         placeholders = ",".join("?" for _ in active_codex)
@@ -741,20 +769,25 @@ def active_agent_session_items(config: Config, history_root: str | None = None, 
     for name in tmux_sessions(config):
         if name in seen_tmux:
             continue
-        target = target_config(config, name)
+        target = Config(name, config.token, config.pane_width)
         profile = agent_profile_in_pane(target)
-        if not profile:
+        managed = managed_session(config, name)
+        if not profile and not managed:
             continue
         cwd = get_pane_cwd(target)
         if history_root is not None and not path_under_root(cwd, history_root):
             continue
-        thread = active_agent_thread(target, cwd)
+        thread = active_agent_thread(target, cwd) if profile else None
         thread_id = str((thread or {}).get("id") or tmux_session_option(config, name, "@faryo_agent_session_id") or name)
+        state, agent_running = agent_session_lifecycle(config, name, profile, managed)
         updated_ts = session_created_ts(target); updated_at = iso_from_ts(updated_ts) if updated_ts else ""
         title = index_titles.get(thread_id) or tmux_session_option(config, name, "@faryo_session_title") or (codex_thread_title(thread, short_path(cwd) or name, index_titles) if thread else short_path(cwd) or name)
-        items.append({"id": thread_id, "title": title, "gitLabel": session_git_label(session_git_cwd(config, name, cwd), git_labels), "cwd": short_path(cwd), "createdAt": "", "updatedAt": updated_at, "updatedTs": updated_ts, "rolloutPath": (thread or {}).get("rollout_path") or "", "model": (thread or {}).get("model") or "", "reasoningEffort": (thread or {}).get("reasoning_effort") or "", "source": profile.source, "tmuxSession": name, "active": True, "managed": managed_session(config, name), "agentRunning": agent_session_running(config, name)})
+        source = profile.source if profile else tmux_session_option(config, name, "@faryo_agent_source") or "codex-cli"
+        items.append({"id": thread_id, "title": title, "gitLabel": session_git_label(session_git_cwd(config, name, cwd), git_labels), "cwd": short_path(cwd), "createdAt": "", "updatedAt": updated_at, "updatedTs": updated_ts, "rolloutPath": (thread or {}).get("rollout_path") or "", "model": (thread or {}).get("model") or "", "reasoningEffort": (thread or {}).get("reasoning_effort") or "", "source": source, "tmuxSession": name, "active": True, "managed": managed, "agentRunning": agent_running, "state": state, "archived": False})
+        if thread_id != name:
+            represented_ids.add(thread_id)
         seen_tmux.add(name)
-    return sorted(items, key=lambda item: float(item.get("updatedTs") or 0), reverse=True), set(active_codex) | superseded
+    return sorted(items, key=lambda item: float(item.get("updatedTs") or 0), reverse=True), represented_ids
 
 
 def agent_session_page(config: Config, limit: int, offset: int = 0, history_root: str | None = None, query: str = "", period: str = "all", archive: str = "active") -> dict[str, Any]:
@@ -771,15 +804,19 @@ def agent_session_items(config: Config, history_root: str | None = None) -> list
     git_labels: dict[str, str] = {}; index_titles = codex_session_index_titles()
     for name in tmux_sessions(config):
         if name in seen_tmux: continue
-        target = target_config(config, name)
+        target = Config(name, config.token, config.pane_width)
         profile = agent_profile_in_pane(target)
-        if not profile: continue
+        managed = managed_session(config, name)
+        if not profile and not managed: continue
         cwd = get_pane_cwd(target)
         if history_root is not None and not path_under_root(cwd, history_root): continue
-        thread = active_agent_thread(target, cwd) or {}; thread_id = str(thread.get("id") or name)
+        thread = (active_agent_thread(target, cwd) or {}) if profile else {}
+        thread_id = str(thread.get("id") or tmux_session_option(config, name, "@faryo_agent_session_id") or name)
+        state, agent_running = agent_session_lifecycle(config, name, profile, managed)
         updated_ts = session_created_ts(target); updated_at = iso_from_ts(updated_ts) if updated_ts else ""
         title = index_titles.get(thread_id) or tmux_session_option(config, name, "@faryo_session_title") or (codex_thread_title(thread, short_path(cwd) or name, index_titles) if thread else short_path(cwd) or name)
-        items.append({"id": thread_id, "title": title, "gitLabel": session_git_label(session_git_cwd(config, name, cwd), git_labels), "cwd": short_path(cwd), "createdAt": "", "updatedAt": updated_at, "updatedTs": updated_ts, "rolloutPath": "", "model": "", "reasoningEffort": "", "source": profile.source, "tmuxSession": name, "active": True, "managed": managed_session(config, name), "agentRunning": agent_session_running(config, name)})
+        source = profile.source if profile else tmux_session_option(config, name, "@faryo_agent_source") or "codex-cli"
+        items.append({"id": thread_id, "title": title, "gitLabel": session_git_label(session_git_cwd(config, name, cwd), git_labels), "cwd": short_path(cwd), "createdAt": "", "updatedAt": updated_at, "updatedTs": updated_ts, "rolloutPath": "", "model": "", "reasoningEffort": "", "source": source, "tmuxSession": name, "active": True, "managed": managed, "agentRunning": agent_running, "state": state, "archived": False})
     return sorted(items, key=lambda item: float(item.get("updatedTs") or 0), reverse=True)
 
 
@@ -879,6 +916,7 @@ def start_agent_runtime(config: Config, cwd: Path, command: str, args: list[str]
             if res.returncode != 0: raise OwnerError(res.stderr.strip() or "tmux session start failed", HTTPStatus.INTERNAL_SERVER_ERROR)
             created_here = True
             tmux_session_option(config, name, "@faryo_managed", "1")
+            tmux_session_option(config, name, "@faryo_starting_at", str(time.time()))
             if source := AGENT_SOURCE_BY_COMMAND.get(command): tmux_session_option(config, name, "@faryo_agent_source", source)
             if clean_launch_id:
                 tmux_session_option(config, name, "@faryo_launch_id", clean_launch_id)
@@ -890,7 +928,10 @@ def start_agent_runtime(config: Config, cwd: Path, command: str, args: list[str]
         return name
     target = Config(name, config.token, config.pane_width); deadline = time.monotonic() + AGENT_START_READY_TIMEOUT
     while time.monotonic() < deadline:
-        if has_session(target) and codex_cli_in_pane(target): ensure_pane_width(target); return name
+        if has_session(target) and codex_cli_in_pane(target):
+            tmux_session_option(config, name, "@faryo_starting_at", "")
+            ensure_pane_width(target)
+            return name
         time.sleep(0.2)
     if created_here:
         tmux(config, ["kill-session", "-t", name], timeout=3)
@@ -929,6 +970,28 @@ def managed_session(config: Config, name: str | None) -> bool:
     return tmux_session_option(config, name, "@faryo_managed") == "1"
 
 
+def agent_session_lifecycle(config: Config, name: str, profile: AgentProfile | None = None, is_managed: bool | None = None, now: float | None = None) -> tuple[str, bool]:
+    """Return the user-facing lifecycle state and whether the agent is busy."""
+    target = Config(name, config.token, config.pane_width)
+    managed = managed_session(config, name) if is_managed is None else is_managed
+    detected = agent_profile_in_pane(target) if profile is None else profile
+    if detected is not None:
+        running = not agent_ready_for_input(target, detected)
+        if not managed:
+            return "desktop", running
+        return ("running" if running else "waiting"), running
+    if not managed:
+        return "", False
+    try:
+        started_at = float(tmux_session_option(config, name, "@faryo_starting_at") or 0)
+    except ValueError:
+        started_at = 0.0
+    current = time.time() if now is None else now
+    if started_at and current - started_at <= AGENT_START_READY_TIMEOUT + AGENT_START_STATE_GRACE_SECONDS:
+        return "starting", False
+    return "exited", False
+
+
 def session_idle_seconds(config: Config) -> float:
     res = tmux(config, ["display-message", "-p", "-t", tmux_target(config), "#{session_activity}"], timeout=2)
     try: return max(0.0, time.time() - float(res.stdout.strip())) if res.returncode == 0 else 0.0
@@ -959,7 +1022,17 @@ def cleanup_managed_sessions(config: Config, agent_idle_seconds: int = 0) -> Non
 
 def active_agent_count(config: Config) -> int:
     cleanup_managed_sessions(config)
-    return sum(1 for name in tmux_sessions(config) if agent_in_pane(Config(name, config.token, config.pane_width)))
+    count = 0
+    now = time.time()
+    for name in tmux_sessions(config):
+        target = Config(name, config.token, config.pane_width)
+        profile = agent_profile_in_pane(target)
+        if profile is not None:
+            count += 1
+            continue
+        if managed_session(config, name) and agent_session_lifecycle(config, name, None, True, now)[0] == "starting":
+            count += 1
+    return count
 
 
 def bounded_max_running(payload: dict[str, Any]) -> int:
@@ -2391,9 +2464,7 @@ def capture_text(config: Config, lines: int = CAPTURE_DEFAULT_LINES, profile: Ag
 def codex_live_tail(text: str, max_lines: int = CODEX_LIVE_TAIL_LINES) -> str:
     lines = text.splitlines()
     user_starts = [index for index, line in enumerate(lines) if CODEX_PROFILE.user_prompt_re.match(line)]
-    running_starts = [index for index, line in enumerate(lines) if re.match(r"^\s*•\s+Running\b", line)]
-    starts = user_starts + running_starts
-    selected = lines[max(starts):] if starts else lines[-min(len(lines), 24):]
+    selected = lines[max(user_starts):] if user_starts else lines
     selected = selected[-max(1, max_lines):]
     redacted = [
         re.sub(r"(?i)(\bAccount:\s*).*$", r"\1<redacted>", line)
@@ -2739,8 +2810,8 @@ def status_payload(config: Config) -> dict[str, Any]:
             weekly_rate_limit = cached_weekly_rate_limit()
         except Exception:
             weekly_rate_limit = None
-    agent_active = profile is not None
-    agent_running = bool(agent_active and not agent_ready_for_input(config, capture_profile))
+    managed = bool(tmux_alive and managed_session(config, config.session))
+    agent_state, agent_running = agent_session_lifecycle(config, config.session, profile, managed) if tmux_alive else ("exited", False)
     target_alive = tmux_alive
     session_title = codex_thread_title(thread, str(thread.get("id") or "Untitled session")) if thread else None
     return {
@@ -2763,6 +2834,7 @@ def status_payload(config: Config) -> dict[str, Any]:
         "contextUsage": context_usage,
         "weeklyRateLimit": weekly_rate_limit,
         "agentRunning": agent_running,
+        "agentState": agent_state,
         "paneCommand": get_pane_current_command(config) if tmux_alive else None,
         "agentSource": profile.source if profile else "",
         "agentProfile": profile.key if profile else "",
@@ -4232,8 +4304,9 @@ class Handler(SimpleHTTPRequestHandler):
                 if raw_launch_id and not launch_id:
                     raise OwnerError("invalid client launch id")
                 title = clean_session_title(payload.get("title"))
+                existing_launch = managed_launch_session(self.config, launch_id or "") if launch_id else ""
                 name = start_agent_runtime(self.config, cwd, command, [], bounded_max_running(payload), wait_ready=True, title=title, launch_id=launch_id or "")
-                self.write_json({"ok": True, "session": name, "updatedAt": now_iso()})
+                self.write_json({"ok": True, "session": name, "duplicate": bool(existing_launch and existing_launch == name), "updatedAt": now_iso()})
                 return
             if parsed.path == "/api/agent/cleanup-idle":
                 idle_seconds = max(60, min(int(payload.get("idle_seconds") or payload.get("idleSeconds") or 0), MAX_MANAGED_AGENT_IDLE_SECONDS))

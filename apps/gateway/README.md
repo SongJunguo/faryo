@@ -75,6 +75,10 @@ Sessions` includes every tmux pane currently running a recognized Codex process,
 including panes started directly on the endpoint. Only sessions
 created and stamped by Faryo expose the remote `Close` action; externally
 started desktop tmux sessions remain openable but protected from remote close.
+Cards use explicit lifecycle states: Starting, Running, Waiting, Exited,
+Desktop, Resumable, and Archived. Detection follows the pane process tree and
+Codex input readiness rather than trusting `pane_current_command`; a managed
+shell whose Codex child exited remains visible briefly with a safe Close action.
 `Session History` excludes those live sessions, scrolls independently, and uses
 server-backed pagination with 10 records per page. Use Previous/Next or enter a
 page number and press Enter/Go to jump directly through long histories. Search
@@ -82,6 +86,13 @@ matches only normalized session titles, explicit Codex rename metadata, and the
 working-folder basename. Date and archive chips filter on Codex metadata; they
 do not read conversation messages or rollout files. Filters are reflected in
 the current URL for refresh/navigation but are not written to browser storage.
+
+The Settings menu separates `Sign out this device` from `Revoke signed-in
+devices`; revocation invalidates every inner Faryo cookie for that account but
+does not stop Codex or close tmux. `Security activity` shows recent body-free
+control metadata from the private mode-600 audit. Targets are HMAC aliases;
+message text, titles, paths, raw session IDs, tokens and client IP history are
+not recorded.
 
 `Start Codex` opens a dedicated working-directory picker. The picker defaults to
 the latest eligible cwd, deduplicates shortcuts within Recent while keeping the

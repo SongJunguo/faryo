@@ -22,7 +22,9 @@ Codex, live terminal state belongs to tmux, and runtime secrets stay below
 The authenticated Gateway home page keeps two session regions separate:
 
 - **Active Sessions** lists every recognized live Codex tmux pane, including
-  sessions started directly on the desktop.
+  sessions started directly on the desktop. Cards show Starting, Running,
+  Waiting, Exited, or Desktop from descendant-process and TUI readiness
+  evidence, not only the tmux top-level command.
 - **Session History** lists inactive resumable threads, uses server-backed pages
   of 10 records, supports Previous/Next plus direct page-number jumps, and can
   search title/folder metadata with date and archive filter chips. Search never
@@ -30,6 +32,10 @@ The authenticated Gateway home page keeps two session regions separate:
 
 Only sessions created and stamped by Faryo expose remote Close. Desktop-created
 tmux sessions can be opened but are not remotely destroyed.
+
+Gateway Settings exposes recent Security activity without message content and
+keeps two account actions distinct: sign out only this browser, or explicitly
+revoke every inner Faryo login without stopping Codex/tmux.
 
 `Start Codex` is successful only after Owner observes a live Codex process in
 the new managed tmux. A missing CLI, invalid configured path, unavailable shell,
@@ -59,6 +65,12 @@ The Owner page contains:
 - attachments and a stable multiline composer;
 - approve, interrupt, terminal navigation, refresh, and return-to-latest
   controls.
+
+The contextual terminal strip reads `Codex menu / ↑ Previous / ↓ Next / Enter
+Choose`. It sends those exact keys to the current TUI; Enter chooses the
+currently highlighted option and must not imply unconditional approval. The
+strip is hidden during ordinary chat and attachment-only states, appears only
+for a detected TUI menu/confirmation, and hides immediately after Enter.
 
 Opening menus, details, Raw mode, or the question rail must never resize tmux or
 the Codex TUI.
@@ -136,6 +148,11 @@ While Codex is working, Compact Chat may include a separate collapsible
 - A new/at-bottom panel follows terminal output.
 - A manually scrolled panel preserves its inner position across refreshes.
 - Its expansion preference is isolated per session.
+- It retains up to 180 lines from the current user turn and exposes a dedicated
+  copy button.
+- Its DOM node is stable. While the user has a non-collapsed selection inside
+  Live, terminal updates are held in memory and the visible text/revision does
+  not change; the newest pending version is applied after selection clears.
 - Clicking the live card does not send interrupt; the explicit animated stop
   control retains that action.
 

@@ -77,6 +77,7 @@
     let removed = 0;
     for (const child of Array.from(container.children || [])) {
       if (retained.has(child)) continue;
+      if (child.dataset?.faryoTransient) continue;
       child.remove();
       removed += 1;
     }

@@ -215,6 +215,29 @@ class GatewayRouteConfigTest(unittest.TestCase):
         )
         self.assertEqual(len(gateway.normalize_history_filters({"q": "x" * 200})["q"]), 96)
 
+    def test_gateway_preserves_explicit_session_lifecycle_state(self) -> None:
+        gateway.BACKENDS.clear()
+        gateway.BACKENDS["txy"] = ("127.0.0.1", 8765, "Workstation")
+        handler = object.__new__(gateway.GatewayHandler)
+
+        exited = handler.gateway_session_item({
+            "id": "thread-a",
+            "tmuxSession": "faryo1",
+            "state": "exited",
+            "managed": True,
+        }, "txy", {}, False)
+        resumable = handler.gateway_session_item({
+            "id": "thread-b",
+            "state": "resumable",
+        }, "txy", {}, False)
+
+        self.assertEqual(exited["state"], "exited")
+        self.assertFalse(exited["agentRunning"])
+        self.assertEqual(resumable["state"], "resumable")
+        page = gateway.portal_html("tester", ["txy"])
+        for label in ("Starting", "Running", "Waiting", "Exited", "Desktop"):
+            self.assertIn(f"{label.lower()}:'{label}'", page)
+
     def test_gateway_config_requires_token_for_enabled_route_only(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)

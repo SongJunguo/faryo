@@ -115,6 +115,25 @@ HISTORY_MAX_FETCH = 1000
 HISTORY_QUERY_MAX_CHARS = 96
 HISTORY_PERIODS = {"all", "today", "7d", "30d"}
 HISTORY_ARCHIVE_FILTERS = {"active", "archived", "all"}
+SESSION_STATES = {"starting", "running", "waiting", "exited", "desktop", "resumable", "archived"}
+SESSION_STATE_PRIORITY = {"running": 6, "starting": 5, "waiting": 4, "desktop": 3, "exited": 2, "resumable": 1, "archived": 0}
+CONTROL_AUDIT_MAX_ROWS = 5000
+CONTROL_AUDIT_RETENTION_SECONDS = 7 * 24 * 60 * 60
+CONTROL_AUDIT_PRUNE_INTERVAL_SECONDS = 60 * 60
+PROXY_CONTROL_ACTIONS = {
+    "/api/send": "send",
+    "/api/interrupt": "interrupt",
+    "/api/approve": "enter",
+    "/api/up": "up",
+    "/api/down": "down",
+    "/api/session/close": "close",
+}
+DIRECT_CONTROL_ACTIONS = {
+    "/api/agent/new": "start",
+    "/api/agent/resume": "resume",
+    "/api/bridge-inject": "file-inject",
+    "/api/auth/revoke-all": "revoke-sessions",
+}
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 FARYO_PROFILE_SOURCE = Path(__file__).resolve().parent / "faryo_profile.md"
 WORKORDER_TEMPLATE_SOURCE = Path(__file__).resolve().parent / "templates" / "workorder.md"
@@ -359,6 +378,34 @@ def owner_history_query(limit: int, offset: int, filters: dict[str, Any] | None 
     return "/api/agent-sessions?" + urlencode(params)
 
 
+def control_result_for_status(status: int) -> str:
+    if 200 <= status < 300:
+        return "success"
+    if status in {HTTPStatus.UNAUTHORIZED, HTTPStatus.FORBIDDEN}:
+        return "denied"
+    if status in {HTTPStatus.REQUEST_TIMEOUT, HTTPStatus.GATEWAY_TIMEOUT}:
+        return "timeout"
+    if status == HTTPStatus.CONFLICT:
+        return "conflict"
+    return "error"
+
+
+def control_target_from_json(raw: bytes | None) -> str:
+    if not raw:
+        return ""
+    try:
+        payload = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return ""
+    if not isinstance(payload, dict):
+        return ""
+    for key in ("session", "agent_session_id", "agentSessionId", "client_launch_id", "clientLaunchId", "package_id", "packageId"):
+        value = str(payload.get(key) or "").strip()
+        if value:
+            return value[:160]
+    return ""
+
+
 def clean_session_title(value: Any) -> str:
     return display_session_title(value)[:48]
 
@@ -519,6 +566,7 @@ class GatewayConfig:
         self.guard_token = env.get("FARYO_GUARD_TOKEN", "")
         self.icp_record = env.get("FARYO_ICP_RECORD", "").strip()
         self.bridge_root = secret_file.parent / "bridge-packages"
+        self.control_audit_path = secret_file.parent / "control-audit.jsonl"
         self.project_workbench_index = secret_file.parent / "project-workbench.jsonl"
         self.project_downlink_root = secret_file.parent / "project-workbench-downlinks"
         self.gateway_home = secret_file.parent.parent
@@ -535,6 +583,9 @@ class GatewayConfig:
         self.project_downlink_root.mkdir(parents=True, exist_ok=True)
         self._bridge_cleanup_lock = threading.Lock()
         self._bridge_cleanup_at = 0.0
+        self._control_audit_lock = threading.Lock()
+        self._control_audit_count: int | None = None
+        self._control_audit_prune_at = 0.0
 
     def install_faryo_codex_profile(self) -> None:
         self.faryo_work_root.mkdir(parents=True, exist_ok=True)
@@ -671,6 +722,108 @@ class GatewayConfig:
     def auth_epoch(self, username: str) -> int:
         return int(self.users[username].get("auth_epoch") or 0)
 
+    def revoke_sessions(self, username: str) -> None:
+        if username not in self.users:
+            raise ValueError("unknown user")
+        self.users[username]["auth_epoch"] = max(int(time.time()), self.auth_epoch(username) + 1)
+        self.save_users()
+
+    def control_target_digest(self, value: str) -> str:
+        clean = str(value or "").strip()
+        if not clean:
+            return ""
+        digest = hmac.new(self.cookie_secret, clean.encode("utf-8"), hashlib.sha256).hexdigest()
+        return "t_" + digest[:16]
+
+    def _prune_control_audit_locked(self, now: float) -> None:
+        rows: list[dict[str, Any]] = []
+        cutoff = now - CONTROL_AUDIT_RETENTION_SECONDS
+        try:
+            with self.control_audit_path.open(encoding="utf-8", errors="replace") as stream:
+                for line in stream:
+                    try:
+                        row = json.loads(line)
+                        epoch = float(row.get("epoch") or 0) if isinstance(row, dict) else 0
+                    except (json.JSONDecodeError, TypeError, ValueError):
+                        continue
+                    if epoch >= cutoff:
+                        rows.append(row)
+        except FileNotFoundError:
+            rows = []
+        rows = rows[-CONTROL_AUDIT_MAX_ROWS:]
+        self.control_audit_path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = self.control_audit_path.with_name(f".{self.control_audit_path.name}.{os.getpid()}.tmp")
+        tmp.write_text("".join(json.dumps(row, ensure_ascii=False, separators=(",", ":")) + "\n" for row in rows), encoding="utf-8")
+        os.chmod(tmp, 0o600)
+        os.replace(tmp, self.control_audit_path)
+        self._control_audit_count = len(rows)
+        self._control_audit_prune_at = now + CONTROL_AUDIT_PRUNE_INTERVAL_SECONDS
+
+    def append_control_audit(self, *, username: str, route: str, action: str, target: str, request_id: str, status: int, duration_ms: int, idempotent: bool = False) -> None:
+        """Best-effort, body-free audit trail. Audit failure never blocks control."""
+        try:
+            now = time.time()
+            row = {
+                "time": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now)),
+                "epoch": int(now),
+                "requestId": str(request_id or "")[:32],
+                "user": str(username or "")[:128],
+                "route": str(route or "")[:24],
+                "action": str(action or "")[:32],
+                "target": self.control_target_digest(target),
+                "result": control_result_for_status(int(status)),
+                "http": int(status),
+                "durationMs": max(0, min(int(duration_ms), 3_600_000)),
+                "idempotent": bool(idempotent),
+            }
+            encoded = json.dumps(row, ensure_ascii=False, separators=(",", ":")) + "\n"
+            with self._control_audit_lock:
+                self.control_audit_path.parent.mkdir(parents=True, exist_ok=True)
+                if self._control_audit_count is None:
+                    try:
+                        with self.control_audit_path.open(encoding="utf-8", errors="replace") as stream:
+                            self._control_audit_count = sum(1 for _line in stream)
+                    except FileNotFoundError:
+                        self._control_audit_count = 0
+                descriptor = os.open(self.control_audit_path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+                try:
+                    os.chmod(self.control_audit_path, 0o600)
+                    os.write(descriptor, encoded.encode("utf-8"))
+                finally:
+                    os.close(descriptor)
+                self._control_audit_count += 1
+                if self._control_audit_count > CONTROL_AUDIT_MAX_ROWS or now >= self._control_audit_prune_at:
+                    self._prune_control_audit_locked(now)
+        except Exception:
+            return
+
+    def control_activity(self, username: str, limit: int = 30) -> list[dict[str, Any]]:
+        allowed_routes = set(self.user_routes(username))
+        maximum = max(1, min(int(limit), 100))
+        rows: list[dict[str, Any]] = []
+        with self._control_audit_lock:
+            if not self.control_audit_path.exists():
+                return []
+            now = time.time()
+            if now >= self._control_audit_prune_at:
+                self._prune_control_audit_locked(now)
+            try:
+                with self.control_audit_path.open(encoding="utf-8", errors="replace") as stream:
+                    lines = stream.readlines()
+            except FileNotFoundError:
+                return []
+        for line in reversed(lines):
+            try:
+                row = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(row, dict) or row.get("user") != username or row.get("route") not in allowed_routes | {""}:
+                continue
+            rows.append({key: row.get(key) for key in ("time", "requestId", "route", "action", "target", "result", "http", "durationMs", "idempotent")})
+            if len(rows) >= maximum:
+                break
+        return rows
+
     def set_password(self, username: str, password: str) -> None:
         if username not in self.users:
             raise ValueError("unknown user")
@@ -800,12 +953,65 @@ class GatewayHandler(BaseHTTPRequestHandler):
     def config(self) -> GatewayConfig:
         return self.server.config  # type: ignore[attr-defined]
 
+    def begin_control_audit(self, username: str, route: str, action: str) -> None:
+        self._control_audit = {
+            "username": username,
+            "route": route,
+            "action": action,
+            "target": "",
+            "requestId": secrets.token_hex(8),
+            "started": time.monotonic(),
+            "idempotent": False,
+            "done": False,
+        }
+
+    def set_control_audit_target(self, target: str, *, route: str | None = None, idempotent: bool | None = None) -> None:
+        context = getattr(self, "_control_audit", None)
+        if not isinstance(context, dict) or context.get("done"):
+            return
+        if target:
+            context["target"] = str(target)[:160]
+        if route is not None:
+            clean_route = str(route).strip().lower()
+            context["route"] = clean_route if clean_route in BACKENDS else ""
+        if idempotent is not None:
+            context["idempotent"] = bool(idempotent)
+
+    def complete_control_audit(self, status: int) -> None:
+        context = getattr(self, "_control_audit", None)
+        if not isinstance(context, dict) or context.get("done"):
+            return
+        context["done"] = True
+        writer = getattr(self.config, "append_control_audit", None)
+        if not callable(writer):
+            return
+        try:
+            writer(
+                username=str(context.get("username") or ""),
+                route=str(context.get("route") or ""),
+                action=str(context.get("action") or ""),
+                target=str(context.get("target") or ""),
+                request_id=str(context.get("requestId") or ""),
+                status=int(status),
+                duration_ms=round((time.monotonic() - float(context.get("started") or time.monotonic())) * 1000),
+                idempotent=bool(context.get("idempotent")),
+            )
+        except Exception:
+            return
+
+    def send_response(self, code: int, message: str | None = None) -> None:
+        super().send_response(code, message)
+        self.complete_control_audit(int(code))
+
     def log_message(self, fmt: str, *args: Any) -> None:
         safe_path = self.path.split("?", 1)[0]
         print("[%s] %s %s" % (time.strftime("%Y-%m-%dT%H:%M:%S%z"), self.command, safe_path), flush=True)
 
     def end_headers(self) -> None:
         nonce = getattr(self, "_csp_nonce", "")
+        audit = getattr(self, "_control_audit", None)
+        if isinstance(audit, dict) and audit.get("requestId"):
+            self.send_header("X-Faryo-Request-Id", str(audit["requestId"]))
         script_src = "'self'" + (f" 'nonce-{nonce}'" if nonce else "")
         self.send_header(
             "Content-Security-Policy",
@@ -890,6 +1096,13 @@ class GatewayHandler(BaseHTTPRequestHandler):
         if parsed.path == "/api/csrf":
             self.write_json({"ok": True, "csrf": self.csrf_token(username)}, HTTPStatus.OK)
             return
+        if parsed.path == "/api/security-activity":
+            try:
+                limit = int(parse_qs(parsed.query).get("limit", ["30"])[0])
+            except ValueError:
+                limit = 30
+            self.write_json({"ok": True, "entries": self.config.control_activity(username, limit)}, HTTPStatus.OK)
+            return
         if parsed.path == "/api/gateway-status":
             routes = self.config.user_routes(username)
             self.write_json({"ok": True, "entries": [backend_status(route) for route in routes]}, HTTPStatus.OK)
@@ -965,6 +1178,10 @@ class GatewayHandler(BaseHTTPRequestHandler):
             self.write_json({"ok": False, "error": "unauthorized"}, HTTPStatus.UNAUTHORIZED)
             return
         route = self.route_for(parsed)
+        if route and route[1] in PROXY_CONTROL_ACTIONS:
+            self.begin_control_audit(username, route[0], PROXY_CONTROL_ACTIONS[route[1]])
+        elif parsed.path in DIRECT_CONTROL_ACTIONS:
+            self.begin_control_audit(username, "", DIRECT_CONTROL_ACTIONS[parsed.path])
         if route:
             if not self.require_csrf_header(username):
                 return
@@ -974,6 +1191,9 @@ class GatewayHandler(BaseHTTPRequestHandler):
             self.handle_password_change(username)
             return
         if not self.require_csrf_header(username):
+            return
+        if parsed.path == "/api/auth/revoke-all":
+            self.handle_revoke_sessions(username)
             return
         if parsed.path == "/api/bridge-packages":
             self.handle_bridge_package_create(username)
@@ -1198,6 +1418,17 @@ class GatewayHandler(BaseHTTPRequestHandler):
         self.send_header("Set-Cookie", self.expired_cookie(LEGACY_COOKIE_NAME))
         self.send_header("Location", "/?password=changed")
         self.end_headers()
+
+    def handle_revoke_sessions(self, username: str) -> None:
+        try:
+            payload = self.read_json_body(4096)
+            if payload.get("confirm") != "revoke":
+                raise ValueError("explicit revoke confirmation is required")
+            self.set_control_audit_target(username)
+            self.config.revoke_sessions(username)
+            self.write_json({"ok": True, "signedOut": True}, HTTPStatus.OK)
+        except ValueError as exc:
+            self.write_json({"ok": False, "error": str(exc)}, HTTPStatus.BAD_REQUEST)
 
 
     def read_json_body(self, max_bytes: int = BRIDGE_PACKAGE_MAX_BYTES) -> dict[str, Any]:
@@ -1939,6 +2170,7 @@ class GatewayHandler(BaseHTTPRequestHandler):
     def handle_bridge_inject(self, username: str) -> None:
         try:
             payload = self.read_json_body(65536); package_id = clean_package_id(str(payload.get("package_id") or payload.get("packageId") or "")); route = str(payload.get("route") or "").strip(); session = clean_session_id(str(payload.get("session") or "")); agent_session_id = clean_agent_session_id(str(payload.get("agent_session_id") or "")); source = str(payload.get("source") or "")
+            self.set_control_audit_target(session or agent_session_id or package_id or "", route=route)
             if not package_id or route not in BACKENDS or (not session and not agent_session_id): raise ValueError("package_id, route and session or agent_session_id are required")
             if agent_session_id and not source: raise ValueError("source is required with agent_session_id")
             if not self.config.allowed_route(username, route): self.write_json({"ok": False, "error": "forbidden"}, HTTPStatus.FORBIDDEN); return
@@ -1987,6 +2219,7 @@ class GatewayHandler(BaseHTTPRequestHandler):
     def handle_agent_resume(self, username: str) -> None:
         try:
             payload = self.read_json_body(65536); route = str(payload.get("route") or "").strip(); agent_session_id = clean_agent_session_id(str(payload.get("agent_session_id") or "")); source = str(payload.get("source") or "")
+            self.set_control_audit_target(agent_session_id or "", route=route)
             if route not in BACKENDS or not agent_session_id or not source: raise ValueError("route, agent_session_id and source are required")
             if not self.config.allowed_route(username, route): self.write_json({"ok": False, "error": "forbidden"}, HTTPStatus.FORBIDDEN); return
             response = self.owner_json_request(route, "/api/agent/resume", {"agent_session_id": agent_session_id, "source": source, "max_running": self.max_running_for(username, route)}, username, timeout=20)
@@ -1998,6 +2231,7 @@ class GatewayHandler(BaseHTTPRequestHandler):
     def handle_agent_new(self, username: str) -> None:
         try:
             payload = self.read_json_body(4096); route = str(payload.get("route") or "").strip(); command = clean_agent_launch_command(str(payload.get("command") or "")); requested_cwd = str(payload.get("cwd") or "").strip().rstrip("/"); cwd_token = str(payload.get("cwd_token") or payload.get("cwdToken") or "").strip(); raw_launch_id = str(payload.get("client_launch_id") or payload.get("clientLaunchId") or "").strip(); launch_id = clean_client_launch_id(raw_launch_id)
+            self.set_control_audit_target(launch_id or "", route=route)
             if route not in BACKENDS or not command: raise ValueError("route and command are required")
             if raw_launch_id and not launch_id: raise ValueError("invalid client launch id")
             if not self.config.allowed_route(username, route): self.write_json({"ok": False, "error": "forbidden"}, HTTPStatus.FORBIDDEN); return
@@ -2018,6 +2252,8 @@ class GatewayHandler(BaseHTTPRequestHandler):
             if selected_cwd and not requested_cwd and not response.get("ok"):
                 response = self.owner_json_request(route, "/api/agent/new", launch, username, timeout=20)
             target_session = clean_session_id(str(response.get("session") or "")) if response.get("ok") else ""
+            if target_session:
+                self.set_control_audit_target(target_session, idempotent=bool(response.get("duplicate")))
             if not target_session: self.write_json({"ok": False, "error": response.get("error") or "owner new session failed"}, HTTPStatus.BAD_GATEWAY); return
             self.write_json({"ok": True, "redirect": f"/{route}/?session={target_session}", "session": target_session}, HTTPStatus.OK)
         except ValueError as exc: self.write_json({"ok": False, "error": str(exc)}, HTTPStatus.BAD_REQUEST)
@@ -2673,6 +2909,9 @@ class GatewayHandler(BaseHTTPRequestHandler):
         tmux_session = str(item.get("tmuxSession") or item.get("session") or "")
         active = bool(tmux_session)
         cwd = str(item.get("cwd") or "")
+        raw_state = str(item.get("state") or "").strip().lower()
+        if raw_state not in SESSION_STATES:
+            raw_state = ("running" if item.get("agentRunning") else "waiting") if active else ("archived" if item.get("archived") else "resumable")
         return {
             "id": str(item.get("id") or ""),
             "title": display_session_title(item.get("title") or item.get("label") or item.get("id") or "Untitled session"),
@@ -2687,6 +2926,7 @@ class GatewayHandler(BaseHTTPRequestHandler):
             "active": active,
             "managed": bool(item.get("managed")),
             "agentRunning": bool(active and item.get("agentRunning")),
+            "state": raw_state,
             "archived": bool(item.get("archived")),
             "limitReached": bool(not active and limit_reached),
             "source": str(item.get("source") or ""),
@@ -2720,7 +2960,7 @@ class GatewayHandler(BaseHTTPRequestHandler):
         exact_page = len(routes) == 1
         route_payloads = {route: self.owner_agent_sessions(route, username, requested_page, exact_page, applied_filters) for route in routes}
         active_sessions = [item for route in routes for item in route_payloads[route]["activeSessions"]]
-        active_sessions.sort(key=lambda item: (bool(item.get("agentRunning")), float(item.get("updatedTs") or 0)), reverse=True)
+        active_sessions.sort(key=lambda item: (SESSION_STATE_PRIORITY.get(str(item.get("state") or ""), -1), float(item.get("updatedTs") or 0)), reverse=True)
         sessions = [item for route in routes for item in route_payloads[route]["sessions"]]
         sessions.sort(key=lambda item: float(item.get("updatedTs") or 0), reverse=True)
         history_total = sum(int(route_payloads[route]["historyTotal"]) for route in routes)
@@ -2802,6 +3042,7 @@ class GatewayHandler(BaseHTTPRequestHandler):
             upstream_path += "?" + parsed.query
         length = int(self.headers.get("Content-Length", "0") or "0")
         body = self.rfile.read(length) if length else None
+        self.set_control_audit_target(control_target_from_json(body), route=route_name)
         blocked_headers = {"host", "content-length", "x-owner-token", "x-faryo-owner-label", "x-faryo-user", "x-faryo-history-scope", "x-faryo-file-inbox-root", "x-faryo-workspace-root", "x-faryo-csrf"}
         headers = {key: value for key, value in self.headers.items() if key.lower() not in HOP_BY_HOP_HEADERS and key.lower() not in blocked_headers}
         headers["Host"] = f"{host}:{port}"
@@ -2834,13 +3075,13 @@ class GatewayHandler(BaseHTTPRequestHandler):
             response_headers = resp.getheaders()
             content_type = next((value for key, value in response_headers if key.lower() == "content-type"), "")
             is_event_stream = content_type.lower().startswith("text/event-stream")
-            self.send_response(resp.status, resp.reason)
-            for key, value in response_headers:
-                lower = key.lower()
-                if lower in HOP_BY_HOP_HEADERS or lower in UPSTREAM_SECURITY_HEADERS or lower == "content-length":
-                    continue
-                self.send_header(key, value)
             if is_event_stream:
+                self.send_response(resp.status, resp.reason)
+                for key, value in response_headers:
+                    lower = key.lower()
+                    if lower in HOP_BY_HOP_HEADERS or lower in UPSTREAM_SECURITY_HEADERS or lower == "content-length":
+                        continue
+                    self.send_header(key, value)
                 self.send_header("Cache-Control", "no-store, no-transform")
                 self.end_headers()
                 while True:
@@ -2857,6 +3098,21 @@ class GatewayHandler(BaseHTTPRequestHandler):
                         break
                 return
             data = resp.read()
+            try:
+                result = json.loads(data.decode("utf-8"))
+            except (UnicodeDecodeError, json.JSONDecodeError):
+                result = {}
+            if isinstance(result, dict):
+                self.set_control_audit_target(
+                    str(result.get("session") or ""),
+                    idempotent=bool(result.get("duplicate") or result.get("idempotent")),
+                )
+            self.send_response(resp.status, resp.reason)
+            for key, value in response_headers:
+                lower = key.lower()
+                if lower in HOP_BY_HOP_HEADERS or lower in UPSTREAM_SECURITY_HEADERS or lower == "content-length":
+                    continue
+                self.send_header(key, value)
             self.send_header("Content-Length", str(len(data)))
             self.end_headers()
             self.write_bytes(data)
@@ -3026,6 +3282,13 @@ PORTAL_CSS += """
 .history-filter-chip{flex:0 0 auto;min-height:31px;padding:5px 9px;border:1px solid var(--line);border-radius:999px;background:var(--panel);color:var(--muted);font:750 11px/1.1 var(--app-font)}
 .history-filter-chip.active{border-color:color-mix(in srgb,var(--accent) 55%,var(--line));background:color-mix(in srgb,var(--accent) 12%,var(--panel));color:var(--accent)}
 .history-filter-separator{flex:0 0 auto;width:1px;height:20px;background:var(--line)}
+.session-card.state-starting{border-color:color-mix(in srgb,var(--accent2) 48%,var(--line));background:color-mix(in srgb,var(--accent2) 8%,var(--panel))}
+.session-card.state-exited{border-color:color-mix(in srgb,var(--danger) 42%,var(--line));background:color-mix(in srgb,var(--danger) 6%,var(--panel));opacity:.82}
+.session-card.state-desktop{border-color:color-mix(in srgb,var(--muted) 42%,var(--line))}
+.settings-row.danger-row{border-color:color-mix(in srgb,var(--danger) 40%,var(--line));color:var(--danger)}
+.activity-row{padding:9px 10px;border:1px solid var(--line);border-radius:9px;background:var(--panel2)}
+.activity-row strong{display:block;font-size:12px;line-height:1.25}
+.activity-row span{display:block;margin-top:3px;color:var(--muted);font-size:10px;line-height:1.35}
 @media(max-width:620px){.directory-crumb{max-width:120px}}
 """
 
@@ -3046,10 +3309,13 @@ function clearDropTargets(){document.querySelectorAll('.session-card.drop-target
 function packageCard(item){const card=document.createElement('div'),pending=item.status==='pending';card.className='package-card';card.draggable=pending;card.dataset.packageId=item.id;const assets=(item.assets||[]).length,status=pending?'Ready to send':'Delivered',source=item.source||'Faryo',actions=pending?'<div class="package-actions"><button class="mini-btn add-asset" type="button">Add files</button><button class="mini-btn send-package" type="button">Send to…</button></div>':'';card.innerHTML=`<div><strong>${escapeHtml(item.title||'Untitled file package')}</strong><span class="package-meta">${status} · ${assets} file${assets===1?'':'s'} · ${escapeHtml(source)}</span></div>${actions}`;card.querySelectorAll('button').forEach(button=>button.addEventListener('pointerdown',(event)=>event.stopPropagation()));card.querySelector('.add-asset')?.addEventListener('click',(event)=>{event.preventDefault();event.stopPropagation();assetTargetPackage=item.id;document.getElementById('packageAssetInput')?.click();});card.querySelector('.send-package')?.addEventListener('click',(event)=>{event.preventDefault();event.stopPropagation();withBusy(()=>selectPackageTarget(item));});card.addEventListener('dragstart',(event)=>{if(!pending||event.target.closest?.('button')){event.preventDefault();return;}draggedPackage=item.id;event.dataTransfer.setData('text/plain',item.id);card.classList.add('dragging');});card.addEventListener('dragend',()=>{draggedPackage=null;card.classList.remove('dragging');clearDropTargets();});return card;}
 function placeSheet(modal){if(!lastAnchorRect){modal.classList.remove('anchored');return;}const margin=16,gap=8,sheet=modal.querySelector('.sheet'),width=Math.min(320,innerWidth-margin*2),center=(lastAnchorRect.left+lastAnchorRect.right)/2;modal.classList.add('open','anchored');const height=sheet.offsetHeight,left=innerWidth<620?(innerWidth-width)/2:Math.max(margin,Math.min(innerWidth-width-margin,center-width/2)),below=lastAnchorRect.bottom+gap,above=lastAnchorRect.top-height-gap,top=below+height+margin<=innerHeight?below:Math.max(margin,above);modal.style.setProperty('--sheet-left',`${left}px`);modal.style.setProperty('--sheet-top',`${top}px`);}
 function resetSheetMode(){const modal=document.getElementById('modal'),toolbar=document.getElementById('directoryToolbar'),breadcrumb=document.getElementById('directoryBreadcrumb'),search=document.getElementById('directorySearch');modal.classList.remove('directory-mode');toolbar.hidden=true;breadcrumb.replaceChildren();search.value='';search.oninput=null;}
-function sheet(title,body,choices){return new Promise(resolve=>{const modal=document.getElementById('modal'),list=document.getElementById('modalChoices'),actions=document.getElementById('modalActions');resetSheetMode();document.getElementById('modalTitle').textContent=title;document.getElementById('modalBody').textContent=body||'';const done=(value)=>{modal.classList.remove('open','anchored');modal.onclick=null;resolve(value);};list.replaceChildren(...(choices||[]).map(item=>{const btn=document.createElement('button');btn.type='button';btn.className=`choice-btn${item.danger?' danger':''}`;btn.disabled=!!item.disabled;btn.innerHTML=`<strong>${escapeHtml(item.label)}</strong>${item.meta?`<span>${escapeHtml(item.meta)}</span>`:''}`;btn.addEventListener('click',()=>done(item.value));return btn;}));const cancel=document.createElement('button');cancel.type='button';cancel.className='mini-btn';cancel.textContent='Cancel';cancel.addEventListener('click',()=>done(null));actions.replaceChildren(cancel);modal.onclick=(event)=>{if(event.target===modal)done(null);};placeSheet(modal);modal.classList.add('open');});}
+function sheet(title,body,choices){return new Promise(resolve=>{const modal=document.getElementById('modal'),list=document.getElementById('modalChoices'),actions=document.getElementById('modalActions');resetSheetMode();document.getElementById('modalTitle').textContent=title;document.getElementById('modalBody').textContent=body||'';const done=(value)=>{modal.classList.remove('open','anchored');modal.onclick=null;resolve(value);};list.replaceChildren(...(choices||[]).map(item=>{const element=document.createElement(item.static?'div':'button');element.className=item.static?'activity-row':`choice-btn${item.danger?' danger':''}`;element.innerHTML=`<strong>${escapeHtml(item.label)}</strong>${item.meta?`<span>${escapeHtml(item.meta)}</span>`:''}`;if(!item.static){element.type='button';element.disabled=!!item.disabled;element.addEventListener('click',()=>done(item.value));}return element;}));const cancel=document.createElement('button');cancel.type='button';cancel.className='mini-btn';cancel.textContent='Cancel';cancel.addEventListener('click',()=>done(null));actions.replaceChildren(cancel);modal.onclick=(event)=>{if(event.target===modal)done(null);};placeSheet(modal);modal.classList.add('open');});}
 async function notice(title,body){await sheet(title,body,[{label:'OK',value:'ok'}]);}
 async function selectPackageTarget(item){const targets=handoffTargets.filter(target=>target.id||target.tmuxSession);if(!targets.length){await notice('No session available','Start or resume a session before sending files.');return;}const choices=targets.map((target,index)=>{const active=!!target.tmuxSession,agent=target.source==='codex-cli'?'Codex':'Runtime',route=target.routeLabel||labels[target.route]||target.route,state=active?'Active':(target.limitReached?'Limit reached':'Resume and send');return{label:target.title||target.id||'Untitled session',meta:`${route} · ${agent} · ${state}`,value:String(index),disabled:!active&&!!target.limitReached};});const selected=await sheet('Send files to a session',item.title||'Choose the destination session.',choices);if(selected===null)return;const target=targets[Number(selected)];if(target)await injectPackage(item.id,target.route,target.tmuxSession||'',target.id||'',target.source||'');}
 async function withBusy(task){if(actionBusy)return;actionBusy=true;try{return await task();}catch(error){await notice('Action failed',error.message||String(error));}finally{actionBusy=false;}}
+function activityTime(value){const timestamp=Date.parse(String(value||''));if(!Number.isFinite(timestamp))return 'Unknown time';const seconds=Math.max(0,Math.round((Date.now()-timestamp)/1000));if(seconds<60)return 'Just now';if(seconds<3600)return `${Math.floor(seconds/60)}m ago`;if(seconds<86400)return `${Math.floor(seconds/3600)}h ago`;return `${Math.floor(seconds/86400)}d ago`;}
+async function showSecurityActivity(){document.getElementById('settings')?.classList.remove('open');const data=await fetchJson('/api/security-activity?limit=30',{cache:'no-store'},'Security activity'),entries=Array.isArray(data.entries)?data.entries:[],actionLabels={start:'Start',resume:'Resume',close:'Close',send:'Send',interrupt:'Interrupt',enter:'Enter',up:'Up',down:'Down','file-inject':'File transfer','revoke-sessions':'Revoke sessions'},rows=entries.map(item=>({static:true,label:`${actionLabels[item.action]||item.action||'Control'} · ${item.result||'unknown'}`,meta:[activityTime(item.time),item.route?labels[item.route]||item.route:'Gateway',item.target||'no target',item.idempotent?'idempotent retry':''].filter(Boolean).join(' · ')}));await sheet('Security activity','Recent control metadata only. Message text, titles and paths are never recorded.',rows.length?rows:[{static:true,label:'No control activity yet',meta:'Actions will appear here after you use Faryo controls.'}]);}
+async function revokeSignedInDevices(){document.getElementById('settings')?.classList.remove('open');const confirmed=await sheet('Revoke signed-in devices','This invalidates every inner Faryo login for your account. It does not stop Codex or close tmux.',[{label:'Revoke all Faryo sessions',meta:'You will sign in again on this device.',value:'revoke',danger:true}]);if(confirmed!=='revoke')return;await fetchJson('/api/auth/revoke-all',{method:'POST',headers:{'Content-Type':'application/json',...(await csrfHeaders())},body:JSON.stringify({confirm:'revoke'})},'Revoke sessions');location.href='/logout';}
 async function selectNewRoute(entries,label){const online=(entries||[]).filter(e=>['online','slow'].includes(e.state));if(!online.length){await notice('No endpoint online','No online endpoint can start sessions.');return null;}const choices=online.map(e=>({label:`Start on ${e.label||labels[e.id]||e.id}`,meta:`${e.activeCount||0}/${e.maxRunning||0} sessions${e.canCreate?'':' · limit reached'}`,value:e.id,disabled:!e.canCreate}));if(!choices.some(item=>!item.disabled)){await sheet('Agent limit reached','Close a running session first.',choices);return null;}return sheet(`Start ${label}`,`Choose the workstation. A new ${label} session will be created.`,choices);}
 async function directoryPage(route,path){const query=path?`?path=${encodeURIComponent(path)}`:'';return fetchJson(`/${route}/api/directories${query}`,{cache:'no-store'},'Directory browser');}
 function trimDirectoryPath(value){let path=String(value||'').trim();while(path.length>1&&path.endsWith('/'))path=path.slice(0,-1);return path;}
@@ -3062,7 +3328,7 @@ function directorySection(title,items,done,more){if(!items.length&&!more)return 
 function directorySheet(data,recent,label){return new Promise(resolve=>{const modal=document.getElementById('modal'),list=document.getElementById('modalChoices'),actions=document.getElementById('modalActions'),toolbar=document.getElementById('directoryToolbar'),breadcrumb=document.getElementById('directoryBreadcrumb'),search=document.getElementById('directorySearch');resetSheetMode();modal.classList.remove('anchored');modal.classList.add('directory-mode');document.getElementById('modalTitle').textContent='Choose working directory';document.getElementById('modalBody').textContent=`Choose where this ${label} session should work.`;toolbar.hidden=false;let expanded=false;const done=value=>{modal.classList.remove('open','anchored','directory-mode');modal.onclick=null;resetSheetMode();resolve(value);},render=()=>{const model=directoryPickerModel(data,recent,search.value,expanded),nodes=[],recentSection=directorySection('Recent',model.recent,done,model.hasMore?()=>{expanded=true;render();}:null),folderSection=directorySection('Folders',model.folders,done,null),locationSection=directorySection('Locations',model.locations,done,null);for(const section of[recentSection,folderSection,locationSection])if(section)nodes.push(section);if(!model.total){const empty=document.createElement('div');empty.className='directory-empty';empty.textContent=search.value?'No matching folders':'This folder has no subfolders';nodes.push(empty);}list.replaceChildren(...nodes);};breadcrumb.replaceChildren(...directoryBreadcrumbItems(data).map(item=>{const button=document.createElement('button');button.type='button';button.className=`directory-crumb${item.collapsed?' directory-crumb-collapsed':''}`;button.textContent=item.label;if(item.current){button.disabled=true;button.setAttribute('aria-current','location');}else button.addEventListener('click',()=>done({path:item.path}));return button;}));search.oninput=render;const cancel=document.createElement('button');cancel.type='button';cancel.className='mini-btn directory-cancel';cancel.textContent='Cancel';cancel.addEventListener('click',()=>done(null));const select=document.createElement('button');select.type='button';select.className='directory-primary';select.textContent=`Start ${label} here`;select.addEventListener('click',()=>done({cwd:String(data.path||''),cwdToken:String(data.selectionToken||'')}));actions.replaceChildren(cancel,select);modal.onclick=event=>{if(event.target===modal)done(null);};render();modal.classList.add('open');requestAnimationFrame(()=>{breadcrumb.scrollLeft=breadcrumb.scrollWidth;});});}
 async function selectNewCwd(route,label,cwdChoices){const recent=Array.isArray(cwdChoices?.[route])?cwdChoices[route]:[];let path=String(recent[0]?.value||''),initial=true;while(true){let data;try{data=await directoryPage(route,path);}catch(error){if(initial&&path){path='';initial=false;continue;}throw error;}initial=false;const selected=await directorySheet(data,recent,label);if(selected===null)return null;if(selected.cwd)return selected;path=String(selected.path||'');}}
 function newAgentCard(item){const {entries,command,label,cwdChoices}=item,card=document.createElement('button');card.type='button';card.className='session-card launcher-card';card.innerHTML=`<div><div class="session-title">Start ${label}</div><div class="session-meta">New CLI session</div></div><div class="arrow">›</div>`;card.addEventListener('click',()=>withBusy(async()=>{const route=await selectNewRoute(entries,label);if(!route)return;const directory=await selectNewCwd(route,label,cwdChoices);if(directory===null)return;const original=card.innerHTML;card.disabled=true;card.innerHTML=`<div><div class="session-title">Starting ${label}…</div><div class="session-meta">Creating session</div></div><div class="arrow">↗</div>`;try{await agentNew(route,command,directory);}finally{card.disabled=false;card.innerHTML=original;}}));return card;}
-function sessionCard(item){const targetSession=item.tmuxSession||'',agentSessionId=item.id||'',source=item.source||'',active=!!targetSession,managed=!!item.managed,running=active&&!!item.agentRunning,archived=!active&&!!item.archived,blocked=!!item.limitReached;const card=document.createElement('div');card.className=`session-card${active?'':' inactive'}${running?' running':(active?' waiting':'')}`;card.dataset.route=item.route;card.dataset.session=targetSession;card.dataset.agentSessionId=agentSessionId;card.dataset.source=source;const state=active?(running?'Running':'Waiting'):(archived?'Archived':(blocked?'Limit reached':'Resume')),ownership=active&&!managed?' · Desktop tmux':'',where=item.cwdLabel||item.cwd||'',updatedAt=localSessionTime(item),agent=source==='codex-cli'?'Codex':'Runtime',title=[item.title||item.id||'Untitled session',item.gitLabel||''].filter(Boolean).join(' ');card.innerHTML=`<div><div class="session-title">${escapeHtml(title)}</div><div class="session-meta">${escapeHtml(item.routeLabel||labels[item.route]||item.route)} · ${agent}${ownership}${where?` · ${escapeHtml(where)}`:''} · ${escapeHtml(updatedAt)} · ${state}</div></div><div>${active&&managed?'<button class="mini-btn close-session" type="button">Close</button>':`<span class="arrow">${archived?'—':'›'}</span>`}</div>`;card.title=[title,item.cwd||'',updatedAt,state].filter(Boolean).join(' · ');card.addEventListener('click',(event)=>withBusy(async()=>{if(event.target.closest('.close-session')){event.preventDefault();event.stopPropagation();await closeSession(item.route,targetSession);return;}if(active){location.href=`/${item.route}/?session=${encodeURIComponent(targetSession)}`;return;}if(!agentSessionId)return;event.preventDefault();if(archived){await notice('Archived session','Unarchive this thread in Codex before resuming it.');return;}if(blocked){await notice('Agent limit reached','Close a running session first.');return;}await resumeSession(item.route,agentSessionId,source);}));card.addEventListener('dragover',(event)=>{if(draggedPackage&&agentSessionId&&!archived){event.preventDefault();card.classList.add('drop-target');}});card.addEventListener('dragleave',()=>card.classList.remove('drop-target'));card.addEventListener('drop',async(event)=>{event.preventDefault();card.classList.remove('drop-target');if(archived)return;const packageId=event.dataTransfer.getData('text/plain')||draggedPackage;if(packageId)await injectPackage(packageId,item.route,targetSession,agentSessionId,source);});return card;}
+function sessionCard(item){const targetSession=item.tmuxSession||'',agentSessionId=item.id||'',source=item.source||'',active=!!targetSession,managed=!!item.managed,archived=!active&&!!item.archived,blocked=!!item.limitReached,lifecycle=String(item.state||(active?(item.agentRunning?'running':'waiting'):(archived?'archived':'resumable'))),canReceive=!['archived','exited','starting'].includes(lifecycle);const card=document.createElement('div');card.className=`session-card state-${lifecycle}${active?'':' inactive'}${lifecycle==='running'?' running':(lifecycle==='waiting'?' waiting':'')}`;card.dataset.route=item.route;card.dataset.session=targetSession;card.dataset.agentSessionId=agentSessionId;card.dataset.source=source;card.dataset.state=lifecycle;const labelsByState={starting:'Starting',running:'Running',waiting:'Waiting',exited:'Exited',desktop:'Desktop',resumable:'Resume',archived:'Archived'},state=blocked&&lifecycle==='resumable'?'Limit reached':(labelsByState[lifecycle]||'Unknown'),ownership=active&&!managed&&lifecycle!=='desktop'?' · Desktop tmux':'',where=item.cwdLabel||item.cwd||'',updatedAt=localSessionTime(item),agent=source==='codex-cli'?'Codex':'Runtime',title=[item.title||item.id||'Untitled session',item.gitLabel||''].filter(Boolean).join(' ');card.innerHTML=`<div><div class="session-title">${escapeHtml(title)}</div><div class="session-meta">${escapeHtml(item.routeLabel||labels[item.route]||item.route)} · ${agent}${ownership}${where?` · ${escapeHtml(where)}`:''} · ${escapeHtml(updatedAt)} · ${state}</div></div><div>${active&&managed?'<button class="mini-btn close-session" type="button">Close</button>':`<span class="arrow">${archived||lifecycle==='exited'?'—':'›'}</span>`}</div>`;card.title=[title,item.cwd||'',updatedAt,state].filter(Boolean).join(' · ');card.addEventListener('click',(event)=>withBusy(async()=>{if(event.target.closest('.close-session')){event.preventDefault();event.stopPropagation();await closeSession(item.route,targetSession);return;}if(lifecycle==='exited'){event.preventDefault();await notice('Codex exited','Close this managed shell; the Codex thread remains available in Session History.');return;}if(active){location.href=`/${item.route}/?session=${encodeURIComponent(targetSession)}`;return;}if(!agentSessionId)return;event.preventDefault();if(archived){await notice('Archived session','Unarchive this thread in Codex before resuming it.');return;}if(blocked){await notice('Agent limit reached','Close a running session first.');return;}await resumeSession(item.route,agentSessionId,source);}));card.addEventListener('dragover',(event)=>{if(draggedPackage&&agentSessionId&&canReceive){event.preventDefault();card.classList.add('drop-target');}});card.addEventListener('dragleave',()=>card.classList.remove('drop-target'));card.addEventListener('drop',async(event)=>{event.preventDefault();card.classList.remove('drop-target');if(!canReceive)return;const packageId=event.dataTransfer.getData('text/plain')||draggedPackage;if(packageId)await injectPackage(packageId,item.route,targetSession,agentSessionId,source);});return card;}
 function newLaunchRequestId(){return globalThis.crypto?.randomUUID?`web-${crypto.randomUUID()}`:`web-${Date.now().toString(36)}-${Math.random().toString(36).slice(2,14)}`;}
 async function agentNew(route,command,directory){const payload={route,command,client_launch_id:newLaunchRequestId()};if(directory?.cwd){payload.cwd=directory.cwd;payload.cwd_token=directory.cwdToken||'';}const request=async()=>fetchJson('/api/agent/new',{method:'POST',headers:{'Content-Type':'application/json',...(await csrfHeaders())},body:JSON.stringify(payload)},'Start Codex');let data;try{data=await request();}catch(error){if(!error.retryable)throw error;await new Promise(resolve=>setTimeout(resolve,350));data=await request();}location.href=data.redirect;}
 async function resumeSession(route,agentSessionId,source){const data=await fetchJson('/api/agent/resume',{method:'POST',headers:{'Content-Type':'application/json',...(await csrfHeaders())},body:JSON.stringify({route,agent_session_id:agentSessionId,source})},'Resume session');location.href=data.redirect||`/${route}/?session=${encodeURIComponent(data.session)}`;}
@@ -3081,6 +3347,8 @@ async function filesToAttachments(fileList){const files=Array.from(fileList||[])
 async function createPackage(files){const attachments=await filesToAttachments(files);if(!attachments.length)return;const title=attachments.length===1?attachments[0].file_name:`${attachments.length} files`;await fetchJson('/api/bridge-packages',{method:'POST',headers:{'Content-Type':'application/json',...(await csrfHeaders())},body:JSON.stringify({title,source:'Manual upload',intent:'Send these files to a selected session.',attachments})},'Add files');await refreshWorkbench();}
 async function appendAttachmentsToPackage(packageId,files){const attachments=await filesToAttachments(files);if(!attachments.length)return;await fetchJson('/api/bridge-package-assets',{method:'POST',headers:{'Content-Type':'application/json',...(await csrfHeaders())},body:JSON.stringify({package_id:packageId,attachments})},'Add files');await refreshWorkbench();}
 document.getElementById('newPackage')?.addEventListener('click',()=>document.getElementById('packageInput')?.click());
+document.getElementById('securityActivity')?.addEventListener('click',()=>withBusy(showSecurityActivity));
+document.getElementById('revokeSessions')?.addEventListener('click',()=>withBusy(revokeSignedInDevices));
 const historySearchInput=document.getElementById('historySearchInput');if(historySearchInput){historySearchInput.value=historyFilters.q;historySearchInput.addEventListener('input',event=>{document.getElementById('historySearchClear').hidden=!event.target.value;scheduleHistorySearch(event.target.value);});}
 document.getElementById('historySearchForm')?.addEventListener('submit',event=>{event.preventDefault();clearTimeout(historySearchTimer);applyHistoryFilter('q',historySearchInput?.value||'').catch(()=>{});});
 document.getElementById('historySearchClear')?.addEventListener('click',()=>{clearTimeout(historySearchTimer);if(historySearchInput)historySearchInput.value='';applyHistoryFilter('q','').catch(()=>{});historySearchInput?.focus();});
@@ -3114,7 +3382,7 @@ def portal_html(username: str, routes: list[str]) -> str:
 <style nonce="{CSP_NONCE_PLACEHOLDER}">
 {PORTAL_CSS}
 </style></head><body><div class="shell">
-<header><a class="brand" href="/projects" aria-label="Open project table"><img class="brand-logo" src="/icons/faryo-mark.png?v=faryo-ui-1" alt=""><div><h1>Faryo</h1><div class="subtitle">{safe_user} · Carry work forward</div></div></a><div class="settings" id="settings"><button class="settings-trigger" type="button" aria-label="Settings"><span class="settings-icon">⚙</span></button><div class="settings-menu" aria-label="Settings panel"><button id="installApp" class="settings-row install-row" type="button" hidden><span><strong>Install app</strong><small>Add Faryo to home screen</small></span><em>↗</em></button><div class="menu-title">Appearance</div><button id="themeBtn" class="settings-row appearance-btn" type="button"><span><strong>Theme</strong><small>System</small></span><em>↻</em></button><button id="fontBtn" class="settings-row appearance-btn" type="button"><span><strong>Font</strong><small>Default</small></span><em>↻</em></button><button id="sizeBtn" class="settings-row appearance-btn" type="button"><span><strong>Size</strong><small>Normal</small></span><em>↻</em></button><div class="menu-title">Account</div><a class="settings-row" href="/password"><span><strong>Change password</strong></span><em>›</em></a><a class="settings-row" href="/logout"><span><strong>Sign out</strong></span><em>›</em></a></div></div></header>
+<header><a class="brand" href="/projects" aria-label="Open project table"><img class="brand-logo" src="/icons/faryo-mark.png?v=faryo-ui-1" alt=""><div><h1>Faryo</h1><div class="subtitle">{safe_user} · Carry work forward</div></div></a><div class="settings" id="settings"><button class="settings-trigger" type="button" aria-label="Settings"><span class="settings-icon">⚙</span></button><div class="settings-menu" aria-label="Settings panel"><button id="installApp" class="settings-row install-row" type="button" hidden><span><strong>Install app</strong><small>Add Faryo to home screen</small></span><em>↗</em></button><div class="menu-title">Appearance</div><button id="themeBtn" class="settings-row appearance-btn" type="button"><span><strong>Theme</strong><small>System</small></span><em>↻</em></button><button id="fontBtn" class="settings-row appearance-btn" type="button"><span><strong>Font</strong><small>Default</small></span><em>↻</em></button><button id="sizeBtn" class="settings-row appearance-btn" type="button"><span><strong>Size</strong><small>Normal</small></span><em>↻</em></button><div class="menu-title">Security</div><button id="securityActivity" class="settings-row" type="button"><span><strong>Security activity</strong><small>Body-free control audit</small></span><em>›</em></button><button id="revokeSessions" class="settings-row danger-row" type="button"><span><strong>Revoke signed-in devices</strong><small>Keep Codex and tmux running</small></span><em>!</em></button><div class="menu-title">Account</div><a class="settings-row" href="/password"><span><strong>Change password</strong></span><em>›</em></a><a class="settings-row" href="/logout"><span><strong>Sign out this device</strong></span><em>›</em></a></div></div></header>
 <nav class="routes" aria-label="Endpoint status">{chips_html}</nav><div class="handoff-strip"><section class="handoff" id="handoffBox" aria-label="Files to session"><div class="handoff-head"><div><div class="eyebrow">Transfer</div><h2>Files to session <span class="count" id="packageCount">· Empty</span></h2></div><button class="mini-btn primary-btn" id="newPackage" type="button">Choose files</button></div><input id="packageInput" type="file" accept="image/*,.pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx,.odt,.odp,.ods,.md,.txt,.csv,.json,.rtf" multiple hidden><input id="packageAssetInput" type="file" accept="image/*,.pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx,.odt,.odp,.ods,.md,.txt,.csv,.json,.rtf" multiple hidden><div class="package-list" id="packageList"><div class="empty-state">Choose files, then send them to a session.</div></div></section><section class="new-session-panel" aria-labelledby="newSessionTitle"><div class="new-session-head"><div class="eyebrow">Launch</div><h2 id="newSessionTitle">New session</h2></div><div class="new-session-slot" id="newSessionSlot"><div class="empty-state">Loading launchers…</div></div></section></div>
 <main><section class="session-section active-section" aria-labelledby="activeSessionsTitle"><div class="section-head"><h2 id="activeSessionsTitle">Active Sessions</h2><span class="count" id="activeSessionCount">Loading</span></div><section class="sessions" id="activeSessionList"><div class="empty-state">Loading active sessions...</div></section></section><section class="session-section history-section" aria-labelledby="sessionHistoryTitle"><div class="section-head"><h2 id="sessionHistoryTitle">Session History</h2><span class="count" id="historyCount">Loading</span></div><div class="history-tools"><form class="history-search" id="historySearchForm" role="search"><span aria-hidden="true">⌕</span><label class="visually-hidden" for="historySearchInput">Search session title or folder</label><input id="historySearchInput" type="search" inputmode="search" autocomplete="off" spellcheck="false" maxlength="96" placeholder="Search title or folder"><button class="history-search-clear" id="historySearchClear" type="button" aria-label="Clear history search" hidden>×</button></form><div class="history-filter-row" aria-label="Session history filters"><button class="history-filter-chip" type="button" data-history-period="all" aria-pressed="true">All time</button><button class="history-filter-chip" type="button" data-history-period="today" aria-pressed="false">Today</button><button class="history-filter-chip" type="button" data-history-period="7d" aria-pressed="false">7 days</button><button class="history-filter-chip" type="button" data-history-period="30d" aria-pressed="false">30 days</button><span class="history-filter-separator" aria-hidden="true"></span><button class="history-filter-chip" type="button" data-history-archive="active" aria-pressed="true">Current</button><button class="history-filter-chip" type="button" data-history-archive="archived" aria-pressed="false">Archived</button><button class="history-filter-chip" type="button" data-history-archive="all" aria-pressed="false">Any status</button></div></div><section class="sessions history-list" id="sessionList"><div class="empty-state">Loading history...</div></section><nav class="history-pager" aria-label="Session history pages"><button class="mini-btn" id="historyPrev" type="button">Prev</button><form class="history-jump" id="historyJump"><label for="historyPageInput">Page</label><input class="history-page-input" id="historyPageInput" type="number" min="1" max="1" step="1" inputmode="numeric" value="1" aria-label="History page"><span>of <span id="historyPageTotal">1</span></span><button class="mini-btn" type="submit">Go</button></form><button class="mini-btn" id="historyNext" type="button">Next</button></nav></section></main>
 </div><div class="modal" id="modal"><div class="sheet"><div class="sheet-heading"><div class="sheet-heading-copy"><h3 id="modalTitle"></h3><p id="modalBody"></p></div></div><div id="directoryToolbar" class="directory-toolbar" hidden><nav id="directoryBreadcrumb" class="directory-breadcrumb" aria-label="Current folder"></nav><label class="directory-search"><span class="visually-hidden">Filter folders</span><span aria-hidden="true">⌕</span><input id="directorySearch" type="search" inputmode="search" autocomplete="off" spellcheck="false" placeholder="Filter folders"></label></div><div class="choice-list" id="modalChoices"></div><div class="modal-actions" id="modalActions"></div></div></div><script nonce="{CSP_NONCE_PLACEHOLDER}">

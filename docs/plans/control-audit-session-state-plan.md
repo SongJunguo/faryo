@@ -1,7 +1,7 @@
 # Faryo Control Audit and Session State Plan
 
 更新时间：2026-08-20
-状态：排队中；等待 Session History Search 完成后实施
+状态：完成并部署验证
 
 ## 问题基线
 
@@ -78,3 +78,26 @@ Close、Interrupt、Enter 或 Start 时，无法从隐私安全证据判断操�
 - UI 状态与真实进程树一致；
 - `Enter` 不再被文案描述为无条件 approve；
 - 审计功能失败不能阻塞正常控制请求。
+
+## 实施与证据
+
+- Gateway 在 control response 边界审计 start/resume/close/send/interrupt/enter/up/down/
+  file-inject/revoke-sessions；CSRF 拒绝也记录，但在读取请求体前完成，因此目标与正文为空。
+- 私有 `control-audit.jsonl` 使用 Gateway Cookie secret 对 target 做 HMAC 并截断为
+  `t_` + 16 hex；文件 mode 600，保留最近 7 天且不超过 5000 条，损坏行跳过。
+- 审计写入为 best-effort 单次 append；I/O 异常被隔离，不改变 control response。API 只返回
+  当前登录用户和其允许 route，且不回传内部 username 字段。
+- 设置菜单新增 Security activity、Sign out this device 和二次确认的 Revoke signed-in devices；
+  revoke 只提升内层 auth epoch，不停止 Codex/tmux。
+- Owner 启动时写 `@faryo_starting_at`，真实 descendant 出现后清除。process tree、managed
+  option 与 TUI prompt 共同产生 Starting/Running/Waiting/Exited/Desktop；非活动 metadata 为
+  Resumable/Archived。
+- managed Codex 退出回到 shell 时仍显示 Exited 并允许 Close；desktop session 不获得 Close。
+  `Confirm` 已改为带明确 aria/title 的 `Enter`。
+- 匿名测试覆盖全部 proxy control 动作、direct start/resume/file-inject、成功/403/502、幂等
+  字段、用户/route scope、损坏尾行、3-row 缩小轮转、I/O 故障和 revoke auth epoch。
+- 生产只用缺少 CSRF 的匿名 interrupt 验证安全拒绝：Owner/tmux 未收到请求，审计 mode 600、
+  denied=403，body marker 不在文件。随后真实 Start Codex→ready→Close 通过，start/close target
+  仅为 HMAC，测试 session 精确清理，原有 session 集合与 geometry 完全一致。
+- 生产 Gateway 当前匿名计数证据为 1 Running、1 Waiting、10 Resumable；390x844 与 1440x900
+  浏览器均通过显式 lifecycle dataset、Security activity 隐私文案、历史搜索和分页。

@@ -37,6 +37,8 @@ class StubConfig:
         self.users = {"tester": {"auth_epoch": 7, "routes": [owner_route]}}
         self.owner_tokens = {owner_route: "owner-token"}
         self.bridge_create_calls = 0
+        self.audit_calls: list[dict[str, Any]] = []
+        self.updated_packages: list[dict[str, Any]] = []
 
     def auth_epoch(self, username: str) -> int:
         return int(self.users[username].get("auth_epoch") or 0)
@@ -62,6 +64,21 @@ class StubConfig:
     def save_bridge_package(self, payload: dict[str, Any], username: str) -> dict[str, Any]:
         self.bridge_create_calls += 1
         return {"id": "pkg-test", "owner": username, "title": payload.get("title") or "test", "status": "pending"}
+
+    def append_control_audit(self, **values: Any) -> None:
+        self.audit_calls.append(values)
+
+    def control_activity(self, username: str, limit: int = 30) -> list[dict[str, Any]]:
+        return [{"time": "2026-01-01T00:00:00Z", "route": self.users[username]["routes"][0], "action": "send", "target": "t_deadbeefdeadbeef", "result": "success", "http": 200, "durationMs": 1, "idempotent": False}][:limit]
+
+    def revoke_sessions(self, username: str) -> None:
+        self.users[username]["auth_epoch"] += 1
+
+    def bridge_package(self, package_id: str, username: str) -> dict[str, Any] | None:
+        return {"id": package_id, "owner": username, "title": "fixture", "status": "pending", "assets": []}
+
+    def update_bridge_package(self, package: dict[str, Any]) -> None:
+        self.updated_packages.append(package)
 
 
 class OwnerHandler(BaseHTTPRequestHandler):
@@ -197,6 +214,106 @@ class GatewayCsrfContractTest(unittest.TestCase):
         self.assertIn("Start ${label}", body)
         self.assertIn("Start on ${e.label", body)
         self.assertNotIn("No handoff package", body)
+
+    def test_authenticated_send_audit_never_receives_message_body(self) -> None:
+        csrf = self.csrf_token()
+        status, _data = self.request(
+            "POST",
+            f"/{self.route}/api/send",
+            {"session": "session-a", "text": "private prompt body", "clientMessageId": "web-audit-123"},
+            {gateway.CSRF_HEADER: csrf},
+        )
+
+        self.assertEqual(status, HTTPStatus.OK)
+        self.assertEqual(len(self.config.audit_calls), 1)
+        audit = self.config.audit_calls[0]
+        self.assertEqual((audit["route"], audit["action"], audit["target"], audit["status"]), (self.route, "send", "session-a", 200))
+        self.assertNotIn("private prompt body", repr(audit))
+
+    def test_csrf_denial_is_audited_without_reading_request_body(self) -> None:
+        status, _data = self.request(
+            "POST",
+            f"/{self.route}/api/interrupt",
+            {"session": "private-session"},
+        )
+
+        self.assertEqual(status, HTTPStatus.FORBIDDEN)
+        self.assertEqual(len(self.config.audit_calls), 1)
+        audit = self.config.audit_calls[0]
+        self.assertEqual((audit["action"], audit["target"], audit["status"]), ("interrupt", "", 403))
+        self.assertNotIn("private-session", repr(audit))
+
+    def test_audit_writer_failure_does_not_change_control_response(self) -> None:
+        csrf = self.csrf_token()
+        with mock.patch.object(self.config, "append_control_audit", side_effect=OSError("audit unavailable")):
+            status, data = self.request(
+                "POST",
+                f"/{self.route}/api/down",
+                {"session": "session-a"},
+                {gateway.CSRF_HEADER: csrf},
+            )
+
+        self.assertEqual(status, HTTPStatus.OK)
+        self.assertTrue(data["ok"])
+
+    def test_security_activity_requires_login_and_revoke_requires_csrf(self) -> None:
+        unauthenticated, _data = self.request("GET", "/api/security-activity", include_cookie=False)
+        self.assertEqual(unauthenticated, HTTPStatus.UNAUTHORIZED)
+        status, activity = self.request("GET", "/api/security-activity?limit=1")
+        self.assertEqual(status, HTTPStatus.OK)
+        self.assertEqual(activity["entries"][0]["target"], "t_deadbeefdeadbeef")
+
+        denied, _data = self.request("POST", "/api/auth/revoke-all", {"confirm": "revoke"})
+        self.assertEqual(denied, HTTPStatus.FORBIDDEN)
+        csrf = self.csrf_token()
+        accepted, payload = self.request(
+            "POST",
+            "/api/auth/revoke-all",
+            {"confirm": "revoke"},
+            {gateway.CSRF_HEADER: csrf},
+        )
+        self.assertEqual(accepted, HTTPStatus.OK)
+        self.assertTrue(payload["signedOut"])
+        self.assertEqual(self.config.audit_calls[-1]["action"], "revoke-sessions")
+
+    def test_proxy_control_action_matrix_is_audited(self) -> None:
+        csrf = self.csrf_token()
+        cases = (
+            ("send", {"session": "session-a", "text": "anonymous"}),
+            ("interrupt", {"session": "session-a"}),
+            ("approve", {"session": "session-a"}),
+            ("up", {"session": "session-a"}),
+            ("down", {"session": "session-a"}),
+            ("session/close", {"session": "session-a"}),
+        )
+        expected = ("send", "interrupt", "enter", "up", "down", "close")
+        self.config.audit_calls.clear()
+
+        for (tail, body), action in zip(cases, expected):
+            status, _data = self.request(
+                "POST",
+                f"/{self.route}/api/{tail}",
+                body,
+                {gateway.CSRF_HEADER: csrf},
+            )
+            self.assertEqual(status, HTTPStatus.OK)
+            self.assertEqual(self.config.audit_calls[-1]["action"], action)
+            self.assertEqual(self.config.audit_calls[-1]["target"], "session-a")
+
+    def test_direct_control_actions_are_audited_on_success_and_failure(self) -> None:
+        csrf = self.csrf_token()
+        self.config.audit_calls.clear()
+        cases = (
+            ("/api/agent/new", {"route": self.route, "command": "codex", "client_launch_id": "web-launch-audit"}, "start", HTTPStatus.BAD_GATEWAY),
+            ("/api/agent/resume", {"route": self.route, "agent_session_id": "thread-a", "source": "codex-cli"}, "resume", HTTPStatus.BAD_GATEWAY),
+            ("/api/bridge-inject", {"package_id": "123-aabbccdd", "route": self.route, "session": "session-a"}, "file-inject", HTTPStatus.OK),
+        )
+
+        for path, body, action, expected_status in cases:
+            status, _data = self.request("POST", path, body, {gateway.CSRF_HEADER: csrf})
+            self.assertEqual(status, expected_status)
+            self.assertEqual(self.config.audit_calls[-1]["action"], action)
+            self.assertEqual(self.config.audit_calls[-1]["route"], self.route)
 
     def test_auth_cookie_defaults_to_twelve_hours_host_only_and_strict(self) -> None:
         handler = object.__new__(gateway.GatewayHandler)

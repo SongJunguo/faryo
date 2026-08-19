@@ -103,4 +103,14 @@ assert.deepEqual(longFirst, { created: 200, reused: 0, removed: 0, stable: 198 }
 assert.deepEqual(longAppend, { created: 1, reused: 200, removed: 0, stable: 199 });
 assert.deepEqual(longContainer.children.slice(0, 200), longOriginalNodes);
 
+const transientContainer = new FakeContainer();
+const transientPlan = stableBlocks.plan(initialBlocks.slice(0, 2), { mode: 'settled', revision: 0 });
+stableBlocks.reconcile(transientContainer, transientPlan, createNode);
+const livePanel = new FakeElement('Live from tmux');
+livePanel.dataset.faryoTransient = 'live';
+transientContainer.insertBefore(livePanel, null);
+const transientResult = stableBlocks.reconcile(transientContainer, transientPlan, createNode);
+assert.deepEqual(transientResult, { created: 0, reused: 2, removed: 0, stable: 0 });
+assert.equal(transientContainer.children.at(-1), livePanel, 'transient Live DOM must survive chat reconciliation');
+
 console.log('stable-block reconciliation tests passed');

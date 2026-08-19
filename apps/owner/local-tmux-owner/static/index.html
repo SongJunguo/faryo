@@ -88,10 +88,11 @@
 
     <footer>
       <div class="status-line">
-        <span class="key-nav">
-          <button id="upBtn" type="button">↑</button>
-          <button id="downBtn" type="button">↓</button>
-          <button id="approveSmallBtn" type="button">Confirm</button>
+        <span class="key-nav" aria-hidden="true">
+          <span class="key-nav-label">Codex menu</span>
+          <button id="upBtn" type="button" aria-label="Move to the previous Codex TUI option" title="Move to the previous Codex TUI option">↑ Previous</button>
+          <button id="downBtn" type="button" aria-label="Move to the next Codex TUI option" title="Move to the next Codex TUI option">↓ Next</button>
+          <button id="approveSmallBtn" type="button" aria-label="Send Enter to choose the current Codex TUI option" title="Send Enter to choose the current Codex TUI option">Enter Choose</button>
         </span>
         <div id="attachmentPreview" class="attachment-preview hidden"></div>
         <button id="versionToggle" class="product-mark" type="button" title="Faryo __FARYO_RELEASE_VERSION__">Faryo __FARYO_RELEASE_NUMBER__</button>
@@ -134,7 +135,7 @@
   <script src="vendor/markdown-ast/markdown-ast.min.js?v=faryo-markdown-ast-2"></script>
   <script src="internal-annotations.js?v=faryo-internal-annotations-1"></script>
   <script src="event-stream.js?v=faryo-event-stream-1"></script>
-  <script src="stable-blocks.js?v=faryo-stable-blocks-1"></script>
+  <script src="stable-blocks.js?v=faryo-stable-blocks-2"></script>
   <script src="question-navigator.js?v=faryo-question-navigator-4"></script>
   <script src="codex-commands.js?v=faryo-codex-commands-1"></script>
   <script src="copy-fidelity.js?v=faryo-copy-fidelity-2"></script>
@@ -142,6 +143,6 @@
   <script type="module" src="vendor/markdown-ast/highlight/highlight.js?v=faryo-shiki-1"></script>
   <script src="compact-rules-codex.js?v=faryo-owner-plan-2"></script>
   <script src="live-scroll.js?v=faryo-owner-live-scroll-2"></script>
-  <script src="app.js?v=faryo-owner-workbench-20"></script>
+  <script src="app.js?v=faryo-owner-workbench-22"></script>
 </body>
 </html>
