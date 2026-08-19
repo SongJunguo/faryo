@@ -131,18 +131,44 @@ class AgentSessionTest(unittest.TestCase):
             mock.patch.object(server, "agent_login_shell", return_value="/bin/bash"),
             mock.patch.object(server, "codex_cli_argv", return_value=["/runtime/node", "/runtime/codex.js"]),
             mock.patch.object(server, "tmux", return_value=completed) as tmux,
-            mock.patch.object(server, "tmux_session_option"),
+            mock.patch.object(server, "tmux_session_option") as session_option,
+            mock.patch.object(server, "managed_launch_session", return_value=""),
             mock.patch.object(server, "has_session", return_value=True),
             mock.patch.object(server, "codex_cli_in_pane", side_effect=[False, True]),
             mock.patch.object(server, "ensure_pane_width") as ensure_width,
             mock.patch.object(server.time, "sleep"),
         ):
-            name = server.start_agent_runtime(self.config, Path("/workspace"), "codex", [], max_running=8)
+            name = server.start_agent_runtime(self.config, Path("/workspace"), "codex", [], max_running=8, launch_id="web-launch-123")
 
         launch = next(call.args[1] for call in tmux.call_args_list if call.args[1][0] == "new-session")
         self.assertTrue(name.startswith("faryo") and name[5:].isdigit())
         self.assertIn("/bin/bash", launch)
         self.assertIn("/runtime/codex.js", launch[-1])
+        session_option.assert_any_call(self.config, name, "@faryo_managed", "1")
+        session_option.assert_any_call(self.config, name, "@faryo_launch_id", "web-launch-123")
+        ensure_width.assert_called_once()
+
+    def test_duplicate_launch_id_reuses_the_same_managed_session(self):
+        with (
+            mock.patch.object(server, "managed_launch_session", return_value="faryo7"),
+            mock.patch.object(server, "active_agent_count") as active_count,
+            mock.patch.object(server, "has_session", return_value=True),
+            mock.patch.object(server, "codex_cli_in_pane", return_value=True),
+            mock.patch.object(server, "ensure_pane_width") as ensure_width,
+            mock.patch.object(server, "tmux") as tmux,
+        ):
+            name = server.start_agent_runtime(
+                self.config,
+                Path("/workspace"),
+                "codex",
+                [],
+                max_running=1,
+                launch_id="web-launch-123",
+            )
+
+        self.assertEqual(name, "faryo7")
+        active_count.assert_not_called()
+        tmux.assert_not_called()
         ensure_width.assert_called_once()
 
     def test_agent_start_timeout_removes_the_empty_tmux(self):
@@ -172,6 +198,22 @@ class AgentSessionTest(unittest.TestCase):
             items = server.agent_session_items(self.config, "/allowed/workspace")
 
         self.assertEqual(items, [])
+
+    def test_detected_desktop_codex_source_does_not_grant_remote_close_ownership(self):
+        def option(_config, _session, key, _value=None):
+            return "codex-cli" if key == "@faryo_agent_source" else ""
+
+        with (
+            mock.patch.object(server, "tmux_sessions", return_value=["codex"]),
+            mock.patch.object(server, "tmux_session_option", side_effect=option),
+        ):
+            self.assertFalse(server.managed_session(self.config, "codex"))
+
+        with (
+            mock.patch.object(server, "tmux_sessions", return_value=["faryo1"]),
+            mock.patch.object(server, "tmux_session_option", return_value="1"),
+        ):
+            self.assertTrue(server.managed_session(self.config, "faryo1"))
 
     def test_codex_history_page_fetches_only_the_requested_window(self):
         active = [{"id": "live", "tmuxSession": "codex", "updatedTs": 100}]

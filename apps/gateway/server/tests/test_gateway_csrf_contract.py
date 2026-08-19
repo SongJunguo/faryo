@@ -56,6 +56,9 @@ class StubConfig:
     def workspace_root(self, username: str, route: str) -> None:
         return None
 
+    def max_running(self, route: str) -> int:
+        return 8
+
     def save_bridge_package(self, payload: dict[str, Any], username: str) -> dict[str, Any]:
         self.bridge_create_calls += 1
         return {"id": "pkg-test", "owner": username, "title": payload.get("title") or "test", "status": "pending"}
@@ -229,6 +232,34 @@ class GatewayCsrfContractTest(unittest.TestCase):
         self.assertEqual(status, HTTPStatus.OK)
         self.assertTrue(data.get("ok"))
         self.assertEqual(self.config.bridge_create_calls, 1)
+
+    def test_start_codex_retries_transport_failure_with_the_same_launch_id(self) -> None:
+        csrf = self.csrf_token()
+        launch_id = "web-generic-launch-123"
+        responses = [
+            {"ok": True, "activeSessions": [], "sessions": []},
+            {"ok": False, "error": "owner restarting", "transportError": True, "retryable": True},
+            {"ok": True, "session": "faryo1"},
+        ]
+        with (
+            mock.patch.object(gateway.GatewayHandler, "owner_json_request", side_effect=responses) as owner_request,
+            mock.patch.object(gateway.time, "sleep") as sleep,
+        ):
+            status, data = self.request(
+                "POST",
+                "/api/agent/new",
+                {"route": self.route, "command": "codex", "client_launch_id": launch_id},
+                {gateway.CSRF_HEADER: csrf},
+            )
+
+        self.assertEqual(status, HTTPStatus.OK)
+        self.assertEqual(data.get("session"), "faryo1")
+        self.assertEqual(owner_request.call_count, 3)
+        first_launch = owner_request.call_args_list[1].args[2]
+        retried_launch = owner_request.call_args_list[2].args[2]
+        self.assertEqual(first_launch["client_launch_id"], launch_id)
+        self.assertEqual(retried_launch, first_launch)
+        sleep.assert_called_once_with(0.25)
 
     def test_owner_proxy_post_requires_gateway_csrf(self) -> None:
         status, data = self.request("POST", f"/{self.route}/api/send", {"text": "blocked"})

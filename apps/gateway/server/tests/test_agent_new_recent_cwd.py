@@ -60,6 +60,12 @@ class SelectRecentAgentCwdTest(unittest.TestCase):
         self.assertEqual(token, gateway.owner_directory_selection_token("owner-secret", "/workspace/a"))
         self.assertNotEqual(token, gateway.owner_directory_selection_token("owner-secret", "/workspace/b"))
 
+    def test_client_launch_id_is_strict_and_owner_command_asset_is_proxyable(self) -> None:
+        self.assertEqual(gateway.clean_client_launch_id("web-generic-launch-123"), "web-generic-launch-123")
+        self.assertIsNone(gateway.clean_client_launch_id("short"))
+        self.assertIsNone(gateway.clean_client_launch_id("bad launch id"))
+        self.assertIn("codex-commands.js", gateway.OWNER_STATIC_FILES)
+
     def test_skips_exact_workspace_root(self) -> None:
         sessions = [session("/srv/brain", 20), session("/srv/brain/projects/faryo", 10)]
         self.assertEqual(gateway.select_recent_agent_cwd(sessions, "/srv/brain"), "/srv/brain/projects/faryo")

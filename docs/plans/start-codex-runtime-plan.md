@@ -1,7 +1,7 @@
 # Faryo Start Codex Runtime Plan
 
 更新时间：2026-08-19
-状态：已完成
+状态：已完成并重新部署；部署竞争与 managed 所有权进入维护回归
 
 ## 已报告现象
 
@@ -78,6 +78,47 @@ Gateway 主页的 `Start Codex` 当前会报错，预期的后台 tmux/Codex 会
   token 返回 HTTP 400，原有 tmux 尺寸不变；
 - 62 个 Owner、48 个 Gateway Python 测试及手机目录 sheet、浏览器工作台、全历史和
   发送矩阵通过。
+
+## 2026-08-19 部署竞争回归
+
+### 现象与证据
+
+- 用户在图形目录选择后点击创建，页面显示 `Unexpected token '<'`，且没有新
+  `faryoN` 会话；
+- Gateway 审计日志确认 POST 已到达，但时间与 Owner 热重启精确重合；重启完成后使用
+  本机签名测试 Cookie 重放同一“目录 token -> Gateway -> Owner -> ready Codex”链路为
+  HTTP 200，并精确清理测试会话；
+- 原始前端对所有响应直接调用 `response.json()`，Cloudflare/反向代理的 HTML 登录页或
+  502 页面因此泄漏成 JSON 语法错误；启动 POST 也没有跨重试的幂等键；
+- Gateway Owner 静态白名单还遗漏了新加入的 `codex-commands.js`，该问题不导致本次
+  POST 失败，但会使公网会话页刷新后缺少命令面板，纳入同一部署回归修复。
+- 真实浏览器检查同时发现：历史代码用 `@faryo_agent_source` 判断 managed，Owner 为了
+  识别活动线程又会给桌面 `codex*` 写该 option，导致桌面会话错误获得远程 Close 权限。
+
+### 修复与新增验收
+
+- Portal 统一先读取文本再受控解析 JSON；认证 HTML、临时 502/503/504 和无效响应显示
+  可理解错误，绝不把 HTML 正文或 `Unexpected token` 暴露给用户；
+- 每次 Start Codex 生成稳定 `client_launch_id`；Gateway 对 Owner 传输失败做一次短重试，
+  浏览器对临时网关失败也只用同一 ID 重试；
+- Owner 把 ID 写入 managed tmux option，同一 ID 的并发、丢响应或跨 Owner 重启重试
+  返回同一个 `faryoN`，不能重复创建；
+- managed 所有权改用仅在 Faryo 创建时写入的 `@faryo_managed=1`；agent source 只描述
+  运行时类型，不再授予关闭权限；
+- 隔离启动测试必须重复提交同一 ID，确认只存在一个 managed tmux，再精确清理；真实
+  Gateway 测试必须验证 HTML 错误分类、完整目录启动、就绪、清理和原有几何不变。
+
+### 回归完成证据
+
+- Owner 68 项、Gateway 50 项 Python 测试通过；隔离启动对同一 launch ID 提交两次，
+  只得到同一 `faryoN`；
+- 390x844 真实 Gateway 浏览器完成目录选择、ready Codex、跳转和关闭；6 个桌面
+  `codex*` 全部识别为 desktop、managed=0；
+- 刻意在 POST 前停止 Owner、150 ms 后恢复，Gateway 使用同一 ID 重试成功，只创建
+  一个会话并精确清理；
+- 公网代理清单包含 `codex-commands.js`；HTML 认证页和 502 fixture 均转成明确错误，
+  不再出现 `Unexpected token '<'`；
+- 上述测试前后所有桌面 Codex tmux 几何完全一致，且无残留 `faryoN` 测试会话。
 
 ## 参考审查
 

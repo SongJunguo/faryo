@@ -6,6 +6,7 @@ python_bin="${FARYO_START_PYTHON:-python3}"
 suffix="$$"
 port="${FARYO_START_PORT:-$((26000 + (suffix % 1000)))}"
 token="anonymous-start-$suffix"
+launch_id="anonymous-launch-$suffix"
 temp_root="$(mktemp -d -t faryo-start-runtime.XXXXXX)"
 owner_pid=''
 created_session=''
@@ -59,7 +60,7 @@ response="$temp_root/start-response.json"
 curl -fsS --max-time 20 \
   -H "X-Owner-Token: $token" \
   -H 'Content-Type: application/json' \
-  -d "{\"command\":\"codex\",\"cwd\":\"$temp_root\",\"max_running\":0}" \
+  -d "{\"command\":\"codex\",\"cwd\":\"$temp_root\",\"max_running\":0,\"client_launch_id\":\"$launch_id\"}" \
   "http://127.0.0.1:$port/api/agent/new" >"$response"
 created_session="$("$python_bin" - "$response" <<'PY'
 import json
@@ -74,7 +75,28 @@ PY
 )"
 
 tmux has-session -t "$created_session"
+[[ "$(tmux show-options -qv -t "$created_session" @faryo_managed)" == "1" ]]
 [[ "$(tmux show-options -qv -t "$created_session" @faryo_agent_source)" == "codex-cli" ]]
+[[ "$(tmux show-options -qv -t "$created_session" @faryo_launch_id)" == "$launch_id" ]]
+
+retry_response="$temp_root/retry-response.json"
+curl -fsS --max-time 20 \
+  -H "X-Owner-Token: $token" \
+  -H 'Content-Type: application/json' \
+  -d "{\"command\":\"codex\",\"cwd\":\"$temp_root\",\"max_running\":0,\"client_launch_id\":\"$launch_id\"}" \
+  "http://127.0.0.1:$port/api/agent/new" >"$retry_response"
+retry_session="$("$python_bin" - "$retry_response" <<'PY'
+import json
+import sys
+with open(sys.argv[1], encoding="utf-8") as handle:
+    data = json.load(handle)
+if not data.get("ok"):
+    raise SystemExit(1)
+print(str(data.get("session") or ""))
+PY
+)"
+[[ "$retry_session" == "$created_session" ]]
+[[ "$(tmux list-sessions -F '#{@faryo_launch_id}' | awk -v id="$launch_id" '$0 == id {count += 1} END {print count + 0}')" == 1 ]]
 
 status="$temp_root/status.json"
 curl -fsS --max-time 5 \
@@ -96,4 +118,4 @@ tmux kill-session -t "$created_session"
 ! tmux has-session -t "$created_session" 2>/dev/null
 created_session=''
 
-echo 'faryo-start-codex-runtime=PASS shell=bash codex=ready managed=yes existing-tmux-size=unchanged'
+echo 'faryo-start-codex-runtime=PASS shell=bash codex=ready managed=yes idempotent-retry=yes existing-tmux-size=unchanged'

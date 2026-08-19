@@ -796,27 +796,46 @@ def next_faryo_session_name(config: Config) -> str:
     return f"faryo{index}"
 
 
-def start_agent_runtime(config: Config, cwd: Path, command: str, args: list[str], max_running: int = 0, wait_ready: bool = True, agent_id: str = "", title: str = "") -> str:
+def managed_launch_session(config: Config, launch_id: str) -> str:
+    clean_id = clean_client_launch_id(launch_id)
+    if not clean_id:
+        return ""
+    for name in tmux_sessions(config):
+        if tmux_session_option(config, name, "@faryo_launch_id") == clean_id and managed_session(config, name):
+            return name
+    return ""
+
+
+def start_agent_runtime(config: Config, cwd: Path, command: str, args: list[str], max_running: int = 0, wait_ready: bool = True, agent_id: str = "", title: str = "", launch_id: str = "") -> str:
+    clean_launch_id = clean_client_launch_id(launch_id)
+    created_here = False
     with RUNTIME_LOCK:
-        if max_running and active_agent_count(config) >= max_running: raise OwnerError("running agent limit reached", HTTPStatus.CONFLICT)
-        name = next_faryo_session_name(config)
-        shell = agent_login_shell()
-        argv = codex_cli_argv(*args) if command == "codex" else [agent_launch_executable(command), *args]
-        launch = f"{shlex.join(argv)}; exec {shlex.quote(shell)} -l"
-        res = tmux(config, ["new-session", "-d", "-s", name, "-c", str(cwd), shell, "-lc", launch], timeout=5)
-        if res.returncode != 0: raise OwnerError(res.stderr.strip() or "tmux session start failed", HTTPStatus.INTERNAL_SERVER_ERROR)
-        if source := AGENT_SOURCE_BY_COMMAND.get(command): tmux_session_option(config, name, "@faryo_agent_source", source)
-        if title:
-            tmux_session_option(config, name, "@faryo_session_title", clean_session_title(title))
-        if agent_id:
-            tmux_session_option(config, name, "@faryo_agent_session_id", agent_id)
+        name = managed_launch_session(config, clean_launch_id) if clean_launch_id else ""
+        if not name:
+            if max_running and active_agent_count(config) >= max_running: raise OwnerError("running agent limit reached", HTTPStatus.CONFLICT)
+            name = next_faryo_session_name(config)
+            shell = agent_login_shell()
+            argv = codex_cli_argv(*args) if command == "codex" else [agent_launch_executable(command), *args]
+            launch = f"{shlex.join(argv)}; exec {shlex.quote(shell)} -l"
+            res = tmux(config, ["new-session", "-d", "-s", name, "-c", str(cwd), shell, "-lc", launch], timeout=5)
+            if res.returncode != 0: raise OwnerError(res.stderr.strip() or "tmux session start failed", HTTPStatus.INTERNAL_SERVER_ERROR)
+            created_here = True
+            tmux_session_option(config, name, "@faryo_managed", "1")
+            if source := AGENT_SOURCE_BY_COMMAND.get(command): tmux_session_option(config, name, "@faryo_agent_source", source)
+            if clean_launch_id:
+                tmux_session_option(config, name, "@faryo_launch_id", clean_launch_id)
+            if title:
+                tmux_session_option(config, name, "@faryo_session_title", clean_session_title(title))
+            if agent_id:
+                tmux_session_option(config, name, "@faryo_agent_session_id", agent_id)
     if not wait_ready:
         return name
     target = Config(name, config.token, config.pane_width); deadline = time.monotonic() + AGENT_START_READY_TIMEOUT
     while time.monotonic() < deadline:
         if has_session(target) and codex_cli_in_pane(target): ensure_pane_width(target); return name
         time.sleep(0.2)
-    tmux(config, ["kill-session", "-t", name], timeout=3)
+    if created_here:
+        tmux(config, ["kill-session", "-t", name], timeout=3)
     raise OwnerError("agent runtime did not become ready", HTTPStatus.BAD_GATEWAY)
 
 
@@ -849,7 +868,7 @@ def target_config(config: Config, session: str | None) -> Config:
 def managed_session(config: Config, name: str | None) -> bool:
     if not name or name not in tmux_sessions(config):
         return False
-    return bool(tmux_session_option(config, name, "@faryo_agent_source"))
+    return tmux_session_option(config, name, "@faryo_managed") == "1"
 
 
 def session_idle_seconds(config: Config) -> float:
@@ -917,6 +936,7 @@ TMUX_SESSION_NAME_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,80}$")
 FARYO_MANAGED_SESSION_RE = re.compile(r"^faryo([1-9][0-9]*)$")
 CODEX_THREAD_ID_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,120}$")
 CLIENT_MESSAGE_ID_RE = re.compile(r"^[A-Za-z0-9_.:-]{8,128}$")
+CLIENT_LAUNCH_ID_RE = re.compile(r"^[A-Za-z0-9_.:-]{8,128}$")
 
 
 def clean_tmux_session_name(value: str | None) -> str | None:
@@ -938,6 +958,13 @@ def clean_client_message_id(value: str | None) -> str | None:
         return None
     value = value.strip()
     return value if CLIENT_MESSAGE_ID_RE.fullmatch(value) else None
+
+
+def clean_client_launch_id(value: str | None) -> str | None:
+    if not value:
+        return None
+    value = value.strip()
+    return value if CLIENT_LAUNCH_ID_RE.fullmatch(value) else None
 
 
 def clean_agent_launch_command(value: str | None) -> str | None:
@@ -4132,8 +4159,12 @@ class Handler(SimpleHTTPRequestHandler):
                 command = clean_agent_launch_command(str(payload.get("command") or ""))
                 if not command:
                     raise OwnerError("invalid launch command")
+                raw_launch_id = str(payload.get("client_launch_id") or payload.get("clientLaunchId") or "").strip()
+                launch_id = clean_client_launch_id(raw_launch_id)
+                if raw_launch_id and not launch_id:
+                    raise OwnerError("invalid client launch id")
                 title = clean_session_title(payload.get("title"))
-                name = start_agent_runtime(self.config, cwd, command, [], bounded_max_running(payload), wait_ready=True, title=title)
+                name = start_agent_runtime(self.config, cwd, command, [], bounded_max_running(payload), wait_ready=True, title=title, launch_id=launch_id or "")
                 self.write_json({"ok": True, "session": name, "updatedAt": now_iso()})
                 return
             if parsed.path == "/api/agent/cleanup-idle":

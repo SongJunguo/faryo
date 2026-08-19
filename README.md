@@ -153,6 +153,10 @@ micromark -> mdast -> CommonMark/GFM/math nodes -> safe HTML -> KaTeX
 - `Start Codex` resolves the configured CLI with its matching Node runtime,
   selects an available login shell, and returns success only after the Codex
   process is present; failed starts remove their partial tmux session.
+- Start retries carry one stable launch ID across browser, Gateway, Owner
+  restarts, and lost responses, so an ambiguous retry returns the same managed
+  tmux instead of creating a duplicate. HTML login/edge errors are classified
+  without exposing parser text.
 - New managed sessions use `faryo1`, `faryo2`, ... names. After choosing a
   workstation, an authenticated directory browser opens at the most recent cwd
   and offers parent, configured roots, recent locations, and child folders.
@@ -242,7 +246,7 @@ or an equivalent exact-identity layer.
 
 The `main` branch was revalidated on 2026-08-19 with privacy-safe fixtures:
 
-- source checks plus 66 Owner and 48 Gateway Python tests;
+- source checks plus 68 Owner and 50 Gateway Python tests;
 - a 20-message browser delivery matrix including Chinese, multiline Markdown,
   TeX, attachment, offline/background recovery, and failed-draft cases;
 - a two-session retry/delayed-response isolation test;

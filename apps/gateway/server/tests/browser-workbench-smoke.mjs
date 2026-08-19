@@ -7,6 +7,8 @@ const targetUrl = process.env.FARYO_SMOKE_URL;
 const loginUser = process.env.FARYO_SMOKE_LOGIN_USER || '';
 const passwordFile = process.env.FARYO_SMOKE_LOGIN_PASSWORD_FILE || '';
 const loginPassword = passwordFile ? (await readFile(passwordFile, 'utf8')).trim() : '';
+const authCookie = process.env.FARYO_SMOKE_AUTH_COOKIE || '';
+const startCodex = process.env.FARYO_SMOKE_START_CODEX === '1';
 const expectedActive = Number(process.env.FARYO_SMOKE_EXPECT_ACTIVE || 0);
 const expectedManaged = Number(process.env.FARYO_SMOKE_EXPECT_MANAGED || -1);
 const expectedDesktop = Number(process.env.FARYO_SMOKE_EXPECT_DESKTOP || -1);
@@ -94,12 +96,24 @@ try {
     socket.send(JSON.stringify({ id, method, params }));
   });
   const evaluate = async (expression) => {
-    const result = await send('Runtime.evaluate', { expression, returnByValue: true });
+    const result = await send('Runtime.evaluate', { expression, returnByValue: true, awaitPromise: true });
+    if (result.exceptionDetails) {
+      throw new Error(result.exceptionDetails.exception?.description || result.exceptionDetails.text || 'Browser evaluation failed');
+    }
     return result.result?.value;
   };
 
   await send('Page.enable');
   await send('Runtime.enable');
+  await send('Network.enable');
+  if (authCookie) {
+    const separator = authCookie.indexOf('=');
+    if (separator <= 0) throw new Error('FARYO_SMOKE_AUTH_COOKIE must be name=value');
+    // A __Host- cookie cannot be installed for the loopback HTTP smoke URL.
+    // CDP request headers preserve the production cookie contract while
+    // keeping this local-only credential out of page JavaScript.
+    await send('Network.setExtraHTTPHeaders', { headers: { Cookie: authCookie } });
+  }
   await send('Emulation.setDeviceMetricsOverride', {
     width: viewportWidth,
     height: viewportHeight,
@@ -202,6 +216,24 @@ try {
   const expectedPalette = { light: '#f6f7f9:#5369e7', dark: '#0f1115:#7188ff' }[smokeTheme];
   if (expectedPalette && `${first.palette.bg}:${first.palette.accent}` !== expectedPalette) throw new Error(`Theme palette mismatch: ${JSON.stringify(first.palette)}`);
   if (first.pageHorizontalOverflow) throw new Error(`Gateway workbench overflowed horizontally: ${JSON.stringify(first.viewport)}`);
+
+  const responseErrors = await evaluate(`(async () => {
+    const capture = async (response, label) => {
+      try { await readJsonResponse(response, label); return { failed: false }; }
+      catch (error) { return { failed: true, message: error.message, retryable: Boolean(error.retryable) }; }
+    };
+    const temporary = await capture(new Response('<!DOCTYPE html><html><title>Bad gateway</title></html>', { status: 502, headers: { 'Content-Type': 'text/html' } }), 'Start Codex');
+    const expired = await capture(new Response('<!DOCTYPE html><html><title>Cloudflare Access</title></html>', { status: 200, headers: { 'Content-Type': 'text/html' } }), 'Start Codex');
+    const json = await readJsonResponse(new Response('{"ok":true,"value":7}', { status: 200, headers: { 'Content-Type': 'application/json' } }), 'Start Codex');
+    return { temporary, expired, jsonValue: json.value };
+  })()`);
+  if (!responseErrors?.temporary?.failed || !responseErrors.temporary.retryable
+    || !responseErrors.temporary.message.includes('temporarily unavailable')
+    || !responseErrors?.expired?.failed || responseErrors.expired.retryable
+    || !responseErrors.expired.message.includes('sign-in expired')
+    || responseErrors.jsonValue !== 7) {
+    throw new Error(`Gateway API response handling is not robust: ${JSON.stringify(responseErrors)}`);
+  }
 
   await evaluate("document.querySelector('#newSessionSlot .launcher-card').click()");
   let launchConfirmation = {};
@@ -313,6 +345,61 @@ try {
   }
 
   if (!third?.ready || third.historyCount !== 10 || !third.changed) throw new Error('Direct page jump did not render a distinct ten-item third page');
+
+  if (startCodex) {
+    await evaluate("document.querySelector('#newSessionSlot .launcher-card').click()");
+    let startSheet = {};
+    for (let attempt = 0; attempt < 80; attempt += 1) {
+      await delay(50);
+      startSheet = await evaluate(`(() => ({
+        title: document.getElementById('modalTitle')?.textContent || '',
+        ready: document.getElementById('modal')?.classList.contains('open') && Boolean(document.querySelector('#modalChoices .choice-btn:not([disabled])')),
+      }))()`);
+      if (startSheet?.ready) break;
+    }
+    if (!startSheet.ready || !startSheet.title.startsWith('Start ')) throw new Error(`Start Codex route sheet did not open: ${JSON.stringify(startSheet)}`);
+    await evaluate("document.querySelector('#modalChoices .choice-btn:not([disabled])').click()");
+    let directorySheet = {};
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      await delay(50);
+      directorySheet = await evaluate(`(() => ({
+        title: document.getElementById('modalTitle')?.textContent || '',
+        ready: [...document.querySelectorAll('#modalChoices .choice-btn strong')].some((item) => item.textContent === 'Use this folder'),
+      }))()`);
+      if (directorySheet?.ready) break;
+    }
+    if (!directorySheet.ready || directorySheet.title !== 'Choose working directory') throw new Error(`Start Codex directory sheet did not open: ${JSON.stringify(directorySheet)}`);
+    await evaluate("[...document.querySelectorAll('#modalChoices .choice-btn')].find((item) => item.querySelector('strong')?.textContent === 'Use this folder').click()");
+    let launched = {};
+    for (let attempt = 0; attempt < 250; attempt += 1) {
+      await delay(100);
+      try {
+        launched = await evaluate(`(() => {
+          const route = location.pathname.split('/').filter(Boolean)[0] || '';
+          const session = new URLSearchParams(location.search).get('session') || '';
+          const uiReady = document.documentElement.dataset.faryoAppReady === '1' && typeof window.FaryoCodexCommands?.match === 'function';
+          return { route, session, uiReady, ready: /^(?:hp|pc|txy)$/.test(route) && /^faryo[1-9][0-9]*$/.test(session) && uiReady };
+        })()`);
+      } catch (_error) {
+        launched = {};
+      }
+      if (launched?.ready) break;
+    }
+    if (!launched.ready) throw new Error('Start Codex did not navigate to a managed ready session');
+    const cleanup = await evaluate(`(async () => {
+      const csrfResponse = await fetch('/api/csrf', { cache: 'no-store' });
+      const csrfData = await csrfResponse.json();
+      const response = await fetch('/${launched.route}/api/session/close', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Faryo-Csrf': csrfData.csrf || '' },
+        body: JSON.stringify({ session: ${JSON.stringify(launched.session)} }),
+      });
+      const data = await response.json();
+      return { status: response.status, ok: Boolean(data.ok) };
+    })()`);
+    if (!cleanup?.ok || cleanup.status !== 200) throw new Error(`Started Codex session was not cleaned up: ${JSON.stringify(cleanup)}`);
+    console.log('faryo-browser-start-codex=PASS directory=selected ready=yes cleanup=yes');
+  }
 
   console.log(`faryo-browser-workbench-smoke=PASS viewport=${first.viewport.width}x${first.viewport.height} active=${first.activeCount} managed=${first.managedCount} desktop=${first.desktopCount}`);
   console.log(`faryo-browser-workbench-history=PASS page1=${first.historyCount} page2=${second.historyCount} page3=${third.historyCount} direct-jump=yes scrollable=yes`);
