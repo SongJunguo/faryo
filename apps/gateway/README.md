@@ -77,7 +77,11 @@ created and stamped by Faryo expose the remote `Close` action; externally
 started desktop tmux sessions remain openable but protected from remote close.
 `Session History` excludes those live sessions, scrolls independently, and uses
 server-backed pagination with 10 records per page. Use Previous/Next or enter a
-page number and press Enter/Go to jump directly through long histories.
+page number and press Enter/Go to jump directly through long histories. Search
+matches only normalized session titles, explicit Codex rename metadata, and the
+working-folder basename. Date and archive chips filter on Codex metadata; they
+do not read conversation messages or rollout files. Filters are reflected in
+the current URL for refresh/navigation but are not written to browser storage.
 
 `Start Codex` opens a dedicated working-directory picker. The picker defaults to
 the latest eligible cwd, deduplicates shortcuts within Recent while keeping the

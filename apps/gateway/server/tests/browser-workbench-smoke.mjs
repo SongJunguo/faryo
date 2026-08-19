@@ -173,6 +173,7 @@ try {
         ready: activeList && historyList && history.length === 10 && document.getElementById('historyPageInput')?.value === '1' && Number(document.getElementById('historyPageTotal')?.textContent) > 2,
         activeCount: active.length,
         historyCount: history.length,
+        firstHistoryTitle: history[0]?.querySelector('.session-title')?.textContent?.trim() || '',
         managedCount: active.filter((item) => item.querySelector('.close-session')).length,
         desktopCount: active.filter((item) => item.querySelector('.session-meta')?.textContent.includes('Desktop tmux')).length,
         sectionsSeparate: history.every((item) => !item.dataset.session) && active.every((item) => item.dataset.session),
@@ -195,6 +196,7 @@ try {
         },
         viewport: { width: innerWidth, height: innerHeight },
         pageHorizontalOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth + 1,
+        historyToolsReady: Boolean(document.getElementById('historySearchInput') && document.querySelector('[data-history-period="7d"]') && document.querySelector('[data-history-archive="archived"]')),
       };
     })()`);
     if (first?.ready) break;
@@ -211,11 +213,48 @@ try {
   if (!first.fileTransferReady) throw new Error('Files-to-session controls are not discoverable');
   if (!first.launcherCount || !first.launcherLabelsClear) throw new Error('New-session launchers are unclear');
   if (!first.launcherIsCodexOnly) throw new Error('Retired agent launchers are still visible');
+  if (!first.historyToolsReady || !first.firstHistoryTitle) throw new Error('Session History search controls are not ready');
   const validPalettes = new Set(['#f6f7f9:#5369e7', '#0f1115:#7188ff']);
   if (!validPalettes.has(`${first.palette.bg}:${first.palette.accent}`)) throw new Error(`Unexpected shared palette: ${JSON.stringify(first.palette)}`);
   const expectedPalette = { light: '#f6f7f9:#5369e7', dark: '#0f1115:#7188ff' }[smokeTheme];
   if (expectedPalette && `${first.palette.bg}:${first.palette.accent}` !== expectedPalette) throw new Error(`Theme palette mismatch: ${JSON.stringify(first.palette)}`);
   if (first.pageHorizontalOverflow) throw new Error(`Gateway workbench overflowed horizontally: ${JSON.stringify(first.viewport)}`);
+
+  const historyQuery = first.firstHistoryTitle.slice(0, Math.min(10, first.firstHistoryTitle.length));
+  await evaluate(`(() => {const input=document.getElementById('historySearchInput');input.value=${JSON.stringify(historyQuery)};input.dispatchEvent(new Event('input',{bubbles:true}));})()`);
+  let searched = {};
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    await delay(100);
+    searched = await evaluate(`(() => {const cards=[...document.querySelectorAll('#sessionList .session-card')],params=new URLSearchParams(location.search),cached=JSON.parse(sessionStorage.getItem('faryoWorkbenchSnapshot')||'null');return{ready:params.get('q')===${JSON.stringify(historyQuery)}&&cards.length>0,count:cards.length,activeCount:document.querySelectorAll('#activeSessionList .session-card').length,cacheHasSearch:cached?.data?.history?.filter?.q===${JSON.stringify(historyQuery)},noHorizontalOverflow:document.documentElement.scrollWidth<=document.documentElement.clientWidth+1};})()`);
+    if (searched?.ready) break;
+  }
+  if (!searched.ready || searched.count > 10 || searched.activeCount !== first.activeCount || searched.cacheHasSearch || !searched.noHorizontalOverflow) {
+    throw new Error(`Session History search failed: ${JSON.stringify(searched)}`);
+  }
+  await evaluate("document.getElementById('historySearchClear').click()");
+  let searchCleared = false;
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    await delay(100);
+    searchCleared = Boolean(await evaluate("!new URLSearchParams(location.search).has('q') && document.querySelectorAll('#sessionList .session-card').length === 10"));
+    if (searchCleared) break;
+  }
+  if (!searchCleared) throw new Error('Clearing Session History search did not restore page one');
+
+  await evaluate("document.querySelector('[data-history-period=\"7d\"]').click()");
+  let periodApplied = false;
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    await delay(100);
+    periodApplied = Boolean(await evaluate("new URLSearchParams(location.search).get('period') === '7d' && document.querySelector('[data-history-period=\"7d\"]').classList.contains('active')"));
+    if (periodApplied) break;
+  }
+  if (!periodApplied) throw new Error('Session History period filter did not apply');
+  await evaluate("document.querySelector('[data-history-period=\"all\"]').click()");
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    await delay(100);
+    const restored = await evaluate("!new URLSearchParams(location.search).has('period') && document.querySelectorAll('#sessionList .session-card').length === 10");
+    if (restored) break;
+    if (attempt === 99) throw new Error('Session History period filter did not restore all-time results');
+  }
 
   const responseErrors = await evaluate(`(async () => {
     const capture = async (response, label) => {

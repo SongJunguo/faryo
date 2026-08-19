@@ -115,10 +115,13 @@ CODEX_HISTORY_MAX_PAGE_TURNS = 24
 CODEX_HISTORY_PAGE_CHAR_BUDGET = 2 * 1024 * 1024
 CODEX_HISTORY_PREVIEW_CHARS = 88
 CODEX_HISTORY_INDEX_MAX_PATHS = CODEX_ROLLOUT_CACHE_MAX_PATHS
-THREAD_COLUMNS = "id, title, rollout_path, tokens_used, model, reasoning_effort, cwd, updated_at, source, thread_source"
+THREAD_COLUMNS = "id, title, rollout_path, tokens_used, model, reasoning_effort, cwd, updated_at, source, thread_source, archived"
 INTERACTIVE_CODEX_THREAD_SOURCES = {"cli", "vscode"}
 AGENT_SESSION_LIST_LIMIT = 20
 AGENT_SESSION_QUERY_LIMIT = 1000
+AGENT_HISTORY_QUERY_MAX_CHARS = 96
+AGENT_HISTORY_PERIODS = {"all", "today", "7d", "30d"}
+AGENT_HISTORY_ARCHIVE_FILTERS = {"active", "archived", "all"}
 EMPTY_MANAGED_SESSION_TTL_SECONDS = 60
 MAX_MANAGED_AGENT_IDLE_SECONDS = 24 * 60 * 60
 AGENT_START_READY_TIMEOUT = 15.0
@@ -622,12 +625,54 @@ def codex_session_item(config: Config, item: dict[str, Any], index_titles: dict[
     # thread name to session_index.jsonl.
     startup_title = tmux_session_option(config, tmux_session, "@faryo_session_title") if tmux_session else ""
     title = index_titles.get(thread_id) or startup_title or codex_thread_title(item, fallback, index_titles)
-    return {"id": thread_id, "title": title, "gitLabel": session_git_label(session_git_cwd(config, tmux_session, cwd), git_labels, bool(tmux_session)), "cwd": short_path(cwd), "createdAt": item.get("created_at") or "", "updatedAt": item.get("updated_at") or "", "updatedTs": updated_ts, "rolloutPath": item.get("rollout_path") or "", "model": item.get("model") or "", "reasoningEffort": item.get("reasoning_effort") or "", "source": "codex-cli", "tmuxSession": tmux_session, "active": bool(tmux_session), "managed": bool(tmux_session and managed_session(config, tmux_session)), "agentRunning": agent_session_running(config, tmux_session)}
+    return {"id": thread_id, "title": title, "gitLabel": session_git_label(session_git_cwd(config, tmux_session, cwd), git_labels, bool(tmux_session)), "cwd": short_path(cwd), "createdAt": item.get("created_at") or "", "updatedAt": item.get("updated_at") or "", "updatedTs": updated_ts, "rolloutPath": item.get("rollout_path") or "", "model": item.get("model") or "", "reasoningEffort": item.get("reasoning_effort") or "", "source": "codex-cli", "tmuxSession": tmux_session, "active": bool(tmux_session), "managed": bool(tmux_session and managed_session(config, tmux_session)), "agentRunning": agent_session_running(config, tmux_session), "archived": bool(item.get("archived"))}
 
 
-def codex_history_filter(history_root: str | None, excluded_ids: set[str]) -> tuple[str, tuple[Any, ...]]:
-    where = "source IN ('cli', 'vscode') AND thread_source = 'user' AND COALESCE(archived, 0) = 0"
+def clean_agent_history_query(value: Any) -> str:
+    return " ".join(str(value or "").replace("\x00", "").split())[:AGENT_HISTORY_QUERY_MAX_CHARS]
+
+
+def clean_agent_history_period(value: Any) -> str:
+    period = str(value or "all").strip().lower()
+    return period if period in AGENT_HISTORY_PERIODS else "all"
+
+
+def clean_agent_history_archive(value: Any) -> str:
+    archive = str(value or "active").strip().lower()
+    return archive if archive in AGENT_HISTORY_ARCHIVE_FILTERS else "active"
+
+
+def agent_history_period_cutoff(period: str, now: float | None = None) -> float:
+    current = float(time.time() if now is None else now)
+    if period == "today":
+        local = _dt.datetime.fromtimestamp(current).astimezone()
+        return local.replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
+    if period == "7d":
+        return current - 7 * 24 * 60 * 60
+    if period == "30d":
+        return current - 30 * 24 * 60 * 60
+    return 0.0
+
+
+def agent_history_text_matches(item: dict[str, Any], query: str, index_titles: dict[str, str]) -> bool:
+    needle = clean_agent_history_query(query).casefold()
+    if not needle:
+        return True
+    cwd = str(item.get("cwd") or "")
+    fallback = short_path(cwd) or str(item.get("id") or "") or "Untitled session"
+    title = codex_thread_title(item, fallback, index_titles)
+    folder = Path(cwd).name if cwd else ""
+    return needle in title.casefold() or needle in folder.casefold()
+
+
+def codex_history_filter(history_root: str | None, excluded_ids: set[str], archive: str = "active") -> tuple[str, tuple[Any, ...]]:
+    where = "source IN ('cli', 'vscode') AND thread_source = 'user'"
     params: tuple[Any, ...] = ()
+    archive = clean_agent_history_archive(archive)
+    if archive == "active":
+        where += " AND COALESCE(archived, 0) = 0"
+    elif archive == "archived":
+        where += " AND COALESCE(archived, 0) != 0"
     if excluded_ids:
         placeholders = ",".join("?" for _ in excluded_ids)
         where += f" AND id NOT IN ({placeholders})"
@@ -644,11 +689,24 @@ def codex_history_filter(history_root: str | None, excluded_ids: set[str]) -> tu
     return where, params
 
 
-def codex_history_page(config: Config, limit: int, offset: int = 0, history_root: str | None = None, excluded_ids: set[str] | None = None) -> tuple[list[dict[str, Any]], int]:
-    where, params = codex_history_filter(history_root, excluded_ids or set())
-    total = codex_count(where, params)
+def codex_history_page(config: Config, limit: int, offset: int = 0, history_root: str | None = None, excluded_ids: set[str] | None = None, query: str = "", period: str = "all", archive: str = "active", now: float | None = None) -> tuple[list[dict[str, Any]], int]:
+    query = clean_agent_history_query(query)
+    period = clean_agent_history_period(period)
+    archive = clean_agent_history_archive(archive)
+    where, params = codex_history_filter(history_root, excluded_ids or set(), archive)
     index_titles = codex_session_index_titles(); git_labels: dict[str, str] = {}
-    rows = codex_rows(where, params, max(1, limit), max(0, offset))
+    if not query and period == "all":
+        total = codex_count(where, params)
+        rows = codex_rows(where, params, max(1, limit), max(0, offset))
+        return [codex_session_item(config, item, index_titles, git_labels) for item in rows], total
+    cutoff = agent_history_period_cutoff(period, now)
+    rows = [
+        item for item in codex_rows(where, params)
+        if (not cutoff or parse_sqlite_timestamp(item.get("updated_at")) >= cutoff)
+        and agent_history_text_matches(item, query, index_titles)
+    ]
+    total = len(rows)
+    rows = rows[max(0, offset):max(0, offset) + max(1, limit)]
     return [codex_session_item(config, item, index_titles, git_labels) for item in rows], total
 
 
@@ -699,12 +757,12 @@ def active_agent_session_items(config: Config, history_root: str | None = None, 
     return sorted(items, key=lambda item: float(item.get("updatedTs") or 0), reverse=True), set(active_codex) | superseded
 
 
-def agent_session_page(config: Config, limit: int, offset: int = 0, history_root: str | None = None) -> dict[str, Any]:
+def agent_session_page(config: Config, limit: int, offset: int = 0, history_root: str | None = None, query: str = "", period: str = "all", archive: str = "active") -> dict[str, Any]:
     page_limit = max(1, limit); start = max(0, offset)
     codex_state = active_codex_thread_state(config)
     active, excluded_ids = active_agent_session_items(config, history_root, codex_state)
-    sessions, history_total = codex_history_page(config, page_limit, start, history_root, excluded_ids)
-    return {"activeSessions": active, "sessions": sessions, "historyTotal": history_total, "historyOffset": start, "historyLimit": page_limit}
+    sessions, history_total = codex_history_page(config, page_limit, start, history_root, excluded_ids, query, period, archive)
+    return {"activeSessions": active, "sessions": sessions, "historyTotal": history_total, "historyOffset": start, "historyLimit": page_limit, "historyFilter": {"q": clean_agent_history_query(query), "period": clean_agent_history_period(period), "archive": clean_agent_history_archive(archive)}}
 
 
 def agent_session_items(config: Config, history_root: str | None = None) -> list[dict[str, Any]]:
@@ -3889,9 +3947,11 @@ class Handler(SimpleHTTPRequestHandler):
         return self.server.config  # type: ignore[attr-defined]
 
     def log_message(self, fmt: str, *args: Any) -> None:
-        message = fmt % args
-        message = re.sub(r"([?&]token=)[^&\s]+", r"\1<redacted>", message)
-        sys.stderr.write("[%s] %s\n" % (now_iso(), message))
+        # Query strings may contain Owner tokens, local paths, or a private
+        # session-history search. Keep routine access logs useful without
+        # persisting any of those values.
+        safe_path = urlparse(self.path).path
+        sys.stderr.write("[%s] %s %s\n" % (now_iso(), self.command, safe_path))
 
     def end_headers(self) -> None:
         self.send_header("Cache-Control", "no-store")
@@ -3944,7 +4004,15 @@ class Handler(SimpleHTTPRequestHandler):
                 except ValueError as exc:
                     raise OwnerError("invalid agent session pagination") from exc
                 if query.get("view", [""])[0] == "split":
-                    payload = agent_session_page(self.config, limit, offset, self.history_root())
+                    payload = agent_session_page(
+                        self.config,
+                        limit,
+                        offset,
+                        self.history_root(),
+                        clean_agent_history_query(query.get("q", [""])[0]),
+                        clean_agent_history_period(query.get("period", ["all"])[0]),
+                        clean_agent_history_archive(query.get("archive", ["active"])[0]),
+                    )
                 else:
                     items = self.agent_session_items()
                     payload = {"sessions": items[offset:offset + limit]}

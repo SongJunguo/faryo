@@ -1,7 +1,7 @@
 # Faryo Session History Search and Filter Plan
 
 更新时间：2026-08-20
-状态：排队中；等待 Source-only CI 完成后实施
+状态：完成并部署验证
 
 ## 问题基线
 
@@ -37,16 +37,20 @@
 - `q`：最多 96 字符，匹配规范化标题和 cwd basename；
 - `period`：`all`、`today`、`7d`、`30d`；
 - `archive`：`active`、`archived`、`all`；
-- `location`：`all` 或当前目录/项目 scope；
 - `page`：过滤后分页。
 
-SQL LIKE 必须转义 `%`、`_` 和反斜杠；显式 rename 通过缓存的 session index 先得到候选
-thread id，再与 SQLite metadata 条件合并。不得构造正文全文索引。
+实际实现先由 SQLite 按 source、workspace、archive 和 active-thread exclusion 缩小元数据
+集合，再在 Python 中对 title、缓存的显式 rename 和 cwd basename 做 Unicode
+`casefold` 字面量匹配。因此 `%`、`_` 和反斜杠没有 SQL wildcard 语义，也不需要把 rename
+回写数据库。不得构造正文全文索引。
+
+没有增加客户端可控的 `location=all`：普通 Gateway 用户原本就被强制限定在配置的 workspace
+root，允许页面放宽该范围会削弱隔离边界。目录定位由 cwd basename 搜索完成。
 
 ## 前端方案
 
 - Session History 标题下增加 search field；
-- chips：All、7 days、This folder、Archived；
+- chips：All time、Today、7 days、30 days，以及 Current、Archived、Any status；
 - 250 ms debounce，旧请求 AbortController 取消，响应按 request generation 丢弃；
 - 搜索时页码归 1；刷新保留 URL 中条件；清空恢复原分页；
 - 无结果显示当前过滤条件，不显示“历史丢失”；
@@ -70,3 +74,18 @@ thread id，再与 SQLite metadata 条件合并。不得构造正文全文索引
 - 搜索不显著增加 Owner 内存或扫描大型 rollout；
 - 公开 fixture 不含真实标题、路径或 thread id；
 - 真实历史只输出计数和匿名匹配状态。
+
+## 实施与证据
+
+- Owner 的筛选只读取 `state_5.sqlite` thread metadata 和缓存的 `session_index.jsonl` rename；
+  测试显式证明 conversation-history reader 没有被调用。
+- Owner 与 Gateway access log 只保留 HTTP method/path，query 中的搜索词、Token 和本机路径
+  不落日志；过滤结果不写入 `sessionStorage`。
+- 250 ms debounce、`AbortController`、request generation、URL query、空结果文案、页码归一和
+  Active Sessions 隔离均已实现。
+- `%_` 被按字面量目录名匹配；公开 fixture 覆盖 rename、目录、30 天、archive 和 96 字符上限。
+- canonical source check 通过：Owner 72 项、Gateway 51 项及全部维护中的 JavaScript 测试，
+  包括 455 条匿名 metadata 的组合过滤与分页。
+- 本机真实 Gateway 在 390x844 Chrome 和 1440x900 Chrome 通过：搜索、清空、7 天切换、
+  10 条分页、第 2/3 页、无横向溢出、Active 数量不变、过滤快照未持久化。
+- 部署前后全部现有 tmux window geometry 完全一致；测试没有启动、关闭或修改 Codex 会话。

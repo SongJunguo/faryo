@@ -106,7 +106,7 @@ class GatewayRouteConfigTest(unittest.TestCase):
             "hp": [{"id": f"hp-{index}", "updatedTs": 39.5 - index} for index in range(20)],
         }
 
-        def route_payload(route: str, _username: str, page: int, _exact_page: bool = False) -> dict:
+        def route_payload(route: str, _username: str, page: int, _exact_page: bool = False, _history_filters=None) -> dict:
             return {
                 "activeSessions": [{"id": f"active-{route}", "tmuxSession": f"live-{route}", "updatedTs": 100}],
                 "sessions": histories[route][:page * gateway.HISTORY_PAGE_SIZE],
@@ -136,6 +136,7 @@ class GatewayRouteConfigTest(unittest.TestCase):
             "totalPages": 4,
             "hasPrevious": False,
             "hasNext": True,
+            "filter": {"q": "", "period": "all", "archive": "active"},
         })
         self.assertEqual(len(second["activeSessions"]), 2)
         self.assertEqual(len(second["sessions"]), 10)
@@ -166,7 +167,13 @@ class GatewayRouteConfigTest(unittest.TestCase):
         with mock.patch.object(gateway, "backend_status", return_value={"id": "txy"}):
             result = handler.workbench_payload("tester", 40)
 
-        handler.owner_agent_sessions.assert_called_once_with("txy", "tester", 40, True)
+        handler.owner_agent_sessions.assert_called_once_with(
+            "txy",
+            "tester",
+            40,
+            True,
+            {"q": "", "period": "all", "archive": "active"},
+        )
         self.assertEqual(result["sessions"], page_rows)
         self.assertEqual(result["history"]["page"], 40)
         self.assertEqual(result["history"]["totalPages"], 44)
@@ -184,8 +191,29 @@ class GatewayRouteConfigTest(unittest.TestCase):
         self.assertIn('id="historyPageInput"', page)
         self.assertIn('id="historyPageTotal"', page)
         self.assertIn('id="historyNext"', page)
-        self.assertIn('/api/workbench?page=', page)
+        self.assertIn('/api/workbench?${historyRequestQuery()}', page)
+        self.assertIn('id="historySearchInput"', page)
+        self.assertIn('data-history-period="7d"', page)
+        self.assertIn('data-history-archive="archived"', page)
         self.assertIn("active&&managed?", page)
+
+    def test_history_filters_are_bounded_encoded_and_forwarded(self) -> None:
+        filters = gateway.history_filters_from_query({
+            "q": ["  renamed 100%_项目  "],
+            "period": ["7d"],
+            "archive": ["all"],
+        })
+        self.assertEqual(filters, {
+            "q": "renamed 100%_项目",
+            "period": "7d",
+            "archive": "all",
+        })
+        path = gateway.owner_history_query(10, 20, filters)
+        self.assertEqual(
+            path,
+            "/api/agent-sessions?view=split&limit=10&offset=20&q=renamed+100%25_%E9%A1%B9%E7%9B%AE&period=7d&archive=all",
+        )
+        self.assertEqual(len(gateway.normalize_history_filters({"q": "x" * 200})["q"]), 96)
 
     def test_gateway_config_requires_token_for_enabled_route_only(self) -> None:
         with tempfile.TemporaryDirectory() as temp:

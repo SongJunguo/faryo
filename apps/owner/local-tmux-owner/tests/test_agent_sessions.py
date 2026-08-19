@@ -1,4 +1,5 @@
 import sys
+import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
@@ -225,7 +226,7 @@ class AgentSessionTest(unittest.TestCase):
         ):
             result = server.agent_session_page(self.config, 10, 390, "/workspace")
 
-        history_page.assert_called_once_with(self.config, 10, 390, "/workspace", {"live"})
+        history_page.assert_called_once_with(self.config, 10, 390, "/workspace", {"live"}, "", "all", "active")
         self.assertEqual(result["activeSessions"], active)
         self.assertEqual(result["sessions"], page)
         self.assertEqual(result["historyTotal"], 437)
@@ -250,6 +251,108 @@ class AgentSessionTest(unittest.TestCase):
         self.assertEqual(params[:2], ("live-a", "live-b"))
         self.assertEqual(params[2], "/workspace/project")
         self.assertEqual(params[3], "/workspace/project/%")
+
+    def test_history_search_matches_explicit_rename_and_literal_folder_symbols(self):
+        rows = [
+            {"id": "renamed", "title": "Old title", "cwd": "/workspace/alpha", "updated_at": 200},
+            {"id": "symbols", "title": "Another title", "cwd": "/workspace/100%_literal", "updated_at": 190},
+        ]
+        with (
+            mock.patch.object(server, "codex_history_filter", return_value=("1 = 1", ())),
+            mock.patch.object(server, "codex_rows", return_value=rows),
+            mock.patch.object(server, "codex_session_index_titles", return_value={"renamed": "Section IV revised"}),
+            mock.patch.object(server, "codex_session_item", side_effect=lambda _config, item, *_args: item),
+        ):
+            renamed, renamed_total = server.codex_history_page(self.config, 10, query="section iv")
+            symbols, symbols_total = server.codex_history_page(self.config, 10, query="%_")
+
+        self.assertEqual(([item["id"] for item in renamed], renamed_total), (["renamed"], 1))
+        self.assertEqual(([item["id"] for item in symbols], symbols_total), (["symbols"], 1))
+
+    def test_history_period_and_archive_filters_are_metadata_only(self):
+        now = 2_000_000_000.0
+        rows = [
+            {"id": "recent", "title": "Recent", "cwd": "/workspace/recent", "updated_at": now - 60},
+            {"id": "old", "title": "Old", "cwd": "/workspace/old", "updated_at": now - 40 * 86400},
+        ]
+        with (
+            mock.patch.object(server, "codex_rows", return_value=rows),
+            mock.patch.object(server, "codex_session_index_titles", return_value={}),
+            mock.patch.object(server, "codex_session_item", side_effect=lambda _config, item, *_args: item),
+            mock.patch.object(server, "codex_conversation_history_page") as transcript_reader,
+        ):
+            sessions, total = server.codex_history_page(
+                self.config,
+                10,
+                period="30d",
+                archive="archived",
+                now=now,
+            )
+
+        self.assertEqual(([item["id"] for item in sessions], total), (["recent"], 1))
+        transcript_reader.assert_not_called()
+        where, _params = server.codex_history_filter(None, set(), "archived")
+        self.assertIn("COALESCE(archived, 0) != 0", where)
+
+    def test_history_query_is_bounded_and_access_log_omits_query_string(self):
+        self.assertEqual(len(server.clean_agent_history_query("x" * 200)), 96)
+        handler = object.__new__(server.Handler)
+        handler.path = "/api/agent-sessions?q=private-title&token=secret"
+        handler.command = "GET"
+        with mock.patch.object(server.sys, "stderr") as stderr:
+            handler.log_message('"GET /api/agent-sessions?q=private-title HTTP/1.1" 200 -')
+
+        logged = stderr.write.call_args.args[0]
+        self.assertIn("GET /api/agent-sessions", logged)
+        self.assertNotIn("private-title", logged)
+        self.assertNotIn("secret", logged)
+
+    def test_large_metadata_history_filters_before_pagination(self):
+        now = 2_000_000_000.0
+        with tempfile.TemporaryDirectory() as root:
+            state_db = Path(root) / "state.sqlite"
+            connection = sqlite3.connect(state_db)
+            try:
+                connection.execute(
+                    "CREATE TABLE threads (id TEXT, title TEXT, rollout_path TEXT, tokens_used INTEGER, "
+                    "model TEXT, reasoning_effort TEXT, cwd TEXT, updated_at REAL, source TEXT, "
+                    "thread_source TEXT, archived INTEGER, created_at REAL)"
+                )
+                connection.executemany(
+                    "INSERT INTO threads VALUES (?, ?, '', 0, '', '', ?, ?, 'cli', 'user', ?, ?)",
+                    [
+                        (
+                            f"thread-{index:03d}",
+                            f"Anonymous topic {index:03d}",
+                            f"/workspace/{'target-folder' if index % 3 == 0 else 'other-folder'}-{index:03d}",
+                            now - index * 3600,
+                            int(index % 5 == 0),
+                            now - index * 3600,
+                        )
+                        for index in range(455)
+                    ],
+                )
+                connection.commit()
+            finally:
+                connection.close()
+            with (
+                mock.patch.object(server, "AGENT_STATE_DB", state_db),
+                mock.patch.object(server, "codex_session_index_titles", return_value={}),
+                mock.patch.object(server, "codex_session_item", side_effect=lambda _config, item, *_args: item),
+            ):
+                page, total = server.codex_history_page(
+                    self.config,
+                    10,
+                    offset=10,
+                    query="target-folder",
+                    period="7d",
+                    archive="all",
+                    now=now,
+                )
+
+        expected = [index for index in range(455) if index % 3 == 0 and index <= 168]
+        self.assertEqual(total, len(expected))
+        self.assertEqual([item["id"] for item in page], [f"thread-{index:03d}" for index in expected[10:20]])
 
 
 if __name__ == "__main__":

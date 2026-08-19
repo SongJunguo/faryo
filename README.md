@@ -154,6 +154,10 @@ micromark -> mdast -> CommonMark/GFM/math nodes -> safe HTML -> KaTeX
 - Shows every recognized active Codex pane, including desktop-started sessions.
 - Keeps history server-paginated at 10 records per page with Previous/Next and
   direct page-number navigation.
+- Searches hundreds of inactive sessions server-side by normalized title,
+  explicit Codex `/rename` name, or working-folder basename, with Today/7-day/
+  30-day and Current/Archived filters. Search never scans rollout or message
+  content, never changes Active Sessions, and is not stored in browser storage.
 - Allows remote Close only for sessions that Faryo created and stamped.
 - `Start Codex` resolves the configured CLI with its matching Node runtime,
   selects an available login shell, and returns success only after the Codex
@@ -254,7 +258,7 @@ or an equivalent exact-identity layer.
 
 The `main` branch was revalidated on 2026-08-20 with privacy-safe fixtures:
 
-- source checks plus 68 Owner and 50 Gateway Python tests;
+- source checks plus 72 Owner and 51 Gateway Python tests;
 - a 20-message browser delivery matrix including Chinese, multiline Markdown,
   TeX, attachment, offline/background recovery, and failed-draft cases;
 - a two-session retry/delayed-response isolation test;
@@ -281,7 +285,9 @@ The `main` branch was revalidated on 2026-08-20 with privacy-safe fixtures:
 - Owner/Gateway health and unchanged dimensions for every pre-existing Codex
   tmux session after deployment.
 - desktop and mobile Gateway checks with exactly one Codex launcher and three
-  independently fetched 10-record history pages.
+  independently fetched 10-record history pages, server-side title/folder
+  search, date filtering, URL restoration, stale-request cancellation, and no
+  filtered snapshot persistence.
 
 Run the canonical source checks:
 

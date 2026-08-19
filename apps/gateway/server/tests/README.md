@@ -8,7 +8,8 @@ PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s apps/gateway/server/te
 
 The suite checks the CSRF boundary, browser security headers, enabled-route
 validation, private runtime configuration, active/history separation,
-exact 10-record history pagination, bridge-package retention/symlink boundaries,
+exact 10-record history pagination, metadata-only history search/filtering,
+bridge-package retention/symlink boundaries,
 CSP nonces, hardened session-cookie attributes,
 trusted-proxy login limiting, CSRF-protected Owner proxy POST behavior, and the
 privacy-safe public Access verifier contract.
@@ -24,5 +25,6 @@ node apps/gateway/server/tests/browser-workbench-smoke.mjs
 ```
 
 The browser smoke checks the two session regions, protected desktop tmux cards,
-independent history scrolling, distinct first/second pages, and a direct jump to
-page three without printing session titles or identifiers.
+independent history scrolling, title/folder search, date-filter URL state,
+non-persistence of filtered snapshots, distinct first/second pages, and a direct
+jump to page three without printing session titles or identifiers.

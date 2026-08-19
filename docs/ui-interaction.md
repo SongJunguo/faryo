@@ -24,7 +24,9 @@ The authenticated Gateway home page keeps two session regions separate:
 - **Active Sessions** lists every recognized live Codex tmux pane, including
   sessions started directly on the desktop.
 - **Session History** lists inactive resumable threads, uses server-backed pages
-  of 10 records, and supports Previous/Next plus direct page-number jumps.
+  of 10 records, supports Previous/Next plus direct page-number jumps, and can
+  search title/folder metadata with date and archive filter chips. Search never
+  scans conversation content and never hides Active Sessions.
 
 Only sessions created and stamped by Faryo expose remote Close. Desktop-created
 tmux sessions can be opened but are not remotely destroyed.

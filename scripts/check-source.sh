@@ -96,6 +96,7 @@ import re
 import sys
 root = Path(sys.argv[1])
 index = (root / "apps/owner/local-tmux-owner/static/index.html").read_text(encoding="utf-8")
+owner_server = (root / "apps/owner/local-tmux-owner/server.py").read_text(encoding="utf-8")
 gateway = (root / "apps/gateway/server/server.py").read_text(encoding="utf-8")
 ci_workflow = (root / ".github/workflows/ci.yml").read_text(encoding="utf-8")
 release_workflow = (root / ".github/workflows/release.yml").read_text(encoding="utf-8")
@@ -106,6 +107,9 @@ assert "package-client.sh" not in release_workflow, "retired package workflow mu
 assert "faryo_${version}_all.deb" not in release_workflow and "macos.tar.gz" not in release_workflow, "release must remain source-only"
 assert "apps/gateway/server/tests" in check_script, "canonical checks must include Gateway tests"
 assert "faryo_resolve_python" in check_script and "faryo_resolve_node" in check_script, "canonical checks must resolve runtimes"
+assert 'id="historySearchInput"' in gateway and 'data-history-period="7d"' in gateway, "Gateway must expose metadata history search"
+assert "agent_history_text_matches" in owner_server and "codex_conversation_history_page" not in owner_server[owner_server.index("def codex_history_page("):owner_server.index("def codex_history_items(")], "session search must not scan conversation history"
+assert "safe_path = urlparse(self.path).path" in owner_server, "Owner logs must omit private query strings"
 assert "compact-rules-codex.js" in index, "index.html must load compact-rules-codex.js"
 assert "compact-rules-codex.js" in gateway, "gateway must allow compact-rules-codex.js"
 assert "compact-rules-claude.js" not in index, "retired Claude rules must not return to the production page"
