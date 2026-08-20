@@ -81,6 +81,24 @@ def create_app(legacy: Any, config: Any) -> Starlette:
             forwarded[key] = value
         return forwarded
 
+    def append_audit(
+        *, username_value: str, route: str, action: str, target: str, request_id: str,
+        status: int, started: float, idempotent: bool = False,
+    ) -> None:
+        writer = getattr(config, "append_control_audit", None)
+        if not callable(writer):
+            return
+        writer(
+            username=username_value,
+            route=route,
+            action=action,
+            target=target,
+            request_id=request_id,
+            status=int(status),
+            duration_ms=round((time.monotonic() - started) * 1000),
+            idempotent=idempotent,
+        )
+
     async def manifest(_request: Request) -> Response:
         return json_response(legacy.PWA_MANIFEST)
 
@@ -166,32 +184,78 @@ def create_app(legacy: Any, config: Any) -> Starlette:
                     status = HTTPStatus.BAD_GATEWAY
                     response = json_response({"ok": False, "error": "upstream unavailable"}, status)
         response.headers["X-Faryo-Request-Id"] = request_id
-        writer = getattr(config, "append_control_audit", None)
-        if callable(writer):
-            writer(
-                username=current,
-                route=route,
-                action=action,
-                target=target,
-                request_id=request_id,
-                status=int(status),
-                duration_ms=round((time.monotonic() - started) * 1000),
-                idempotent=idempotent,
-            )
+        append_audit(
+            username_value=current, route=route, action=action, target=target,
+            request_id=request_id, status=status, started=started, idempotent=idempotent,
+        )
         return response
 
-    async def owner_get(request: Request) -> Response:
+    async def session_history_lifecycle(request: Request) -> Response:
         current = username(request)
         if not current:
             return json_response({"ok": False, "error": "unauthorized"}, HTTPStatus.UNAUTHORIZED)
-        route = str(request.path_params["route"])
-        if route not in legacy.BACKENDS:
-            return json_response({"ok": False, "error": "not found"}, HTTPStatus.NOT_FOUND)
-        if not config.allowed_route(current, route):
-            return json_response({"ok": False, "error": "forbidden"}, HTTPStatus.FORBIDDEN)
-        upstream_path = "/api/" + str(request.path_params["tail"])
-        if request.url.query:
-            upstream_path += "?" + request.url.query
+        request_id = secrets.token_hex(8)
+        started = time.monotonic()
+        archived = request.url.path == "/api/session-history/archive"
+        action = "archive" if archived else "unarchive"
+        route = ""
+        target = ""
+        idempotent = False
+        supplied_csrf = request.headers.get(legacy.CSRF_HEADER, "").strip()
+        expected_csrf = gateway_security.csrf_token(config.cookie_secret, current, config.auth_epoch(current))
+        if not supplied_csrf or not secrets.compare_digest(supplied_csrf, expected_csrf):
+            status = HTTPStatus.FORBIDDEN
+            response = json_response({"ok": False, "error": "csrf required"}, status)
+        else:
+            try:
+                body = await request.body()
+                if not body:
+                    raise ValueError("empty JSON body")
+                if len(body) > 4096:
+                    raise ValueError("request too large")
+                payload = json.loads(body.decode("utf-8"))
+                if not isinstance(payload, dict):
+                    raise ValueError("invalid JSON object")
+                route = str(payload.get("route") or "").strip().lower()
+                target = legacy.clean_agent_session_id(str(payload.get("agent_session_id") or payload.get("agentSessionId") or "")) or ""
+                if route not in legacy.BACKENDS or not target:
+                    raise ValueError("route and agent_session_id are required")
+                if not config.allowed_route(current, route):
+                    status = HTTPStatus.FORBIDDEN
+                    response = json_response({"ok": False, "error": "forbidden"}, status)
+                else:
+                    result = await to_thread.run_sync(
+                        lambda: client.json_request(
+                            route, f"/api/agent-session/{action}", {"agent_session_id": target}, current, timeout=10,
+                        )
+                    )
+                    if not result.get("ok"):
+                        raw_status = int(result.get("httpStatus") or HTTPStatus.BAD_GATEWAY)
+                        status = raw_status if 100 <= raw_status <= 599 else HTTPStatus.BAD_GATEWAY
+                        response = json_response({"ok": False, "error": str(result.get("error") or f"owner {action} failed")}, status)
+                    else:
+                        idempotent = bool(result.get("duplicate"))
+                        status = HTTPStatus.OK
+                        response = json_response({
+                            "ok": True,
+                            "agentSessionId": target,
+                            "archived": bool(result.get("archived")),
+                            "duplicate": idempotent,
+                        })
+            except (UnicodeDecodeError, json.JSONDecodeError):
+                status = HTTPStatus.BAD_REQUEST
+                response = json_response({"ok": False, "error": "invalid JSON body"}, status)
+            except (TypeError, ValueError) as exc:
+                status = HTTPStatus.BAD_REQUEST
+                response = json_response({"ok": False, "error": str(exc)}, status)
+        response.headers["X-Faryo-Request-Id"] = request_id
+        append_audit(
+            username_value=current, route=route, action=action, target=target,
+            request_id=request_id, status=status, started=started, idempotent=idempotent,
+        )
+        return response
+
+    async def proxy_owner_get(request: Request, current: str, route: str, upstream_path: str) -> Response:
         try:
             stream = await to_thread.run_sync(
                 lambda: client.open_stream(
@@ -227,6 +291,39 @@ def create_app(legacy: Any, config: Any) -> Starlette:
             await to_thread.run_sync(stream.close)
         return Response(body, status_code=stream.status, headers=headers)
 
+    async def owner_get(request: Request) -> Response:
+        current = username(request)
+        if not current:
+            return json_response({"ok": False, "error": "unauthorized"}, HTTPStatus.UNAUTHORIZED)
+        route = str(request.path_params["route"])
+        if route not in legacy.BACKENDS:
+            return json_response({"ok": False, "error": "not found"}, HTTPStatus.NOT_FOUND)
+        if not config.allowed_route(current, route):
+            return json_response({"ok": False, "error": "forbidden"}, HTTPStatus.FORBIDDEN)
+        upstream_path = "/api/" + str(request.path_params["tail"])
+        if request.url.query:
+            upstream_path += "?" + request.url.query
+        return await proxy_owner_get(request, current, route, upstream_path)
+
+    async def owner_resource(request: Request) -> Response:
+        current = username(request)
+        target = request.url.path + (f"?{request.url.query}" if request.url.query else "")
+        if not current:
+            return RedirectResponse("/login?" + legacy.urlencode({"next": gateway_security.safe_target(target)}), status_code=HTTPStatus.SEE_OTHER)
+        route = str(request.path_params["route"])
+        tail = str(request.path_params.get("tail") or "")
+        if route not in legacy.BACKENDS:
+            return Response("not found", status_code=HTTPStatus.NOT_FOUND)
+        allowed = (not tail and bool(request.query_params.get("session"))) or tail in legacy.OWNER_STATIC_FILES or tail.startswith(legacy.OWNER_STATIC_PREFIXES)
+        if not allowed:
+            return Response("not found", status_code=HTTPStatus.NOT_FOUND)
+        if not config.allowed_route(current, route):
+            return html_page(request, "<!doctype html><meta charset='utf-8'><title>403</title><p>Access denied for this endpoint</p>", HTTPStatus.FORBIDDEN)
+        upstream_path = "/" + tail
+        if request.url.query:
+            upstream_path += "?" + request.url.query
+        return await proxy_owner_get(request, current, route, upstream_path)
+
     routes = [
         Route("/manifest.json", manifest, methods=["GET"]),
         Route("/sw.js", service_worker, methods=["GET"]),
@@ -235,7 +332,10 @@ def create_app(legacy: Any, config: Any) -> Starlette:
         Route("/api/csrf", csrf, methods=["GET"]),
         Route("/{route}/api/{tail:path}", owner_get, methods=["GET"]),
         Route("/{route}/api/{tail:path}", owner_control, methods=["POST"]),
+        Route("/api/session-history/archive", session_history_lifecycle, methods=["POST"]),
+        Route("/api/session-history/unarchive", session_history_lifecycle, methods=["POST"]),
         Route("/", home, methods=["GET"]),
+        Route("/{route}/{tail:path}", owner_resource, methods=["GET"]),
         Route("/{filename}", static_asset, methods=["GET"]),
     ]
     app = Starlette(routes=routes)

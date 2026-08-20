@@ -71,7 +71,12 @@ class OwnerContractFixture(BaseHTTPRequestHandler):
         body = self.rfile.read(int(self.headers.get("Content-Length", "0") or "0"))
         self.__class__.requests.append({"path": self.path, "headers": dict(self.headers), "body": body})
         payload = json.loads(body.decode("utf-8")) if body else {}
-        data = json.dumps({"ok": True, "session": payload.get("session") or "", "duplicate": False}).encode("utf-8")
+        result = {"ok": True, "session": payload.get("session") or "", "duplicate": False}
+        if self.path == "/api/agent-session/archive":
+            result["archived"] = True
+        elif self.path == "/api/agent-session/unarchive":
+            result["archived"] = False
+        data = json.dumps(result).encode("utf-8")
         self.send_response(HTTPStatus.OK)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(data)))
@@ -85,10 +90,20 @@ class OwnerContractFixture(BaseHTTPRequestHandler):
             self.send_response(HTTPStatus.OK)
             self.send_header("Content-Type", "text/event-stream; charset=utf-8")
             self.send_header("Cache-Control", "no-store")
-        else:
+        elif self.path.startswith("/api/"):
             data = json.dumps({"ok": True, "path": self.path}).encode("utf-8")
             self.send_response(HTTPStatus.OK)
             self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Cache-Control", "no-store")
+        elif self.path.startswith("/?session="):
+            data = b"<!doctype html><title>Owner fixture</title>"
+            self.send_response(HTTPStatus.OK)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Cache-Control", "no-store")
+        else:
+            data = b"export const fixture = true;\n"
+            self.send_response(HTTPStatus.OK)
+            self.send_header("Content-Type", "text/javascript")
             self.send_header("Cache-Control", "no-store")
         self.send_header("Content-Length", str(len(data)))
         self.end_headers()
@@ -266,6 +281,53 @@ class AsgiReadContractTest(unittest.TestCase):
 
     def test_owner_get_requires_authentication_equally(self) -> None:
         self.assert_contract("/lab/api/status")
+
+    def test_owner_page_and_static_resource_contracts_match(self) -> None:
+        for path in ("/lab/?session=fixture", "/lab/app.js", "/lab/owner/changes-panel.mjs"):
+            with self.subTest(path=path):
+                self.assert_contract(path, authenticated=True)
+
+    def test_owner_page_redirects_to_login_without_authentication(self) -> None:
+        self.assert_contract("/lab/?session=fixture")
+
+    def test_unknown_owner_resource_is_not_proxied(self) -> None:
+        legacy_result = self.request(self.legacy_base, "/lab/private.txt", authenticated=True)
+        asgi_result = self.request(self.asgi_base, "/lab/private.txt", authenticated=True)
+        self.assertEqual(asgi_result[0], legacy_result[0])
+        self.assertEqual(asgi_result[0], HTTPStatus.NOT_FOUND)
+
+    def test_session_history_archive_restore_and_audit_contract_match(self) -> None:
+        csrf = gateway_security.csrf_token(self.config.cookie_secret, "tester", self.config.auth_epoch("tester"))
+        headers = {legacy.CSRF_HEADER: csrf, "Content-Type": "application/json"}
+        body = json.dumps({"route": "lab", "agent_session_id": "thread-fixture"}).encode("utf-8")
+        for path, action, archived in (
+            ("/api/session-history/archive", "archive", True),
+            ("/api/session-history/unarchive", "unarchive", False),
+        ):
+            with self.subTest(path=path):
+                self.config.audit_calls.clear()
+                legacy_result = self.request(self.legacy_base, path, authenticated=True, method="POST", body=body, extra_headers=headers)
+                asgi_result = self.request(self.asgi_base, path, authenticated=True, method="POST", body=body, extra_headers=headers)
+                self.assertEqual(asgi_result[0], legacy_result[0])
+                self.assertEqual(json.loads(asgi_result[2]), json.loads(legacy_result[2]))
+                self.assertEqual(json.loads(asgi_result[2])["archived"], archived)
+                self.assertEqual(len(self.config.audit_calls), 2)
+                normalized = [
+                    {key: value for key, value in call.items() if key not in {"request_id", "duration_ms"}}
+                    for call in self.config.audit_calls
+                ]
+                self.assertEqual(normalized[0], normalized[1])
+                self.assertEqual(normalized[0]["action"], action)
+                self.assertEqual(normalized[0]["target"], "thread-fixture")
+
+    def test_session_history_validation_contract_matches(self) -> None:
+        csrf = gateway_security.csrf_token(self.config.cookie_secret, "tester", self.config.auth_epoch("tester"))
+        headers = {legacy.CSRF_HEADER: csrf, "Content-Type": "application/json"}
+        body = json.dumps({"route": "lab"}).encode("utf-8")
+        legacy_result = self.request(self.legacy_base, "/api/session-history/archive", authenticated=True, method="POST", body=body, extra_headers=headers)
+        asgi_result = self.request(self.asgi_base, "/api/session-history/archive", authenticated=True, method="POST", body=body, extra_headers=headers)
+        self.assertEqual(asgi_result[0], legacy_result[0])
+        self.assertEqual(json.loads(asgi_result[2]), json.loads(legacy_result[2]))
 
 
 if __name__ == "__main__":
