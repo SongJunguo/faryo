@@ -287,6 +287,9 @@ consumed as private runtime input and is never printed.
 - `static/owner/changes-panel.mjs` owns the read-only Changes payload, files,
   line/split state and lazy sanitized diff assets. It receives API, session and
   panel functions explicitly and does not read the Owner token.
+- `tmux_runtime.py` owns UTF-8 subprocess defaults, fixed tmux invocation,
+  process-tree parsing and bounded session/thread/message identifiers; product
+  policy remains in the higher Owner services.
 - Local file preview is token-protected and limited to supported file suffixes.
 - `send` targets the controlled tmux pane and is maintained for Codex; generic
   terminal interfaces retain the conservative tmux path.

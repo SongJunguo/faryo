@@ -64,6 +64,7 @@ release_checks() {
     "$ROOT/apps/owner/local-tmux-owner/server.py" \
     "$ROOT/apps/owner/local-tmux-owner/attachment_storage.py" \
     "$ROOT/apps/owner/local-tmux-owner/path_policy.py" \
+    "$ROOT/apps/owner/local-tmux-owner/tmux_runtime.py" \
     "$ROOT/apps/owner/local-tmux-owner/workspace_changes.py" \
     "$ROOT/apps/owner/local-tmux-owner/runtime_diagnostics.py" \
     "$ROOT/apps/owner/local-tmux-owner/tests/owner-archive-roundtrip.py" \

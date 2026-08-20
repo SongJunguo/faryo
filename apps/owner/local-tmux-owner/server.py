@@ -50,6 +50,7 @@ import workspace_changes
 import runtime_diagnostics
 import attachment_storage
 import path_policy
+import tmux_runtime
 
 SHARED_DIR = Path(__file__).resolve().parents[2] / "shared"
 if str(SHARED_DIR) not in sys.path:
@@ -431,21 +432,10 @@ class Config:
         self.pane_width = pane_width
 
 
-def run_cmd(args: list[str], *, input_text: str | None = None, timeout: float = 5.0) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        args,
-        input=input_text,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        timeout=timeout,
-        check=False,
-    )
+run_cmd = tmux_runtime.run_command
 
 def tmux(config: Config, args: list[str], *, timeout: float = 5.0) -> subprocess.CompletedProcess[str]:
-    return run_cmd(["tmux", *args], timeout=timeout)
+    return tmux_runtime.run_tmux(args, timeout=timeout)
 
 
 def tmux_target(config: Config) -> str:
@@ -1084,39 +1074,11 @@ def close_shell_session(config: Config, session: str | None) -> None:
         raise OwnerError(res.stderr.strip() or "tmux kill-session failed", HTTPStatus.INTERNAL_SERVER_ERROR)
 
 
-TMUX_SESSION_NAME_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,80}$")
 FARYO_MANAGED_SESSION_RE = re.compile(r"^faryo([1-9][0-9]*)$")
-CODEX_THREAD_ID_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,120}$")
-CLIENT_MESSAGE_ID_RE = re.compile(r"^[A-Za-z0-9_.:-]{8,128}$")
-CLIENT_LAUNCH_ID_RE = re.compile(r"^[A-Za-z0-9_.:-]{8,128}$")
-
-
-def clean_tmux_session_name(value: str | None) -> str | None:
-    if not value:
-        return None
-    value = value.strip()
-    return value if TMUX_SESSION_NAME_RE.fullmatch(value) else None
-
-
-def clean_agent_session_id(value: str | None) -> str | None:
-    if not value:
-        return None
-    value = value.strip()
-    return value if CODEX_THREAD_ID_RE.fullmatch(value) else None
-
-
-def clean_client_message_id(value: str | None) -> str | None:
-    if not value:
-        return None
-    value = value.strip()
-    return value if CLIENT_MESSAGE_ID_RE.fullmatch(value) else None
-
-
-def clean_client_launch_id(value: str | None) -> str | None:
-    if not value:
-        return None
-    value = value.strip()
-    return value if CLIENT_LAUNCH_ID_RE.fullmatch(value) else None
+clean_tmux_session_name = tmux_runtime.clean_tmux_session_name
+clean_agent_session_id = tmux_runtime.clean_agent_session_id
+clean_client_message_id = tmux_runtime.clean_client_message_id
+clean_client_launch_id = tmux_runtime.clean_client_launch_id
 
 
 def clean_agent_launch_command(value: str | None) -> str | None:
@@ -1177,37 +1139,8 @@ def get_pane_cwd(config: Config) -> str | None:
     return res.stdout.strip() or None
 
 
-def process_table() -> dict[int, tuple[int, str]]:
-    res = run_cmd(["ps", "-eo", "pid=,ppid=,args="], timeout=3)
-    table: dict[int, tuple[int, str]] = {}
-    if res.returncode != 0:
-        return table
-    for line in res.stdout.splitlines():
-        parts = line.strip().split(None, 2)
-        if len(parts) < 2:
-            continue
-        try:
-            pid = int(parts[0])
-            ppid = int(parts[1])
-        except ValueError:
-            continue
-        cmd = parts[2] if len(parts) > 2 else ""
-        table[pid] = (ppid, cmd)
-    return table
-
-
-def descendants(root_pid: int, table: dict[int, tuple[int, str]]) -> list[tuple[int, str]]:
-    children: dict[int, list[int]] = {}
-    for pid, (ppid, _cmd) in table.items():
-        children.setdefault(ppid, []).append(pid)
-    out: list[tuple[int, str]] = []
-    stack = list(children.get(root_pid, []))
-    while stack:
-        pid = stack.pop()
-        cmd = table.get(pid, (0, ""))[1]
-        out.append((pid, cmd))
-        stack.extend(children.get(pid, []))
-    return out
+process_table = tmux_runtime.process_table
+descendants = tmux_runtime.descendants
 
 
 def agent_in_pane(config: Config) -> bool:

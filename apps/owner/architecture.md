@@ -77,6 +77,9 @@ but the default upload destination should come from the Faryo data directory.
 - The read-only Changes browser controller is a native ES module with injected
   API/session/panel dependencies; `app.js` remains the composition root and the
   diff renderer stays a lazy local asset.
+- Low-level command execution and tmux/process-tree/identifier primitives are
+  isolated in `tmux_runtime.py`; higher services keep policy and translate
+  failures rather than rebuilding subprocess defaults.
 - Capability and diagnostics payloads use an explicit allowlist and counts; they
   never expose private runtime configuration.
 - Upstream control headers: use Faryo header names.
