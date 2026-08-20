@@ -81,11 +81,16 @@ Shiki for code. The policy should be value-per-complexity:
 
 | Candidate | Decision | Reason |
 | --- | --- | --- |
+| Playwright | Best next development dependency | Consolidates repeated raw Chrome DevTools setup and gives maintained touch, focus, screenshot and multi-browser fixtures without entering the production bundle |
+| Ruff | Good next development dependency | Fast formatting/lint gates can constrain the two Python hotspots before they are split, with no runtime dependency |
 | `screenfull` | Re-evaluate after a unified front-end bundle | Mature and tiny, but current ESM integration creates a new build seam and the platform still does not support iPhone fullscreen; v1.2.2 uses a small tested adapter plus PWA fallback |
 | Floating UI | Good next dependency | Replaces hand-written anchored-sheet collision logic and brings focused visual regression value |
+| diff2html | Adopt with a read-only diff feature | Avoids hand-parsing unified diff and already supports line/side-by-side views; bundle locally and keep workspace/output limits |
+| Python Web Push library | Adopt only with the attention center | Correct VAPID/payload encryption is not suitable for local reimplementation; subscriptions and notification bodies need a separate privacy design |
 | Preact | Gateway pilot after static extraction | Small component/runtime cost and a familiar state model; avoid migrating the structured transcript DOM first |
 | Lit | Alternative pilot | Incremental web components fit vanilla pages, but Shadow DOM can complicate shared styling, copy and Markdown interaction |
 | Capacitor | Conditional Android path | Reuses the web UI and is lower-risk than an Expo rewrite when native push/camera/share features become a real requirement |
+| FastAPI/Pydantic | Defer until API growth | Useful for versioned schemas and OpenAPI once queue/notification/diff APIs grow; changing the server framework before responsibility extraction would mix two migrations |
 | Expo/React Native | Not now | Excellent for a native-first product such as Happy, but it would duplicate Faryo's tested web surface and release/security matrix today |
 
 The `screenfull` trade-off is based on its own documented 0.7 kB wrapper,
@@ -94,6 +99,12 @@ cross-browser normalisation and lack of iPhone support in the
 Lit and Floating UI are evaluated from their maintained upstream repositories:
 [Preact](https://github.com/preactjs/preact), [Lit](https://github.com/lit/lit),
 and [Floating UI](https://github.com/floating-ui/floating-ui).
+The testing/diff/push candidates are maintained at
+[Playwright](https://github.com/microsoft/playwright),
+[Ruff](https://github.com/astral-sh/ruff),
+[diff2html](https://github.com/rtfpessoa/diff2html), and
+[pywebpush](https://github.com/web-push-libs/pywebpush). They are roadmap
+candidates, not undeclared v1.2.2 dependencies.
 
 ## Similar-project benchmark
 

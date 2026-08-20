@@ -49,6 +49,10 @@ HTML/CSS/JavaScript 嵌入 Python，并不是文件过多。适合渐进抽取�
 - screenfull 适合一般 Fullscreen API 封装，但其当前 ESM 集成会给本项目新增构建层，且仍不
   支持 iPhone；本次保留独立、Node 可测的薄适配层，后续一旦建立统一前端 bundle 再复评；
 - Floating UI 适合替换 Gateway 当前手写的弹层碰撞定位，列为近期候选；
+- Playwright 和 Ruff 是优先级更高的开发依赖候选：前者收敛重复 CDP 浏览器脚本，后者在
+  Python 单文件拆分前提供快速约束；它们不进入生产运行时；
+- 只读 diff 和 attention/push 真正进入实施时，优先评估 diff2html 与 Python Web Push
+  成熟实现，不手写 unified-diff parser、VAPID 或 payload encryption；
 - Preact 或 Lit 只在 Gateway 静态资源先从 Python 抽离、共享状态接口稳定后再做小范围试点，
   不以框架迁移本身作为目标。
 
