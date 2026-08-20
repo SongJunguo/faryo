@@ -472,7 +472,7 @@ class FaryoCliTest(unittest.TestCase):
             layout = self.layout(root)
             program = application.ProgramLayout.from_layout(layout)
             first = program.versions / "v1.4.1"
-            second = program.versions / "v1.5.0.dev0"
+            second = program.versions / "v1.5.0"
             for version in (first, second):
                 cli_path = version / ".venv/bin/faryo"
                 cli_path.parent.mkdir(parents=True)
@@ -517,7 +517,7 @@ class FaryoCliTest(unittest.TestCase):
             ):
                 prepared = application.prepare_version(layout, bootstrap_python=sys.executable)
 
-            self.assertEqual(prepared, program.versions / "v1.5.0.dev0")
+            self.assertEqual(prepared, program.versions / "v1.5.0")
             create.assert_called_once_with(prepared, sys.executable)
             self.assertFalse((prepared / ".installing").exists())
             self.assertEqual(list(program.versions.glob(".stage-*")), [])
@@ -537,7 +537,7 @@ class FaryoCliTest(unittest.TestCase):
                     application.prepare_version(layout, bootstrap_python=sys.executable)
 
             versions = application.ProgramLayout.from_layout(layout).versions
-            self.assertFalse((versions / "v1.5.0.dev0").exists())
+            self.assertFalse((versions / "v1.5.0").exists())
             self.assertEqual(list(versions.glob(".stage-*")), [])
 
     def test_incomplete_version_cleanup_requires_bounded_marker(self) -> None:
@@ -552,7 +552,7 @@ class FaryoCliTest(unittest.TestCase):
     def test_versioned_install_restores_activation_and_configs_on_failure(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             layout = self.layout(Path(temp))
-            version = Path(temp) / "program/versions/v1.5.0.dev0"
+            version = Path(temp) / "program/versions/v1.5.0"
             python = version / ".venv/bin/python"
             faryo = version / ".venv/bin/faryo"
             faryo.parent.mkdir(parents=True)

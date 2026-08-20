@@ -67,7 +67,7 @@ Historical distribution and non-Codex platform paths may remain in the tree for
 upstream compatibility, but they are not part of this fork's current validation
 or support claims.
 
-Current source-only release: [Faryo 1.4.1](https://github.com/SongJunguo/faryo/releases/tag/v1.4.1).
+Current release: [Faryo 1.5.0](https://github.com/SongJunguo/faryo/releases/tag/v1.5.0).
 
 ## Current Functionality
 

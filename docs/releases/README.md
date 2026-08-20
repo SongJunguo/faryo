@@ -8,4 +8,4 @@ fork's source-only GitHub Release notes.
 
 The maintained fork is source-only and Codex-focused. Use the repository root
 [`README.md`](../../README.md) for current scope, deployment, and validation.
-The current maintained release is [`v1.4.1`](v1.4.1.md).
+The current maintained release is [`v1.5.0`](v1.5.0.md).

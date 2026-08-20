@@ -1,3 +1,3 @@
 """Unified Faryo command-line interface."""
 
-__version__ = "1.5.0.dev0"
+__version__ = "1.5.0"
