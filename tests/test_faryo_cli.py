@@ -131,6 +131,19 @@ class FaryoCliTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             self.assertIsNone(diagnostics.discover_source_root({"FARYO_INSTALL_ROOT": temp}))
 
+    def test_installed_cli_discovers_its_managed_current_application(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            home = Path(temp)
+            app = home / ".local/share/faryo/versions/v1.5.0/app"
+            for relative in ("apps/owner/local-tmux-owner/server.py", "apps/gateway/server/run_asgi.py"):
+                path = app / relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text("fixture\n", encoding="utf-8")
+            current = home / ".local/share/faryo/current"
+            current.symlink_to(Path("versions/v1.5.0"))
+
+            self.assertEqual(diagnostics.discover_source_root({"HOME": str(home)}), current / "app")
+
     def test_codex_resolution_supports_configured_and_nvm_paths(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             home = Path(temp)
