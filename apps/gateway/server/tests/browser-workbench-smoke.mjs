@@ -90,9 +90,9 @@ await withBrowser({
       const style = historyList ? getComputedStyle(historyList) : null;
       const rootStyle = getComputedStyle(document.documentElement);
       const launchers = [...document.querySelectorAll('#newSessionSlot .launcher-card')];
-      const maintainedLists = [packageList, document.getElementById('newSessionSlot'), activeList, historyList];
       const lifecycleStates = [...active, ...history].map((item) => item.dataset.state || '');
       const packageList = document.getElementById('packageList');
+      const maintainedLists = [packageList, document.getElementById('newSessionSlot'), activeList, historyList];
       window.__faryoHistoryPageOne = historySignature;
       return {
         ready: activeList && historyList && history.length === 10 && document.getElementById('historyPageInput')?.value === '1' && Number(document.getElementById('historyPageTotal')?.textContent) > 2,
