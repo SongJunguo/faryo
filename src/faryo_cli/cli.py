@@ -39,6 +39,7 @@ def parser() -> argparse.ArgumentParser:
     install.add_argument("--dry-run", action="store_true", help="Validate without writing service units")
     install.add_argument("--no-start", action="store_true", help="Install units without changing running services")
     install.add_argument("--migrate-owner", action="store_true", help="Replace legacy Owner tmux supervision after rollback checks")
+    install.add_argument("--python", dest="bootstrap_python", help="Python 3.10+ interpreter used to create the private venv")
     internal = commands.add_parser("internal", help=argparse.SUPPRESS)
     internal_commands = internal.add_subparsers(dest="internal_command", required=True)
     internal_commands.add_parser("run-owner")
@@ -79,7 +80,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     if arguments.command == "install":
         try:
             result = install_versioned_application(
-                bootstrap_python=sys.executable,
+                bootstrap_python=arguments.bootstrap_python,
                 dry_run=arguments.dry_run,
                 no_start=arguments.no_start,
                 migrate_owner=arguments.migrate_owner,

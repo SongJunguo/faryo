@@ -468,7 +468,7 @@ class FaryoCliTest(unittest.TestCase):
                 mock.patch.object(application, "create_private_venv", side_effect=operations.OperationError("venv failed")),
             ):
                 with self.assertRaisesRegex(operations.OperationError, "venv failed"):
-                    application.prepare_version(layout)
+                    application.prepare_version(layout, bootstrap_python=sys.executable)
 
             versions = application.ProgramLayout.from_layout(layout).versions
             self.assertEqual(list(versions.glob(".stage-*")), [])
@@ -494,6 +494,23 @@ class FaryoCliTest(unittest.TestCase):
 
             self.assertEqual(layout.owner_env.read_text(encoding="utf-8"), before)
             restore.assert_called_once_with(None, layout)
+
+    def test_bootstrap_python_prefers_supported_system_runtime(self) -> None:
+        with (
+            mock.patch.object(application.Path, "is_file", return_value=True),
+            mock.patch.object(application.os, "access", return_value=True),
+            mock.patch.object(application, "usable_bootstrap_python", side_effect=lambda value: value == "/usr/bin/python3"),
+        ):
+            self.assertEqual(application.select_bootstrap_python(), "/usr/bin/python3")
+
+    def test_explicit_unsupported_bootstrap_is_rejected(self) -> None:
+        with (
+            mock.patch.object(application.Path, "is_file", return_value=True),
+            mock.patch.object(application.os, "access", return_value=True),
+            mock.patch.object(application, "usable_bootstrap_python", side_effect=lambda value: value == sys.executable),
+        ):
+            with self.assertRaisesRegex(operations.OperationError, "Python 3.10"):
+                application.select_bootstrap_python("/old/python")
 
 
 if __name__ == "__main__":

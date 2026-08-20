@@ -53,6 +53,36 @@ def version_name() -> str:
     return value
 
 
+def usable_bootstrap_python(executable: str) -> bool:
+    result = run_binary(
+        [
+            executable,
+            "-c",
+            "import sys,venv; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)",
+        ],
+        timeout=10,
+    )
+    return result.returncode == 0
+
+
+def select_bootstrap_python(configured: str | None = None) -> str:
+    explicit = configured or os.environ.get("FARYO_BOOTSTRAP_PYTHON") or ""
+    candidates = [explicit] if explicit else ["/usr/bin/python3", sys.executable]
+    seen: set[str] = set()
+    for candidate in candidates:
+        if not candidate:
+            continue
+        absolute = os.path.abspath(candidate)
+        if absolute in seen:
+            continue
+        seen.add(absolute)
+        if Path(absolute).is_file() and os.access(absolute, os.X_OK) and usable_bootstrap_python(absolute):
+            return absolute
+        if explicit:
+            break
+    raise OperationError("Python 3.10+ with the venv module was not found")
+
+
 def run_binary(argv: list[str], *, cwd: Path | None = None, timeout: float = 300) -> subprocess.CompletedProcess[bytes]:
     try:
         return subprocess.run(argv, cwd=cwd, check=False, capture_output=True, timeout=timeout)
@@ -142,7 +172,7 @@ def remove_staging(path: Path, versions: Path) -> None:
 def prepare_version(
     layout: Layout | None = None,
     *,
-    bootstrap_python: str = sys.executable,
+    bootstrap_python: str | None = None,
     version: str | None = None,
 ) -> Path:
     selected = layout or Layout.from_environment()
@@ -159,7 +189,7 @@ def prepare_version(
     stage = Path(tempfile.mkdtemp(prefix=f".stage-{name}-", dir=program.versions))
     try:
         revision = copy_source(selected.source_root, stage / "app")
-        create_private_venv(stage, bootstrap_python)
+        create_private_venv(stage, select_bootstrap_python(bootstrap_python))
         manifest = {
             "schemaVersion": 1,
             "version": name,
@@ -248,7 +278,7 @@ def replace_env_value(path: Path, key: str, value: str) -> None:
 def install_versioned_application(
     layout: Layout | None = None,
     *,
-    bootstrap_python: str = sys.executable,
+    bootstrap_python: str | None = None,
     dry_run: bool = False,
     no_start: bool = False,
     migrate_owner: bool = False,
