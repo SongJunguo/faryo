@@ -270,6 +270,10 @@ sha256sum --check install-faryo.sh.sha256
 bash install-faryo.sh --version v1.5.0 --workspace "$PWD"
 ```
 
+Upgrading a pre-v1.5 checkout that still uses the dedicated Owner keepalive
+supervisor requires the explicit `--migrate-owner` flag; normal Codex tmux
+sessions are preserved and geometry-checked.
+
 The installer verifies a versioned source archive and SHA-256 manifest, creates
 the private venv, initializes missing mode-`600` configuration, and installs two
 loopback-only user services. Existing config, tokens, attachments, Codex history,

@@ -54,6 +54,18 @@ bounded single-root regular-file archive, and invokes the same `faryo install`
 path used by source developers. It does not execute sudo, install apt packages,
 create a tunnel, or change Cloudflare settings.
 
+When upgrading a pre-v1.5 deployment that still has the dedicated
+`local-tmux-owner` service session/keepalive timer, explicitly approve only that
+supervisor migration:
+
+```bash
+bash install-faryo.sh --version v1.5.0 --workspace /path/to/workspace --migrate-owner
+```
+
+The migration records and compares every existing agent tmux geometry. It stops
+only the named legacy Owner service session, never `faryo1`, `faryo2`, or other
+Codex sessions, and restores the old supervisor if health checks fail.
+
 If `/usr/bin/python3` is not compatible, select another existing interpreter:
 
 ```bash

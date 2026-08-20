@@ -4,7 +4,7 @@ set -euo pipefail
 usage() {
   cat <<'USAGE'
 Usage:
-  install-faryo.sh [--version vX.Y.Z] [--python /path/to/python3] [--workspace /path]
+  install-faryo.sh [--version vX.Y.Z] [--python /path/to/python3] [--workspace /path] [--migrate-owner]
 
 Downloads the exact Faryo source release and SHA-256 manifest, verifies both,
 then creates a versioned private virtual environment and user services.
@@ -15,6 +15,7 @@ VERSION="${FARYO_VERSION:-}"
 BOOTSTRAP_PYTHON="${FARYO_BOOTSTRAP_PYTHON:-}"
 WORKSPACE="${FARYO_INITIAL_WORKSPACE:-$PWD}"
 REPOSITORY="SongJunguo/faryo"
+MIGRATE_OWNER=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -32,6 +33,10 @@ while [[ $# -gt 0 ]]; do
       [[ $# -ge 2 ]] || { usage >&2; exit 2; }
       WORKSPACE="$2"
       shift 2
+      ;;
+    --migrate-owner)
+      MIGRATE_OWNER=1
+      shift
       ;;
     -h|--help)
       usage
@@ -150,9 +155,9 @@ APP_ROOT="$SOURCE_DIR/faryo-$VERSION"
   exit 1
 }
 
-PYTHONPATH="$APP_ROOT/src" "$BOOTSTRAP_PYTHON" -m faryo_cli install \
-  --python "$BOOTSTRAP_PYTHON" \
-  --workspace "$WORKSPACE"
+INSTALL_ARGS=(--python "$BOOTSTRAP_PYTHON" --workspace "$WORKSPACE")
+[[ "$MIGRATE_OWNER" == 1 ]] && INSTALL_ARGS+=(--migrate-owner)
+PYTHONPATH="$APP_ROOT/src" "$BOOTSTRAP_PYTHON" -m faryo_cli install "${INSTALL_ARGS[@]}"
 
 echo "Faryo $VERSION is installed."
 echo "Run: $HOME/.local/bin/faryo doctor"
