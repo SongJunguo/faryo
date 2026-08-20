@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from http import HTTPStatus
+import threading
 from typing import Any
 
 from anyio import to_thread
@@ -20,6 +21,31 @@ class OwnerProxyRoutes:
         self.config = config
         self.client = client
         self.support = support
+        self._stream_lock = threading.Lock()
+        self._active_streams: set[owner_client.OwnerStream] = set()
+        self._closing = False
+
+    def _track_stream(self, stream: owner_client.OwnerStream) -> None:
+        with self._stream_lock:
+            closing = self._closing
+            if not closing:
+                self._active_streams.add(stream)
+        if closing:
+            stream.close()
+
+    def _release_stream(self, stream: owner_client.OwnerStream) -> None:
+        with self._stream_lock:
+            self._active_streams.discard(stream)
+        stream.close()
+
+    def close_active_streams(self) -> int:
+        with self._stream_lock:
+            self._closing = True
+            streams = list(self._active_streams)
+            self._active_streams.clear()
+        for stream in streams:
+            stream.close()
+        return len(streams)
 
     async def proxy_get(self, request: Request, current: str, route: str, upstream_path: str) -> Response:
         try:
@@ -35,6 +61,7 @@ class OwnerProxyRoutes:
             )
         except owner_client.OwnerTransportError:
             return self.support.json_response({"ok": False, "error": "upstream unavailable"}, HTTPStatus.BAD_GATEWAY)
+        self._track_stream(stream)
         headers = self.support.forwarded_response_headers(stream.headers)
         content_type = next((value for key, value in stream.headers if key.lower() == "content-type"), "")
         if content_type.lower().startswith("text/event-stream"):
@@ -43,18 +70,18 @@ class OwnerProxyRoutes:
             async def body_iterator():
                 try:
                     while True:
-                        chunk = await to_thread.run_sync(stream.readline)
+                        chunk = await to_thread.run_sync(stream.readline, abandon_on_cancel=True)
                         if not chunk:
                             break
                         yield chunk
                 finally:
-                    await to_thread.run_sync(stream.close)
+                    self._release_stream(stream)
 
             return StreamingResponse(body_iterator(), status_code=stream.status, headers=headers)
         try:
             body = await to_thread.run_sync(stream.read)
         finally:
-            await to_thread.run_sync(stream.close)
+            self._release_stream(stream)
         return Response(body, status_code=stream.status, headers=headers)
 
     async def api_get(self, request: Request) -> Response:

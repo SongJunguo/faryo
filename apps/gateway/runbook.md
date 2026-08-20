@@ -209,7 +209,9 @@ systemctl --user restart faryo-gateway.service
 ```
 
 Logs must not contain login passwords, Owner tokens, query-string tokens, or
-private conversation text.
+private conversation text. A normal restart with an open session page should
+also finish without `timeout graceful shutdown exceeded`; the runner closes
+active Gateway-to-Owner SSE streams before Uvicorn waits for request tasks.
 
 ## Change Login Password
 

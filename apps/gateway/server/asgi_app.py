@@ -56,5 +56,6 @@ def create_app(legacy: Any, config: Any) -> Starlette:
         read_routes.static_route(),
     ]
     app = Starlette(routes=routes)
+    app.state.close_owner_streams = proxy_routes.close_active_streams
     app.add_middleware(asgi_support.SecurityHeadersMiddleware)
     return app

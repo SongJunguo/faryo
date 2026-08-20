@@ -4,10 +4,12 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 from pathlib import Path
+import socket
 import sys
 import tempfile
 import threading
 from typing import Any
+from unittest import mock
 import unittest
 
 
@@ -15,7 +17,7 @@ SERVER_ROOT = Path(__file__).resolve().parents[1]
 if str(SERVER_ROOT) not in sys.path:
     sys.path.insert(0, str(SERVER_ROOT))
 
-from owner_client import OwnerClient
+from owner_client import OwnerClient, OwnerStream
 
 
 class StubConfig:
@@ -117,6 +119,22 @@ class OwnerClientTest(unittest.TestCase):
         self.assertEqual(request["path"], "/api/send?fixture=1")
         self.assertEqual(request["body"], body)
         self.assertEqual(request["headers"]["X-Owner-Token"], "token-lab")
+
+    def test_owner_stream_close_is_idempotent_and_stops_future_reads(self) -> None:
+        connection = mock.Mock()
+        connection.sock = mock.Mock()
+        response = mock.Mock(status=HTTPStatus.OK, reason="OK")
+        response.getheaders.return_value = [("Content-Type", "text/event-stream")]
+        response.readline.return_value = b"data: fixture\n"
+        stream = OwnerStream(connection, response)
+
+        stream.close()
+        stream.close()
+
+        self.assertEqual(stream.readline(), b"")
+        connection.sock.shutdown.assert_called_once_with(socket.SHUT_RDWR)
+        connection.close.assert_called_once_with()
+        response.readline.assert_not_called()
 
 
 if __name__ == "__main__":

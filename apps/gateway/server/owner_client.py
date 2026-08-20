@@ -7,6 +7,8 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 import secrets
+import socket
+import threading
 from typing import Any, Callable, Mapping
 
 
@@ -42,14 +44,40 @@ class OwnerStream:
         self.status = response.status
         self.reason = response.reason
         self.headers = response.getheaders()
+        self._close_lock = threading.Lock()
+        self._closed = False
+        response_raw = getattr(getattr(response, "fp", None), "raw", None)
+        self._upstream_socket = getattr(connection, "sock", None) or getattr(response_raw, "_sock", None)
+
+    def _read(self, operation: Callable[[], bytes]) -> bytes:
+        with self._close_lock:
+            if self._closed:
+                return b""
+        try:
+            return operation()
+        except (OSError, ValueError):
+            with self._close_lock:
+                if self._closed:
+                    return b""
+            raise
 
     def read(self, size: int | None = None) -> bytes:
-        return self.response.read() if size is None else self.response.read(size)
+        return self._read(lambda: self.response.read() if size is None else self.response.read(size))
 
     def readline(self) -> bytes:
-        return self.response.readline()
+        return self._read(self.response.readline)
 
     def close(self) -> None:
+        with self._close_lock:
+            if self._closed:
+                return
+            self._closed = True
+        upstream_socket = self._upstream_socket
+        if upstream_socket is not None:
+            try:
+                upstream_socket.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
         self.connection.close()
 
 

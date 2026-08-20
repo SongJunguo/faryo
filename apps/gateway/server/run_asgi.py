@@ -4,13 +4,31 @@
 from __future__ import annotations
 
 import argparse
+import logging
 from pathlib import Path
+from typing import Callable
 
 import uvicorn
 
 import asgi_app
 import gateway_config
 import server as legacy
+
+
+LOGGER = logging.getLogger("uvicorn.error")
+
+
+class FaryoServer(uvicorn.Server):
+    """Close indefinite Owner streams before Uvicorn waits for HTTP tasks."""
+
+    def __init__(self, config: uvicorn.Config, close_owner_streams: Callable[[], int]) -> None:
+        super().__init__(config)
+        self.close_owner_streams = close_owner_streams
+
+    async def shutdown(self, sockets=None) -> None:
+        closed = self.close_owner_streams()
+        LOGGER.info("Closing %d active Owner stream(s) before graceful shutdown", closed)
+        await super().shutdown(sockets)
 
 
 def parse_args() -> argparse.Namespace:
@@ -39,7 +57,7 @@ def main() -> None:
     args = parse_args()
     app = create_runtime_app(args)
     print(f"Faryo Gateway ASGI listening on http://{args.host}:{args.port}", flush=True)
-    uvicorn.run(
+    config = uvicorn.Config(
         app,
         host=args.host,
         port=args.port,
@@ -54,6 +72,7 @@ def main() -> None:
         timeout_graceful_shutdown=10,
         timeout_keep_alive=5,
     )
+    FaryoServer(config, app.state.close_owner_streams).run()
 
 
 if __name__ == "__main__":

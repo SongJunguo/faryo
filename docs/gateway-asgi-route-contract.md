@@ -1,6 +1,6 @@
 # Gateway ASGI Route Contract
 
-Updated: 2026-08-20  
+Updated: 2026-08-20
 Target: Faryo v1.4.0
 
 Production cutover status: Uvicorn is active on the loopback Gateway port. The
@@ -40,6 +40,13 @@ isolated loopback port and explicitly asserts status, selected headers, cookies,
 HTML/JSON, streaming bytes, uploads, Owner-injected headers, CSRF denials and
 body-free audit records.
 
+`apps/gateway/server/tests/test_asgi_shutdown.py` keeps a real Owner SSE response
+open, requests Gateway shutdown and requires the server to exit before the
+graceful timeout. `FaryoServer` closes registered Gateway-to-Owner streams before
+Uvicorn waits for HTTP tasks. `OwnerStream` retains the response-owned socket and
+uses `shutdown(SHUT_RDWR)` before close, so an already blocked `readline` ends
+normally instead of producing a ten-second timeout and forced-cancellation log.
+
 ## Deliberate HTTP-server differences
 
 Starlette automatically provides `HEAD` for read routes. The legacy Gateway
@@ -62,5 +69,8 @@ The production move from the legacy server to Uvicorn was accepted after:
    port, including SSE reconnect and a non-destructive CSRF write fixture;
 3. the service unit, health check and rollback command have been tested without
    changing any tmux pane geometry;
+4. an active SSE client cannot hold a service restart open until the graceful
+   shutdown timeout.
+
 The HTTP migration gate is complete. The source and deployment suites continue
 to prove that only `run_asgi.py` is a valid production Gateway entrypoint.

@@ -40,6 +40,14 @@ internal headers, JSON/raw calls and bounded multipart forwarding. Forwarded
 browser headers cannot replace internal identity/scope fields. Both HTTP stacks
 use it so Owner tokens and workspace/inbox scopes cannot drift.
 
+`server/asgi_owner_proxy.py` registers every active Owner stream. The production
+`FaryoServer` runner closes that registry before Uvicorn waits for request tasks,
+so a live SSE response cannot consume the full graceful-shutdown timeout during
+a service restart. `OwnerStream` retains the response-owned socket and performs
+an idempotent `shutdown(SHUT_RDWR)` plus close, which unblocks a worker already
+inside `readline`; normal browser disconnect still releases the same registry
+entry.
+
 `server/mcp_service.py` is the HTTP-independent MCP JSON-RPC/tool service used
 by both stacks. Token/CORS remain adapter concerns, while protocol methods,
 batch/notification behavior and handoff creation have one implementation.

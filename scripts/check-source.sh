@@ -196,6 +196,7 @@ gateway_config_source = (root / "apps/gateway/server/gateway_config.py").read_te
 gateway_audit_source = (root / "apps/gateway/server/control_audit.py").read_text(encoding="utf-8")
 gateway_asgi_support = (root / "apps/gateway/server/asgi_support.py").read_text(encoding="utf-8")
 gateway_runner = (root / "apps/gateway/scripts/run-gateway.sh").read_text(encoding="utf-8")
+gateway_asgi_runner = (root / "apps/gateway/server/run_asgi.py").read_text(encoding="utf-8")
 gateway_workbench = (root / "apps/gateway/server/static/workbench.js").read_text(encoding="utf-8")
 gateway_preact_source = (root / "apps/gateway/ui/preact-workbench.jsx").read_text(encoding="utf-8")
 gateway_ui = gateway + "\n" + gateway_workbench
@@ -244,6 +245,7 @@ assert "owner_http.safe_log_path(self.path)" in owner_server and "def safe_log_p
 assert "ControlAuditStore" in gateway_config_source and "target_digest" in gateway_audit_source and "append_audit" in gateway_asgi_support and 'id="securityActivity"' in gateway, "Gateway must expose body-free control auditing"
 assert "GatewayHandler" not in gateway and "ThreadingHTTPServer" not in gateway, "legacy Gateway HTTP server must not return"
 assert "run_asgi.py" in gateway_runner and "FARYO_GATEWAY_HTTP_ENGINE" not in gateway_runner, "Gateway runner must remain ASGI-only"
+assert "class FaryoServer" in gateway_asgi_runner and "close_owner_streams" in gateway_asgi_runner, "Gateway shutdown must release active Owner streams before waiting"
 assert "/api/session-history/archive" in gateway and "/api/session-history/unarchive" in gateway, "Gateway must expose reversible history lifecycle controls"
 assert "/api/session-history/delete" not in gateway_ui and '"thread/delete"' not in owner_server, "Faryo must not expose hard thread deletion"
 assert 'class="brand" href="/" aria-label="Faryo home"' in gateway, "Gateway brand must remain on the session home"
