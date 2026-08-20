@@ -38,6 +38,7 @@ class ContractConfig:
         self.icp_record = ""
         self.mcp_user = "mcp"
         self.audit_calls: list[dict[str, Any]] = []
+        self.packages: dict[str, dict[str, Any]] = {}
 
     def auth_epoch(self, username: str) -> int:
         return int(self.users[username]["auth_epoch"])
@@ -65,6 +66,25 @@ class ContractConfig:
 
     def revoke_sessions(self, username: str) -> None:
         self.users[username]["auth_epoch"] += 1
+
+    def save_bridge_package(self, payload: dict[str, Any], username: str) -> dict[str, Any]:
+        package = {"id": "1-deadbeef", "owner": username, "title": payload.get("title") or "fixture", "status": "pending", "assets": []}
+        self.packages[package["id"]] = package
+        return package
+
+    def bridge_asset_sources(self, payload: dict[str, Any]) -> list[Any]:
+        return list(payload.get("attachments") or [])
+
+    def append_bridge_package_assets(self, package_id: str, assets: list[Any], username: str) -> dict[str, Any]:
+        package = self.packages[package_id]
+        package["assets"].extend(assets)
+        return package
+
+    def bridge_package(self, package_id: str, username: str) -> dict[str, Any] | None:
+        return self.packages.get(package_id)
+
+    def update_bridge_package(self, package: dict[str, Any]) -> None:
+        self.packages[str(package["id"])] = package
 
 
 class OwnerContractFixture(BaseHTTPRequestHandler):
@@ -440,6 +460,54 @@ class AsgiReadContractTest(unittest.TestCase):
         self.assertEqual(asgi_result[0], legacy_result[0])
         self.assertEqual(json.loads(asgi_result[2]), json.loads(legacy_result[2]))
         self.assertEqual(asgi_result[0], HTTPStatus.BAD_REQUEST)
+
+    def test_bridge_package_create_and_empty_asset_append_match(self) -> None:
+        csrf = gateway_security.csrf_token(self.config.cookie_secret, "tester", self.config.auth_epoch("tester"))
+        headers = {legacy.CSRF_HEADER: csrf, "Content-Type": "application/json"}
+        create_body = json.dumps({"title": "fixture"}).encode("utf-8")
+        legacy_create = self.request(
+            self.legacy_base, "/api/bridge-packages", authenticated=True, method="POST", body=create_body, extra_headers=headers,
+        )
+        self.config.packages.clear()
+        asgi_create = self.request(
+            self.asgi_base, "/api/bridge-packages", authenticated=True, method="POST", body=create_body, extra_headers=headers,
+        )
+        self.assertEqual(asgi_create[0], legacy_create[0])
+        self.assertEqual(json.loads(asgi_create[2]), json.loads(legacy_create[2]))
+
+        append_body = json.dumps({"package_id": "1-deadbeef", "attachments": []}).encode("utf-8")
+        legacy_append = self.request(
+            self.legacy_base, "/api/bridge-package-assets", authenticated=True, method="POST", body=append_body, extra_headers=headers,
+        )
+        asgi_append = self.request(
+            self.asgi_base, "/api/bridge-package-assets", authenticated=True, method="POST", body=append_body, extra_headers=headers,
+        )
+        self.assertEqual(asgi_append[0], legacy_append[0])
+        self.assertEqual(json.loads(asgi_append[2]), json.loads(legacy_append[2]))
+
+    def test_bridge_inject_without_assets_and_audit_match(self) -> None:
+        csrf = gateway_security.csrf_token(self.config.cookie_secret, "tester", self.config.auth_epoch("tester"))
+        headers = {legacy.CSRF_HEADER: csrf, "Content-Type": "application/json"}
+        body = json.dumps({"package_id": "1-deadbeef", "route": "lab", "session": "faryo4"}).encode("utf-8")
+        base_package = {"id": "1-deadbeef", "owner": "tester", "title": "fixture", "status": "pending", "assets": []}
+        self.config.packages["1-deadbeef"] = dict(base_package)
+        self.config.audit_calls.clear()
+        legacy_result = self.request(
+            self.legacy_base, "/api/bridge-inject", authenticated=True, method="POST", body=body, extra_headers=headers,
+        )
+        self.config.packages["1-deadbeef"] = dict(base_package)
+        asgi_result = self.request(
+            self.asgi_base, "/api/bridge-inject", authenticated=True, method="POST", body=body, extra_headers=headers,
+        )
+        self.assertEqual(asgi_result[0], legacy_result[0])
+        self.assertEqual(json.loads(asgi_result[2]), json.loads(legacy_result[2]))
+        normalized = [
+            {key: value for key, value in call.items() if key not in {"request_id", "duration_ms"}}
+            for call in self.config.audit_calls
+        ]
+        self.assertEqual(normalized[0], normalized[1])
+        self.assertEqual(normalized[0]["action"], "file-inject")
+        self.assertEqual(normalized[0]["target"], "faryo4")
 
 
 if __name__ == "__main__":

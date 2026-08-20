@@ -99,6 +99,20 @@ def create_app(legacy: Any, config: Any) -> Starlette:
             idempotent=idempotent,
         )
 
+    async def read_json_body(request: Request, max_bytes: int) -> dict[str, Any]:
+        body = await request.body()
+        if not body:
+            raise ValueError("empty JSON body")
+        if len(body) > max_bytes:
+            raise ValueError("request too large")
+        try:
+            payload = json.loads(body.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise ValueError("invalid JSON body") from exc
+        if not isinstance(payload, dict):
+            raise ValueError("invalid JSON object")
+        return payload
+
     async def manifest(_request: Request) -> Response:
         return json_response(legacy.PWA_MANIFEST)
 
@@ -448,6 +462,116 @@ def create_app(legacy: Any, config: Any) -> Starlette:
         )
         return response
 
+    async def bridge_package_create(request: Request) -> Response:
+        current = username(request)
+        if not current:
+            return json_response({"ok": False, "error": "unauthorized"}, HTTPStatus.UNAUTHORIZED)
+        supplied_csrf = request.headers.get(legacy.CSRF_HEADER, "").strip()
+        expected_csrf = gateway_security.csrf_token(config.cookie_secret, current, config.auth_epoch(current))
+        if not supplied_csrf or not secrets.compare_digest(supplied_csrf, expected_csrf):
+            return json_response({"ok": False, "error": "csrf required"}, HTTPStatus.FORBIDDEN)
+        try:
+            payload = await read_json_body(request, legacy.BRIDGE_PACKAGE_MAX_BYTES)
+            package = await to_thread.run_sync(lambda: config.save_bridge_package(payload, current))
+            return json_response({"ok": True, "package": package})
+        except ValueError as exc:
+            return json_response({"ok": False, "error": str(exc)}, HTTPStatus.BAD_REQUEST)
+
+    async def bridge_package_assets(request: Request) -> Response:
+        current = username(request)
+        if not current:
+            return json_response({"ok": False, "error": "unauthorized"}, HTTPStatus.UNAUTHORIZED)
+        supplied_csrf = request.headers.get(legacy.CSRF_HEADER, "").strip()
+        expected_csrf = gateway_security.csrf_token(config.cookie_secret, current, config.auth_epoch(current))
+        if not supplied_csrf or not secrets.compare_digest(supplied_csrf, expected_csrf):
+            return json_response({"ok": False, "error": "csrf required"}, HTTPStatus.FORBIDDEN)
+        try:
+            payload = await read_json_body(request, legacy.BRIDGE_PACKAGE_MAX_BYTES)
+            assets = config.bridge_asset_sources(payload)
+            package_id = str(payload.get("package_id") or payload.get("packageId") or "")
+            package = await to_thread.run_sync(lambda: config.append_bridge_package_assets(package_id, assets, current))
+            return json_response({"ok": True, "package": package})
+        except ValueError as exc:
+            return json_response({"ok": False, "error": str(exc)}, HTTPStatus.BAD_REQUEST)
+
+    async def bridge_inject(request: Request) -> Response:
+        current = username(request)
+        if not current:
+            return json_response({"ok": False, "error": "unauthorized"}, HTTPStatus.UNAUTHORIZED)
+        request_id = secrets.token_hex(8)
+        started = time.monotonic()
+        route = ""
+        target = ""
+        supplied_csrf = request.headers.get(legacy.CSRF_HEADER, "").strip()
+        expected_csrf = gateway_security.csrf_token(config.cookie_secret, current, config.auth_epoch(current))
+        if not supplied_csrf or not secrets.compare_digest(supplied_csrf, expected_csrf):
+            status = HTTPStatus.FORBIDDEN
+            response = json_response({"ok": False, "error": "csrf required"}, status)
+        else:
+            try:
+                payload = await read_json_body(request, 65536)
+                package_id = legacy.clean_package_id(str(payload.get("package_id") or payload.get("packageId") or ""))
+                route = str(payload.get("route") or "").strip()
+                session = legacy.clean_session_id(str(payload.get("session") or ""))
+                agent_session_id = legacy.clean_agent_session_id(str(payload.get("agent_session_id") or ""))
+                source = str(payload.get("source") or "")
+                target = session or agent_session_id or package_id or ""
+                if not package_id or route not in legacy.BACKENDS or (not session and not agent_session_id):
+                    raise ValueError("package_id, route and session or agent_session_id are required")
+                if agent_session_id and not source:
+                    raise ValueError("source is required with agent_session_id")
+                if not config.allowed_route(current, route):
+                    status = HTTPStatus.FORBIDDEN
+                    response = json_response({"ok": False, "error": "forbidden"}, status)
+                else:
+                    package = config.bridge_package(package_id, current)
+                    if not package:
+                        status = HTTPStatus.NOT_FOUND
+                        response = json_response({"ok": False, "error": "package not found"}, status)
+                    elif package.get("assets"):
+                        status = HTTPStatus.BAD_GATEWAY
+                        response = json_response({"ok": False, "error": "bridge assets await ASGI upload migration"}, status)
+                    else:
+                        target_session = session
+                        if not target_session:
+                            resume = await to_thread.run_sync(lambda: client.json_request(
+                                route, "/api/agent/resume",
+                                {"agent_session_id": agent_session_id, "source": source, "max_running": config.max_running(route)},
+                                current,
+                            ))
+                            if not resume.get("ok"):
+                                status = HTTPStatus.BAD_GATEWAY
+                                response = json_response({"ok": False, "error": resume.get("error") or "owner resume failed"}, status)
+                                target_session = ""
+                            else:
+                                target_session = legacy.clean_session_id(str(resume.get("session") or "")) or ""
+                                if not target_session:
+                                    status = HTTPStatus.BAD_GATEWAY
+                                    response = json_response({"ok": False, "error": "owner did not return target session"}, status)
+                        if target_session:
+                            sent = await to_thread.run_sync(lambda: client.json_request(
+                                route, "/api/send", {"session": target_session, "text": legacy.bridge_prompt_text(package)}, current,
+                            ))
+                            if not sent.get("ok"):
+                                status = HTTPStatus.BAD_GATEWAY
+                                response = json_response({"ok": False, "error": sent.get("error") or "owner inject failed"}, status)
+                            else:
+                                package["status"] = "injected"
+                                package["target"] = {"route": route, "session": target_session, "agentSessionId": agent_session_id or "", "source": source}
+                                config.update_bridge_package(package)
+                                target = target_session
+                                status = HTTPStatus.OK
+                                response = json_response({"ok": True, "redirect": f"/{route}/?session={target_session}", "package": package})
+            except ValueError as exc:
+                status = HTTPStatus.BAD_REQUEST
+                response = json_response({"ok": False, "error": str(exc)}, status)
+        response.headers["X-Faryo-Request-Id"] = request_id
+        append_audit(
+            username_value=current, route=route, action="file-inject", target=target,
+            request_id=request_id, status=status, started=started,
+        )
+        return response
+
     async def proxy_owner_get(request: Request, current: str, route: str, upstream_path: str) -> Response:
         try:
             stream = await to_thread.run_sync(
@@ -530,6 +654,9 @@ def create_app(legacy: Any, config: Any) -> Starlette:
         Route("/api/auth/revoke-all", revoke_sessions, methods=["POST"]),
         Route("/api/agent/resume", agent_resume, methods=["POST"]),
         Route("/api/agent/new", agent_new, methods=["POST"]),
+        Route("/api/bridge-packages", bridge_package_create, methods=["POST"]),
+        Route("/api/bridge-package-assets", bridge_package_assets, methods=["POST"]),
+        Route("/api/bridge-inject", bridge_inject, methods=["POST"]),
         Route("/", home, methods=["GET"]),
         Route("/{route}/{tail:path}", owner_resource, methods=["GET"]),
         Route("/{filename}", static_asset, methods=["GET"]),
