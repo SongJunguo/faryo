@@ -49,6 +49,18 @@ jobs:
           FARYO_NODE_BIN="$(command -v node)" \
             scripts/check-source.sh
 
+      - name: Build verified source installer assets
+        env:
+          TAG_NAME: ${{ github.ref_name }}
+        run: |
+          mkdir -p dist
+          archive="faryo-$TAG_NAME.tar.gz"
+          test -z "$(git ls-files -s | awk '$1 == 120000 {print}')"
+          git archive --format=tar.gz --prefix="faryo-$TAG_NAME/" -o "dist/$archive" "$TAG_NAME"
+          (cd dist && sha256sum "$archive" > "$archive.sha256")
+          install -m 0755 scripts/install-faryo.sh dist/install-faryo.sh
+          (cd dist && sha256sum install-faryo.sh > install-faryo.sh.sha256)
+
       - name: Publish source-only release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -60,3 +72,9 @@ jobs:
           else
             gh release create "$TAG_NAME" --verify-tag --title "Faryo ${TAG_NAME#v}" --notes-file "$notes"
           fi
+          gh release upload "$TAG_NAME" \
+            "dist/faryo-$TAG_NAME.tar.gz" \
+            "dist/faryo-$TAG_NAME.tar.gz.sha256" \
+            dist/install-faryo.sh \
+            dist/install-faryo.sh.sha256 \
+            --clobber

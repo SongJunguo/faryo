@@ -229,6 +229,8 @@ assert "pull_request:" in ci_workflow and "branches: [main]" in ci_workflow, "so
 assert "scripts/check-source.sh" in ci_workflow and "scripts/check-source.sh" in release_workflow, "CI and release must share source checks"
 assert "package-client.sh" not in release_workflow, "retired package workflow must not return"
 assert "faryo_${version}_all.deb" not in release_workflow and "macos.tar.gz" not in release_workflow, "release must remain source-only"
+assert "git archive --format=tar.gz" in release_workflow and "sha256sum" in release_workflow, "release must build a verified source archive"
+assert "install-faryo.sh" in release_workflow and "gh release upload" in release_workflow, "release must publish the reviewed source installer"
 assert "apps/gateway/server/tests" in check_script, "canonical checks must include Gateway tests"
 assert (root / "package-lock.json").is_file(), "development JavaScript dependencies must be locked"
 package = json.loads((root / "package.json").read_text(encoding="utf-8"))
