@@ -1,6 +1,8 @@
 (async () => {
   'use strict';
-  const { createChangesPanelController } = await import("./owner/changes-panel.mjs?v=faryo-owner-changes-1");
+  // Workspace review is an optional surface. Start loading it immediately,
+  // but never let a transient asset failure block capture/history rendering.
+  const changesPanelModulePromise = import("./owner/changes-panel.mjs?v=faryo-owner-changes-1");
 
   const $ = (id) => document.getElementById(id);
   const outputWrap = $('outputWrap');
@@ -2442,17 +2444,26 @@
   });
   $('detailsBtn').addEventListener('click', (event) => { event.stopPropagation(); openSurfacePanel(detailsPanel, $('detailsBtn')); });
   detailsPanel.addEventListener('click', (event) => { if (event.target.closest('[data-close-panel]')) closeSurfacePanels(); });
-  const changesPanelController = createChangesPanelController({
-    view: window,
-    routeBase,
-    getSelectedSession: () => selectedSession,
-    api,
-    userErrorMessage,
-    setError,
-    openSurfacePanel,
-    closeSurfacePanels,
+  const changesButton = $('detailsChangesBtn');
+  changesButton.disabled = true;
+  changesPanelModulePromise.then(({ createChangesPanelController }) => {
+    const changesPanelController = createChangesPanelController({
+      view: window,
+      routeBase,
+      getSelectedSession: () => selectedSession,
+      api,
+      userErrorMessage,
+      setError,
+      openSurfacePanel,
+      closeSurfacePanels,
+    });
+    changesPanelController.connect();
+    changesButton.disabled = false;
+  }).catch((error) => {
+    changesButton.disabled = true;
+    changesButton.title = 'Workspace changes are temporarily unavailable';
+    console.debug('workspace changes module unavailable', error);
   });
-  changesPanelController.connect();
   $('detailsDiagnosticsBtn').addEventListener('click', downloadDiagnostics);
   panelBackdrop.addEventListener('click', () => closeSurfacePanels());
   $('dockPlusBtn').addEventListener('click', (event) => {

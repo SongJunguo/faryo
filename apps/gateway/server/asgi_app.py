@@ -20,6 +20,7 @@ import gateway_security
 import owner_client
 import mcp_service
 import asgi_support
+import workbench_service
 
 
 def create_app(legacy: Any, config: Any) -> Starlette:
@@ -27,6 +28,7 @@ def create_app(legacy: Any, config: Any) -> Starlette:
     shared_static_dir = Path(legacy.SHARED_STATIC_DIR)
     client = owner_client.OwnerClient(legacy.BACKENDS, config, encode_label=legacy.owner_label_header_value)
     support = asgi_support.AsgiSupport(legacy, config)
+    workbench = workbench_service.WorkbenchService(legacy.WorkbenchRuntime, config, client)
     mcp = mcp_service.McpService(
         config,
         protocol_version=legacy.MCP_PROTOCOL_VERSION,
@@ -114,6 +116,42 @@ def create_app(legacy: Any, config: Any) -> Starlette:
             return json_response({"ok": False, "error": "unauthorized"}, HTTPStatus.UNAUTHORIZED)
         packages = await to_thread.run_sync(lambda: config.list_bridge_packages(current))
         return json_response({"ok": True, "packages": packages})
+
+    async def gateway_status(request: Request) -> Response:
+        current = username(request)
+        if not current:
+            return json_response({"ok": False, "error": "unauthorized"}, HTTPStatus.UNAUTHORIZED)
+        routes = config.user_routes(current)
+        entries = await to_thread.run_sync(lambda: [legacy.backend_status(route) for route in routes])
+        return json_response({"ok": True, "entries": entries})
+
+    async def workbench_payload(request: Request) -> Response:
+        current = username(request)
+        if not current:
+            return json_response({"ok": False, "error": "unauthorized"}, HTTPStatus.UNAUTHORIZED)
+        try:
+            page = max(1, int(request.query_params.get("page", "1")))
+        except ValueError:
+            page = 1
+        query = {key: request.query_params.getlist(key) for key in request.query_params}
+        filters = legacy.history_filters_from_query(query)
+        payload = await to_thread.run_sync(lambda: workbench.payload(current, page, filters))
+        return json_response(payload)
+
+    async def bridge_package_asset(request: Request) -> Response:
+        current = username(request)
+        if not current:
+            return RedirectResponse("/login?" + legacy.urlencode({"next": gateway_security.safe_target(request.url.path)}), status_code=HTTPStatus.SEE_OTHER)
+        package_id = str(request.path_params["package_id"])
+        filename = str(request.path_params["filename"])
+        if not legacy.clean_package_id(package_id) or filename != Path(filename).name:
+            return Response("not found", status_code=HTTPStatus.NOT_FOUND)
+        package = config.bridge_package(package_id, current)
+        asset_path = config.bridge_root / package_id / filename
+        if not package or not asset_path.is_file():
+            return Response("not found", status_code=HTTPStatus.NOT_FOUND)
+        content_type = legacy.BRIDGE_SUFFIX_MIME.get(asset_path.suffix.lower(), "application/octet-stream")
+        return Response(asset_path.read_bytes(), headers={"Content-Type": content_type, "Cache-Control": "private, no-store"})
 
     async def password_page(request: Request) -> Response:
         current = username(request)
@@ -729,6 +767,9 @@ def create_app(legacy: Any, config: Any) -> Starlette:
         Route("/logout", logout, methods=["GET"]),
         Route("/api/csrf", csrf, methods=["GET"]),
         Route("/api/security-activity", security_activity, methods=["GET"]),
+        Route("/api/gateway-status", gateway_status, methods=["GET"]),
+        Route("/api/workbench", workbench_payload, methods=["GET"]),
+        Route("/bridge/packages/{package_id}/{filename}", bridge_package_asset, methods=["GET"]),
         Route("/api/bridge-packages", bridge_packages_get, methods=["GET"]),
         Route("/password", password_page, methods=["GET", "POST"]),
         Route("/{route}/api/{tail:path}", owner_get, methods=["GET"]),

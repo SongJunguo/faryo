@@ -33,6 +33,10 @@ batch/notification behavior and handoff creation have one implementation.
 lookup, HTML/JSON responses, bounded JSON input, proxy header filtering and
 body-free audit writes. Route modules should not recreate those helpers.
 
+`server/workbench_service.py` is the shared active/history/page/filter/cwd and
+Inbox aggregation service. Legacy and ASGI workbench endpoints use the same
+OwnerClient-backed model rather than maintaining parallel session semantics.
+
 ## 1. Entry Flow
 
 ```text

@@ -34,6 +34,7 @@ if str(GATEWAY_MODULE_DIR) not in sys.path:
 import gateway_security
 import owner_client
 import mcp_service
+import workbench_service
 
 SHARED_DIR = Path(__file__).resolve().parents[2] / "shared"
 SHARED_STATIC_DIR = SHARED_DIR / "static"
@@ -877,6 +878,24 @@ class GatewayConfig:
         package["updated_at"] = now_ts(); (self.bridge_root / package_id / "package.json").write_text(json.dumps(package, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
+class WorkbenchRuntime:
+    BACKENDS = BACKENDS
+    SESSION_STATES = SESSION_STATES
+    SESSION_STATE_PRIORITY = SESSION_STATE_PRIORITY
+    HISTORY_PAGE_SIZE = HISTORY_PAGE_SIZE
+    HISTORY_MAX_FETCH = HISTORY_MAX_FETCH
+    NEW_SESSION_COMMANDS = NEW_SESSION_COMMANDS
+    display_session_title = staticmethod(display_session_title)
+    compact_path_label = staticmethod(compact_path_label)
+    display_updated_at = staticmethod(display_updated_at)
+    parse_updated_ts = staticmethod(parse_updated_ts)
+    owner_history_query = staticmethod(owner_history_query)
+    normalize_history_filters = staticmethod(normalize_history_filters)
+    backend_status = staticmethod(backend_status)
+    agent_cwd_choices = staticmethod(agent_cwd_choices)
+    now_ts = staticmethod(now_ts)
+
+
 class GatewayHandler(BaseHTTPRequestHandler):
     server_version = "FaryoGateway/0.1"
 
@@ -1405,106 +1424,27 @@ class GatewayHandler(BaseHTTPRequestHandler):
     def max_running_for(self, username: str, route: str) -> int:
         return self.config.max_running(route)
 
+    def shared_workbench_service(self) -> workbench_service.WorkbenchService:
+        server = getattr(self, "server", None)
+        config = getattr(server, "config", None)
+        return workbench_service.WorkbenchService(
+            WorkbenchRuntime,
+            config,
+            self,
+            owner_json_request_callback=self.owner_json_request,
+            owner_sessions_callback=self.owner_agent_sessions,
+            max_running_callback=self.max_running_for,
+            backend_status_callback=backend_status,
+        )
+
     def gateway_session_item(self, item: dict[str, Any], route: str, result: dict[str, Any], limit_reached: bool) -> dict[str, Any]:
-        updated_raw = item.get("updatedAt") or item.get("updated_at") or result.get("updatedAt") or ""
-        tmux_session = str(item.get("tmuxSession") or item.get("session") or "")
-        active = bool(tmux_session)
-        cwd = str(item.get("cwd") or "")
-        raw_state = str(item.get("state") or "").strip().lower()
-        if raw_state not in SESSION_STATES:
-            raw_state = ("running" if item.get("agentRunning") else "waiting") if active else ("archived" if item.get("archived") else "resumable")
-        return {
-            "id": str(item.get("id") or ""),
-            "title": display_session_title(item.get("title") or item.get("label") or item.get("id") or "Untitled session"),
-            "gitLabel": str(item.get("gitLabel") or item.get("git_label") or ""),
-            "route": route,
-            "routeLabel": BACKENDS[route][2],
-            "cwd": cwd,
-            "cwdLabel": compact_path_label(cwd),
-            "updatedAt": display_updated_at(updated_raw),
-            "updatedTs": float(item.get("updatedTs") or parse_updated_ts(updated_raw)),
-            "tmuxSession": tmux_session,
-            "active": active,
-            "managed": bool(item.get("managed")),
-            "agentRunning": bool(active and item.get("agentRunning")),
-            "state": raw_state,
-            "archived": bool(item.get("archived")),
-            "limitReached": bool(not active and limit_reached),
-            "source": str(item.get("source") or ""),
-        }
+        return self.shared_workbench_service().session_item(item, route, result, limit_reached)
 
     def owner_agent_sessions(self, route: str, username: str, history_page: int = 1, exact_page: bool = False, history_filters: dict[str, Any] | None = None) -> dict[str, Any]:
-        page = max(1, history_page)
-        history_limit = HISTORY_PAGE_SIZE if exact_page else min(HISTORY_PAGE_SIZE * page, HISTORY_MAX_FETCH)
-        history_offset = (page - 1) * HISTORY_PAGE_SIZE if exact_page else 0
-        max_running = self.max_running_for(username, route)
-        result = self.owner_json_request(route, owner_history_query(history_limit, history_offset, history_filters), None, username, method="GET")
-        active_count = int(result.get("activeCount") or 0)
-        limit_reached = active_count >= max_running
-        raw_active = result.get("activeSessions", []) if result.get("ok") and isinstance(result.get("activeSessions"), list) else []
-        raw_history = result.get("sessions", []) if result.get("ok") and isinstance(result.get("sessions"), list) else []
-        active_sessions = [self.gateway_session_item(item, route, result, limit_reached) for item in raw_active if isinstance(item, dict)]
-        sessions = [self.gateway_session_item(item, route, result, limit_reached) for item in raw_history if isinstance(item, dict)]
-        return {
-            "activeSessions": active_sessions,
-            "sessions": sessions,
-            "historyTotal": int(result.get("historyTotal") or len(sessions)),
-            "activeCount": active_count,
-            "maxRunning": max_running,
-            "canCreate": not limit_reached,
-        }
+        return self.shared_workbench_service().owner_sessions(route, username, history_page, exact_page, history_filters)
 
     def workbench_payload(self, username: str, history_page: int = 1, history_filters: dict[str, Any] | None = None) -> dict[str, Any]:
-        requested_page = max(1, history_page)
-        applied_filters = normalize_history_filters(history_filters)
-        routes = self.config.user_routes(username)
-        exact_page = len(routes) == 1
-        route_payloads = {route: self.owner_agent_sessions(route, username, requested_page, exact_page, applied_filters) for route in routes}
-        active_sessions = [item for route in routes for item in route_payloads[route]["activeSessions"]]
-        active_sessions.sort(key=lambda item: (SESSION_STATE_PRIORITY.get(str(item.get("state") or ""), -1), float(item.get("updatedTs") or 0)), reverse=True)
-        sessions = [item for route in routes for item in route_payloads[route]["sessions"]]
-        sessions.sort(key=lambda item: float(item.get("updatedTs") or 0), reverse=True)
-        history_total = sum(int(route_payloads[route]["historyTotal"]) for route in routes)
-        total_pages = max(1, (history_total + HISTORY_PAGE_SIZE - 1) // HISTORY_PAGE_SIZE)
-        page = min(requested_page, total_pages)
-        if exact_page and page != requested_page:
-            route = routes[0]
-            route_payloads[route] = self.owner_agent_sessions(route, username, page, True, applied_filters)
-            active_sessions = route_payloads[route]["activeSessions"]
-            sessions = route_payloads[route]["sessions"]
-        start = (page - 1) * HISTORY_PAGE_SIZE
-        entries = []
-        for item in [backend_status(route) for route in routes]:
-            item.update({key: route_payloads[item["id"]][key] for key in ("activeCount", "maxRunning", "canCreate")})
-            entries.append(item)
-        cwd_choices = {}
-        for route in routes:
-            choice_payload = route_payloads[route]
-            cwd_choices[route] = agent_cwd_choices(
-                [*choice_payload["activeSessions"], *choice_payload["sessions"]],
-                self.config.workspace_root(username, route),
-            )
-        inbox = self.config.list_bridge_packages(username, "pending")[:1]
-        return {
-            "ok": True,
-            "entries": entries,
-            "activeSessions": active_sessions,
-            "sessions": sessions[:HISTORY_PAGE_SIZE] if exact_page else sessions[start:start + HISTORY_PAGE_SIZE],
-            "history": {
-                "page": page,
-                "pageSize": HISTORY_PAGE_SIZE,
-                "total": history_total,
-                "totalPages": total_pages,
-                "hasPrevious": page > 1,
-                "hasNext": page < total_pages,
-                "filter": applied_filters,
-            },
-            "newSessionCommands": sorted(NEW_SESSION_COMMANDS),
-            "agentCwdChoices": cwd_choices,
-            "packages": inbox,
-            "inbox": inbox,
-            "updatedAt": now_ts(),
-        }
+        return self.shared_workbench_service().payload(username, history_page, history_filters)
 
     def write_bridge_package_asset(self, path: str, username: str) -> None:
         match = re.match(r"^/bridge/packages/([0-9]+-[a-f0-9]{8})/([^/]+)$", path)

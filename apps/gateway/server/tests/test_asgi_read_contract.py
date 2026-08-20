@@ -348,6 +348,35 @@ class AsgiReadContractTest(unittest.TestCase):
             self.assertEqual(asgi_result[0], legacy_result[0])
             self.assertEqual(json.loads(asgi_result[2]), json.loads(legacy_result[2]))
 
+    def test_gateway_status_and_workbench_contracts_match(self) -> None:
+        def normalized(payload: dict[str, Any]) -> dict[str, Any]:
+            value = json.loads(json.dumps(payload))
+            value["updatedAt"] = 0
+            for entry in value.get("entries", []):
+                entry["stateText"] = "<timing>"
+                entry["detail"] = "<timing>"
+            return value
+
+        for path in ("/api/gateway-status", "/api/workbench?page=1&period=7d&archive=all&q=fixture"):
+            legacy_result = self.request(self.legacy_base, path, authenticated=True)
+            asgi_result = self.request(self.asgi_base, path, authenticated=True)
+            self.assertEqual(asgi_result[0], legacy_result[0])
+            self.assertEqual(normalized(json.loads(asgi_result[2])), normalized(json.loads(legacy_result[2])))
+
+    def test_bridge_package_asset_read_contract_matches(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            self.config.bridge_root = Path(temp)
+            package_dir = self.config.bridge_root / "1-deadbeef"
+            package_dir.mkdir()
+            asset = package_dir / "fixture.png"
+            asset.write_bytes(b"png fixture")
+            self.config.packages["1-deadbeef"] = {"id": "1-deadbeef", "owner": "tester", "assets": []}
+            legacy_result = self.request(self.legacy_base, "/bridge/packages/1-deadbeef/fixture.png", authenticated=True)
+            asgi_result = self.request(self.asgi_base, "/bridge/packages/1-deadbeef/fixture.png", authenticated=True)
+        self.assertEqual(asgi_result[0], legacy_result[0])
+        self.assertEqual(asgi_result[2], legacy_result[2])
+        self.assertEqual(self.selected_headers(asgi_result[1]), self.selected_headers(legacy_result[1]))
+
     def test_csrf_contract_matches_with_and_without_authentication(self) -> None:
         self.assert_contract("/api/csrf")
         self.assert_contract("/api/csrf", authenticated=True)
