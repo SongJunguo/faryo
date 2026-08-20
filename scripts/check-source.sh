@@ -119,6 +119,7 @@ release_checks() {
     "$ROOT/apps/owner/local-tmux-owner/static/immersive-mode.js" \
     "$ROOT/apps/owner/local-tmux-owner/static/scroll-surface.js" \
     "$ROOT/apps/owner/local-tmux-owner/static/owner/changes-panel.mjs" \
+    "$ROOT/apps/owner/local-tmux-owner/static/owner/api-client.mjs" \
     "$ROOT/apps/owner/local-tmux-owner/static/vendor/markdown-ast/markdown-ast.min.js" \
     "$ROOT/apps/owner/local-tmux-owner/static/live-scroll.js" \
     "$ROOT/apps/shared/static/appearance.js" \
@@ -147,6 +148,7 @@ release_checks() {
   "$NODE_BIN" "$ROOT/apps/owner/local-tmux-owner/tests/immersive-mode.test.js"
   "$NODE_BIN" "$ROOT/apps/owner/local-tmux-owner/tests/scroll-surface.test.js"
   "$NODE_BIN" --test "$ROOT/apps/owner/local-tmux-owner/tests/changes-panel.test.mjs"
+  "$NODE_BIN" --test "$ROOT/apps/owner/local-tmux-owner/tests/api-client.test.mjs"
   "$NODE_BIN" --test "$ROOT/apps/owner/local-tmux-owner/tests/terminal-delivery-receiver.test.mjs"
   "$PYTHON_BIN" -m unittest discover -s "$ROOT/apps/owner/local-tmux-owner/tests" -p 'test_*.py'
   "$PYTHON_BIN" -m unittest discover -s "$ROOT/apps/gateway/server/tests" -p 'test_*.py'
@@ -298,14 +300,17 @@ for grammar in ("python", "latex", "lean", "matlab", "markdown", "yaml", "html",
 assert (root / "tools/markdown-engine/package-lock.json").is_file(), "AST Markdown build must have a lockfile"
 app = (root / "apps/owner/local-tmux-owner/static/app.js").read_text(encoding="utf-8")
 changes_panel_source = (root / "apps/owner/local-tmux-owner/static/owner/changes-panel.mjs").read_text(encoding="utf-8")
+api_client_source = (root / "apps/owner/local-tmux-owner/static/owner/api-client.mjs").read_text(encoding="utf-8")
 assert 'import("./owner/changes-panel.mjs?v=faryo-owner-changes-1")' in app, "Owner Changes must use its native ES module"
+assert 'import("./owner/api-client.mjs?v=faryo-owner-api-1")' in app, "Owner API must use its native ES module"
 assert "/api/workspace-changes" in owner_server and "/api/workspace-changes" in changes_panel_source, "workspace changes must use the scoped read-only Owner API"
 assert "/api/capabilities" in owner_server and "/api/diagnostics" in owner_server and "loadOwnerCapabilities" in app, "Owner must expose versioned redacted diagnostics"
 assert '"pendingQueueManagement": False' in runtime_diagnostics_source and '"pendingQueue": "unsupported"' in runtime_diagnostics_source, "Faryo must not overclaim editable Codex queues"
 assert "shell=True" not in workspace_changes_source and "--no-ext-diff" in workspace_changes_source and "--no-textconv" in workspace_changes_source, "workspace diff must remain fixed and read-only"
 stable_blocks_source = (root / "apps/owner/local-tmux-owner/static/stable-blocks.js").read_text(encoding="utf-8")
 assert "stableBlocks.reconcile(output, models, createNode)" in app, "Compact Chat must reconcile stable DOM blocks"
-assert "headers['X-Owner-Token'] = ownerToken" in app, "Owner API calls must include the token header"
+assert '"X-Owner-Token": ownerToken' in api_client_source and '"X-Faryo-Csrf"' in api_client_source, "Owner API client must preserve token and CSRF headers"
+assert "async function api(" not in app and "async function gatewayCsrfHeaders(" not in app, "Owner API implementation must not return to app.js"
 assert "sessionStorage.setItem(OWNER_TOKEN_STORAGE_KEY" in app, "direct Owner auth must survive same-tab refresh without URL persistence"
 assert "new EventSource" not in app, "Owner streaming must support the authentication header"
 assert "token=${encodeURIComponent(ownerToken)}" not in app, "Owner streaming must not place the token in request URLs"

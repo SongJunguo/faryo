@@ -287,6 +287,10 @@ consumed as private runtime input and is never printed.
 - `static/owner/changes-panel.mjs` owns the read-only Changes payload, files,
   line/split state and lazy sanitized diff assets. It receives API, session and
   panel functions explicitly and does not read the Owner token.
+- `static/owner/api-client.mjs` owns route-local API URL composition, Owner
+  headers, single-flight Gateway CSRF caching, JSON/FormData headers and
+  structured HTTP errors. It receives fetch, route and token dependencies and
+  does not own transcript or rendering state.
 - `tmux_runtime.py` owns UTF-8 subprocess defaults, fixed tmux invocation,
   process-tree parsing and bounded session/thread/message identifiers; product
   policy remains in the higher Owner services.

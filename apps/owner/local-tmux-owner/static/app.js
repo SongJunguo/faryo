@@ -1,8 +1,10 @@
 (async () => {
   'use strict';
+  const apiClientModulePromise = import("./owner/api-client.mjs?v=faryo-owner-api-1");
   // Workspace review is an optional surface. Start loading it immediately,
   // but never let a transient asset failure block capture/history rendering.
   const changesPanelModulePromise = import("./owner/changes-panel.mjs?v=faryo-owner-changes-1");
+  const { createApiClient, sessionApiPath } = await apiClientModulePromise;
 
   const $ = (id) => document.getElementById(id);
   const outputWrap = $('outputWrap');
@@ -107,7 +109,14 @@
     const cleanQuery = params.toString();
     history.replaceState(null, '', `${location.pathname}${cleanQuery ? `?${cleanQuery}` : ''}${location.hash}`);
   }
-  let gatewayCsrfToken = '';
+  const ownerApiClient = createApiClient({
+    routeBase,
+    ownerToken,
+    fetch: window.fetch.bind(window),
+    FormData: window.FormData,
+  });
+  const api = ownerApiClient.request;
+  const gatewayCsrfHeaders = ownerApiClient.csrfHeaders;
   let selectedSession = params.get('session') || '';
   const HISTORY_PAGE_TURNS = 12;
   const HISTORY_REFRESH_MIN_MS = 2500;
@@ -768,45 +777,6 @@
     console.debug('background refresh failed', err);
   }
 
-  async function gatewayCsrfHeaders() {
-    if (!routeBase || ownerToken) return {};
-    if (!gatewayCsrfToken) {
-      const res = await fetch('/api/csrf', { cache: 'no-store' });
-      const data = await res.json();
-      if (!res.ok || !data.csrf) {
-        const err = new Error(data.error || 'CSRF token unavailable');
-        err.status = res.status;
-        throw err;
-      }
-      gatewayCsrfToken = data.csrf;
-    }
-    return { 'X-Faryo-Csrf': gatewayCsrfToken };
-  }
-
-  async function api(path, options = {}) {
-    const headers = Object.assign({}, options.headers || {});
-    if (ownerToken) headers['X-Owner-Token'] = ownerToken;
-    const method = String(options.method || 'GET').toUpperCase();
-    if (!['GET', 'HEAD', 'OPTIONS'].includes(method)) Object.assign(headers, await gatewayCsrfHeaders());
-    if (options.body && !headers['Content-Type'] && !(options.body instanceof FormData)) headers['Content-Type'] = 'application/json';
-    const requestPath = path.startsWith('/api/') ? `${routeBase}${path}` : path;
-    const res = await fetch(requestPath, Object.assign({}, options, { headers, cache: 'no-store' }));
-    const text = await res.text();
-    let data = {};
-    try {
-      data = text ? JSON.parse(text) : {};
-    } catch (_) {
-      const err = new Error(res.ok ? 'API response is not JSON' : `${res.status} ${res.statusText || 'API error'}`);
-      err.status = res.status;
-      err.nonJson = true;
-      throw err;
-    }
-    if (!res.ok || data.ok === false) {
-      const err = new Error(data.error || `${res.status} ${res.statusText}`); err.status = res.status; err.payload = data; throw err;
-    }
-    return data;
-  }
-
   async function loadOwnerCapabilities() {
     const payload = await api('/api/capabilities');
     document.documentElement.dataset.faryoCapabilitySchema = String(payload.schemaVersion || 'unknown');
@@ -837,7 +807,7 @@
   }
 
   function apiPath(path) {
-    return selectedSession && path.startsWith('/api/') ? path + (path.includes('?') ? '&' : '?') + `session=${encodeURIComponent(selectedSession)}` : path;
+    return sessionApiPath(path, selectedSession);
   }
 
   function emptyConversationHistory() {
@@ -1229,7 +1199,7 @@
   }
 
   async function consumeEventStream(controller, runId) {
-    const headers = ownerToken ? { 'X-Owner-Token': ownerToken } : {};
+    const headers = ownerApiClient.ownerHeaders();
     const response = await fetch(eventUrl(), {
       headers,
       cache: 'no-store',
@@ -1547,7 +1517,7 @@
   }
 
   async function refreshSessionMenu() {
-    const headers = ownerToken ? { 'X-Owner-Token': ownerToken } : {};
+    const headers = ownerApiClient.ownerHeaders();
     const res = await fetch('/api/workbench', { headers, cache: 'no-store' }), data = await res.json(); if (!res.ok || data.ok === false) throw new Error(data.error || 'Failed to load sessions');
     try { sessionStorage.setItem(WORKBENCH_CACHE_KEY, JSON.stringify({ storedAt: Date.now(), data })); } catch (_err) {}
     renderSessionMenu(data, false);
@@ -1685,7 +1655,7 @@
       throw new Error('Local resource URL was rejected');
     }
     target.searchParams.delete('token');
-    const headers = ownerToken ? { 'X-Owner-Token': ownerToken } : {};
+    const headers = ownerApiClient.ownerHeaders();
     const response = await fetch(target.pathname + target.search, {
       headers,
       cache: 'no-store',

@@ -77,6 +77,9 @@ but the default upload destination should come from the Faryo data directory.
 - The read-only Changes browser controller is a native ES module with injected
   API/session/panel dependencies; `app.js` remains the composition root and the
   diff renderer stays a lazy local asset.
+- `static/owner/api-client.mjs` is the native HTTP boundary for route-local API
+  paths, Owner headers, cached Gateway CSRF, JSON/FormData request policy and
+  bounded non-JSON errors. SSE/rendering state remains in the composition root.
 - Low-level command execution and tmux/process-tree/identifier primitives are
   isolated in `tmux_runtime.py`; higher services keep policy and translate
   failures rather than rebuilding subprocess defaults.
