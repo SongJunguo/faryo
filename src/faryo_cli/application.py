@@ -189,6 +189,21 @@ def create_private_venv(version_dir: Path, bootstrap_python: str) -> None:
         raise OperationError("installed Faryo CLI failed its version check")
 
 
+def private_venv_version(version_dir: Path) -> str:
+    result = run_binary(
+        [
+            str(venv_python(version_dir)),
+            "-c",
+            "import platform; print(platform.python_version())",
+        ],
+        timeout=15,
+    )
+    value = (result.stdout or b"").decode("ascii", errors="ignore").strip()
+    if result.returncode != 0 or not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", value):
+        raise OperationError("private venv Python version check failed")
+    return value
+
+
 def remove_incomplete_version(path: Path, versions: Path) -> None:
     if path.parent != versions or not VERSION_RE.fullmatch(path.name):
         raise OperationError("refusing to remove an unbounded version path")
@@ -240,7 +255,7 @@ def prepare_version(
             "schemaVersion": 1,
             "version": name,
             "sourceRevision": revision,
-            "python": f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}",
+            "python": private_venv_version(final),
             "createdAt": int(time.time()),
         }
         atomic_write(final / "install-manifest.json", json.dumps(manifest, sort_keys=True, separators=(",", ":")) + "\n", 0o600)

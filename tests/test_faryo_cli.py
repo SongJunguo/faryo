@@ -142,7 +142,22 @@ class FaryoCliTest(unittest.TestCase):
             current = home / ".local/share/faryo/current"
             current.symlink_to(Path("versions/v1.5.0"))
 
-            self.assertEqual(diagnostics.discover_source_root({"HOME": str(home)}), current / "app")
+            installed_module = home / ".local/share/faryo/current/.venv/lib/python3.10/site-packages/faryo_cli/diagnostics.py"
+            self.assertEqual(diagnostics.discover_source_root({"HOME": str(home)}, module_file=installed_module), current / "app")
+
+    def test_source_checkout_precedes_managed_current_fallback(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            home = Path(temp)
+            managed = home / ".local/share/faryo/current/app"
+            for relative in ("apps/owner/local-tmux-owner/server.py", "apps/gateway/server/run_asgi.py"):
+                path = managed / relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text("fixture\n", encoding="utf-8")
+            for root in (managed, ROOT):
+                self.assertTrue((root / "apps/owner/local-tmux-owner/server.py").is_file())
+                self.assertTrue((root / "apps/gateway/server/run_asgi.py").is_file())
+            module_file = ROOT / "src/faryo_cli/diagnostics.py"
+            self.assertEqual(diagnostics.discover_source_root({"HOME": str(home)}, module_file=module_file), ROOT)
 
     def test_codex_resolution_supports_configured_and_nvm_paths(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -547,6 +562,7 @@ class FaryoCliTest(unittest.TestCase):
             with (
                 mock.patch.object(application, "copy_source", side_effect=fake_source),
                 mock.patch.object(application, "create_private_venv", side_effect=fake_venv) as create,
+                mock.patch.object(application, "private_venv_version", return_value="3.10.12"),
                 mock.patch.object(application, "select_bootstrap_python", return_value=sys.executable),
                 mock.patch.object(application, "run_binary", return_value=subprocess.CompletedProcess([], 0)),
             ):

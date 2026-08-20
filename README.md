@@ -327,7 +327,7 @@ layer while keeping Faryo's inner login enabled.
 
 The `main` branch was revalidated on 2026-08-20 with privacy-safe fixtures:
 
-- source checks plus 130 Owner, 112 Gateway, and 49 unified-CLI Python tests;
+- source checks plus 130 Owner, 112 Gateway, and 50 unified-CLI Python tests;
 - Ruff fatal/Pyflakes checks, a Playwright system-browser fixture, deterministic
   diff-review rebuild comparison and zero npm audit findings;
 - a workspace Git security matrix covering scope/symlink escape, disabled
