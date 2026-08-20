@@ -255,6 +255,45 @@ def create_app(legacy: Any, config: Any) -> Starlette:
         )
         return response
 
+    async def revoke_sessions(request: Request) -> Response:
+        current = username(request)
+        if not current:
+            return json_response({"ok": False, "error": "unauthorized"}, HTTPStatus.UNAUTHORIZED)
+        request_id = secrets.token_hex(8)
+        started = time.monotonic()
+        supplied_csrf = request.headers.get(legacy.CSRF_HEADER, "").strip()
+        expected_csrf = gateway_security.csrf_token(config.cookie_secret, current, config.auth_epoch(current))
+        if not supplied_csrf or not secrets.compare_digest(supplied_csrf, expected_csrf):
+            status = HTTPStatus.FORBIDDEN
+            response = json_response({"ok": False, "error": "csrf required"}, status)
+        else:
+            try:
+                body = await request.body()
+                if not body:
+                    raise ValueError("empty JSON body")
+                if len(body) > 4096:
+                    raise ValueError("request too large")
+                payload = json.loads(body.decode("utf-8"))
+                if not isinstance(payload, dict):
+                    raise ValueError("invalid JSON object")
+                if payload.get("confirm") != "revoke":
+                    raise ValueError("explicit revoke confirmation is required")
+                config.revoke_sessions(current)
+                status = HTTPStatus.OK
+                response = json_response({"ok": True, "signedOut": True})
+            except (UnicodeDecodeError, json.JSONDecodeError):
+                status = HTTPStatus.BAD_REQUEST
+                response = json_response({"ok": False, "error": "invalid JSON body"}, status)
+            except ValueError as exc:
+                status = HTTPStatus.BAD_REQUEST
+                response = json_response({"ok": False, "error": str(exc)}, status)
+        response.headers["X-Faryo-Request-Id"] = request_id
+        append_audit(
+            username_value=current, route="", action="revoke-sessions", target=current,
+            request_id=request_id, status=status, started=started,
+        )
+        return response
+
     async def proxy_owner_get(request: Request, current: str, route: str, upstream_path: str) -> Response:
         try:
             stream = await to_thread.run_sync(
@@ -334,6 +373,7 @@ def create_app(legacy: Any, config: Any) -> Starlette:
         Route("/{route}/api/{tail:path}", owner_control, methods=["POST"]),
         Route("/api/session-history/archive", session_history_lifecycle, methods=["POST"]),
         Route("/api/session-history/unarchive", session_history_lifecycle, methods=["POST"]),
+        Route("/api/auth/revoke-all", revoke_sessions, methods=["POST"]),
         Route("/", home, methods=["GET"]),
         Route("/{route}/{tail:path}", owner_resource, methods=["GET"]),
         Route("/{filename}", static_asset, methods=["GET"]),

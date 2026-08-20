@@ -60,6 +60,9 @@ class ContractConfig:
     def append_control_audit(self, **values: Any) -> None:
         self.audit_calls.append(values)
 
+    def revoke_sessions(self, username: str) -> None:
+        self.users[username]["auth_epoch"] += 1
+
 
 class OwnerContractFixture(BaseHTTPRequestHandler):
     requests: list[dict[str, Any]] = []
@@ -326,6 +329,44 @@ class AsgiReadContractTest(unittest.TestCase):
         body = json.dumps({"route": "lab"}).encode("utf-8")
         legacy_result = self.request(self.legacy_base, "/api/session-history/archive", authenticated=True, method="POST", body=body, extra_headers=headers)
         asgi_result = self.request(self.asgi_base, "/api/session-history/archive", authenticated=True, method="POST", body=body, extra_headers=headers)
+        self.assertEqual(asgi_result[0], legacy_result[0])
+        self.assertEqual(json.loads(asgi_result[2]), json.loads(legacy_result[2]))
+
+    def test_revoke_sessions_and_audit_contract_match(self) -> None:
+        body = json.dumps({"confirm": "revoke"}).encode("utf-8")
+        csrf = gateway_security.csrf_token(self.config.cookie_secret, "tester", 7)
+        headers = {legacy.CSRF_HEADER: csrf, "Content-Type": "application/json"}
+        self.config.users["tester"]["auth_epoch"] = 7
+        self.config.audit_calls.clear()
+        legacy_result = self.request(
+            self.legacy_base, "/api/auth/revoke-all", authenticated=True, method="POST", body=body, extra_headers=headers,
+        )
+        self.config.users["tester"]["auth_epoch"] = 7
+        asgi_result = self.request(
+            self.asgi_base, "/api/auth/revoke-all", authenticated=True, method="POST", body=body, extra_headers=headers,
+        )
+        self.assertEqual(asgi_result[0], legacy_result[0])
+        self.assertEqual(json.loads(asgi_result[2]), json.loads(legacy_result[2]))
+        self.assertEqual(len(self.config.audit_calls), 2)
+        normalized = [
+            {key: value for key, value in call.items() if key not in {"request_id", "duration_ms"}}
+            for call in self.config.audit_calls
+        ]
+        self.assertEqual(normalized[0], normalized[1])
+        self.assertEqual(normalized[0]["action"], "revoke-sessions")
+        self.config.users["tester"]["auth_epoch"] = 7
+
+    def test_revoke_requires_explicit_confirmation_equally(self) -> None:
+        body = json.dumps({"confirm": "no"}).encode("utf-8")
+        csrf = gateway_security.csrf_token(self.config.cookie_secret, "tester", 7)
+        headers = {legacy.CSRF_HEADER: csrf, "Content-Type": "application/json"}
+        self.config.users["tester"]["auth_epoch"] = 7
+        legacy_result = self.request(
+            self.legacy_base, "/api/auth/revoke-all", authenticated=True, method="POST", body=body, extra_headers=headers,
+        )
+        asgi_result = self.request(
+            self.asgi_base, "/api/auth/revoke-all", authenticated=True, method="POST", body=body, extra_headers=headers,
+        )
         self.assertEqual(asgi_result[0], legacy_result[0])
         self.assertEqual(json.loads(asgi_result[2]), json.loads(legacy_result[2]))
 
