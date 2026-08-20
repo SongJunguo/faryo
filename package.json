@@ -6,19 +6,23 @@
   },
   "scripts": {
     "build:diff-review": "node tools/diff-review/build.mjs",
+    "build:gateway-preact": "node tools/gateway-preact/build.mjs",
     "check:diff-review": "node tools/diff-review/build.mjs --check",
-    "check:format": "prettier --check apps/gateway/server/static/workbench.js apps/gateway/server/static/workbench.css",
+    "check:gateway-preact": "node tools/gateway-preact/build.mjs --check",
+    "check:format": "prettier --check apps/gateway/server/static/workbench.js apps/gateway/server/static/workbench.css apps/gateway/ui/preact-workbench.jsx apps/gateway/ui/session-model.mjs tools/gateway-preact/build.mjs",
     "check:lint": "eslint apps tools",
-    "format:gateway": "prettier --write apps/gateway/server/static/workbench.js apps/gateway/server/static/workbench.css",
+    "format:gateway": "prettier --write apps/gateway/server/static/workbench.js apps/gateway/server/static/workbench.css apps/gateway/ui/preact-workbench.jsx apps/gateway/ui/session-model.mjs tools/gateway-preact/build.mjs",
     "test:browser-harness": "node --test tools/browser-harness/*.test.mjs",
-    "test:diff-review": "node --test tools/diff-review/*.test.mjs"
+    "test:diff-review": "node --test tools/diff-review/*.test.mjs",
+    "test:gateway-preact": "node --test apps/gateway/server/tests/session-model.test.mjs"
   },
   "devDependencies": {
     "diff2html": "3.4.56",
     "dompurify": "3.4.14",
-    "eslint": "10.8.1",
     "esbuild": "0.28.2",
+    "eslint": "10.8.1",
     "playwright-core": "1.62.1",
+    "preact": "10.29.8",
     "prettier": "3.9.6"
   }
 }

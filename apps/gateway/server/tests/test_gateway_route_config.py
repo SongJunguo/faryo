@@ -19,6 +19,10 @@ from urllib.parse import unquote
 REPO_ROOT = Path(__file__).resolve().parents[4]
 SERVER_PATH = REPO_ROOT / "apps" / "gateway" / "server" / "server.py"
 WORKBENCH_JS = (SERVER_PATH.parent / "static" / "workbench.js").read_text(encoding="utf-8")
+SESSION_MODEL = (SERVER_PATH.parents[1] / "ui" / "session-model.mjs").read_text(encoding="utf-8")
+PREACT_WORKBENCH = (SERVER_PATH.parents[1] / "ui" / "preact-workbench.jsx").read_text(
+    encoding="utf-8"
+)
 
 spec = importlib.util.spec_from_file_location("faryo_gateway_route_server", SERVER_PATH)
 gateway = importlib.util.module_from_spec(spec)
@@ -215,10 +219,10 @@ class GatewayRouteConfigTest(unittest.TestCase):
         self.assertIn('data-history-archive="archived"', page)
         self.assertIn("/api/session-history/", WORKBENCH_JS)
         self.assertIn('archived ? "archive" : "unarchive"', WORKBENCH_JS)
-        self.assertIn('class="mini-btn archive-session"', WORKBENCH_JS)
-        self.assertIn('class="mini-btn restore-session"', WORKBENCH_JS)
+        self.assertIn('class="mini-btn archive-session"', PREACT_WORKBENCH)
+        self.assertIn('class="mini-btn restore-session"', PREACT_WORKBENCH)
         self.assertNotIn('/api/session-history/delete', WORKBENCH_JS)
-        self.assertIn("active && managed ?", WORKBENCH_JS)
+        self.assertIn("view.active && item.managed", PREACT_WORKBENCH)
 
     def test_history_filters_are_bounded_encoded_and_forwarded(self) -> None:
         filters = gateway.history_filters_from_query({
@@ -262,7 +266,7 @@ class GatewayRouteConfigTest(unittest.TestCase):
         self.assertFalse(exited["agentRunning"])
         self.assertEqual(resumable["state"], "resumable")
         for label in ("Starting", "Running", "Waiting", "Exited", "Desktop"):
-            self.assertIn(f'{label.lower()}: "{label}"', WORKBENCH_JS)
+            self.assertIn(f'{label.lower()}: "{label}"', SESSION_MODEL)
 
     def test_portal_json_bootstrap_escapes_script_breakout(self) -> None:
         gateway.BACKENDS.clear()

@@ -89,6 +89,10 @@ Gateway host: the machine reached by the public HTTPS edge.
 - The authenticated portal shell remains server-rendered, while its versioned
   CSS/JavaScript are static files. The only dynamic script-adjacent data is a
   nonce-protected JSON map of routes the current user may access.
+- A local Preact 10.29.8 bundle owns only the four keyed package/launcher/
+  active-session/history-session list roots. Its exact build, hash, gzip bound
+  and MIT notice are source-checked. Attention, directory/sheet state and Owner
+  transcript rendering do not share a second framework state tree.
 - Gateway owns the root-scoped `standalone` PWA manifest and service worker.
   Owner session pages reference that same manifest so installed navigation stays
   within one authenticated app identity.

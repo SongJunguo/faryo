@@ -138,10 +138,12 @@ window, delete the now-stale initial-password file. Gateway runtime uses the
 password hash in `gateway-auth.json`, not the plaintext file.
 
 Changing the password invalidates older Faryo sessions. Browser sessions are
-host-only, strict same-site cookies with a 12-hour default absolute lifetime.
-Set `FARYO_GATEWAY_SESSION_HOURS` to an integer from 1 through 720 in the private
-Gateway environment to choose another lifetime. This deployment option is
-independent from the Cloudflare Access application session duration.
+host-only, strict same-site cookies with a 30-day (720-hour) default absolute
+lifetime for the trusted personal-device deployment. Set
+`FARYO_GATEWAY_SESSION_HOURS` to an integer from 1 through 720 in the private
+Gateway environment to choose a shorter lifetime. This deployment option is
+independent from the 168-hour Cloudflare Access application session duration;
+revocation or password change still invalidates existing inner sessions early.
 
 ## Verification
 

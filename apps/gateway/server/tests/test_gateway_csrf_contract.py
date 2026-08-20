@@ -258,7 +258,8 @@ class GatewayCsrfContractTest(unittest.TestCase):
             self.assertIsNotNone(match)
             nonce = match.group(1)
             self.assertIn(f'<script id="faryoRouteLabels" type="application/json" nonce="{nonce}">', body)
-            self.assertIn('<script src="/workbench.js?v=faryo-gateway-2"></script>', body)
+            self.assertIn('<script src="/workbench-preact.js?v=faryo-gateway-preact-1"></script>', body)
+            self.assertIn('<script src="/workbench.js?v=faryo-gateway-3"></script>', body)
             self.assertIn('<link rel="stylesheet" href="/workbench.css?v=faryo-gateway-2">', body)
             self.assertNotIn("<style nonce=", body)
             self.assertNotIn(gateway.CSP_NONCE_PLACEHOLDER, body)
@@ -278,15 +279,23 @@ class GatewayCsrfContractTest(unittest.TestCase):
         self.assertIn("Files to session", body)
         self.assertIn("Choose files", body)
         script = (gateway.STATIC_DIR / "workbench.js").read_text(encoding="utf-8")
-        self.assertIn("Send to…", script)
-        self.assertIn("Start ${label}", script)
+        component_source = (gateway.STATIC_DIR.parents[1] / "ui" / "preact-workbench.jsx").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("Send to…", component_source)
+        self.assertIn("Start ${item.label}", component_source)
         self.assertIn("Start on ${e.label", script)
         self.assertNotIn("No handoff package", body)
         self.assertIn('class="brand" href="/" aria-label="Faryo home"', body)
         self.assertNotIn('href="/projects"', body)
 
     def test_external_workbench_assets_are_served_with_explicit_types(self) -> None:
-        for path, content_type in (("/workbench.css", "text/css; charset=utf-8"), ("/workbench.js", "text/javascript; charset=utf-8")):
+        for path, content_type in (
+            ("/workbench.css", "text/css; charset=utf-8"),
+            ("/workbench.js", "text/javascript; charset=utf-8"),
+            ("/workbench-preact.js", "text/javascript; charset=utf-8"),
+            ("/workbench-preact.LICENSE.txt", "text/plain; charset=utf-8"),
+        ):
             with self.subTest(path=path):
                 conn = http.client.HTTPConnection(*self.base, timeout=5)
                 try:

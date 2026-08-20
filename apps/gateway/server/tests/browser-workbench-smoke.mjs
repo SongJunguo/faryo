@@ -148,12 +148,54 @@ await withBrowser({
   if (expectedPalette && `${first.palette.bg}:${first.palette.accent}` !== expectedPalette) throw new Error(`Theme palette mismatch: ${JSON.stringify(first.palette)}`);
   if (first.pageHorizontalOverflow) throw new Error(`Gateway workbench overflowed horizontally: ${JSON.stringify(first.viewport)}`);
 
-  const lifecycleFixture = await evaluate(`(() => {const states=['starting','running','waiting','exited','desktop','resumable','archived'],labels={starting:'Starting',running:'Running',waiting:'Waiting',exited:'Exited',desktop:'Desktop',resumable:'Resume',archived:'Archived'};return states.map(state=>{const active=!['resumable','archived'].includes(state),card=sessionCard({id:'anonymous-thread',title:'Anonymous session',route:'txy',routeLabel:'Workstation',source:'codex-cli',tmuxSession:active?'anonymous-tmux':'',managed:active&&state!=='desktop',agentRunning:state==='running',archived:state==='archived',state,updatedTs:1});return{state:card.dataset.state,label:card.querySelector('.session-meta')?.textContent.includes(labels[state])||false,close:Boolean(card.querySelector('.close-session')),archive:Boolean(card.querySelector('.archive-session')),restore:Boolean(card.querySelector('.restore-session'))};});})()`);
+  const keyedCardState = await evaluate(`(async () => {
+    const container = document.querySelector('#activeSessionList .session-card')
+      ? document.getElementById('activeSessionList')
+      : document.getElementById('sessionList');
+    const card = container?.querySelector('.session-card');
+    if (!card) return { ready: false };
+    const identity = [card.dataset.route || '', card.dataset.session || '', card.dataset.agentSessionId || ''].join('|');
+    card.tabIndex = 0;
+    card.dataset.preactTransient = 'preserved';
+    card.focus();
+    await refreshWorkbench();
+    const current = [...container.querySelectorAll('.session-card')].find((item) =>
+      [item.dataset.route || '', item.dataset.session || '', item.dataset.agentSessionId || ''].join('|') === identity
+    );
+    return {
+      ready: true,
+      sameNode: current === card,
+      focusPreserved: document.activeElement === card,
+      transientPreserved: current?.dataset.preactTransient === 'preserved',
+    };
+  })()`);
+  if (!keyedCardState.ready || !keyedCardState.sameNode || !keyedCardState.focusPreserved || !keyedCardState.transientPreserved) {
+    throw new Error(`Keyed Preact reconciliation replaced live card state: ${JSON.stringify(keyedCardState)}`);
+  }
+
+  const safeTextFixture = await evaluate(`(() => {
+    const container = document.createElement('div');
+    const title = '<img id="faryoInjectedCard" src=x onerror="window.__faryoInjected=true">';
+    const card = window.__faryoRenderSessionFixture({
+      id: 'anonymous-text-fixture', title, route: 'txy', routeLabel: 'Workstation',
+      source: 'codex-cli', state: 'resumable', updatedTs: 1,
+    }, container);
+    return {
+      title: card.querySelector('.session-title')?.textContent || '',
+      injectedElement: Boolean(container.querySelector('#faryoInjectedCard')),
+      executed: Boolean(window.__faryoInjected),
+    };
+  })()`);
+  if (!safeTextFixture.title.startsWith('<img') || safeTextFixture.injectedElement || safeTextFixture.executed) {
+    throw new Error(`Preact card text escaped the component boundary: ${JSON.stringify(safeTextFixture)}`);
+  }
+
+  const lifecycleFixture = await evaluate(`(() => {const states=['starting','running','waiting','exited','desktop','resumable','archived'],labels={starting:'Starting',running:'Running',waiting:'Waiting',exited:'Exited',desktop:'Desktop',resumable:'Resume',archived:'Archived'};return states.map(state=>{const active=!['resumable','archived'].includes(state),container=document.createElement('div'),card=window.__faryoRenderSessionFixture({id:'anonymous-thread',title:'Anonymous session',route:'txy',routeLabel:'Workstation',source:'codex-cli',tmuxSession:active?'anonymous-tmux':'',managed:active&&state!=='desktop',agentRunning:state==='running',archived:state==='archived',state,updatedTs:1},container);return{state:card.dataset.state,label:card.querySelector('.session-meta')?.textContent.includes(labels[state])||false,close:Boolean(card.querySelector('.close-session')),archive:Boolean(card.querySelector('.archive-session')),restore:Boolean(card.querySelector('.restore-session'))};});})()`);
   if (!Array.isArray(lifecycleFixture) || lifecycleFixture.some((item) => !item.label || item.state === 'desktop' && item.close || ['starting','running','waiting','exited'].includes(item.state) && !item.close || item.state==='resumable'&&!item.archive || item.state==='archived'&&!item.restore || !['resumable'].includes(item.state)&&item.archive || item.state!=='archived'&&item.restore)) {
     throw new Error(`Session lifecycle cards are inconsistent: ${JSON.stringify(lifecycleFixture)}`);
   }
 
-  await evaluate(`(() => {const card=sessionCard({id:'anonymous-archive-thread',title:'Anonymous archive fixture',route:'txy',routeLabel:'Workstation',source:'codex-cli',state:'resumable',updatedTs:1});card.id='faryoArchiveFixtureCard';card.hidden=true;document.body.appendChild(card);card.querySelector('.archive-session')?.click();})()`);
+  await evaluate(`(() => {const fixture=document.createElement('div');fixture.id='faryoArchiveFixtureCard';fixture.hidden=true;document.body.appendChild(fixture);const card=window.__faryoRenderSessionFixture({id:'anonymous-archive-thread',title:'Anonymous archive fixture',route:'txy',routeLabel:'Workstation',source:'codex-cli',state:'resumable',updatedTs:1},fixture);card.querySelector('.archive-session')?.click();})()`);
   let archiveSheet = {};
   for (let attempt = 0; attempt < 40; attempt += 1) {
     await delay(50);

@@ -4,13 +4,17 @@ export default [
       "**/node_modules/**",
       "**/vendor/**",
       "**/*.min.js",
+      "apps/gateway/server/static/workbench-preact.js",
     ],
   },
   {
-    files: ["apps/**/*.{js,mjs}", "tools/**/*.{js,mjs}"],
+    files: ["apps/**/*.{js,mjs,jsx}", "tools/**/*.{js,mjs}"],
     languageOptions: {
       ecmaVersion: "latest",
       sourceType: "module",
+      parserOptions: {
+        ecmaFeatures: { jsx: true },
+      },
     },
     rules: {
       "no-dupe-args": "error",
@@ -30,6 +34,14 @@ export default [
         },
       ],
       "valid-typeof": "error",
+    },
+  },
+  {
+    files: ["apps/**/*.jsx"],
+    rules: {
+      // JSX identifiers are resolved by esbuild; core ESLint has no JSX
+      // reference tracker without adding a framework-specific plugin.
+      "no-unused-vars": "off",
     },
   },
 ];

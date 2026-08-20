@@ -27,4 +27,7 @@ node apps/gateway/server/tests/browser-workbench-smoke.mjs
 The browser smoke checks the two session regions, protected desktop tmux cards,
 independent history scrolling, title/folder search, date-filter URL state,
 non-persistence of filtered snapshots, distinct first/second pages, and a direct
-jump to page three without printing session titles or identifiers.
+jump to page three without printing session titles or identifiers. It also
+requires keyed Preact cards to preserve their DOM node, focus and transient
+state across a real refresh, and verifies that markup-looking server strings
+remain inert text.

@@ -69,6 +69,8 @@ release_checks() {
   (cd "$ROOT" && PATH="$(dirname "$NODE_BIN"):$PATH" npm run --silent test:browser-harness)
   (cd "$ROOT" && PATH="$(dirname "$NODE_BIN"):$PATH" npm run --silent check:diff-review)
   (cd "$ROOT" && PATH="$(dirname "$NODE_BIN"):$PATH" npm run --silent test:diff-review)
+  (cd "$ROOT" && PATH="$(dirname "$NODE_BIN"):$PATH" npm run --silent check:gateway-preact)
+  (cd "$ROOT" && PATH="$(dirname "$NODE_BIN"):$PATH" npm run --silent test:gateway-preact)
   bash -n \
     "$ROOT/scripts/check-source.sh" \
     "$ROOT"/scripts/*.sh \
@@ -130,7 +132,10 @@ release_checks() {
     "$ROOT/apps/owner/local-tmux-owner/static/live-scroll.js" \
     "$ROOT/apps/shared/static/appearance.js" \
     "$ROOT/apps/owner/local-tmux-owner/static/app.js" \
-    "$ROOT/apps/gateway/server/static/workbench.js"
+    "$ROOT/apps/gateway/server/static/workbench.js" \
+    "$ROOT/apps/gateway/server/static/workbench-preact.js" \
+    "$ROOT/apps/gateway/ui/session-model.mjs" \
+    "$ROOT/tools/gateway-preact/build.mjs"
   do
     "$NODE_BIN" --check "$js_file"
   done
@@ -192,6 +197,7 @@ gateway_audit_source = (root / "apps/gateway/server/control_audit.py").read_text
 gateway_asgi_support = (root / "apps/gateway/server/asgi_support.py").read_text(encoding="utf-8")
 gateway_runner = (root / "apps/gateway/scripts/run-gateway.sh").read_text(encoding="utf-8")
 gateway_workbench = (root / "apps/gateway/server/static/workbench.js").read_text(encoding="utf-8")
+gateway_preact_source = (root / "apps/gateway/ui/preact-workbench.jsx").read_text(encoding="utf-8")
 gateway_ui = gateway + "\n" + gateway_workbench
 ci_workflow = (root / ".github/workflows/ci.yml").read_text(encoding="utf-8")
 release_workflow = (root / ".github/workflows/release.yml").read_text(encoding="utf-8")
@@ -202,6 +208,8 @@ assert "package-client.sh" not in release_workflow, "retired package workflow mu
 assert "faryo_${version}_all.deb" not in release_workflow and "macos.tar.gz" not in release_workflow, "release must remain source-only"
 assert "apps/gateway/server/tests" in check_script, "canonical checks must include Gateway tests"
 assert (root / "package-lock.json").is_file(), "development JavaScript dependencies must be locked"
+package = json.loads((root / "package.json").read_text(encoding="utf-8"))
+assert package.get("devDependencies", {}).get("preact") == "10.29.8", "Preact pilot must remain exact-pinned"
 assert (root / "requirements-dev.txt").is_file(), "development Python dependencies must be pinned"
 assert "faryo_resolve_python" in check_script and "faryo_resolve_node" in check_script, "canonical checks must resolve runtimes"
 python_runtime_tests = (
@@ -242,10 +250,13 @@ assert 'class="brand" href="/" aria-label="Faryo home"' in gateway, "Gateway bra
 for retired_marker in ("/projects", "/api/project-workbench", "/api/faryo/start", "/api/faryo/dispatch", "/api/workorder"):
     assert retired_marker not in gateway_ui and retired_marker not in owner_server, f"retired project orchestration route returned: {retired_marker}"
 assert "PORTAL_CSS" not in gateway and "PORTAL_JS_TEMPLATE" not in gateway, "Gateway portal assets must stay external"
-assert 'href="/workbench.css?v=faryo-gateway-2"' in gateway and 'src="/workbench.js?v=faryo-gateway-2"' in gateway, "Gateway must load versioned external workbench assets"
+assert 'href="/workbench.css?v=faryo-gateway-2"' in gateway and 'src="/workbench.js?v=faryo-gateway-3"' in gateway, "Gateway must load versioned external workbench assets"
 assert 'id="faryoRouteLabels" type="application/json"' in gateway, "Gateway route labels must use the nonce-protected JSON bootstrap"
 assert 'id="attentionCenter"' in gateway and 'id="notificationControl"' in gateway, "Gateway must expose body-free attention controls"
 assert "processAttention" in gateway_workbench and "A session completed or needs input." in gateway_workbench, "Gateway attention must use generic notification text"
+assert "syncChildren" not in gateway_workbench and "FaryoPreactWorkbench" in gateway_workbench, "Gateway card lists must remain Preact keyed components"
+assert "dangerouslySetInnerHTML" not in gateway_preact_source and "innerHTML" not in gateway_preact_source, "Gateway card components must render server strings as text"
+assert "workbench-preact.js?v=faryo-gateway-preact-1" in gateway and "workbench-preact.LICENSE.txt" in gateway, "Gateway Preact bundle and notice must remain local"
 assert '"starting", "running", "waiting", "exited", "desktop", "resumable"' in gateway, "Gateway must expose explicit session lifecycle states"
 assert "compact-rules-codex.js" in index, "index.html must load compact-rules-codex.js"
 assert "compact-rules-codex.js" in gateway, "gateway must allow compact-rules-codex.js"
@@ -360,7 +371,7 @@ assert "compactOutputSources" not in app and "dataset.sourceIndex" not in app, "
 appearance = (root / "apps/shared/static/appearance.css").read_text(encoding="utf-8")
 assert "--bg: #0F1115" in appearance and "--accent: #7188FF" in appearance, "shared dark palette must match Owner"
 assert "--bg: #F6F7F9" in appearance and "--accent: #5369E7" in appearance, "shared light palette must match Owner"
-assert "Files to session" in gateway and "Send to…" in gateway_workbench, "Gateway must expose explicit file-to-session controls"
+assert "Files to session" in gateway and "Send to…" in gateway_preact_source, "Gateway must expose explicit file-to-session controls"
 assert "No handoff package" not in gateway_ui, "Gateway must not expose unexplained handoff copy"
 for retired in (
     "apps/owner/local-tmux-owner/static/compact-rules-claude.js",

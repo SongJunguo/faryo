@@ -99,6 +99,32 @@ check. Production never loads these assets from a CDN.
 - Removal path: remove the Changes renderer/panel and the local vendor directory;
   Owner's bounded JSON status/diff endpoint remains independently removable.
 
+### Preact 10.29.8
+
+- Upstream: [preactjs/preact](https://github.com/preactjs/preact)
+- License: MIT
+- Lock/build: exact root `package-lock.json` pin and
+  `tools/gateway-preact/build.mjs`
+- Classification: locally bundled Gateway runtime library; no CDN or runtime
+  Node process
+- Scope: only the keyed file-package, launcher, active-session and
+  history-session list roots on the authenticated Gateway home
+- Production transitive dependencies: none
+- Shipped bundle: 17,753 bytes raw and 7,211 bytes at gzip level 9; the build
+  rejects results over 12 KiB gzip
+- Bundle SHA-256:
+  `795ad3cc48e8610ed105cb68a936567bb7c97ab156ed656a5557958582c33f3d`
+- Notice: `workbench-preact.LICENSE.txt` is generated beside the bundle and
+  records the exact version, hash, byte counts, transitive count and MIT text
+- Measured result: removed the hand-written JSON-signature/DOM replacement
+  renderer and string-built dynamic card HTML. Browser regressions require
+  keyed node/focus/transient state to survive refresh and markup-looking server
+  strings to remain inert text.
+- Removal path: remove the exact pin and build, delete the Gateway Preact source
+  and generated assets, and restore the last behavior-closed vanilla card
+  renderer. No server state or private data migration is involved.
+- Full adoption evidence: [Gateway Preact pilot evaluation](preact-pilot-evaluation.md)
+
 ## Runtime and bundled assets
 
 - Gateway runtime Python dependencies are exact-pinned in
@@ -119,5 +145,5 @@ check. Production never loads these assets from a CDN.
   their own notices under the Owner static tree.
 - Floating UI was evaluated but not adopted: the tested `placeSheet` function is
   656 bytes, so the library would currently add more production code than it
-  removes. Preact/Lit and Python Web Push remain conditional future candidates.
+  removes. Lit and Python Web Push remain conditional future candidates.
 - The current root npm dependency audit reports zero known vulnerabilities.

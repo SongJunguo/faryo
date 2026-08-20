@@ -150,6 +150,9 @@ micromark -> mdast -> CommonMark/GFM/math nodes -> safe HTML -> KaTeX
   preserves accompanying plain text, and reuses the existing compressed upload,
   thumbnail, removal, attachment-limit, and idempotent-send path without asking
   for persistent clipboard access.
+- Keeps up to 35 pending conversation attachments in a horizontally bounded
+  preview strip, with at most four compression/upload workers active at once
+  and a 25 MiB server-side limit for each file.
 - Shows agent-reported context used/window and weekly quota when available.
 - Opens fresh, reloaded, and newly selected conversations at the latest output.
 - Preserves the main reading position during structured refreshes.
@@ -231,9 +234,11 @@ and Codex-specific delivery state machine. The browser is a thin authenticated
 control surface; the durable work remains in tmux and Codex's own history.
 
 Gateway portal CSS and JavaScript are separate versioned static assets; dynamic
-route labels enter through a nonce-protected JSON bootstrap. Development uses
-locked Playwright/Ruff tooling, while production runtime dependencies and lazy
-bundled UI assets remain local and independently documented.
+route labels enter through a nonce-protected JSON bootstrap. A focused local
+Preact bundle owns only keyed package/launcher/session-card lists, while the
+Owner transcript and Markdown/TeX pipeline remain framework-free. Development
+uses locked Playwright/Ruff tooling, and every production runtime dependency or
+lazy bundled UI asset remains local and independently documented.
 
 ## Source Deployment
 

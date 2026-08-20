@@ -141,6 +141,108 @@ let attentionItems = new Map(),
   dismissedAttention = new Set(),
   lastLifecycleStates = new Map(),
   attentionInitialized = false;
+const preactFactory = window.FaryoPreactWorkbench?.createWorkbenchRenderer;
+if (typeof preactFactory !== "function")
+  throw new Error("Faryo Preact workbench bundle is unavailable");
+const workbenchRenderer = preactFactory({
+  routeLabels: labels,
+  containers: {
+    packages: document.getElementById("packageList"),
+    launchers: document.getElementById("newSessionSlot"),
+    activeSessions: document.getElementById("activeSessionList"),
+    sessions: document.getElementById("sessionList"),
+  },
+  actions: {
+    packageDragStart(item, event) {
+      draggedPackage = item.id;
+      event.dataTransfer.setData("text/plain", item.id);
+    },
+    packageDragEnd() {
+      draggedPackage = null;
+      clearDropTargets();
+    },
+    addPackageFiles(item) {
+      assetTargetPackage = item.id;
+      document.getElementById("packageAssetInput")?.click();
+    },
+    sendPackage(item) {
+      return withBusy(() => selectPackageTarget(item));
+    },
+    startLauncher(item) {
+      return withBusy(async () => {
+        const route = await selectNewRoute(item.entries, item.label);
+        if (!route) return;
+        const directory = await selectNewCwd(
+          route,
+          item.label,
+          item.cwdChoices,
+        );
+        if (directory === null) return;
+        await agentNew(route, item.command, directory);
+      });
+    },
+    sessionAction(item, action, event) {
+      return withBusy(async () => {
+        if (action === "close") {
+          event.preventDefault();
+          event.stopPropagation();
+          await closeSession(item.route, item.tmuxSession || "");
+          return;
+        }
+        if (action === "archive" || action === "restore") {
+          event.preventDefault();
+          event.stopPropagation();
+          await changeSessionArchived(item, action === "archive");
+          return;
+        }
+        markAttentionRead(item);
+        const lifecycle = String(item.state || "");
+        if (lifecycle === "exited") {
+          event.preventDefault();
+          await notice(
+            "Codex exited",
+            "Close this managed shell; the Codex thread remains available in Session History.",
+          );
+          return;
+        }
+        if (item.tmuxSession) {
+          location.href = `/${item.route}/?session=${encodeURIComponent(item.tmuxSession)}`;
+          return;
+        }
+        if (!item.id) return;
+        event.preventDefault();
+        if (item.archived || lifecycle === "archived") {
+          await notice(
+            "Archived session",
+            "Restore this thread before resuming it.",
+          );
+          return;
+        }
+        if (item.limitReached) {
+          await notice("Agent limit reached", "Close a running session first.");
+          return;
+        }
+        await resumeSession(item.route, item.id, item.source || "");
+      });
+    },
+    draggedPackage: () => draggedPackage,
+    async dropPackage(item, event) {
+      const packageId =
+        event.dataTransfer.getData("text/plain") || draggedPackage;
+      if (packageId) {
+        await injectPackage(
+          packageId,
+          item.route,
+          item.tmuxSession || "",
+          item.id || "",
+          item.source || "",
+        );
+      }
+    },
+  },
+});
+window.__faryoRenderSessionFixture = (item, container) =>
+  workbenchRenderer.renderSessionFixture(item, container);
 function historyFilterActive() {
   return (
     !!historyFilters.q ||
@@ -199,115 +301,10 @@ function markRoutes(entries) {
     }
   }
 }
-function localSessionTime(item) {
-  const ts = Number(item.updatedTs || 0);
-  if (!Number.isFinite(ts) || ts <= 0) return item.updatedAt || "";
-  const date = new Date(ts * 1000),
-    now = new Date(),
-    sameDay = date.toDateString() === now.toDateString();
-  return new Intl.DateTimeFormat(
-    undefined,
-    sameDay
-      ? { hour: "2-digit", minute: "2-digit" }
-      : {
-          month: "2-digit",
-          day: "2-digit",
-          hour: "2-digit",
-          minute: "2-digit",
-        },
-  ).format(date);
-}
 function clearDropTargets() {
   document
     .querySelectorAll(".session-card.drop-target")
     .forEach((el) => el.classList.remove("drop-target"));
-}
-function childByKey(container, key) {
-  return Array.from(container.children).find((el) => el.dataset.key === key);
-}
-function cardSig(item) {
-  try {
-    return JSON.stringify(item);
-  } catch (_err) {
-    return "";
-  }
-}
-function syncChildren(container, items, keyFn, renderFn, emptyText) {
-  const list = items || [];
-  if (!list.length) {
-    if (container.dataset.empty !== emptyText) {
-      container.replaceChildren(empty(emptyText));
-      container.dataset.empty = emptyText;
-    }
-    return;
-  }
-  container.dataset.empty = "";
-  const seen = new Set();
-  list.forEach((item, index) => {
-    const key = String(keyFn(item)),
-      sig = cardSig(item);
-    let node = childByKey(container, key);
-    if (!node || node.dataset.sig !== sig) {
-      const next = renderFn(item);
-      next.dataset.key = key;
-      next.dataset.sig = sig;
-      if (node) node.replaceWith(next);
-      node = next;
-    }
-    seen.add(key);
-    const ref = container.children[index];
-    if (ref !== node) container.insertBefore(node, ref || null);
-  });
-  Array.from(container.children).forEach((node) => {
-    if (!seen.has(node.dataset.key || "")) node.remove();
-  });
-}
-function packageCard(item) {
-  const card = document.createElement("div"),
-    pending = item.status === "pending";
-  card.className = "package-card";
-  card.draggable = pending;
-  card.dataset.packageId = item.id;
-  const assets = (item.assets || []).length,
-    status = pending ? "Ready to send" : "Delivered",
-    source = item.source || "Faryo",
-    actions = pending
-      ? '<div class="package-actions"><button class="mini-btn add-asset" type="button">Add files</button><button class="mini-btn send-package" type="button">Send to…</button></div>'
-      : "";
-  card.innerHTML = `<div><strong>${escapeHtml(item.title || "Untitled file package")}</strong><span class="package-meta">${status} · ${assets} file${assets === 1 ? "" : "s"} · ${escapeHtml(source)}</span></div>${actions}`;
-  card
-    .querySelectorAll("button")
-    .forEach((button) =>
-      button.addEventListener("pointerdown", (event) =>
-        event.stopPropagation(),
-      ),
-    );
-  card.querySelector(".add-asset")?.addEventListener("click", (event) => {
-    event.preventDefault();
-    event.stopPropagation();
-    assetTargetPackage = item.id;
-    document.getElementById("packageAssetInput")?.click();
-  });
-  card.querySelector(".send-package")?.addEventListener("click", (event) => {
-    event.preventDefault();
-    event.stopPropagation();
-    withBusy(() => selectPackageTarget(item));
-  });
-  card.addEventListener("dragstart", (event) => {
-    if (!pending || event.target.closest?.("button")) {
-      event.preventDefault();
-      return;
-    }
-    draggedPackage = item.id;
-    event.dataTransfer.setData("text/plain", item.id);
-    card.classList.add("dragging");
-  });
-  card.addEventListener("dragend", () => {
-    draggedPackage = null;
-    card.classList.remove("dragging");
-    clearDropTargets();
-  });
-  return card;
 }
 function placeSheet(modal) {
   if (!lastAnchorRect) {
@@ -1057,163 +1054,6 @@ async function selectNewCwd(route, label, cwdChoices) {
     path = String(selected.path || "");
   }
 }
-function newAgentCard(item) {
-  const { entries, command, label, cwdChoices } = item,
-    card = document.createElement("button");
-  card.type = "button";
-  card.className = "session-card launcher-card";
-  card.innerHTML = `<div><div class="session-title">Start ${label}</div><div class="session-meta">New CLI session</div></div><div class="arrow">›</div>`;
-  card.addEventListener("click", () =>
-    withBusy(async () => {
-      const route = await selectNewRoute(entries, label);
-      if (!route) return;
-      const directory = await selectNewCwd(route, label, cwdChoices);
-      if (directory === null) return;
-      const original = card.innerHTML;
-      card.disabled = true;
-      card.innerHTML = `<div><div class="session-title">Starting ${label}…</div><div class="session-meta">Creating session</div></div><div class="arrow">↗</div>`;
-      try {
-        await agentNew(route, command, directory);
-      } finally {
-        card.disabled = false;
-        card.innerHTML = original;
-      }
-    }),
-  );
-  return card;
-}
-function sessionCard(item) {
-  const targetSession = item.tmuxSession || "",
-    agentSessionId = item.id || "",
-    source = item.source || "",
-    active = !!targetSession,
-    managed = !!item.managed,
-    archived = !active && !!item.archived,
-    blocked = !!item.limitReached,
-    lifecycle = String(
-      item.state ||
-        (active
-          ? item.agentRunning
-            ? "running"
-            : "waiting"
-          : archived
-            ? "archived"
-            : "resumable"),
-    ),
-    canReceive = !["archived", "exited", "starting"].includes(lifecycle);
-  const card = document.createElement("div");
-  card.className = `session-card state-${lifecycle}${active ? "" : " inactive"}${lifecycle === "running" ? " running" : lifecycle === "waiting" ? " waiting" : ""}`;
-  card.dataset.route = item.route;
-  card.dataset.session = targetSession;
-  card.dataset.agentSessionId = agentSessionId;
-  card.dataset.source = source;
-  card.dataset.state = lifecycle;
-  const labelsByState = {
-      starting: "Starting",
-      running: "Running",
-      waiting: "Waiting",
-      exited: "Exited",
-      desktop: "Desktop",
-      resumable: "Resume",
-      archived: "Archived",
-    },
-    state =
-      blocked && lifecycle === "resumable"
-        ? "Limit reached"
-        : labelsByState[lifecycle] || "Unknown",
-    ownership =
-      active && !managed && lifecycle !== "desktop" ? " · Desktop tmux" : "",
-    where = item.cwdLabel || item.cwd || "",
-    updatedAt = localSessionTime(item),
-    agent = source === "codex-cli" ? "Codex" : "Runtime",
-    title = [item.title || item.id || "Untitled session", item.gitLabel || ""]
-      .filter(Boolean)
-      .join(" "),
-    historyAction =
-      lifecycle === "resumable"
-        ? '<button class="mini-btn archive-session" type="button">Archive</button>'
-        : lifecycle === "archived"
-          ? '<button class="mini-btn restore-session" type="button">Restore</button>'
-          : "";
-  card.innerHTML = `<div><div class="session-title">${escapeHtml(title)}</div><div class="session-meta">${escapeHtml(item.routeLabel || labels[item.route] || item.route)} · ${agent}${ownership}${where ? ` · ${escapeHtml(where)}` : ""} · ${escapeHtml(updatedAt)} · ${state}</div></div><div>${active && managed ? '<button class="mini-btn close-session" type="button">Close</button>' : historyAction || `<span class="arrow">${archived || lifecycle === "exited" ? "—" : "›"}</span>`}</div>`;
-  card.title = [title, item.cwd || "", updatedAt, state]
-    .filter(Boolean)
-    .join(" · ");
-  card.addEventListener("click", (event) =>
-    withBusy(async () => {
-      if (event.target.closest(".close-session")) {
-        event.preventDefault();
-        event.stopPropagation();
-        await closeSession(item.route, targetSession);
-        return;
-      }
-      if (event.target.closest(".archive-session")) {
-        event.preventDefault();
-        event.stopPropagation();
-        await changeSessionArchived(item, true);
-        return;
-      }
-      if (event.target.closest(".restore-session")) {
-        event.preventDefault();
-        event.stopPropagation();
-        await changeSessionArchived(item, false);
-        return;
-      }
-      markAttentionRead(item);
-      if (lifecycle === "exited") {
-        event.preventDefault();
-        await notice(
-          "Codex exited",
-          "Close this managed shell; the Codex thread remains available in Session History.",
-        );
-        return;
-      }
-      if (active) {
-        location.href = `/${item.route}/?session=${encodeURIComponent(targetSession)}`;
-        return;
-      }
-      if (!agentSessionId) return;
-      event.preventDefault();
-      if (archived) {
-        await notice(
-          "Archived session",
-          "Restore this thread before resuming it.",
-        );
-        return;
-      }
-      if (blocked) {
-        await notice("Agent limit reached", "Close a running session first.");
-        return;
-      }
-      await resumeSession(item.route, agentSessionId, source);
-    }),
-  );
-  card.addEventListener("dragover", (event) => {
-    if (draggedPackage && agentSessionId && canReceive) {
-      event.preventDefault();
-      card.classList.add("drop-target");
-    }
-  });
-  card.addEventListener("dragleave", () =>
-    card.classList.remove("drop-target"),
-  );
-  card.addEventListener("drop", async (event) => {
-    event.preventDefault();
-    card.classList.remove("drop-target");
-    if (!canReceive) return;
-    const packageId =
-      event.dataTransfer.getData("text/plain") || draggedPackage;
-    if (packageId)
-      await injectPackage(
-        packageId,
-        item.route,
-        targetSession,
-        agentSessionId,
-        source,
-      );
-  });
-  return card;
-}
 function newLaunchRequestId() {
   return globalThis.crypto?.randomUUID
     ? `web-${crypto.randomUUID()}`
@@ -1412,36 +1252,16 @@ function renderWorkbench(data) {
     history.hasPrevious === false || historyPage <= 1;
   document.getElementById("historyNext").disabled =
     history.hasNext === false || historyPage >= historyTotalPages;
-  syncChildren(
-    document.getElementById("packageList"),
-    packageItems,
-    (item) => `pkg-${item.id}`,
-    packageCard,
-    "Choose files, then send them to a session.",
-  );
-  syncChildren(
-    document.getElementById("newSessionSlot"),
+  workbenchRenderer.render({
+    packages: packageItems,
     launchers,
-    (item) => item.id,
-    newAgentCard,
-    "No launchers available",
-  );
-  syncChildren(
-    document.getElementById("activeSessionList"),
     activeSessions,
-    (item) => `active-${item.route}-${item.tmuxSession || item.id}`,
-    sessionCard,
-    "No active agent sessions",
-  );
-  syncChildren(
-    document.getElementById("sessionList"),
     sessions,
-    (item) => `session-${item.route}-${item.id}`,
-    sessionCard,
-    historyFilterActive()
+    routeLabels: labels,
+    historyEmptyText: historyFilterActive()
       ? "No sessions match these filters"
       : "No session history",
-  );
+  });
   syncHistoryLocation();
 }
 async function refreshWorkbench() {
@@ -1520,12 +1340,6 @@ function scheduleHistorySearch(value) {
   historySearchTimer = setTimeout(() => {
     applyHistoryFilter("q", value).catch(() => {});
   }, 250);
-}
-function empty(text) {
-  const el = document.createElement("div");
-  el.className = "empty-state";
-  el.textContent = text;
-  return el;
 }
 function escapeHtml(value) {
   return String(value).replace(
@@ -1714,12 +1528,7 @@ handoffBox?.addEventListener("drop", (event) => {
 });
 function initialRefresh() {
   refreshWorkbench().catch(() => {
-    document
-      .getElementById("activeSessionList")
-      .replaceChildren(empty("Workbench failed to load"));
-    document
-      .getElementById("sessionList")
-      .replaceChildren(empty("Workbench failed to load"));
+    workbenchRenderer.renderError("Workbench failed to load");
   });
 }
 function scheduleInitialRefresh() {

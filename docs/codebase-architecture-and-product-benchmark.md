@@ -238,3 +238,17 @@ The first step follows this roadmap rather than starting a framework migration:
 - The current official Codex App Server schema documents `turn/steer` but no
   queued-follow-up list/edit/reorder/cancel method. Faryo therefore exposes the
   protocol boundary instead of parsing TUI text into a false editable queue.
+
+## v1.4.0 dependency outcome
+
+- Gateway production HTTP moved to one Starlette/Uvicorn implementation; the
+  legacy `http.server` shell and migration switch were removed after explicit
+  ASGI contracts passed.
+- Preact 10.29.8 is now adopted only for the four repeatedly reconciled Gateway
+  list roots. The 7,211-byte gzip local bundle removes the manual
+  JSON-signature/card replacement and dynamic `innerHTML` paths without moving
+  Owner, Markdown/TeX, Attention or directory/sheet state into a framework.
+- The adoption is based on two browser-tested defect classes, not a misleading
+  total-source reduction claim. Exact measurements, hash, licence, security
+  audit and rollback are recorded in the
+  [pilot evaluation](preact-pilot-evaluation.md).
