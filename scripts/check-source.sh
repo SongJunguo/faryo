@@ -116,7 +116,8 @@ release_checks() {
     "$ROOT/src/faryo_cli/__init__.py" \
     "$ROOT/src/faryo_cli/__main__.py" \
     "$ROOT/src/faryo_cli/cli.py" \
-    "$ROOT/src/faryo_cli/diagnostics.py"
+    "$ROOT/src/faryo_cli/diagnostics.py" \
+    "$ROOT/src/faryo_cli/operations.py"
   for js_file in \
     "$ROOT/apps/owner/local-tmux-owner/static/compact-rules-codex.js" \
     "$ROOT/apps/owner/local-tmux-owner/static/event-stream.js" \

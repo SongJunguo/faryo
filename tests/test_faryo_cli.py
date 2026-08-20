@@ -15,7 +15,7 @@ SRC = ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
-from faryo_cli import cli, diagnostics
+from faryo_cli import cli, diagnostics, operations
 
 
 class FaryoCliTest(unittest.TestCase):
@@ -150,6 +150,63 @@ class FaryoCliTest(unittest.TestCase):
                 diagnostics.codex_argv(str(launcher), "--version"),
                 [str(node), str(script), "--version"],
             )
+
+    def test_legacy_start_is_idempotent_and_keeps_gateway_managed(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            layout = self.layout(Path(temp))
+            actions = []
+
+            def exists(name):
+                return name in {"faryo-gateway.service", "faryo-owner-keepalive.timer"}
+
+            with (
+                mock.patch.object(operations, "unit_exists", side_effect=exists),
+                mock.patch.object(operations, "control_service", side_effect=lambda name, action: actions.append((name, action))),
+                mock.patch.object(operations, "http_status", return_value=200),
+                mock.patch.object(operations, "run_legacy_owner") as legacy,
+                mock.patch.object(operations, "wait_for_health") as wait,
+            ):
+                result = operations.service_operation("start", layout)
+
+        self.assertEqual(result, "started")
+        self.assertEqual(actions, [
+            ("faryo-owner-keepalive.timer", "start"),
+            ("faryo-gateway.service", "start"),
+        ])
+        legacy.assert_not_called()
+        wait.assert_called_once_with(layout)
+
+    def test_direct_stop_never_touches_tmux_helpers(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            layout = self.layout(Path(temp))
+            actions = []
+            with (
+                mock.patch.object(operations, "unit_exists", return_value=True),
+                mock.patch.object(operations, "control_service", side_effect=lambda name, action: actions.append((name, action))),
+                mock.patch.object(operations, "run_legacy_owner") as legacy,
+            ):
+                result = operations.service_operation("stop", layout)
+
+        self.assertEqual(result, "stopped")
+        self.assertEqual(actions, [
+            ("faryo-gateway.service", "stop"),
+            ("faryo-owner.service", "stop"),
+        ])
+        legacy.assert_not_called()
+
+    def test_open_prints_only_loopback_gateway_url(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            layout = self.layout(Path(temp))
+            self.assertEqual(operations.open_gateway(layout, print_only=True), "http://127.0.0.1:8780/")
+
+    def test_cli_service_failures_are_bounded(self) -> None:
+        output = StringIO()
+        with mock.patch.object(cli, "service_operation", side_effect=operations.OperationError("bounded failure")):
+            with redirect_stdout(output), mock.patch("sys.stderr", new=StringIO()) as error:
+                code = cli.main(["restart"])
+        self.assertEqual(code, 1)
+        self.assertEqual(output.getvalue(), "")
+        self.assertIn("bounded failure", error.getvalue())
 
 
 if __name__ == "__main__":

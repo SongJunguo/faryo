@@ -9,6 +9,7 @@ from typing import Any, Sequence
 
 from faryo_cli import __version__
 from faryo_cli.diagnostics import build_report, compact_status
+from faryo_cli.operations import OperationError, journal, open_gateway, service_operation
 
 
 def parser() -> argparse.ArgumentParser:
@@ -21,6 +22,17 @@ def parser() -> argparse.ArgumentParser:
     ):
         command = commands.add_parser(name, help=help_text)
         command.add_argument("--json", action="store_true", help="Print privacy-safe machine-readable JSON")
+    for name, help_text in (
+        ("start", "Start Owner and Gateway"),
+        ("stop", "Stop Owner and Gateway without stopping Codex tmux sessions"),
+        ("restart", "Restart Owner and Gateway, then wait for health"),
+    ):
+        commands.add_parser(name, help=help_text)
+    open_command = commands.add_parser("open", help="Open the local Gateway")
+    open_command.add_argument("--print", action="store_true", dest="print_only", help="Print the URL without opening a browser")
+    logs = commands.add_parser("logs", help="Show bounded systemd journal output")
+    logs.add_argument("component", choices=("owner", "gateway"))
+    logs.add_argument("--lines", type=int, default=120)
     return root
 
 
@@ -46,6 +58,28 @@ def print_status(status: dict[str, Any]) -> None:
 
 def main(argv: Sequence[str] | None = None) -> int:
     arguments = parser().parse_args(argv)
+    if arguments.command in {"start", "stop", "restart"}:
+        try:
+            result = service_operation(arguments.command)
+        except OperationError as exc:
+            print(f"Faryo {arguments.command} failed: {exc}", file=sys.stderr)
+            return 1
+        print(f"Faryo {result}")
+        return 0
+    if arguments.command == "open":
+        try:
+            print(open_gateway(print_only=arguments.print_only))
+        except OperationError as exc:
+            print(f"Faryo open failed: {exc}", file=sys.stderr)
+            return 1
+        return 0
+    if arguments.command == "logs":
+        try:
+            print(journal(arguments.component, arguments.lines), end="")
+        except OperationError as exc:
+            print(f"Faryo logs failed: {exc}", file=sys.stderr)
+            return 1
+        return 0
     report = build_report()
     if arguments.command == "doctor":
         if arguments.json:
