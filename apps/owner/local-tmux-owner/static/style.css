@@ -673,15 +673,25 @@ html[data-faryo-ui="workbench-v2"] .bottom-btn {
   backdrop-filter: blur(14px) saturate(1.08);
 }
 
-.question-navigator:hover,
-.question-navigator:focus-within,
-.question-navigator.is-scrolling,
-.question-navigator.is-interacting {
-  border-color: color-mix(in srgb, var(--accent) 34%, var(--owner-hairline));
-  background: color-mix(in srgb, var(--panel) 94%, transparent);
+.question-navigator.is-scrolling {
+  border-color: color-mix(in srgb, var(--accent) 22%, var(--owner-hairline));
+  background: color-mix(in srgb, var(--panel) 58%, transparent);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, .06);
   opacity: 1;
   pointer-events: auto;
   transform: translate(0, -50%);
+  backdrop-filter: blur(5px) saturate(1.03);
+}
+
+.question-navigator:hover,
+.question-navigator:focus-within,
+.question-navigator.is-interacting {
+  border-color: color-mix(in srgb, var(--accent) 34%, var(--owner-hairline));
+  background: color-mix(in srgb, var(--panel) 90%, transparent);
+  opacity: 1;
+  pointer-events: auto;
+  transform: translate(0, -50%);
+  backdrop-filter: blur(12px) saturate(1.06);
 }
 
 .question-nav-count {
@@ -1017,6 +1027,12 @@ html[data-faryo-ui="workbench-v2"] :is(button, a, textarea):focus-visible {
   .question-navigator {
     right: max(2px, env(safe-area-inset-right));
     max-height: min(48vh, 380px);
+  }
+
+  .question-navigator.is-scrolling:not(.is-interacting):not(:focus-within) {
+    background: color-mix(in srgb, var(--panel) 52%, transparent);
+    box-shadow: 0 5px 14px rgba(0, 0, 0, .05);
+    backdrop-filter: blur(3px) saturate(1.02);
   }
 }
 

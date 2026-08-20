@@ -1654,6 +1654,19 @@ try {
       || Math.abs(revealed.outputWidth - initial.outputWidth) > 1) {
       throw new Error(`Question navigator did not reveal for fast scrolling: ${JSON.stringify(revealed)}`);
     }
+    await delay(220);
+    const translucentResult = await send('Runtime.evaluate', {
+      expression: `(() => {
+        const style = getComputedStyle(document.getElementById('questionNavigator'));
+        const match = style.backgroundColor.match(/\\/\\s*([\\d.]+)\\)/);
+        return { background: style.backgroundColor, alpha: match ? Number(match[1]) : 1, backdrop: style.backdropFilter };
+      })()`,
+      returnByValue: true,
+    });
+    const translucentState = translucentResult.result?.value || {};
+    if (translucentState.alpha > 0.62 || !String(translucentState.backdrop || '').includes('blur(')) {
+      throw new Error(`Question navigator obscures content while scrolling: ${JSON.stringify(translucentState)}`);
+    }
 
     await send('Runtime.evaluate', {
       expression: `document.getElementById('promptInput')?.focus()`,
@@ -1843,7 +1856,7 @@ try {
     if (hiddenState.shown || hiddenState.interactive) {
       throw new Error(`Question navigator did not auto-hide: ${JSON.stringify(hiddenState)}`);
     }
-    console.log('faryo-browser-question-navigator=PASS questions=13 reveal=fast-scroll auto-hide=PASS jump=8 live-append=preserved latest=13');
+    console.log('faryo-browser-question-navigator=PASS questions=13 reveal=fast-scroll translucent=PASS auto-hide=PASS jump=8 live-append=preserved latest=13');
   }
 
   if (checkLiveScroll) {
