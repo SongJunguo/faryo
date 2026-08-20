@@ -294,6 +294,67 @@ def create_app(legacy: Any, config: Any) -> Starlette:
         )
         return response
 
+    async def agent_resume(request: Request) -> Response:
+        current = username(request)
+        if not current:
+            return json_response({"ok": False, "error": "unauthorized"}, HTTPStatus.UNAUTHORIZED)
+        request_id = secrets.token_hex(8)
+        started = time.monotonic()
+        route = ""
+        target = ""
+        supplied_csrf = request.headers.get(legacy.CSRF_HEADER, "").strip()
+        expected_csrf = gateway_security.csrf_token(config.cookie_secret, current, config.auth_epoch(current))
+        if not supplied_csrf or not secrets.compare_digest(supplied_csrf, expected_csrf):
+            status = HTTPStatus.FORBIDDEN
+            response = json_response({"ok": False, "error": "csrf required"}, status)
+        else:
+            try:
+                body = await request.body()
+                if not body:
+                    raise ValueError("empty JSON body")
+                if len(body) > 65536:
+                    raise ValueError("request too large")
+                payload = json.loads(body.decode("utf-8"))
+                if not isinstance(payload, dict):
+                    raise ValueError("invalid JSON object")
+                route = str(payload.get("route") or "").strip()
+                target = legacy.clean_agent_session_id(str(payload.get("agent_session_id") or "")) or ""
+                source = str(payload.get("source") or "")
+                if route not in legacy.BACKENDS or not target or not source:
+                    raise ValueError("route, agent_session_id and source are required")
+                if not config.allowed_route(current, route):
+                    status = HTTPStatus.FORBIDDEN
+                    response = json_response({"ok": False, "error": "forbidden"}, status)
+                else:
+                    result = await to_thread.run_sync(
+                        lambda: client.json_request(
+                            route,
+                            "/api/agent/resume",
+                            {"agent_session_id": target, "source": source, "max_running": config.max_running(route)},
+                            current,
+                            timeout=20,
+                        )
+                    )
+                    session = legacy.clean_session_id(str(result.get("session") or "")) if result.get("ok") else ""
+                    if not session:
+                        status = HTTPStatus.BAD_GATEWAY
+                        response = json_response({"ok": False, "error": result.get("error") or "owner resume failed"}, status)
+                    else:
+                        status = HTTPStatus.OK
+                        response = json_response({"ok": True, "redirect": f"/{route}/?session={session}", "session": session})
+            except (UnicodeDecodeError, json.JSONDecodeError):
+                status = HTTPStatus.BAD_REQUEST
+                response = json_response({"ok": False, "error": "invalid JSON body"}, status)
+            except ValueError as exc:
+                status = HTTPStatus.BAD_REQUEST
+                response = json_response({"ok": False, "error": str(exc)}, status)
+        response.headers["X-Faryo-Request-Id"] = request_id
+        append_audit(
+            username_value=current, route=route, action="resume", target=target,
+            request_id=request_id, status=status, started=started,
+        )
+        return response
+
     async def proxy_owner_get(request: Request, current: str, route: str, upstream_path: str) -> Response:
         try:
             stream = await to_thread.run_sync(
@@ -374,6 +435,7 @@ def create_app(legacy: Any, config: Any) -> Starlette:
         Route("/api/session-history/archive", session_history_lifecycle, methods=["POST"]),
         Route("/api/session-history/unarchive", session_history_lifecycle, methods=["POST"]),
         Route("/api/auth/revoke-all", revoke_sessions, methods=["POST"]),
+        Route("/api/agent/resume", agent_resume, methods=["POST"]),
         Route("/", home, methods=["GET"]),
         Route("/{route}/{tail:path}", owner_resource, methods=["GET"]),
         Route("/{filename}", static_asset, methods=["GET"]),
