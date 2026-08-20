@@ -278,7 +278,7 @@ def activate_version(version_dir: Path, layout: Layout | None = None) -> Path | 
     previous = symlink_target(program.current)
     program.state.mkdir(parents=True, exist_ok=True)
     program.state.chmod(0o700)
-    if previous is not None:
+    if previous is not None and previous != version_dir:
         atomic_write(program.state / "previous-version", previous.name + "\n", 0o600)
     relative = os.path.relpath(version_dir, program.current.parent)
     atomic_symlink(program.current, relative)

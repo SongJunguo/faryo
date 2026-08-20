@@ -489,6 +489,28 @@ class FaryoCliTest(unittest.TestCase):
             self.assertEqual(program.current.resolve(), first)
             self.assertEqual(program.bin_path.resolve(), first / ".venv/bin/faryo")
 
+    def test_repeated_activation_preserves_the_real_previous_version(self) -> None:
+        with tempfile.TemporaryDirectory() as temp, mock.patch.dict(
+            os.environ,
+            {"FARYO_PROGRAM_HOME": str(Path(temp) / "program")},
+            clear=False,
+        ):
+            layout = self.layout(Path(temp))
+            program = application.ProgramLayout.from_layout(layout)
+            previous = program.versions / "v1.4.1"
+            current = program.versions / "v1.5.0"
+            for version in (previous, current):
+                cli_path = version / ".venv/bin/faryo"
+                cli_path.parent.mkdir(parents=True)
+                cli_path.write_text("cli", encoding="utf-8")
+            application.activate_version(previous, layout)
+            application.activate_version(current, layout)
+            marker = program.state / "previous-version"
+            self.assertEqual(marker.read_text(encoding="utf-8"), "v1.4.1\n")
+
+            self.assertEqual(application.activate_version(current, layout), current)
+            self.assertEqual(marker.read_text(encoding="utf-8"), "v1.4.1\n")
+
     def test_prepare_version_builds_venv_at_its_final_path(self) -> None:
         with tempfile.TemporaryDirectory() as temp, mock.patch.dict(
             os.environ,
