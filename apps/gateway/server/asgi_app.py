@@ -528,10 +528,34 @@ def create_app(legacy: Any, config: Any) -> Starlette:
                     if not package:
                         status = HTTPStatus.NOT_FOUND
                         response = json_response({"ok": False, "error": "package not found"}, status)
-                    elif package.get("assets"):
-                        status = HTTPStatus.BAD_GATEWAY
-                        response = json_response({"ok": False, "error": "bridge assets await ASGI upload migration"}, status)
                     else:
+                        target_package = package
+                        assets = package.get("assets") if isinstance(package.get("assets"), list) else []
+                        if assets:
+                            delivered = []
+                            for asset in assets:
+                                if not isinstance(asset, dict):
+                                    continue
+                                path = Path(str(asset.get("path") or ""))
+                                if not path.is_file() or config.bridge_root not in path.resolve().parents:
+                                    raise ValueError("bridge asset is missing")
+                                uploaded = await to_thread.run_sync(lambda path=path, asset=asset: client.attachment_request(
+                                    route,
+                                    path,
+                                    str(asset.get("mime_type") or "application/octet-stream"),
+                                    str(asset.get("file_name") or path.name),
+                                    current,
+                                ))
+                                owner_path = str(uploaded.get("path") or "")
+                                if not uploaded.get("ok") or not owner_path:
+                                    raise ValueError(str(uploaded.get("error") or "owner attachment upload failed"))
+                                delivered_asset = dict(asset)
+                                delivered_asset["source_path"] = str(path)
+                                delivered_asset["path"] = owner_path
+                                delivered_asset["owner_path"] = owner_path
+                                delivered.append(delivered_asset)
+                            target_package = dict(package)
+                            target_package["assets"] = delivered
                         target_session = session
                         if not target_session:
                             resume = await to_thread.run_sync(lambda: client.json_request(
@@ -550,7 +574,7 @@ def create_app(legacy: Any, config: Any) -> Starlette:
                                     response = json_response({"ok": False, "error": "owner did not return target session"}, status)
                         if target_session:
                             sent = await to_thread.run_sync(lambda: client.json_request(
-                                route, "/api/send", {"session": target_session, "text": legacy.bridge_prompt_text(package)}, current,
+                                route, "/api/send", {"session": target_session, "text": legacy.bridge_prompt_text(target_package)}, current,
                             ))
                             if not sent.get("ok"):
                                 status = HTTPStatus.BAD_GATEWAY

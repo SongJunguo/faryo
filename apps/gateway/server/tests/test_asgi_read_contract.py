@@ -9,6 +9,7 @@ from pathlib import Path
 import re
 import socket
 import sys
+import tempfile
 import threading
 import time
 from typing import Any
@@ -39,6 +40,7 @@ class ContractConfig:
         self.mcp_user = "mcp"
         self.audit_calls: list[dict[str, Any]] = []
         self.packages: dict[str, dict[str, Any]] = {}
+        self.bridge_root = Path("/nonexistent")
 
     def auth_epoch(self, username: str) -> int:
         return int(self.users[username]["auth_epoch"])
@@ -96,7 +98,7 @@ class OwnerContractFixture(BaseHTTPRequestHandler):
     def do_POST(self) -> None:
         body = self.rfile.read(int(self.headers.get("Content-Length", "0") or "0"))
         self.__class__.requests.append({"path": self.path, "headers": dict(self.headers), "body": body})
-        payload = json.loads(body.decode("utf-8")) if body else {}
+        payload = json.loads(body.decode("utf-8")) if body and self.path != "/api/attachment" else {}
         result = {"ok": True, "session": payload.get("session") or "", "duplicate": False}
         if self.path == "/api/agent-session/archive":
             result["archived"] = True
@@ -106,6 +108,8 @@ class OwnerContractFixture(BaseHTTPRequestHandler):
             result["session"] = "faryo3"
         elif self.path == "/api/agent/new":
             result["session"] = "faryo4"
+        elif self.path == "/api/attachment":
+            result["path"] = "/inbox/fixture.png"
         data = json.dumps(result).encode("utf-8")
         self.send_response(HTTPStatus.OK)
         self.send_header("Content-Type", "application/json; charset=utf-8")
@@ -508,6 +512,38 @@ class AsgiReadContractTest(unittest.TestCase):
         self.assertEqual(normalized[0], normalized[1])
         self.assertEqual(normalized[0]["action"], "file-inject")
         self.assertEqual(normalized[0]["target"], "faryo4")
+
+    def test_bridge_inject_with_real_asset_upload_matches(self) -> None:
+        csrf = gateway_security.csrf_token(self.config.cookie_secret, "tester", self.config.auth_epoch("tester"))
+        headers = {legacy.CSRF_HEADER: csrf, "Content-Type": "application/json"}
+        body = json.dumps({"package_id": "1-deadbeef", "route": "lab", "session": "faryo4"}).encode("utf-8")
+        with tempfile.TemporaryDirectory() as temp:
+            self.config.bridge_root = Path(temp)
+            asset_path = self.config.bridge_root / "fixture.png"
+            asset_path.write_bytes(b"png fixture")
+            base_package = {
+                "id": "1-deadbeef",
+                "owner": "tester",
+                "title": "fixture",
+                "status": "pending",
+                "assets": [{"path": str(asset_path), "file_name": "fixture.png", "mime_type": "image/png"}],
+            }
+            self.config.packages["1-deadbeef"] = json.loads(json.dumps(base_package))
+            OwnerContractFixture.requests.clear()
+            legacy_result = self.request(
+                self.legacy_base, "/api/bridge-inject", authenticated=True, method="POST", body=body, extra_headers=headers,
+            )
+            self.config.packages["1-deadbeef"] = json.loads(json.dumps(base_package))
+            asgi_result = self.request(
+                self.asgi_base, "/api/bridge-inject", authenticated=True, method="POST", body=body, extra_headers=headers,
+            )
+        self.assertEqual(asgi_result[0], legacy_result[0])
+        self.assertEqual(json.loads(asgi_result[2]), json.loads(legacy_result[2]))
+        uploads = [request for request in OwnerContractFixture.requests if request["path"] == "/api/attachment"]
+        self.assertEqual(len(uploads), 2)
+        for upload in uploads:
+            self.assertIn(b'name="file"', upload["body"])
+            self.assertEqual(upload["headers"]["X-Owner-Token"], "contract-owner-token")
 
 
 if __name__ == "__main__":
