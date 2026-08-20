@@ -173,6 +173,10 @@ owner_server = (root / "apps/owner/local-tmux-owner/server.py").read_text(encodi
 workspace_changes_source = (root / "apps/owner/local-tmux-owner/workspace_changes.py").read_text(encoding="utf-8")
 runtime_diagnostics_source = (root / "apps/owner/local-tmux-owner/runtime_diagnostics.py").read_text(encoding="utf-8")
 gateway = (root / "apps/gateway/server/server.py").read_text(encoding="utf-8")
+gateway_config_source = (root / "apps/gateway/server/gateway_config.py").read_text(encoding="utf-8")
+gateway_audit_source = (root / "apps/gateway/server/control_audit.py").read_text(encoding="utf-8")
+gateway_asgi_support = (root / "apps/gateway/server/asgi_support.py").read_text(encoding="utf-8")
+gateway_runner = (root / "apps/gateway/scripts/run-gateway.sh").read_text(encoding="utf-8")
 gateway_workbench = (root / "apps/gateway/server/static/workbench.js").read_text(encoding="utf-8")
 gateway_ui = gateway + "\n" + gateway_workbench
 ci_workflow = (root / ".github/workflows/ci.yml").read_text(encoding="utf-8")
@@ -215,7 +219,9 @@ assert "faryo_resolve_codex" in command_inventory_source and "faryo_resolve_node
 assert 'id="historySearchInput"' in gateway and 'data-history-period="7d"' in gateway, "Gateway must expose metadata history search"
 assert "agent_history_text_matches" in owner_server and "codex_conversation_history_page" not in owner_server[owner_server.index("def codex_history_page("):owner_server.index("def codex_history_items(")], "session search must not scan conversation history"
 assert "safe_path = urlparse(self.path).path" in owner_server, "Owner logs must omit private query strings"
-assert "append_control_audit" in gateway and 'id="securityActivity"' in gateway, "Gateway must expose body-free control auditing"
+assert "ControlAuditStore" in gateway_config_source and "target_digest" in gateway_audit_source and "append_audit" in gateway_asgi_support and 'id="securityActivity"' in gateway, "Gateway must expose body-free control auditing"
+assert "GatewayHandler" not in gateway and "ThreadingHTTPServer" not in gateway, "legacy Gateway HTTP server must not return"
+assert "run_asgi.py" in gateway_runner and "FARYO_GATEWAY_HTTP_ENGINE" not in gateway_runner, "Gateway runner must remain ASGI-only"
 assert "/api/session-history/archive" in gateway and "/api/session-history/unarchive" in gateway, "Gateway must expose reversible history lifecycle controls"
 assert "/api/session-history/delete" not in gateway_ui and '"thread/delete"' not in owner_server, "Faryo must not expose hard thread deletion"
 assert 'class="brand" href="/" aria-label="Faryo home"' in gateway, "Gateway brand must remain on the session home"

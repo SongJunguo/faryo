@@ -4,11 +4,11 @@ Updated: 2026-08-20
 Target: Faryo v1.4.0
 
 Production cutover status: Uvicorn is active on the loopback Gateway port. The
-legacy engine is retained only as a temporary rollback switch until the v1.4.0
-release-removal gate.
+legacy engine and rollback switch have been removed; rollback uses the signed
+previous release tag.
 
-This inventory is the cutover checklist between the temporary legacy
-`BaseHTTPRequestHandler` Gateway and the Starlette/Uvicorn Gateway. It records
+This inventory records the completed migration from the former
+`BaseHTTPRequestHandler` Gateway to Starlette/Uvicorn. It records
 public route families rather than any private deployment hostname, identity,
 token, path, or session data.
 
@@ -35,10 +35,10 @@ token, path, or session data.
 | Generic preflight | OPTIONS | public 204; MCP keeps its own CORS contract | `asgi_read.py` | legacy-equivalent status and headers |
 
 The executable contract is
-`apps/gateway/server/tests/test_asgi_read_contract.py`. It runs legacy and
-Uvicorn on separate loopback ports and compares status, selected headers,
-cookies, normalized HTML/JSON, streaming bytes, uploads, Owner-injected headers,
-CSRF denials and body-free audit records.
+`apps/gateway/server/tests/test_asgi_read_contract.py`. It runs Uvicorn on an
+isolated loopback port and explicitly asserts status, selected headers, cookies,
+HTML/JSON, streaming bytes, uploads, Owner-injected headers, CSRF denials and
+body-free audit records.
 
 ## Deliberate HTTP-server differences
 
@@ -62,5 +62,5 @@ The production move from the legacy server to Uvicorn was accepted after:
    port, including SSE reconnect and a non-destructive CSRF write fixture;
 3. the service unit, health check and rollback command have been tested without
    changing any tmux pane geometry;
-The remaining release gate is to remove the legacy HTTP implementation and its
-temporary engine switch after the rollback tag is confirmed.
+The HTTP migration gate is complete. The source and deployment suites continue
+to prove that only `run_asgi.py` is a valid production Gateway entrypoint.

@@ -14,6 +14,23 @@ from starlette.routing import Route
 import gateway_security
 
 
+ERROR_MESSAGE_FORMAT = """<!DOCTYPE HTML>
+<html lang="en">
+    <head>
+        <meta charset="utf-8">
+        <title>Error response</title>
+    </head>
+    <body>
+        <h1>Error response</h1>
+        <p>Error code: %(code)d</p>
+        <p>Message: %(message)s.</p>
+        <p>Error code explanation: %(code)s - %(explain)s.</p>
+    </body>
+</html>
+"""
+ERROR_CONTENT_TYPE = "text/html;charset=utf-8"
+
+
 class ReadRoutes:
     ICON_FILES = {"pwa-light-192.png", "pwa-light-512.png", "favicon.png", "favicon.ico", "faryo-mark.png"}
 
@@ -71,16 +88,15 @@ class ReadRoutes:
 
     def not_found(self) -> Response:
         status = HTTPStatus.NOT_FOUND
-        short, explain = self.legacy.GatewayHandler.responses[status]
-        body = self.legacy.GatewayHandler.error_message_format % {
+        body = ERROR_MESSAGE_FORMAT % {
             "code": status.value,
-            "message": short,
-            "explain": explain,
+            "message": status.phrase,
+            "explain": status.description,
         }
         return Response(
             body.encode("utf-8", errors="replace"),
             status_code=status,
-            headers={"Content-Type": self.legacy.GatewayHandler.error_content_type},
+            headers={"Content-Type": ERROR_CONTENT_TYPE},
         )
 
     async def api_fallback(self, request: Request) -> Response:

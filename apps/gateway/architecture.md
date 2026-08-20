@@ -10,17 +10,17 @@ controlled headers injected into local execution endpoints.
 
 Cookie signing/validation, CSRF derivation, trusted login-rate identity,
 redirect allowlisting and browser security headers are shared pure policy in
-`server/gateway_security.py`. The legacy handler and the migrating ASGI app
-must consume the same module rather than reproduce these boundaries.
+`server/gateway_security.py`. Every ASGI adapter consumes the same module
+rather than reproducing these boundaries.
 
 `server/asgi_app.py` is the production Starlette application run by Uvicorn;
-the legacy handler remains only as a temporary cutover fallback and contract
-oracle until its release removal gate passes. The ASGI stack covers public manifest/service-worker/static
+the legacy `http.server` implementation and runtime switch have been removed.
+The ASGI stack covers public manifest/service-worker/static
 assets, login/logout/password/CSRF, the authenticated home page, tmux control
 POST, ordinary Owner API GET/SSE, session pages, allowlisted Owner assets, MCP,
 Archive/Restore, revoke, Codex start/resume and bridge package upload/injection.
-The route inventory and deployment cutover gates have passed; release still
-requires deleting the temporary legacy HTTP implementation.
+The route inventory, explicit ASGI contracts and deployment cutover gates have
+passed.
 
 The Starlette HTTP adapters are split by responsibility:
 
@@ -57,8 +57,8 @@ append/read, retention and corrupt-tail recovery. `server/bridge_packages.py`
 owns package persistence, bounded attachment files, owner visibility and
 status-dependent cleanup. `server/gateway_config.py` owns private env parsing,
 route limits, user scopes, cookie-secret loading and store composition. The
-production runner constructs it directly; the legacy module retains only a
-thin compatibility subclass during removal.
+production runner constructs it directly; `server.py` is now a small runtime
+policy/template facade with no HTTP server.
 
 ## 1. Entry Flow
 

@@ -24,11 +24,7 @@ for pid in "${pids[@]}"; do
   [[ -r "/proc/$pid/cmdline" ]] || continue
   cmdline="$(tr '\0' ' ' < "/proc/$pid/cmdline")"
   owner="$(ps -o user= -p "$pid" 2>/dev/null | awk '{print $1}')"
-  if [[ "$owner" == "$(id -un)" && "$cmdline" == *"$FARYO_GATEWAY_ROOT/server/server.py"* ]]; then
-    safe_pids+=("$pid")
-  elif [[ "$owner" == "$(id -un)" && "$cmdline" == *"$FARYO_GATEWAY_ROOT/server/run_asgi.py"* ]]; then
-    safe_pids+=("$pid")
-  elif [[ "$owner" == "$(id -un)" && "$cmdline" == *"server/server.py"* ]]; then
+  if [[ "$owner" == "$(id -un)" && "$cmdline" == *"$FARYO_GATEWAY_ROOT/server/run_asgi.py"* ]]; then
     safe_pids+=("$pid")
   elif [[ "$owner" == "$(id -un)" && "$cmdline" == *"server/run_asgi.py"* ]]; then
     safe_pids+=("$pid")

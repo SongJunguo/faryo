@@ -5,6 +5,7 @@ from __future__ import annotations
 from http import HTTPStatus
 import secrets
 from typing import Any
+from urllib.parse import parse_qs, urlencode
 
 from anyio import to_thread
 import bcrypt
@@ -25,7 +26,7 @@ class AuthRoutes:
         target = gateway_security.safe_target(request.query_params.get("next", "/"))
         if request.method == "POST":
             body = await request.body()
-            form = self.legacy.parse_qs(body[:8192].decode("utf-8", errors="replace"))
+            form = parse_qs(body[:8192].decode("utf-8", errors="replace"))
             candidate = form.get("username", [""])[0].strip()
             password = form.get("password", [""])[0]
             target = gateway_security.safe_target(form.get("next", [target])[0] or "/")
@@ -80,7 +81,7 @@ class AuthRoutes:
         if not current:
             target = gateway_security.safe_target(request.url.path)
             return RedirectResponse(
-                "/login?" + self.legacy.urlencode({"next": target}),
+                "/login?" + urlencode({"next": target}),
                 status_code=HTTPStatus.SEE_OTHER,
             )
         csrf_value = gateway_security.csrf_token(
@@ -94,7 +95,7 @@ class AuthRoutes:
                 self.legacy.password_html(csrf_value, icp=self.config.icp_record),
             )
         body = await request.body()
-        form = self.legacy.parse_qs(body[:8192].decode("utf-8", errors="replace"))
+        form = parse_qs(body[:8192].decode("utf-8", errors="replace"))
         current_password = form.get("current_password", [""])[0]
         new_password = form.get("new_password", [""])[0]
         confirmation = form.get("confirm_password", [""])[0]

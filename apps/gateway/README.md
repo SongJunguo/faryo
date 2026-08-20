@@ -67,19 +67,15 @@ configured independently.
 
 `server/gateway_security.py` is the single policy implementation for signed
 cookies, epoch revoke, CSRF, trusted login-rate keys, safe redirects, CSP and
-browser hardening headers. It has no dependency on either the legacy HTTP
-handler or Starlette so both migration stacks can share exact behavior.
+browser hardening headers. It is independent from Starlette route adapters.
 
-The v1.4 development tree runs `server/asgi_app.py` through Uvicorn by default.
-Normalized dual-port contracts cover login, writes, proxying, SSE, uploads,
-MCP and fallback routes. During the cutover window only,
-`FARYO_GATEWAY_HTTP_ENGINE=legacy` restores the previous HTTP shell; that
-temporary branch is removed before the v1.4.0 release.
+The v1.4 development tree runs `server/asgi_app.py` through Uvicorn. Explicit
+ASGI contracts cover login, writes, proxying, SSE, uploads, MCP and fallback
+routes. The previous `http.server` shell and migration switch have been removed.
 
 `server/owner_client.py` centralizes Owner Token, route label, user,
 history-scope, workspace and inbox headers plus JSON and multipart requests.
-The legacy handler and ASGI adapters both delegate to this client during the
-cutover window.
+All ASGI adapters delegate to this client.
 
 Gateway serves one root-scoped installable PWA manifest with `display:
 standalone`. The home page exposes the browser install prompt when available,
