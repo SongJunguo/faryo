@@ -1560,7 +1560,7 @@ def append_codex_history_index(path: Path, state: dict[str, Any], target_size: i
                 if not raw_line.endswith(b"\n"):
                     break
                 complete_offset = handle.tell()
-                message, _usage = parse_codex_rollout_event(raw_line.rstrip(b"\n"))
+                message = parse_codex_rollout_event(raw_line.rstrip(b"\n"))["message"]
                 if message is None:
                     continue
                 role, text = message
@@ -1617,7 +1617,7 @@ def codex_history_turn_text(handle: Any, turn: dict[str, Any]) -> str:
             raw_line = handle.read(max(0, int(end) - int(start))).rstrip(b"\n")
         except OSError:
             continue
-        message, _usage = parse_codex_rollout_event(raw_line)
+        message = parse_codex_rollout_event(raw_line)["message"]
         if message is None:
             continue
         role, text = message
@@ -1741,12 +1741,18 @@ def cached_codex_rollout_state(key: str) -> dict[str, Any] | None:
         return state
 
 
-def parse_codex_rollout_event(raw_line: bytes) -> tuple[tuple[str, str] | None, dict[str, int | float] | None]:
+def parse_codex_rollout_event(raw_line: bytes) -> dict[str, Any]:
     try:
         event = json.loads(raw_line.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError):
-        return None, None
-    return codex_rollout_message(event), codex_rollout_context_usage(event)
+        return {"message": None, "contextUsage": None, "goalStatus": None, "goalCallId": None, "goalOutput": None}
+    return {
+        "message": codex_rollout_message(event),
+        "contextUsage": codex_rollout_context_usage(event),
+        "goalStatus": codex_history.direct_goal_snapshot(event),
+        "goalCallId": codex_history.goal_tool_call_id(event),
+        "goalOutput": codex_history.goal_tool_output(event),
+    }
 
 
 def initial_codex_rollout_state(path: Path, identity: tuple[int, int]) -> dict[str, Any]:
@@ -1757,20 +1763,23 @@ def initial_codex_rollout_state(path: Path, identity: tuple[int, int]) -> dict[s
     char_budget = 0
     turn_count = 0
     complete_end = 0
+    goal_status: dict[str, Any] | None = None
+    goal_call_ids: set[str] = set()
+    pending_goal_outputs: dict[str, dict[str, Any]] = {}
     try:
         with path.open("rb") as fh:
             if os.fstat(fh.fileno()).st_size <= 0:
-                return {"identity": identity, "offset": 0, "messages": [], "contextUsage": None}
+                return {"identity": identity, "offset": 0, "messages": [], "contextUsage": None, "goalStatus": None, "goalCallIds": set()}
             with mmap.mmap(fh.fileno(), 0, access=mmap.ACCESS_READ) as mapped:
                 size = len(mapped)
                 if size <= 0:
-                    return {"identity": identity, "offset": 0, "messages": [], "contextUsage": None}
+                    return {"identity": identity, "offset": 0, "messages": [], "contextUsage": None, "goalStatus": None, "goalCallIds": set()}
                 if mapped[size - 1] == 0x0A:
                     complete_end = size
                 else:
                     final_newline = mapped.rfind(b"\n", 0, size)
                     if final_newline < 0:
-                        return {"identity": identity, "offset": 0, "messages": [], "contextUsage": None}
+                        return {"identity": identity, "offset": 0, "messages": [], "contextUsage": None, "goalStatus": None, "goalCallIds": set()}
                     complete_end = final_newline + 1
 
                 scan_floor = max(0, complete_end - CODEX_ROLLOUT_TAIL_SCAN_BYTES)
@@ -1788,9 +1797,28 @@ def initial_codex_rollout_state(path: Path, identity: tuple[int, int]) -> dict[s
                     cursor = line_start
                     if not raw_line:
                         continue
-                    message, usage = parse_codex_rollout_event(raw_line)
+                    signals = parse_codex_rollout_event(raw_line)
+                    message = signals["message"]
+                    usage = signals["contextUsage"]
                     if context_usage is None and usage is not None:
                         context_usage = usage
+                    if goal_status is None:
+                        direct_goal = signals["goalStatus"]
+                        goal_output = signals["goalOutput"]
+                        goal_call_id = signals["goalCallId"]
+                        if direct_goal is not None:
+                            goal_status = direct_goal
+                        elif goal_output is not None:
+                            output_call_id, snapshot = goal_output
+                            pending_goal_outputs[output_call_id] = snapshot
+                            if len(pending_goal_outputs) > 64:
+                                pending_goal_outputs.pop(next(iter(pending_goal_outputs)))
+                        elif goal_call_id:
+                            snapshot = pending_goal_outputs.pop(goal_call_id, None)
+                            if snapshot is not None:
+                                goal_status = snapshot
+                            else:
+                                goal_call_ids.add(goal_call_id)
                     if message is not None:
                         messages_reversed.append(message)
                         line_budget += message[1].count("\n") + 1
@@ -1800,6 +1828,7 @@ def initial_codex_rollout_state(path: Path, identity: tuple[int, int]) -> dict[s
                         if (
                             message[0] == "user"
                             and context_usage is not None
+                            and goal_status is not None
                             and (
                                 turn_count >= CODEX_TRANSCRIPT_PAGE_TURNS
                                 or char_budget >= CODEX_ROLLOUT_CACHE_CHAR_BUDGET
@@ -1811,7 +1840,7 @@ def initial_codex_rollout_state(path: Path, identity: tuple[int, int]) -> dict[s
                         ):
                             break
     except (OSError, ValueError):
-        return {"identity": identity, "offset": 0, "messages": [], "contextUsage": None}
+        return {"identity": identity, "offset": 0, "messages": [], "contextUsage": None, "goalStatus": None, "goalCallIds": set()}
 
     messages = bounded_codex_rollout_messages(list(reversed(messages_reversed)))
     return {
@@ -1819,6 +1848,8 @@ def initial_codex_rollout_state(path: Path, identity: tuple[int, int]) -> dict[s
         "offset": complete_end,
         "messages": messages,
         "contextUsage": context_usage,
+        "goalStatus": goal_status,
+        "goalCallIds": goal_call_ids,
     }
 
 
@@ -1871,17 +1902,34 @@ def codex_rollout_state(history_path: str | None) -> dict[str, Any] | None:
 
         messages = list(cached.get("messages") or [])
         context_usage = cached.get("contextUsage")
+        goal_status = cached.get("goalStatus")
+        goal_call_ids = set(cached.get("goalCallIds") or set())
         for raw_line in chunk[:complete_end].splitlines():
-            message, usage = parse_codex_rollout_event(raw_line)
+            signals = parse_codex_rollout_event(raw_line)
+            message = signals["message"]
+            usage = signals["contextUsage"]
             if message is not None:
                 messages.append(message)
             if usage is not None:
                 context_usage = usage
+            if signals["goalStatus"] is not None:
+                goal_status = signals["goalStatus"]
+            if goal_call_id := signals["goalCallId"]:
+                goal_call_ids.add(goal_call_id)
+            if goal_output := signals["goalOutput"]:
+                output_call_id, snapshot = goal_output
+                if output_call_id in goal_call_ids:
+                    goal_status = snapshot
+                    goal_call_ids.discard(output_call_id)
+            if len(goal_call_ids) > 64:
+                goal_call_ids = set(sorted(goal_call_ids)[-64:])
         cached = {
             "identity": identity,
             "offset": offset + complete_end + 1,
             "messages": bounded_codex_rollout_messages(messages),
             "contextUsage": context_usage,
+            "goalStatus": goal_status,
+            "goalCallIds": goal_call_ids,
         }
         store_codex_rollout_cache(key, cached)
         return cached
@@ -1890,6 +1938,12 @@ def codex_rollout_state(history_path: str | None) -> dict[str, Any] | None:
 def codex_rollout_messages(history_path: str | None) -> list[tuple[str, str]]:
     state = codex_rollout_state(history_path)
     return list(state.get("messages") or []) if state else []
+
+
+def latest_goal_status(history_path: str | None) -> dict[str, Any] | None:
+    state = codex_rollout_state(history_path)
+    goal_status = state.get("goalStatus") if state else None
+    return dict(goal_status) if isinstance(goal_status, dict) else None
 
 
 def codex_message_transcript(messages: list[tuple[str, str]], max_lines: int) -> str:
@@ -2467,7 +2521,9 @@ def status_payload(config: Config) -> dict[str, Any]:
         fast_status = "off"
     cwd = get_pane_cwd(config) if tmux_alive else None
     thread = active_agent_thread(config, cwd) if tmux_alive else None
-    context_usage = latest_context_usage(thread.get("rollout_path") if thread else None)
+    history_path = str(thread.get("rollout_path") or "") if thread else ""
+    context_usage = latest_context_usage(history_path)
+    goal_status = latest_goal_status(history_path)
     weekly_rate_limit = None
     if tmux_alive and profile is CODEX_PROFILE:
         try:
@@ -2496,6 +2552,7 @@ def status_payload(config: Config) -> dict[str, Any]:
         "sessionTitle": session_title,
         "sessionId": thread.get("id") if thread else None,
         "contextUsage": context_usage,
+        "goalStatus": goal_status,
         "weeklyRateLimit": weekly_rate_limit,
         "agentRunning": agent_running,
         "agentState": agent_state,

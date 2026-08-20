@@ -38,6 +38,36 @@ repo = Path(sys.argv[2])
 thread_id = "11111111-2222-4333-8444-555555555555"
 rollout = root / f"rollout-2026-01-01T00-00-00-{thread_id}.jsonl"
 events = []
+events.extend((
+    {
+        "type": "response_item",
+        "payload": {
+            "type": "custom_tool_call",
+            "name": "exec",
+            "call_id": "anonymous-goal-call",
+            "input": "const result = await tools.create_goal({objective: 'anonymous'}); text(result);",
+        },
+    },
+    {
+        "type": "response_item",
+        "payload": {
+            "type": "custom_tool_call_output",
+            "call_id": "anonymous-goal-call",
+            "output": [{
+                "type": "input_text",
+                "text": json.dumps({
+                    "goal": {
+                        "threadId": thread_id,
+                        "objective": "anonymous fixture objective must stay private",
+                        "status": "active",
+                        "tokensUsed": 1200,
+                        "timeUsedSeconds": 90,
+                    },
+                }),
+            }],
+        },
+    },
+))
 for index in range(40):
     events.extend((
         {
@@ -141,6 +171,8 @@ env \
   'FARYO_SMOKE_EXPECT_STRUCTURED=1' \
   'FARYO_SMOKE_CHECK_OWNER_LAYOUT=1' \
   'FARYO_SMOKE_CHECK_MODE_SWITCH=1' \
+  'FARYO_SMOKE_EXPECT_GOAL_STATUS=active' \
+  "FARYO_SMOKE_UI_SCREENSHOT=${FARYO_HISTORY_UI_SCREENSHOT:-}" \
   'FARYO_SMOKE_MIN_QUESTION_MARKERS=40' \
   'FARYO_SMOKE_EXPECT_HISTORY_TURNS=40' \
   "FARYO_SMOKE_VIEWPORT_WIDTH=${FARYO_HISTORY_VIEWPORT_WIDTH:-390}" \

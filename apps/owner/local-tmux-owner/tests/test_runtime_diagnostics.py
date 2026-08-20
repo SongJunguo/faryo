@@ -23,6 +23,7 @@ class RuntimeDiagnosticsTest(unittest.TestCase):
         self.assertEqual(payload["schemaVersion"], 1)
         self.assertTrue(payload["features"]["workspaceChanges"])
         self.assertTrue(payload["features"]["diagnostics"])
+        self.assertTrue(payload["features"]["goalStatus"])
         self.assertFalse(payload["features"]["pendingQueueManagement"])
         self.assertEqual(payload["protocol"]["pendingQueue"], "unsupported")
 

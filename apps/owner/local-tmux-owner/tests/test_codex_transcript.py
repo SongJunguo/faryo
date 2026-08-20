@@ -217,6 +217,83 @@ class CodexTranscriptTest(unittest.TestCase):
             server.CODEX_ROLLOUT_CACHE_MIN_TURNS,
         )
 
+    def test_rollout_goal_status_is_incremental_and_objective_free(self):
+        def goal_call(call_id, method):
+            return {
+                "type": "response_item",
+                "payload": {
+                    "type": "custom_tool_call",
+                    "name": "exec",
+                    "call_id": call_id,
+                    "input": f"const result = await tools.{method}({{}}); text(result);",
+                },
+            }
+
+        def goal_output(call_id, status, tokens):
+            return {
+                "type": "response_item",
+                "payload": {
+                    "type": "custom_tool_call_output",
+                    "call_id": call_id,
+                    "output": [{
+                        "type": "input_text",
+                        "text": json.dumps({
+                            "goal": {
+                                "threadId": "private-thread",
+                                "objective": "SECRET_GOAL_OBJECTIVE",
+                                "status": status,
+                                "tokensUsed": tokens,
+                                "timeUsedSeconds": 12,
+                            },
+                        }),
+                    }],
+                },
+            }
+
+        with tempfile.TemporaryDirectory() as root:
+            history = Path(root) / "rollout.jsonl"
+            events = [
+                goal_call("goal-create", "create_goal"),
+                goal_output("goal-create", "active", 10),
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": [{"type": "input_text", "text": "fixture question"}],
+                    },
+                },
+            ]
+            history.write_text("\n".join(json.dumps(event) for event in events) + "\n", encoding="utf-8")
+
+            first = server.latest_goal_status(str(history))
+            with history.open("a", encoding="utf-8") as fh:
+                for event in (
+                    goal_call("goal-complete", "update_goal"),
+                    goal_output("goal-complete", "complete", 20),
+                ):
+                    fh.write(json.dumps(event) + "\n")
+            second = server.latest_goal_status(str(history))
+
+        self.assertEqual(first, {"status": "active", "tokensUsed": 10, "timeUsedSeconds": 12})
+        self.assertEqual(second, {"status": "complete", "tokensUsed": 20, "timeUsedSeconds": 12})
+        self.assertNotIn("SECRET_GOAL_OBJECTIVE", json.dumps(first) + json.dumps(second))
+
+    def test_rollout_direct_goal_clear_hides_older_status(self):
+        events = [
+            {
+                "type": "response_item",
+                "payload": {"type": "thread_goal_updated", "goal": {"status": "active", "objective": "private"}},
+            },
+            {"type": "response_item", "payload": {"type": "thread_goal_updated", "goal": None}},
+        ]
+        with tempfile.TemporaryDirectory() as root:
+            history = Path(root) / "rollout.jsonl"
+            history.write_text("\n".join(json.dumps(event) for event in events) + "\n", encoding="utf-8")
+            status = server.latest_goal_status(str(history))
+
+        self.assertEqual(status, {"status": "none"})
+
     def test_rollout_transcript_is_incremental_and_preserves_markdown_math(self):
         events = [
             {

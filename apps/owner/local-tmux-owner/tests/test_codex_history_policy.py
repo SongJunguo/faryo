@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import json
 import sys
 import unittest
 
@@ -51,6 +52,64 @@ class CodexHistoryPolicyTest(unittest.TestCase):
         messages = [("user", "old"), ("assistant", "old answer"), ("user", "new"), ("assistant", "line one\nline two")]
         selected = codex_history.bounded_rollout_messages(messages, page_turns=12, line_budget=2, char_budget=1024, min_turns=1)
         self.assertEqual(selected, [("user", "new"), ("assistant", "line one\nline two")])
+
+    def test_goal_snapshot_is_status_only_and_never_returns_objective(self) -> None:
+        snapshot = codex_history.goal_snapshot({
+            "threadId": "private-thread",
+            "objective": "private objective",
+            "status": "active",
+            "tokensUsed": 123,
+            "timeUsedSeconds": 45,
+            "updatedAt": 999,
+        })
+
+        self.assertEqual(snapshot, {
+            "status": "active",
+            "tokensUsed": 123,
+            "timeUsedSeconds": 45,
+            "updatedAt": 999,
+        })
+        self.assertNotIn("objective", snapshot)
+        self.assertNotIn("threadId", snapshot)
+
+    def test_direct_and_tool_goal_events_have_explicit_clear_semantics(self) -> None:
+        direct = {
+            "type": "response_item",
+            "payload": {"type": "thread_goal_updated", "goal": {"status": "blocked", "objective": "private"}},
+        }
+        cleared = {"type": "response_item", "payload": {"type": "thread_goal_updated", "goal": None}}
+        call = {
+            "type": "response_item",
+            "payload": {
+                "type": "custom_tool_call",
+                "name": "exec",
+                "call_id": "call-goal",
+                "input": "const result = await tools.get_goal({}); text(result);",
+            },
+        }
+        output = {
+            "type": "response_item",
+            "payload": {
+                "type": "custom_tool_call_output",
+                "call_id": "call-goal",
+                "output": [
+                    {"type": "input_text", "text": "ignored"},
+                    {"type": "input_text", "text": json.dumps({
+                        "goal": {"status": "complete", "objective": "private", "tokensUsed": 456},
+                    })},
+                ],
+            },
+        }
+
+        self.assertEqual(codex_history.direct_goal_snapshot(direct), {"status": "blocked"})
+        self.assertEqual(codex_history.direct_goal_snapshot(cleared), {"status": "none"})
+        self.assertEqual(codex_history.goal_tool_call_id(call), "call-goal")
+        self.assertEqual(codex_history.goal_tool_output(output), (
+            "call-goal",
+            {"status": "complete", "tokensUsed": 456},
+        ))
+        call["payload"]["input"] = "text('tools.get_goal is documentation, not a call')"
+        self.assertIsNone(codex_history.goal_tool_call_id(call))
 
 
 if __name__ == "__main__":

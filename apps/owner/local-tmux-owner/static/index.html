@@ -10,7 +10,7 @@
   <link rel="manifest" href="/manifest.json" />
   <script src="appearance.js?v=faryo-appearance-3"></script>
   <link rel="stylesheet" href="appearance.css?v=faryo-appearance-2" />
-  <link rel="stylesheet" href="style.css?v=faryo-owner-workbench-16" />
+  <link rel="stylesheet" href="style.css?v=faryo-owner-workbench-17" />
   <link rel="stylesheet" href="vendor/katex/katex.min.css?v=0.18.4" />
 </head>
 <body>
@@ -50,7 +50,10 @@
           </button>
           <span id="modelText">Connecting...</span>
         </div>
-        <span id="phasePill" class="pill git-pill">git --</span>
+        <div class="meta-pills">
+          <span id="goalPill" class="pill goal-pill" role="status" aria-live="polite" hidden></span>
+          <span id="phasePill" class="pill git-pill">git --</span>
+        </div>
       </div>
     </header>
     <div id="panelBackdrop" class="panel-backdrop hidden" aria-hidden="true"></div>
@@ -92,6 +95,7 @@
           <div><dt>Owner</dt><dd id="detailsOwner">unknown</dd></div>
           <div><dt>Model</dt><dd id="detailsModel">unknown</dd></div>
           <div><dt>Context</dt><dd id="detailsContext">unknown</dd></div>
+          <div><dt>Goal</dt><dd id="detailsGoal">No goal</dd></div>
           <div><dt>Weekly quota</dt><dd id="detailsQuota">unknown</dd></div>
           <div><dt>Git</dt><dd id="detailsGit">unknown</dd></div>
           <div><dt>Source</dt><dd id="detailsSource">unknown</dd></div>
@@ -190,6 +194,6 @@
   <script type="module" src="vendor/markdown-ast/highlight/highlight.js?v=faryo-shiki-1"></script>
   <script src="compact-rules-codex.js?v=faryo-owner-plan-2"></script>
   <script src="live-scroll.js?v=faryo-owner-live-scroll-2"></script>
-  <script src="app.js?v=faryo-owner-workbench-31"></script>
+  <script src="app.js?v=faryo-owner-workbench-32"></script>
 </body>
 </html>

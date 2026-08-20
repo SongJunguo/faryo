@@ -92,6 +92,9 @@ but the default upload destination should come from the Faryo data directory.
 - `static/owner/composer-delivery.mjs` owns route/session-scoped drafts, pending
   message identity, success-only clearing, failed-draft restoration and one
   same-ID retry for ambiguous network/502/504 outcomes. DOM/animation stay out.
+- `static/owner/goal-status.mjs` maps structured Codex goal states to the header
+  pill and Details row. It receives only status/timing metadata; objective and
+  thread identity are discarded by the rollout parser before the API boundary.
 - `owner_http.py` owns browser security headers, query-redacted log paths,
   Owner-token validation, bounded JSON/multipart parsing, gzip JSON and file
   byte responses. The Handler delegates these primitives and keeps routing.
@@ -108,9 +111,10 @@ but the default upload destination should come from the Faryo data directory.
   Tab/Enter confirmation, retry and ambiguity policy through an explicit
   runtime adapter; HTTP only translates its bounded result or error.
 - Pure Codex message extraction, complete-turn budgeting, previews and
-  revision-bound cursors are isolated in `codex_history.py`; incremental file
-  indexing and caches remain higher services until their state boundary is
-  explicit.
+  revision-bound cursors are isolated in `codex_history.py`. The same bounded
+  incremental rollout path recognizes `thread_goal_updated` and verified goal
+  tool results, retaining only status/timing metadata; incremental file indexing
+  and caches remain higher services until their state boundary is explicit.
 - Capability and diagnostics payloads use an explicit allowlist and counts; they
   never expose private runtime configuration.
 - Upstream control headers: use Faryo header names.

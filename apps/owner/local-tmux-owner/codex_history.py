@@ -3,9 +3,15 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 import secrets
 from typing import Any
+
+
+GOAL_STATUSES = {"active", "blocked", "complete", "paused", "usage_limited"}
+GOAL_TOOL_CALL_RE = re.compile(r"\btools\.(?:create_goal|get_goal|update_goal)\s*\(")
+GOAL_OUTPUT_MAX_CHARS = 256 * 1024
 
 
 class HistoryCursorError(Exception):
@@ -90,6 +96,92 @@ def rollout_message(event: Any) -> tuple[str, str] | None:
                 values.append(f"Attachment: {path}")
     text = "\n".join(values).strip()
     return (role, text) if text else None
+
+
+def _goal_nonnegative_int(value: Any) -> int | None:
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        result = int(value)
+    except (TypeError, ValueError):
+        return None
+    return result if result >= 0 else None
+
+
+def goal_snapshot(value: Any, *, allow_none: bool = False) -> dict[str, Any] | None:
+    """Return privacy-safe goal metadata, never the objective or thread id."""
+    if value is None:
+        return {"status": "none"} if allow_none else None
+    if not isinstance(value, dict):
+        return None
+    status = str(value.get("status") or "").strip().lower()
+    if status not in GOAL_STATUSES:
+        return None
+    snapshot: dict[str, Any] = {"status": status}
+    for source, target in (
+        ("tokenBudget", "tokenBudget"),
+        ("token_budget", "tokenBudget"),
+        ("tokensUsed", "tokensUsed"),
+        ("tokens_used", "tokensUsed"),
+        ("timeUsedSeconds", "timeUsedSeconds"),
+        ("time_used_seconds", "timeUsedSeconds"),
+        ("updatedAt", "updatedAt"),
+        ("updated_at", "updatedAt"),
+    ):
+        if target in snapshot:
+            continue
+        parsed = _goal_nonnegative_int(value.get(source))
+        if parsed is not None:
+            snapshot[target] = parsed
+    return snapshot
+
+
+def direct_goal_snapshot(event: Any) -> dict[str, Any] | None:
+    if not isinstance(event, dict) or event.get("type") != "response_item":
+        return None
+    payload = event.get("payload")
+    if not isinstance(payload, dict) or payload.get("type") != "thread_goal_updated" or "goal" not in payload:
+        return None
+    return goal_snapshot(payload.get("goal"), allow_none=True)
+
+
+def goal_tool_call_id(event: Any) -> str | None:
+    if not isinstance(event, dict) or event.get("type") != "response_item":
+        return None
+    payload = event.get("payload")
+    if not isinstance(payload, dict) or payload.get("type") != "custom_tool_call" or payload.get("name") != "exec":
+        return None
+    source = payload.get("input")
+    if not isinstance(source, str) or not GOAL_TOOL_CALL_RE.search(source):
+        return None
+    call_id = str(payload.get("call_id") or payload.get("id") or "").strip()
+    return call_id or None
+
+
+def goal_tool_output(event: Any) -> tuple[str, dict[str, Any]] | None:
+    if not isinstance(event, dict) or event.get("type") != "response_item":
+        return None
+    payload = event.get("payload")
+    if not isinstance(payload, dict) or payload.get("type") != "custom_tool_call_output":
+        return None
+    call_id = str(payload.get("call_id") or "").strip()
+    output = payload.get("output")
+    if not call_id or not isinstance(output, list):
+        return None
+    for block in output:
+        text = block.get("text") if isinstance(block, dict) else None
+        if not isinstance(text, str) or len(text) > GOAL_OUTPUT_MAX_CHARS or not text.lstrip().startswith("{"):
+            continue
+        try:
+            result = json.loads(text)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(result, dict) or "goal" not in result:
+            continue
+        snapshot = goal_snapshot(result.get("goal"), allow_none=True)
+        if snapshot is not None:
+            return call_id, snapshot
+    return None
 
 
 def history_preview(text: str, max_chars: int) -> str:

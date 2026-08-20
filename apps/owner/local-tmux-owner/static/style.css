@@ -30,7 +30,14 @@ header { z-index: 5; min-width: 0; max-width: 100%; overflow: hidden; padding: c
 .session-menu strong { font-size: calc(13px + var(--font-step)); }
 .session-menu small, .session-empty, .session-menu em { color: var(--muted); font-size: calc(11px + var(--font-step)); font-style: normal; }
 .pill { flex: 0 0 auto; max-width: 42%; overflow: hidden; text-overflow: ellipsis; color: var(--muted); font-size: calc(12px + var(--font-step)); white-space: nowrap; }
-.git-pill { max-width: min(36%, 156px); }
+.meta-pills { flex: 0 1 auto; min-width: 0; max-width: min(48%, 250px); display: flex; align-items: center; justify-content: flex-end; gap: 6px; overflow: hidden; }
+.goal-pill { max-width: 104px; padding: 2px 7px; border-radius: 999px; background: color-mix(in srgb, var(--muted) 8%, transparent); font-weight: 700; }
+.goal-pill.goal-active { color: var(--continuity); background: color-mix(in srgb, var(--continuity) 12%, transparent); }
+.goal-pill.goal-complete { color: var(--accent); background: color-mix(in srgb, var(--accent) 11%, transparent); }
+.goal-pill.goal-paused { color: var(--muted); background: color-mix(in srgb, var(--muted) 10%, transparent); }
+.goal-pill.goal-blocked { color: var(--danger); background: color-mix(in srgb, var(--danger) 11%, transparent); }
+.goal-pill.goal-limited { color: var(--pending); background: color-mix(in srgb, var(--pending) 11%, transparent); }
+.git-pill { flex: 1 1 auto; min-width: 0; max-width: 156px; }
 .app.header-collapsed { grid-template-rows: minmax(0, 1fr) auto; }
 header.collapsed { position: absolute; left: 0; top: 0; padding: calc(env(safe-area-inset-top) + 6px) 8px 6px; background: transparent; border: 0; backdrop-filter: none; }
 header.collapsed .meta-row, header.collapsed #draftState { display: none; }
@@ -1043,6 +1050,9 @@ html[data-faryo-ui="workbench-v2"] :is(button, a, textarea):focus-visible {
   .command-suggest-meta { max-width: none; overflow: hidden; text-align: left; text-overflow: ellipsis; white-space: nowrap; }
   .command-risk { display: inline; margin: 0 0 0 5px; }
   html[data-faryo-ui="workbench-v2"] .meta-main { gap: 4px; }
+  html[data-faryo-ui="workbench-v2"] .meta-pills { max-width: 49%; gap: 4px; }
+  html[data-faryo-ui="workbench-v2"] .goal-pill { max-width: 86px; padding: 1px 5px; font-size: calc(11px + var(--font-step)); }
+  html[data-faryo-ui="workbench-v2"].has-goal-status #modelText { display: none; }
   html[data-faryo-ui="workbench-v2"] .quota-bars { display: none; }
   html[data-faryo-ui="workbench-v2"] #ctxText { font-size: calc(11px + var(--font-step)); }
 }

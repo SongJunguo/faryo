@@ -128,6 +128,7 @@ release_checks() {
     "$ROOT/apps/owner/local-tmux-owner/static/owner/history-controller.mjs" \
     "$ROOT/apps/owner/local-tmux-owner/static/owner/capture-controller.mjs" \
     "$ROOT/apps/owner/local-tmux-owner/static/owner/composer-delivery.mjs" \
+    "$ROOT/apps/owner/local-tmux-owner/static/owner/goal-status.mjs" \
     "$ROOT/apps/owner/local-tmux-owner/static/vendor/markdown-ast/markdown-ast.min.js" \
     "$ROOT/apps/owner/local-tmux-owner/static/live-scroll.js" \
     "$ROOT/apps/shared/static/appearance.js" \
@@ -164,6 +165,7 @@ release_checks() {
   "$NODE_BIN" --test "$ROOT/apps/owner/local-tmux-owner/tests/history-controller.test.mjs"
   "$NODE_BIN" --test "$ROOT/apps/owner/local-tmux-owner/tests/capture-controller.test.mjs"
   "$NODE_BIN" --test "$ROOT/apps/owner/local-tmux-owner/tests/composer-delivery.test.mjs"
+  "$NODE_BIN" --test "$ROOT/apps/owner/local-tmux-owner/tests/goal-status.test.mjs"
   "$NODE_BIN" --test "$ROOT/apps/owner/local-tmux-owner/tests/terminal-delivery-receiver.test.mjs"
   "$PYTHON_BIN" -m unittest discover -s "$ROOT/apps/owner/local-tmux-owner/tests" -p 'test_*.py'
   "$PYTHON_BIN" -m unittest discover -s "$ROOT/apps/gateway/server/tests" -p 'test_*.py'
@@ -337,6 +339,7 @@ attachment_controller_source = (root / "apps/owner/local-tmux-owner/static/owner
 history_controller_source = (root / "apps/owner/local-tmux-owner/static/owner/history-controller.mjs").read_text(encoding="utf-8")
 capture_controller_source = (root / "apps/owner/local-tmux-owner/static/owner/capture-controller.mjs").read_text(encoding="utf-8")
 composer_delivery_source = (root / "apps/owner/local-tmux-owner/static/owner/composer-delivery.mjs").read_text(encoding="utf-8")
+goal_status_source = (root / "apps/owner/local-tmux-owner/static/owner/goal-status.mjs").read_text(encoding="utf-8")
 assert 'import("./owner/changes-panel.mjs?v=faryo-owner-changes-1")' in app, "Owner Changes must use its native ES module"
 assert 'import("./owner/api-client.mjs?v=faryo-owner-api-1")' in app, "Owner API must use its native ES module"
 assert 'import("./owner/attachment-controller.mjs?v=faryo-owner-attachments-1")' in app, "Owner attachments must use their native ES module"
@@ -371,6 +374,8 @@ assert "MAX_ATTACHMENTS = 35" in app and "uploadConcurrency: 4" in app, "Owner m
 assert "olderLoadQueued" in history_controller_source and "function emptyConversationHistory(" not in app, "Owner paged history state must remain in its controller"
 assert "retryEventStream" in capture_controller_source and "function consumeEventStream(" not in app, "Owner capture transport must remain in its controller"
 assert "isAmbiguousDeliveryError" in composer_delivery_source and "function isAmbiguousDeliveryError(" not in app, "Owner ambiguous delivery recovery must remain in its controller"
+assert "goal-status.mjs" in app and 'id="goalPill"' in index and 'id="detailsGoal"' in index, "Owner must render goal status in the header and details"
+assert "objective" not in goal_status_source and '"goalStatus": goal_status' in owner_server, "Owner goal UI must receive status-only metadata"
 assert "navigator.clipboard.read(" not in app + attachment_controller_source, "Owner must not read the clipboard outside a paste event"
 assert "lastCompactCapture" in app and "lastFullCapture" in app and "renderModeLoading" in app, "Chat and Raw must keep isolated capture caches"
 assert "renderOutput(lastCapture)" not in app, "compact callbacks must not replay a Raw capture"

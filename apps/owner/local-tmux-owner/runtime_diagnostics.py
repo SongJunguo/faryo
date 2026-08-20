@@ -19,6 +19,7 @@ def capability_payload(release: str, app_server_configured: bool, metadata_avail
             "diagnostics": True,
             "documentScroll": True,
             "fullscreen": True,
+            "goalStatus": True,
             "markdownMath": True,
             "pendingQueueManagement": False,
             "pwa": True,

@@ -70,6 +70,8 @@ The Owner page contains:
 - a Faryo logo link back to the Gateway home page;
 - workstation/session title and session switcher;
 - agent-reported context used/window and weekly quota when available;
+- a privacy-safe Goal status pill, with the same state and elapsed time in
+  Details but no objective text;
 - git status and structured-source/connection details;
 - Compact Chat and Raw output modes;
 - attachments and a stable multiline composer;

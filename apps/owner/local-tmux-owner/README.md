@@ -328,14 +328,15 @@ consumed as private runtime input and is never printed.
   terminal interfaces retain the conservative tmux path.
 - Should not bind directly to public or LAN addresses.
 
-Codex status reading is optional metadata for model, context, and rate-limit
-display. The Owner header shows the remaining weekly percentage, while Session
-Details also shows the used percentage and reset time when the provider returns
-one. Context used/window values come from the agent's rollout rather than a
-configured model maximum. Rate limits use one non-blocking, single-flight cache;
-an NVM-installed `codex.js` is paired with its sibling Node runtime even when a
-systemd service has no NVM directory in `PATH`. Without this metadata, the
-service still works as a generic tmux control surface and displays the quota as
+Codex status reading is optional metadata for model, context, Goal, and
+rate-limit display. The Owner header shows the remaining weekly percentage and
+a compact Goal state; Session Details adds the used/reset quota and Goal elapsed
+time. Goal objective/thread identity are never returned. Context used/window
+values come from the agent's rollout rather than a configured model maximum.
+Rate limits use one non-blocking, single-flight cache; an NVM-installed
+`codex.js` is paired with its sibling Node runtime even when a systemd service
+has no NVM directory in `PATH`. Without this metadata, the service still works
+as a generic tmux control surface and displays the optional fields as
 unavailable.
 
 ## API

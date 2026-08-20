@@ -5,6 +5,7 @@
   const historyControllerModulePromise = import("./owner/history-controller.mjs?v=faryo-owner-history-1");
   const captureControllerModulePromise = import("./owner/capture-controller.mjs?v=faryo-owner-capture-1");
   const composerDeliveryModulePromise = import("./owner/composer-delivery.mjs?v=faryo-owner-composer-1");
+  const goalStatusModulePromise = import("./owner/goal-status.mjs?v=faryo-owner-goal-1");
   // Workspace review is an optional surface. Start loading it immediately,
   // but never let a transient asset failure block capture/history rendering.
   const changesPanelModulePromise = import("./owner/changes-panel.mjs?v=faryo-owner-changes-1");
@@ -14,12 +15,14 @@
     { createHistoryController, isStructuredCapture },
     { createCaptureController },
     { createComposerDelivery },
+    { renderGoalStatus },
   ] = await Promise.all([
     apiClientModulePromise,
     attachmentControllerModulePromise,
     historyControllerModulePromise,
     captureControllerModulePromise,
     composerDeliveryModulePromise,
+    goalStatusModulePromise,
   ]);
 
   const $ = (id) => document.getElementById(id);
@@ -30,6 +33,7 @@
   const attachmentPreview = $('attachmentPreview');
   const errorBox = $('errorBox');
   const phasePill = $('phasePill');
+  const goalPill = $('goalPill');
   const bottomBtn = $('bottomBtn');
   const questionNavigatorElement = $('questionNavigator');
   const questionNavMarkers = $('questionNavMarkers');
@@ -1261,7 +1265,9 @@
     $('modelText').textContent = modelLabel;
     $('modelText').title = model;
     const quotaText = renderQuotaStatus(weeklyRateLimit);
-    $('subTitle').title = `${contextText} · ${quotaText} · ${model}${data.fastStatus ? ` · fast:${data.fastStatus}` : ''}`;
+    const goalModel = renderGoalStatus(data.goalStatus, { pill: goalPill, details: $('detailsGoal') });
+    document.documentElement.classList.toggle('has-goal-status', goalModel.visible);
+    $('subTitle').title = `${contextText} · ${quotaText} · ${goalModel.detail} · ${model}${data.fastStatus ? ` · fast:${data.fastStatus}` : ''}`;
     updateFolderLabel(data);
     updateStatusPill(data.gitStatus);
     if ($('detailsOwner')) $('detailsOwner').textContent = ownerLabel;

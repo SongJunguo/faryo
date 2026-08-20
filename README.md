@@ -67,7 +67,7 @@ Historical distribution and non-Codex platform paths may remain in the tree for
 upstream compatibility, but they are not part of this fork's current validation
 or support claims.
 
-Current source-only release: [Faryo 1.4.0](https://github.com/SongJunguo/faryo/releases/tag/v1.4.0).
+Current source-only release: [Faryo 1.4.1](https://github.com/SongJunguo/faryo/releases/tag/v1.4.1).
 
 ## Current Functionality
 
@@ -156,6 +156,9 @@ micromark -> mdast -> CommonMark/GFM/math nodes -> safe HTML -> KaTeX
   preview strip, with at most four compression/upload workers active at once
   and a 25 MiB server-side limit for each file.
 - Shows agent-reported context used/window and weekly quota when available.
+- Shows the current Codex Goal state as a compact header pill and in Session
+  Details. Only status and elapsed metadata are exposed; the goal objective and
+  thread identifier never enter the Owner API or browser DOM.
 - Opens fresh, reloaded, and newly selected conversations at the latest output.
 - Preserves the main reading position during structured refreshes.
 - Keeps up to 180 lines from the current turn in an expanded Live tmux panel,

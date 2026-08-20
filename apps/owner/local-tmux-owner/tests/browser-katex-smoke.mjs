@@ -63,6 +63,7 @@ const uiScreenshotFocus = process.env.FARYO_SMOKE_UI_FOCUS || '';
 const expectedTex = JSON.parse(process.env.FARYO_SMOKE_EXPECT_TEX || '[]');
 const expectedOutput = process.env.FARYO_SMOKE_EXPECT_OUTPUT || '';
 const expectedSessionTitle = process.env.FARYO_SMOKE_EXPECT_SESSION_TITLE || '';
+const expectedGoalStatus = process.env.FARYO_SMOKE_EXPECT_GOAL_STATUS || '';
 const minMatrixRows = Number(process.env.FARYO_SMOKE_MIN_MATRIX_ROWS || 0);
 const minKatex = Number(process.env.FARYO_SMOKE_MIN_KATEX ?? 2);
 const minDisplay = Number(process.env.FARYO_SMOKE_MIN_DISPLAY ?? 1);
@@ -605,6 +606,19 @@ try {
               details: String(document.getElementById('detailsContext')?.textContent || '').trim(),
               title: String(document.getElementById('ctxText')?.title || '').trim(),
             },
+            goalStatus: {
+              visible: (() => { const item = document.getElementById('goalPill'); return Boolean(item && !item.hidden && item.getClientRects().length); })(),
+              label: String(document.getElementById('goalPill')?.textContent || '').trim(),
+              details: String(document.getElementById('detailsGoal')?.textContent || '').trim(),
+              className: String(document.getElementById('goalPill')?.className || ''),
+              title: String(document.getElementById('goalPill')?.title || '').trim(),
+              modelVisible: (() => { const item = document.getElementById('modelText'); return Boolean(item && item.getClientRects().length); })(),
+              objectiveLeak: [
+                document.getElementById('goalPill')?.textContent,
+                document.getElementById('goalPill')?.title,
+                document.getElementById('detailsGoal')?.textContent,
+              ].some((value) => String(value || '').includes('anonymous fixture objective must stay private')),
+            },
             sessionTitleMatches: !${JSON.stringify(expectedSessionTitle)} || (
               String(document.getElementById('detailsSession')?.textContent || '').trim() === ${JSON.stringify(expectedSessionTitle)}
               && String(document.getElementById('sessionTitle')?.title || '').includes(${JSON.stringify(expectedSessionTitle)})
@@ -904,6 +918,30 @@ try {
     if (!/^Ctx (?:--|\d+(?:\.\d+)?%(?: · \d+(?:\.\d+)?[km]?\/\d+(?:\.\d+)?[km]?)?)$/.test(layout.contextStatus?.label || '')
       || !layout.contextStatus?.details) {
       throw new Error(`Owner context status is not explicit: ${JSON.stringify(layout.contextStatus)}`);
+    }
+    if (expectedGoalStatus) {
+      if (expectedGoalStatus === 'none') {
+        if (layout.goalStatus?.visible || layout.goalStatus?.label || layout.goalStatus?.details !== 'No goal'
+          || layout.goalStatus?.objectiveLeak) {
+          throw new Error(`Owner empty goal status is wrong: ${JSON.stringify(layout.goalStatus)}`);
+        }
+      } else {
+        const expected = {
+          active: { label: 'Goal Active', detail: 'Active', className: 'goal-active' },
+          blocked: { label: 'Goal Blocked', detail: 'Blocked', className: 'goal-blocked' },
+          complete: { label: 'Goal Done', detail: 'Complete', className: 'goal-complete' },
+          paused: { label: 'Goal Paused', detail: 'Paused', className: 'goal-paused' },
+          usage_limited: { label: 'Goal Limited', detail: 'Usage limited', className: 'goal-limited' },
+        }[expectedGoalStatus];
+        if (!expected || !layout.goalStatus?.visible || layout.goalStatus.label !== expected.label
+          || !layout.goalStatus.details.startsWith(expected.detail)
+          || !layout.goalStatus.className.includes(expected.className)
+          || !layout.goalStatus.title.startsWith('Goal status · ')
+          || (state.viewport.width <= 420 ? layout.goalStatus.modelVisible : !layout.goalStatus.modelVisible)
+          || layout.goalStatus.objectiveLeak) {
+          throw new Error(`Owner goal status is missing or wrong: ${JSON.stringify({ expectedGoalStatus, goalStatus: layout.goalStatus })}`);
+        }
+      }
     }
     if (prompt.height < 82) throw new Error(`Owner composer is unexpectedly short: ${JSON.stringify(prompt)}`);
     if (layout.outputWidth > 752) throw new Error(`Owner reading column is too wide: ${JSON.stringify(layout)}`);
@@ -2072,11 +2110,15 @@ try {
         text('ctxText', 'Ctx 42% · 108.5k/258k');
         text('quotaText', 'Week 58% left');
         text('modelText', 'Agent ready');
+        const goalPill = document.getElementById('goalPill');
+        if (goalPill) { goalPill.hidden = false; goalPill.className = 'pill goal-pill goal-active'; }
+        text('goalPill', 'Goal Active');
         text('phasePill', 'git clean');
         text('detailsSession', 'Research session');
         text('detailsOwner', 'Ubuntu Workstation');
         text('detailsModel', 'Agent model');
         text('detailsContext', '108,528 / 258,400 tokens · 42% used');
+        text('detailsGoal', 'Active · 18m');
         text('detailsQuota', '58% left · 42% used · resets Aug 20, 10:20');
         text('detailsGit', 'git clean');
         text('detailsSource', 'structured history');
@@ -2086,9 +2128,9 @@ try {
         if (prompt) prompt.placeholder = 'Ask Codex about this result';
         const smokeSafeText = {
           ownerText: 'Ubuntu Workstation', topicText: 'Research session', draftState: 'Project workspace',
-          ctxText: 'Ctx 42% · 108.5k/258k', quotaText: 'Week 58% left', modelText: 'Agent ready', phasePill: 'git clean',
+          ctxText: 'Ctx 42% · 108.5k/258k', quotaText: 'Week 58% left', modelText: 'Agent ready', goalPill: 'Goal Active', phasePill: 'git clean',
           detailsSession: 'Research session', detailsOwner: 'Ubuntu Workstation', detailsModel: 'Agent model',
-          detailsContext: '108,528 / 258,400 tokens · 42% used', detailsQuota: '58% left · 42% used · resets Aug 20, 10:20', detailsGit: 'git clean', detailsSource: 'structured history', detailsConnection: 'live',
+          detailsContext: '108,528 / 258,400 tokens · 42% used', detailsGoal: 'Active · 18m', detailsQuota: '58% left · 42% used · resets Aug 20, 10:20', detailsGit: 'git clean', detailsSource: 'structured history', detailsConnection: 'live',
         };
         const safeStyle = document.createElement('style');
         safeStyle.textContent = '.faryo-smoke-safe-text{font-size:0!important;color:transparent!important}.faryo-smoke-safe-text::after{content:attr(data-faryo-smoke-text);font-size:12px;color:var(--text)}#ownerText.faryo-smoke-safe-text::after,#topicText.faryo-smoke-safe-text::after{font-size:14px}.details-list dd.faryo-smoke-safe-text::after{font-size:12px}';
