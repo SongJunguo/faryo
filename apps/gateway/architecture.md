@@ -15,8 +15,9 @@ must consume the same module rather than reproduce these boundaries.
 
 `server/asgi_app.py` is currently a non-production Starlette adapter used for
 dual-stack contract comparison. It covers public manifest/service-worker/static
-assets, login/logout, CSRF and the authenticated home page. POST, Owner proxy,
-SSE, MCP and uploads remain on the legacy stack until their contracts match.
+assets, login/logout, CSRF, the authenticated home page, tmux control POST,
+ordinary Owner API GET and SSE. MCP, direct Gateway writes, non-API Owner assets
+and uploads remain on the legacy stack until their contracts match.
 
 `server/owner_client.py` is the shared authenticated Owner client for scoped
 internal headers, JSON/raw calls and bounded multipart forwarding. Forwarded

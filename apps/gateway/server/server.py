@@ -1598,7 +1598,7 @@ class GatewayHandler(BaseHTTPRequestHandler):
                 self.send_response(resp.status, resp.reason)
                 for key, value in response_headers:
                     lower = key.lower()
-                    if lower in HOP_BY_HOP_HEADERS or lower in UPSTREAM_SECURITY_HEADERS or lower == "content-length":
+                    if lower in HOP_BY_HOP_HEADERS or lower in UPSTREAM_SECURITY_HEADERS or lower in {"cache-control", "content-length"}:
                         continue
                     self.send_header(key, value)
                 self.send_header("Cache-Control", "no-store, no-transform")

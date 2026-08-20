@@ -13,7 +13,7 @@ from anyio import to_thread
 from starlette.applications import Starlette
 from starlette.datastructures import MutableHeaders
 from starlette.requests import Request
-from starlette.responses import HTMLResponse, RedirectResponse, Response
+from starlette.responses import HTMLResponse, RedirectResponse, Response, StreamingResponse
 from starlette.routing import Route
 
 import gateway_security
@@ -65,6 +65,21 @@ def create_app(legacy: Any, config: Any) -> Starlette:
     def json_response(value: dict[str, Any], status: int = HTTPStatus.OK) -> Response:
         body = json.dumps(value, ensure_ascii=False).encode("utf-8")
         return Response(body, status_code=status, headers={"Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store"})
+
+    def forwarded_request_headers(request: Request) -> dict[str, str]:
+        return {
+            key: value for key, value in request.headers.items()
+            if key.lower() not in legacy.HOP_BY_HOP_HEADERS and key.lower() not in owner_client.INTERNAL_HEADER_NAMES
+        }
+
+    def forwarded_response_headers(headers: list[tuple[str, str]]) -> dict[str, str]:
+        forwarded: dict[str, str] = {}
+        for key, value in headers:
+            lower = key.lower()
+            if lower in legacy.HOP_BY_HOP_HEADERS or lower in legacy.UPSTREAM_SECURITY_HEADERS or lower == "content-length":
+                continue
+            forwarded[key] = value
+        return forwarded
 
     async def manifest(_request: Request) -> Response:
         return json_response(legacy.PWA_MANIFEST)
@@ -132,10 +147,7 @@ def create_app(legacy: Any, config: Any) -> Starlette:
             else:
                 body = await request.body()
                 target = legacy.control_target_from_json(body)
-                forwarded = {
-                    key: value for key, value in request.headers.items()
-                    if key.lower() not in legacy.HOP_BY_HOP_HEADERS and key.lower() not in owner_client.INTERNAL_HEADER_NAMES
-                }
+                forwarded = forwarded_request_headers(request)
                 path = upstream_path + (f"?{request.url.query}" if request.url.query else "")
                 try:
                     upstream = await to_thread.run_sync(
@@ -149,13 +161,7 @@ def create_app(legacy: Any, config: Any) -> Starlette:
                     if isinstance(result, dict):
                         target = str(result.get("session") or target)
                         idempotent = bool(result.get("duplicate") or result.get("idempotent"))
-                    response_headers = {}
-                    for key, value in upstream.headers:
-                        lower = key.lower()
-                        if lower in legacy.HOP_BY_HOP_HEADERS or lower in legacy.UPSTREAM_SECURITY_HEADERS or lower == "content-length":
-                            continue
-                        response_headers[key] = value
-                    response = Response(upstream.body, status_code=status, headers=response_headers)
+                    response = Response(upstream.body, status_code=status, headers=forwarded_response_headers(upstream.headers))
                 except owner_client.OwnerTransportError:
                     status = HTTPStatus.BAD_GATEWAY
                     response = json_response({"ok": False, "error": "upstream unavailable"}, status)
@@ -174,12 +180,60 @@ def create_app(legacy: Any, config: Any) -> Starlette:
             )
         return response
 
+    async def owner_get(request: Request) -> Response:
+        current = username(request)
+        if not current:
+            return json_response({"ok": False, "error": "unauthorized"}, HTTPStatus.UNAUTHORIZED)
+        route = str(request.path_params["route"])
+        if route not in legacy.BACKENDS:
+            return json_response({"ok": False, "error": "not found"}, HTTPStatus.NOT_FOUND)
+        if not config.allowed_route(current, route):
+            return json_response({"ok": False, "error": "forbidden"}, HTTPStatus.FORBIDDEN)
+        upstream_path = "/api/" + str(request.path_params["tail"])
+        if request.url.query:
+            upstream_path += "?" + request.url.query
+        try:
+            stream = await to_thread.run_sync(
+                lambda: client.open_stream(
+                    route,
+                    "GET",
+                    upstream_path,
+                    None,
+                    current,
+                    forwarded_headers=forwarded_request_headers(request),
+                )
+            )
+        except owner_client.OwnerTransportError:
+            return json_response({"ok": False, "error": "upstream unavailable"}, HTTPStatus.BAD_GATEWAY)
+        headers = forwarded_response_headers(stream.headers)
+        content_type = next((value for key, value in stream.headers if key.lower() == "content-type"), "")
+        if content_type.lower().startswith("text/event-stream"):
+            headers["Cache-Control"] = "no-store, no-transform"
+
+            async def body_iterator():
+                try:
+                    while True:
+                        chunk = await to_thread.run_sync(stream.readline)
+                        if not chunk:
+                            break
+                        yield chunk
+                finally:
+                    await to_thread.run_sync(stream.close)
+
+            return StreamingResponse(body_iterator(), status_code=stream.status, headers=headers)
+        try:
+            body = await to_thread.run_sync(stream.read)
+        finally:
+            await to_thread.run_sync(stream.close)
+        return Response(body, status_code=stream.status, headers=headers)
+
     routes = [
         Route("/manifest.json", manifest, methods=["GET"]),
         Route("/sw.js", service_worker, methods=["GET"]),
         Route("/login", login, methods=["GET"]),
         Route("/logout", logout, methods=["GET"]),
         Route("/api/csrf", csrf, methods=["GET"]),
+        Route("/{route}/api/{tail:path}", owner_get, methods=["GET"]),
         Route("/{route}/api/{tail:path}", owner_control, methods=["POST"]),
         Route("/", home, methods=["GET"]),
         Route("/{filename}", static_asset, methods=["GET"]),

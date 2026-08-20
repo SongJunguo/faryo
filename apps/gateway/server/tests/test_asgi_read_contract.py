@@ -78,6 +78,22 @@ class OwnerContractFixture(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
+    def do_GET(self) -> None:
+        self.__class__.requests.append({"path": self.path, "headers": dict(self.headers), "body": b""})
+        if self.path.startswith("/api/events"):
+            data = b"event: status\ndata: first\n\nevent: status\ndata: second\n\n"
+            self.send_response(HTTPStatus.OK)
+            self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+            self.send_header("Cache-Control", "no-store")
+        else:
+            data = json.dumps({"ok": True, "path": self.path}).encode("utf-8")
+            self.send_response(HTTPStatus.OK)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Cache-Control", "no-store")
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
 
 class AsgiReadContractTest(unittest.TestCase):
     @classmethod
@@ -241,6 +257,15 @@ class AsgiReadContractTest(unittest.TestCase):
         asgi_result = self.request(self.asgi_base, "/lab/api/down", authenticated=True, method="POST", body=body)
         self.assertEqual(asgi_result[0], legacy_result[0])
         self.assertEqual(json.loads(asgi_result[2]), json.loads(legacy_result[2]))
+
+    def test_owner_json_get_contract_matches(self) -> None:
+        self.assert_contract("/lab/api/status?session=fixture", authenticated=True)
+
+    def test_owner_sse_bytes_and_headers_match(self) -> None:
+        self.assert_contract("/lab/api/events?session=fixture", authenticated=True)
+
+    def test_owner_get_requires_authentication_equally(self) -> None:
+        self.assert_contract("/lab/api/status")
 
 
 if __name__ == "__main__":

@@ -35,6 +35,24 @@ class OwnerTransportError(Exception):
     pass
 
 
+class OwnerStream:
+    def __init__(self, connection: http.client.HTTPConnection, response: http.client.HTTPResponse) -> None:
+        self.connection = connection
+        self.response = response
+        self.status = response.status
+        self.reason = response.reason
+        self.headers = response.getheaders()
+
+    def read(self, size: int | None = None) -> bytes:
+        return self.response.read() if size is None else self.response.read(size)
+
+    def readline(self) -> bytes:
+        return self.response.readline()
+
+    def close(self) -> None:
+        self.connection.close()
+
+
 class OwnerClient:
     def __init__(
         self,
@@ -110,6 +128,31 @@ class OwnerClient:
         forwarded_headers: Mapping[str, str] | None = None,
         timeout: float = 20,
     ) -> OwnerResponse:
+        stream = self.open_stream(
+            route,
+            method,
+            path,
+            body,
+            username,
+            forwarded_headers=forwarded_headers,
+            timeout=timeout,
+        )
+        try:
+            return OwnerResponse(stream.status, stream.reason, stream.headers, stream.read())
+        finally:
+            stream.close()
+
+    def open_stream(
+        self,
+        route: str,
+        method: str,
+        path: str,
+        body: bytes | None,
+        username: str,
+        *,
+        forwarded_headers: Mapping[str, str] | None = None,
+        timeout: float = 20,
+    ) -> OwnerStream:
         host, port, _label = self.backends[route]
         headers = self.headers(route, username)
         if forwarded_headers:
@@ -119,12 +162,10 @@ class OwnerClient:
         connection = http.client.HTTPConnection(host, port, timeout=timeout)
         try:
             connection.request(method, path, body=body, headers=headers)
-            response = connection.getresponse()
-            return OwnerResponse(response.status, response.reason, response.getheaders(), response.read())
+            return OwnerStream(connection, connection.getresponse())
         except (OSError, UnicodeError) as exc:
-            raise OwnerTransportError("upstream unavailable") from exc
-        finally:
             connection.close()
+            raise OwnerTransportError("upstream unavailable") from exc
 
     def attachment_request(self, route: str, path: Path, mime_type: str, filename: str, username: str) -> dict[str, Any]:
         host, port, _label = self.backends[route]
