@@ -25,6 +25,8 @@ gateway = importlib.util.module_from_spec(spec)
 assert spec and spec.loader
 spec.loader.exec_module(gateway)
 
+import workbench_service
+
 
 class GatewayRouteConfigTest(unittest.TestCase):
     def setUp(self) -> None:
@@ -68,31 +70,37 @@ class GatewayRouteConfigTest(unittest.TestCase):
     def test_each_route_fetches_enough_history_for_the_requested_page(self) -> None:
         gateway.BACKENDS.clear()
         gateway.BACKENDS["txy"] = ("127.0.0.1", 8765, "TXY")
-        handler = object.__new__(gateway.GatewayHandler)
-        handler.owner_json_request = mock.Mock(return_value={
+        owner_request = mock.Mock(return_value={
             "ok": True,
             "activeCount": 0,
             "activeSessions": [],
             "sessions": [],
             "historyTotal": 0,
         })
-        handler.max_running_for = mock.Mock(return_value=8)
+        max_running = mock.Mock(return_value=8)
+        service = workbench_service.WorkbenchService(
+            gateway.WorkbenchRuntime,
+            mock.Mock(),
+            mock.Mock(),
+            owner_json_request_callback=owner_request,
+            max_running_callback=max_running,
+        )
 
-        handler.owner_agent_sessions("txy", "tester", 1)
+        service.owner_sessions("txy", "tester", 1)
         self.assertEqual(
-            handler.owner_json_request.call_args.args[1],
+            owner_request.call_args.args[1],
             "/api/agent-sessions?view=split&limit=10&offset=0",
         )
 
-        handler.owner_agent_sessions("txy", "tester", 2)
+        service.owner_sessions("txy", "tester", 2)
         self.assertEqual(
-            handler.owner_json_request.call_args.args[1],
+            owner_request.call_args.args[1],
             "/api/agent-sessions?view=split&limit=20&offset=0",
         )
 
-        handler.owner_agent_sessions("txy", "tester", 40, True)
+        service.owner_sessions("txy", "tester", 40, True)
         self.assertEqual(
-            handler.owner_json_request.call_args.args[1],
+            owner_request.call_args.args[1],
             "/api/agent-sessions?view=split&limit=10&offset=390",
         )
 
@@ -102,7 +110,6 @@ class GatewayRouteConfigTest(unittest.TestCase):
             "txy": ("127.0.0.1", 8765, "TXY"),
             "hp": ("127.0.0.1", 8766, "HP"),
         })
-        handler = object.__new__(gateway.GatewayHandler)
         histories = {
             "txy": [{"id": f"txy-{index}", "updatedTs": 40 - index} for index in range(20)],
             "hp": [{"id": f"hp-{index}", "updatedTs": 39.5 - index} for index in range(20)],
@@ -118,16 +125,21 @@ class GatewayRouteConfigTest(unittest.TestCase):
                 "canCreate": True,
             }
 
-        handler.owner_agent_sessions = mock.Mock(side_effect=route_payload)
+        owner_sessions = mock.Mock(side_effect=route_payload)
         config = mock.Mock()
         config.user_routes.return_value = ["txy", "hp"]
         config.list_bridge_packages.return_value = []
         config.mcp_user = "mcp-user"
-        handler.server = mock.Mock(config=config)
+        service = workbench_service.WorkbenchService(
+            gateway.WorkbenchRuntime,
+            config,
+            mock.Mock(),
+            owner_sessions_callback=owner_sessions,
+            backend_status_callback=lambda route: {"id": route},
+        )
 
-        with mock.patch.object(gateway, "backend_status", side_effect=lambda route: {"id": route}):
-            first = handler.workbench_payload("tester", 1)
-            second = handler.workbench_payload("tester", 2)
+        first = service.payload("tester", 1)
+        second = service.payload("tester", 2)
 
         self.assertEqual(len(first["activeSessions"]), 2)
         self.assertEqual(len(first["sessions"]), 10)
@@ -150,9 +162,8 @@ class GatewayRouteConfigTest(unittest.TestCase):
     def test_single_route_workbench_requests_only_the_exact_history_page(self) -> None:
         gateway.BACKENDS.clear()
         gateway.BACKENDS["txy"] = ("127.0.0.1", 8765, "Ubuntu 工作站")
-        handler = object.__new__(gateway.GatewayHandler)
         page_rows = [{"id": f"history-{index}", "updatedTs": 100 - index} for index in range(390, 400)]
-        handler.owner_agent_sessions = mock.Mock(return_value={
+        owner_sessions = mock.Mock(return_value={
             "activeSessions": [{"id": "active", "tmuxSession": "codex", "updatedTs": 200}],
             "sessions": page_rows,
             "historyTotal": 437,
@@ -164,12 +175,17 @@ class GatewayRouteConfigTest(unittest.TestCase):
         config.user_routes.return_value = ["txy"]
         config.list_bridge_packages.return_value = []
         config.mcp_user = "controller"
-        handler.server = mock.Mock(config=config)
+        service = workbench_service.WorkbenchService(
+            gateway.WorkbenchRuntime,
+            config,
+            mock.Mock(),
+            owner_sessions_callback=owner_sessions,
+            backend_status_callback=lambda _route: {"id": "txy"},
+        )
 
-        with mock.patch.object(gateway, "backend_status", return_value={"id": "txy"}):
-            result = handler.workbench_payload("tester", 40)
+        result = service.payload("tester", 40)
 
-        handler.owner_agent_sessions.assert_called_once_with(
+        owner_sessions.assert_called_once_with(
             "txy",
             "tester",
             40,
@@ -225,15 +241,19 @@ class GatewayRouteConfigTest(unittest.TestCase):
     def test_gateway_preserves_explicit_session_lifecycle_state(self) -> None:
         gateway.BACKENDS.clear()
         gateway.BACKENDS["txy"] = ("127.0.0.1", 8765, "Workstation")
-        handler = object.__new__(gateway.GatewayHandler)
+        service = workbench_service.WorkbenchService(
+            gateway.WorkbenchRuntime,
+            mock.Mock(),
+            mock.Mock(),
+        )
 
-        exited = handler.gateway_session_item({
+        exited = service.session_item({
             "id": "thread-a",
             "tmuxSession": "faryo1",
             "state": "exited",
             "managed": True,
         }, "txy", {}, False)
-        resumable = handler.gateway_session_item({
+        resumable = service.session_item({
             "id": "thread-b",
             "state": "resumable",
         }, "txy", {}, False)

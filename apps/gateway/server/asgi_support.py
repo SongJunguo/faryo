@@ -93,16 +93,19 @@ class AsgiSupport:
         writer = getattr(self.config, "append_control_audit", None)
         if not callable(writer):
             return
-        writer(
-            username=username_value,
-            route=route,
-            action=action,
-            target=target,
-            request_id=request_id,
-            status=int(status),
-            duration_ms=round((time.monotonic() - started) * 1000),
-            idempotent=idempotent,
-        )
+        try:
+            writer(
+                username=username_value,
+                route=route,
+                action=action,
+                target=target,
+                request_id=request_id,
+                status=int(status),
+                duration_ms=round((time.monotonic() - started) * 1000),
+                idempotent=idempotent,
+            )
+        except Exception:
+            return
 
     @staticmethod
     async def read_json_body(request: Request, max_bytes: int) -> dict[str, Any]:

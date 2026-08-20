@@ -3,14 +3,11 @@
 
 from __future__ import annotations
 
-import base64
-import hashlib
-import hmac
 import http.client
 import importlib.util
 import json
 import re
-import secrets
+import socket
 import threading
 import time
 import unittest
@@ -20,6 +17,8 @@ from pathlib import Path
 from typing import Any
 from unittest import mock
 
+import uvicorn
+
 REPO_ROOT = Path(__file__).resolve().parents[4]
 SERVER_PATH = REPO_ROOT / "apps" / "gateway" / "server" / "server.py"
 
@@ -28,6 +27,11 @@ gateway = importlib.util.module_from_spec(spec)
 assert spec and spec.loader
 spec.loader.exec_module(gateway)
 
+import asgi_agents
+import asgi_app
+import gateway_security
+import owner_client
+
 
 class StubConfig:
     def __init__(self, owner_route: str):
@@ -35,6 +39,10 @@ class StubConfig:
         self.mcp_user = "tester"
         self.users = {"tester": {"auth_epoch": 7, "routes": [owner_route]}}
         self.owner_tokens = {owner_route: "owner-token"}
+        self.mcp_token = ""
+        self.mcp_cors_origin = ""
+        self.icp_record = ""
+        self.bridge_root = Path("/nonexistent")
         self.bridge_create_calls = 0
         self.audit_calls: list[dict[str, Any]] = []
         self.updated_packages: list[dict[str, Any]] = []
@@ -63,6 +71,15 @@ class StubConfig:
     def save_bridge_package(self, payload: dict[str, Any], username: str) -> dict[str, Any]:
         self.bridge_create_calls += 1
         return {"id": "pkg-test", "owner": username, "title": payload.get("title") or "test", "status": "pending"}
+
+    def list_bridge_packages(self, username: str, status: str | None = None) -> list[dict[str, Any]]:
+        return []
+
+    def bridge_asset_sources(self, payload: dict[str, Any]) -> list[Any]:
+        return []
+
+    def append_bridge_package_assets(self, package_id: str, assets: list[Any], username: str) -> dict[str, Any]:
+        return {"id": package_id, "owner": username, "assets": assets, "status": "pending"}
 
     def append_control_audit(self, **values: Any) -> None:
         self.audit_calls.append(values)
@@ -122,17 +139,34 @@ class GatewayCsrfContractTest(unittest.TestCase):
         self.original_backends = dict(gateway.BACKENDS)
         gateway.BACKENDS[self.route] = ("127.0.0.1", self.owner.server_address[1], "Lab")
         self.config = StubConfig(self.route)
-        self.server = gateway.ReusableThreadingHTTPServer(("127.0.0.1", 0), gateway.GatewayHandler)
-        self.server.config = self.config
-        self.gateway_thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+        self.gateway_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.gateway_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self.gateway_socket.bind(("127.0.0.1", 0))
+        self.gateway_socket.listen(128)
+        self.base = ("127.0.0.1", self.gateway_socket.getsockname()[1])
+        self.server = uvicorn.Server(uvicorn.Config(
+            asgi_app.create_app(gateway, self.config),
+            log_level="error",
+            access_log=False,
+            lifespan="off",
+        ))
+        self.gateway_thread = threading.Thread(
+            target=self.server.run,
+            kwargs={"sockets": [self.gateway_socket]},
+            daemon=True,
+        )
         self.gateway_thread.start()
-        self.base = ("127.0.0.1", self.server.server_address[1])
+        for _attempt in range(100):
+            if self.server.started:
+                break
+            time.sleep(0.02)
+        if not self.server.started:
+            raise RuntimeError("ASGI CSRF test server did not start")
         self.cookie = self.auth_cookie("tester")
 
     def tearDown(self) -> None:
-        self.server.shutdown()
-        self.server.server_close()
-        self.gateway_thread.join(timeout=2)
+        self.server.should_exit = True
+        self.gateway_thread.join(timeout=5)
         self.owner.shutdown()
         self.owner.server_close()
         self.owner_thread.join(timeout=2)
@@ -140,11 +174,13 @@ class GatewayCsrfContractTest(unittest.TestCase):
         gateway.BACKENDS.update(self.original_backends)
 
     def auth_cookie(self, username: str) -> str:
-        epoch = self.config.auth_epoch(username)
-        payload = f"{username}|{int(time.time())}|{epoch}|{secrets.token_urlsafe(8)}"
-        payload_b64 = base64.urlsafe_b64encode(payload.encode("utf-8")).decode("ascii")
-        sig = hmac.new(self.config.cookie_secret, payload_b64.encode("ascii"), hashlib.sha256).hexdigest()
-        return f"{gateway.COOKIE_NAME}={payload_b64}.{sig}"
+        codec = gateway_security.SessionCookieCodec(
+            self.config.cookie_secret,
+            name=gateway.COOKIE_NAME,
+            max_age=gateway.COOKIE_MAX_AGE,
+            same_site=gateway.COOKIE_SAME_SITE,
+        )
+        return codec.issue(username, self.config.auth_epoch(username)).split(";", 1)[0]
 
     def request(
         self,
@@ -393,10 +429,13 @@ class GatewayCsrfContractTest(unittest.TestCase):
         self.assertEqual(self.config.audit_calls[-1]["status"], HTTPStatus.CONFLICT)
 
     def test_auth_cookie_defaults_to_thirty_days_host_only_and_strict(self) -> None:
-        handler = object.__new__(gateway.GatewayHandler)
-        handler.server = self.server
-
-        cookie = handler.auth_cookie("tester")
+        codec = gateway_security.SessionCookieCodec(
+            self.config.cookie_secret,
+            name=gateway.COOKIE_NAME,
+            max_age=gateway.COOKIE_MAX_AGE,
+            same_site=gateway.COOKIE_SAME_SITE,
+        )
+        cookie = codec.issue("tester", self.config.auth_epoch("tester"))
 
         self.assertTrue(cookie.startswith(f"{gateway.COOKIE_NAME}="))
         self.assertIn("Max-Age=2592000", cookie)
@@ -406,11 +445,13 @@ class GatewayCsrfContractTest(unittest.TestCase):
         self.assertNotIn("Domain=", cookie)
 
     def test_auth_cookie_honors_configured_twenty_four_hour_lifetime(self) -> None:
-        handler = object.__new__(gateway.GatewayHandler)
-        handler.server = self.server
-
-        with mock.patch.object(gateway, "COOKIE_MAX_AGE", 24 * 60 * 60):
-            cookie = handler.auth_cookie("tester")
+        codec = gateway_security.SessionCookieCodec(
+            self.config.cookie_secret,
+            name=gateway.COOKIE_NAME,
+            max_age=24 * 60 * 60,
+            same_site=gateway.COOKIE_SAME_SITE,
+        )
+        cookie = codec.issue("tester", self.config.auth_epoch("tester"))
 
         self.assertIn("Max-Age=86400", cookie)
 
@@ -436,8 +477,8 @@ class GatewayCsrfContractTest(unittest.TestCase):
             {"ok": True, "session": "faryo1"},
         ]
         with (
-            mock.patch.object(gateway.GatewayHandler, "owner_json_request", side_effect=responses) as owner_request,
-            mock.patch.object(gateway.time, "sleep") as sleep,
+            mock.patch.object(owner_client.OwnerClient, "json_request", side_effect=responses) as owner_request,
+            mock.patch.object(asgi_agents, "sleep", new=mock.AsyncMock()) as sleep,
         ):
             status, data = self.request(
                 "POST",
@@ -471,16 +512,14 @@ class GatewayCsrfContractTest(unittest.TestCase):
         self.assertNotIn(gateway.CSRF_HEADER, OwnerHandler.requests[0]["headers"])
 
     def test_login_rate_key_ignores_spoofable_forwarded_for(self) -> None:
-        handler = object.__new__(gateway.GatewayHandler)
-        handler.client_address = ("127.0.0.1", 12345)
-        handler.headers = {
-            "CF-Connecting-IP": "203.0.113.7",
-            "X-Forwarded-For": "198.51.100.99",
-        }
-        self.assertEqual(handler.login_rate_key(), "203.0.113.7")
-
-        handler.client_address = ("198.51.100.10", 12345)
-        self.assertEqual(handler.login_rate_key(), "198.51.100.10")
+        self.assertEqual(
+            gateway_security.login_rate_key("127.0.0.1", "203.0.113.7"),
+            "203.0.113.7",
+        )
+        self.assertEqual(
+            gateway_security.login_rate_key("198.51.100.10", "203.0.113.7"),
+            "198.51.100.10",
+        )
 
 if __name__ == "__main__":
     unittest.main()
