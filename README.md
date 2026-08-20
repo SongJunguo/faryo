@@ -22,10 +22,12 @@ browser terminal, or a second AI chat history.
 
 ## Project Status
 
-Faryo Codex Web UI started from
-[Snailflyer/faryo](https://github.com/Snailflyer/faryo) and is now maintained as
-an independent, Codex-focused project. The original repository remains tracked
-as the local `upstream`; this project is maintained at
+Faryo Codex Web UI started from the MIT-licensed `Snailflyer/faryo` project and
+is now maintained as an independent, Codex-focused project. Its
+[upstream baseline](https://github.com/SongJunguo/faryo-codex-web-ui/commit/625d8cecc15b03b71c41b57bc60d0315e30841c4)
+is preserved in Git history; the original public URL remains recorded as the
+local `upstream` remote for provenance, although it is currently unavailable.
+This project is maintained at
 [SongJunguo/faryo-codex-web-ui](https://github.com/SongJunguo/faryo-codex-web-ui).
 
 Faryo is an independent community project. It is not affiliated with, endorsed
@@ -80,12 +82,13 @@ Ubuntu/Linux workstation
   -> current Chrome or Microsoft Edge on phone/desktop
 ```
 
-This fork does **not** currently publish or maintain binary release packages.
+This standalone project does **not** currently publish or maintain binary
+release packages.
 Historical distribution and non-Codex platform paths may remain in the tree for
-upstream compatibility, but they are not part of this fork's current validation
+upstream compatibility, but they are not part of this project's current validation
 or support claims.
 
-Current release: [Faryo 1.5.0](https://github.com/SongJunguo/faryo-codex-web-ui/releases/tag/v1.5.0).
+Current release: [Faryo 1.5.1](https://github.com/SongJunguo/faryo-codex-web-ui/releases/tag/v1.5.1).
 
 ## Current Functionality
 
@@ -285,7 +288,7 @@ initial allowed workspace:
 
 ```bash
 sha256sum --check install-faryo.sh.sha256
-bash install-faryo.sh --version v1.5.0 --workspace "$PWD"
+bash install-faryo.sh --version v1.5.1 --workspace "$PWD"
 ```
 
 Upgrading a pre-v1.5 checkout that still uses the dedicated Owner keepalive
@@ -489,10 +492,10 @@ attribution and license information is available in the
 
 ## Upstream and License
 
-The original Faryo project is maintained by
-[Snailflyer](https://github.com/Snailflyer/faryo). This standalone project keeps
-that repository as the local `upstream` remote for attribution and comparison,
-but pushes maintained changes only to
+The original Faryo history was published as `Snailflyer/faryo`; its preserved
+baseline is linked in Project Status above. This standalone project keeps the
+original URL as a non-pushable local `upstream` remote for attribution and
+comparison, but pushes maintained changes only to
 [SongJunguo/faryo-codex-web-ui](https://github.com/SongJunguo/faryo-codex-web-ui).
 
 Faryo is released under the MIT License. See [LICENSE](LICENSE).

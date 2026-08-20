@@ -1,8 +1,8 @@
 # Faryo UI Interaction Model
 
-This document describes the maintained Ubuntu/Linux Codex UI in the current
-personal fork. It is an interaction contract, not a record of inherited platform
-or package capabilities.
+This document describes the maintained Ubuntu/Linux Codex UI in the standalone
+project. It is an interaction contract, not a record of inherited platform or
+package capabilities.
 
 ## Product Shape
 

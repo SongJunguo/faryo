@@ -222,6 +222,7 @@ gateway_asgi_runner = (root / "apps/gateway/server/run_asgi.py").read_text(encod
 gateway_workbench = (root / "apps/gateway/server/static/workbench.js").read_text(encoding="utf-8")
 gateway_preact_source = (root / "apps/gateway/ui/preact-workbench.jsx").read_text(encoding="utf-8")
 gateway_ui = gateway + "\n" + gateway_workbench
+assert "firstAvailableDirectoryPage" in gateway_workbench and "for (const candidate of candidates)" in gateway_workbench, "directory picker must try every recent cwd before root fallback"
 ci_workflow = (root / ".github/workflows/ci.yml").read_text(encoding="utf-8")
 release_workflow = (root / ".github/workflows/release.yml").read_text(encoding="utf-8")
 check_script = (root / "scripts/check-source.sh").read_text(encoding="utf-8")

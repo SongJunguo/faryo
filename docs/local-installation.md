@@ -46,10 +46,10 @@ Review and verify the script before executing it:
 ```bash
 sha256sum --check install-faryo.sh.sha256
 less install-faryo.sh
-bash install-faryo.sh --version v1.5.0 --workspace /path/to/workspace
+bash install-faryo.sh --version v1.5.1 --workspace /path/to/workspace
 ```
 
-The script then downloads `faryo-v1.5.0.tar.gz` and its checksum, accepts only a
+The script then downloads `faryo-v1.5.1.tar.gz` and its checksum, accepts only a
 bounded single-root regular-file archive, and invokes the same `faryo install`
 path used by source developers. It does not execute sudo, install apt packages,
 create a tunnel, or change Cloudflare settings.
@@ -59,7 +59,7 @@ When upgrading a pre-v1.5 deployment that still has the dedicated
 supervisor migration:
 
 ```bash
-bash install-faryo.sh --version v1.5.0 --workspace /path/to/workspace --migrate-owner
+bash install-faryo.sh --version v1.5.1 --workspace /path/to/workspace --migrate-owner
 ```
 
 The migration records and compares every existing agent tmux geometry. It stops

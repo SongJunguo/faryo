@@ -8,7 +8,8 @@
 
 独立维护仓库：`origin`（`SongJunguo/faryo-codex-web-ui`）
 
-原作者仓库：`upstream`（`Snailflyer/faryo`）
+原作者历史仓库：`upstream`（`Snailflyer/faryo`；当前公开 URL 不可用，本地保留
+`625d8ce` remote-tracking baseline，push URL 禁用）
 
 ## 总目标
 

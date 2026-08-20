@@ -568,7 +568,7 @@ class FaryoCliTest(unittest.TestCase):
             ):
                 prepared = application.prepare_version(layout, bootstrap_python=sys.executable)
 
-            self.assertEqual(prepared, program.versions / "v1.5.0")
+            self.assertEqual(prepared, program.versions / application.version_name())
             create.assert_called_once_with(prepared, sys.executable)
             self.assertFalse((prepared / ".installing").exists())
             self.assertEqual(list(program.versions.glob(".stage-*")), [])
@@ -588,7 +588,7 @@ class FaryoCliTest(unittest.TestCase):
                     application.prepare_version(layout, bootstrap_python=sys.executable)
 
             versions = application.ProgramLayout.from_layout(layout).versions
-            self.assertFalse((versions / "v1.5.0").exists())
+            self.assertFalse((versions / application.version_name()).exists())
             self.assertEqual(list(versions.glob(".stage-*")), [])
 
     def test_incomplete_version_cleanup_requires_bounded_marker(self) -> None:

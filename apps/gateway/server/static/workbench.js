@@ -1031,27 +1031,37 @@ function directorySheet(data, recent, label) {
     });
   });
 }
+async function firstAvailableDirectoryPage(route, recent) {
+  const candidates = [],
+    seen = new Set();
+  for (const item of recent) {
+    const value = String(item?.value || "").trim();
+    if (!value || seen.has(value)) continue;
+    seen.add(value);
+    candidates.push(value);
+  }
+  candidates.push("");
+  let lastError = null;
+  for (const candidate of candidates) {
+    try {
+      return { data: await directoryPage(route, candidate), path: candidate };
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  throw lastError || new Error("No available working directory");
+}
 async function selectNewCwd(route, label, cwdChoices) {
   const recent = Array.isArray(cwdChoices?.[route]) ? cwdChoices[route] : [];
-  let path = String(recent[0]?.value || ""),
-    initial = true;
+  const initial = await firstAvailableDirectoryPage(route, recent);
+  let path = initial.path,
+    data = initial.data;
   while (true) {
-    let data;
-    try {
-      data = await directoryPage(route, path);
-    } catch (error) {
-      if (initial && path) {
-        path = "";
-        initial = false;
-        continue;
-      }
-      throw error;
-    }
-    initial = false;
     const selected = await directorySheet(data, recent, label);
     if (selected === null) return null;
     if (selected.cwd) return selected;
     path = String(selected.path || "");
+    data = await directoryPage(route, path);
   }
 }
 function newLaunchRequestId() {
