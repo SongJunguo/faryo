@@ -1,7 +1,7 @@
 # Faryo — Self-hosted Codex Web UI for tmux
 
-[![Release](https://img.shields.io/github/v/release/SongJunguo/faryo?display_name=tag&sort=semver)](https://github.com/SongJunguo/faryo/releases/latest)
-[![Source CI](https://github.com/SongJunguo/faryo/actions/workflows/ci.yml/badge.svg)](https://github.com/SongJunguo/faryo/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/SongJunguo/faryo-codex-web-ui?display_name=tag&sort=semver)](https://github.com/SongJunguo/faryo-codex-web-ui/releases/latest)
+[![Source CI](https://github.com/SongJunguo/faryo-codex-web-ui/actions/workflows/ci.yml/badge.svg)](https://github.com/SongJunguo/faryo-codex-web-ui/actions/workflows/ci.yml)
 [![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white)](docs/local-installation.md)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
@@ -18,14 +18,15 @@ browser terminal, or a second AI chat history.
 
 [Install](#installation) · [Screenshots](#real-ui-screenshots) ·
 [Features](#current-functionality) · [Security](#security-boundary) ·
-[Latest release](https://github.com/SongJunguo/faryo/releases/latest)
+[Latest release](https://github.com/SongJunguo/faryo-codex-web-ui/releases/latest)
 
 ## Project Status
 
-This repository is an actively maintained, Codex-focused fork of
-[Snailflyer/faryo](https://github.com/Snailflyer/faryo). The original project is
-tracked as `upstream`; this fork is maintained at
-[SongJunguo/faryo](https://github.com/SongJunguo/faryo).
+Faryo Codex Web UI started from
+[Snailflyer/faryo](https://github.com/Snailflyer/faryo) and is now maintained as
+an independent, Codex-focused project. The original repository remains tracked
+as the local `upstream`; this project is maintained at
+[SongJunguo/faryo-codex-web-ui](https://github.com/SongJunguo/faryo-codex-web-ui).
 
 Faryo is an independent community project. It is not affiliated with, endorsed
 by, or sponsored by OpenAI; “Codex” is used only to describe compatibility with
@@ -33,7 +34,7 @@ Codex CLI. Faryo uses its own name and logo and includes no OpenAI brand assets.
 
 ## Why Faryo
 
-Most lightweight tmux web bridges can only reproduce terminal text. This fork
+Most lightweight tmux web bridges can only reproduce terminal text. This project
 uses Codex's structured rollout history for the reading experience while keeping
 the existing tmux TUI as the execution surface.
 
@@ -84,7 +85,7 @@ Historical distribution and non-Codex platform paths may remain in the tree for
 upstream compatibility, but they are not part of this fork's current validation
 or support claims.
 
-Current release: [Faryo 1.5.0](https://github.com/SongJunguo/faryo/releases/tag/v1.5.0).
+Current release: [Faryo 1.5.0](https://github.com/SongJunguo/faryo-codex-web-ui/releases/tag/v1.5.0).
 
 ## Current Functionality
 
@@ -299,8 +300,8 @@ and tmux sessions are preserved.
 Developers can install a clean checkout through the same application path:
 
 ```bash
-git clone https://github.com/SongJunguo/faryo.git
-cd faryo
+git clone https://github.com/SongJunguo/faryo-codex-web-ui.git
+cd faryo-codex-web-ui
 PYTHONPATH=src /usr/bin/python3 -m faryo_cli install --workspace "$PWD"
 ```
 
@@ -344,7 +345,7 @@ layer while keeping Faryo's inner login enabled.
 
 The `main` branch was revalidated on 2026-08-20 with privacy-safe fixtures:
 
-- source checks plus 130 Owner, 112 Gateway, and 50 unified-CLI Python tests;
+- source checks plus 130 Owner, 112 Gateway, and 51 unified-CLI Python tests;
 - Ruff fatal/Pyflakes checks, a Playwright system-browser fixture, deterministic
   diff-review rebuild comparison and zero npm audit findings;
 - a workspace Git security matrix covering scope/symlink escape, disabled
@@ -489,8 +490,9 @@ attribution and license information is available in the
 ## Upstream and License
 
 The original Faryo project is maintained by
-[Snailflyer](https://github.com/Snailflyer/faryo). This fork preserves the
-upstream remote for comparison but pushes personal changes only to
-[SongJunguo/faryo](https://github.com/SongJunguo/faryo).
+[Snailflyer](https://github.com/Snailflyer/faryo). This standalone project keeps
+that repository as the local `upstream` remote for attribution and comparison,
+but pushes maintained changes only to
+[SongJunguo/faryo-codex-web-ui](https://github.com/SongJunguo/faryo-codex-web-ui).
 
 Faryo is released under the MIT License. See [LICENSE](LICENSE).

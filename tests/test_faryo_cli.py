@@ -910,10 +910,18 @@ class FaryoCliTest(unittest.TestCase):
                     application.safe_extract(archive, root / f"extract-{name}")
 
     def test_release_download_allows_only_github_https_hosts(self) -> None:
-        self.assertTrue(updates.trusted_release_url("https://github.com/SongJunguo/faryo/releases"))
+        self.assertTrue(updates.trusted_release_url("https://github.com/SongJunguo/faryo-codex-web-ui/releases"))
         self.assertTrue(updates.trusted_release_url("https://release-assets.githubusercontent.com/file"))
         self.assertFalse(updates.trusted_release_url("http://github.com/file"))
         self.assertFalse(updates.trusted_release_url("https://github.com.example.invalid/file"))
+
+    def test_default_update_repository_uses_the_standalone_slug(self) -> None:
+        self.assertEqual(updates.DEFAULT_REPOSITORY, "SongJunguo/faryo-codex-web-ui")
+        archive, _checksum = updates.release_asset_names("v1.5.0")
+        self.assertEqual(
+            updates.release_asset_url("v1.5.0", archive),
+            "https://github.com/SongJunguo/faryo-codex-web-ui/releases/download/v1.5.0/faryo-v1.5.0.tar.gz",
+        )
 
 
 if __name__ == "__main__":

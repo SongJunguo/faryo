@@ -1,4 +1,4 @@
-# Faryo 个人 Fork 完善路线图
+# Faryo 独立维护路线图
 
 计划索引：[`README.md`](README.md)
 
@@ -6,13 +6,13 @@
 
 当前主分支：`main`（原实施分支 `feature/deepseek-inspired-ui` 已于 2026-08-19 提升）
 
-个人仓库：`origin`（`SongJunguo/faryo`）
+独立维护仓库：`origin`（`SongJunguo/faryo-codex-web-ui`）
 
 原作者仓库：`upstream`（`Snailflyer/faryo`）
 
 ## 总目标
 
-把个人 Faryo fork 完善为可长期使用的本机 Codex Web 客户端：优先实现结构化消息实时同步与可靠输入提交，再完成安全 Markdown、离线 KaTeX、本机自启、端到端测试、文档和个人 GitHub 推送，同时保持 tmux TUI 可用且不修改原作者 upstream。
+把 Faryo 独立维护项目完善为可长期使用的本机 Codex Web 客户端：优先实现结构化消息实时同步与可靠输入提交，再完成安全 Markdown、离线 KaTeX、本机自启、端到端测试、文档和 GitHub 推送，同时保持 tmux TUI 可用，并把原作者仓库保留为只读 upstream。
 
 ## 当前架构边界
 

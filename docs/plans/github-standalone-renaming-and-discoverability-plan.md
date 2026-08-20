@@ -189,7 +189,7 @@ GitHub 转换、代码引用与远端恢复完成后，把 checkout 从 `faryo` 
 - README 首屏已经加入描述性 H1、release/CI/Python/license badges、Codex Web UI、agent
   workbench/session harness、tmux、Markdown/LaTeX/KaTeX、mobile/PWA 与 quick links；
 - GitHub description 已更新，topics 已扩展至准确的 20 个上限；
-- 本地 canonical source gate通过：Python 3.13.14，Owner 130、Gateway 112、CLI 50，前端与浏览器
+- 本地 canonical source gate 通过：Python 3.13.14，Owner 130、Gateway 112、CLI 51，前端与浏览器
   bundles 全绿；
 - 私有恢复包已完成：verified all-refs bundle、repository/releases/Actions/settings JSON、v1.5.0
   四个资产与总 SHA-256 清单；

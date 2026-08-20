@@ -21,7 +21,7 @@ from faryo_cli.diagnostics import Layout
 from faryo_cli.operations import OperationError
 
 
-DEFAULT_REPOSITORY = "SongJunguo/faryo"
+DEFAULT_REPOSITORY = "SongJunguo/faryo-codex-web-ui"
 MAX_ARCHIVE_BYTES = 32 * 1024 * 1024
 MAX_METADATA_BYTES = 1024 * 1024
 SHA256_RE = re.compile(r"[0-9a-f]{64}")
