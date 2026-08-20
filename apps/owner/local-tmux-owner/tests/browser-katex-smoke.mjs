@@ -926,6 +926,39 @@ try {
     if (layout.enterControl?.label !== 'Enter Choose' || !layout.enterControl?.aria.includes('current Codex TUI option')) {
       throw new Error(`Owner Enter control is ambiguous: ${JSON.stringify(layout.enterControl)}`);
     }
+    const attachmentStripResult = await send('Runtime.evaluate', {
+      expression: `(() => {
+        const preview = document.getElementById('attachmentPreview');
+        const statusLine = document.querySelector('.status-line');
+        if (!preview || !statusLine) return { ready: false };
+        statusLine.classList.add('auto-expanded');
+        preview.classList.remove('hidden');
+        preview.replaceChildren(...Array.from({ length: 35 }, (_value, index) => {
+          const item = document.createElement('button');
+          item.type = 'button';
+          item.className = 'attachment-thumb file';
+          item.textContent = String(index + 1);
+          return item;
+        }));
+        const state = {
+          ready: true,
+          count: preview.children.length,
+          overflowX: getComputedStyle(preview).overflowX,
+          scrollable: preview.scrollWidth > preview.clientWidth,
+          pageOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth + 1,
+        };
+        preview.replaceChildren();
+        preview.classList.add('hidden');
+        statusLine.classList.remove('auto-expanded');
+        return state;
+      })()`,
+      returnByValue: true,
+    });
+    const attachmentStrip = attachmentStripResult.result?.value || {};
+    if (!attachmentStrip.ready || attachmentStrip.count !== 35 || attachmentStrip.overflowX !== 'auto'
+      || !attachmentStrip.scrollable || attachmentStrip.pageOverflow) {
+      throw new Error(`Owner 35-file attachment strip is not bounded: ${JSON.stringify(attachmentStrip)}`);
+    }
     const keyNavResult = await send('Runtime.evaluate', {
       expression: `(() => {
         const line = document.querySelector('.status-line');
@@ -1121,7 +1154,7 @@ try {
     if (detailsClosedState.panelOpen || detailsClosedState.backdropVisible || detailsClosedState.activeId !== 'detailsBtn') {
       throw new Error(`Owner details panel did not close on Escape: ${JSON.stringify(detailsClosedState)}`);
     }
-    console.log(`faryo-browser-owner-layout=PASS viewport=${state.viewport.width}x${state.viewport.height}`);
+    console.log(`faryo-browser-owner-layout=PASS viewport=${state.viewport.width}x${state.viewport.height} attachments=35-scrollable`);
   }
   if (minProtectedLinks > 0) {
     const startResult = await send('Runtime.evaluate', {

@@ -6,7 +6,7 @@
 ## 问题基线
 
 Owner 对话页已经支持通过 Attach 按钮或拖放上传图片，并具有压缩、进度、缩略图、移除、
-最多 5 个附件和可靠发送逻辑；但在桌面截图工具或手机剪贴板复制图片后，仍必须另存或重新
+最多 35 个附件和可靠发送逻辑；但在桌面截图工具或手机剪贴板复制图片后，仍必须另存或重新
 打开文件选择器。
 
 ## 目标
@@ -26,7 +26,7 @@ Owner 对话页已经支持通过 Attach 按钮或拖放上传图片，并具有
 - 同时包含图片和纯文本时，手工插入 `text/plain`，不读取 HTML clipboard 内容。
 - Blob URL 只用于本页缩略图并在移除/成功发送时撤销；图片、文件名和本机上传路径不写入
   localStorage/sessionStorage 或公开日志。
-- 继续沿用 Owner token/CSRF、25 MiB 服务端上限、5 个附件上限、随机私有落盘名和既有
+- 继续沿用 Owner token/CSRF、25 MiB 单文件服务端上限、35 个附件上限、随机私有落盘名和既有
   workspace/inbox 边界。
 
 ## 实现方案
@@ -45,7 +45,7 @@ Owner 对话页已经支持通过 Attach 按钮或拖放上传图片，并具有
 1. 纯文本 paste 不被拦截；image-only paste 被拦截并上传。
 2. image + text 同时粘贴时，文本按 selection range 插入且图片只入队一次。
 3. `clipboardData.items`/`files` fallback、非图片 file、空 clipboard。
-4. 多图和已有附件共同遵守 5 个上限，不产生重复上传。
+4. 多图和已有附件共同遵守 35 个上限，压缩/上传并发不超过 4，不产生重复上传。
 5. PNG fixture 缩略图、进度、移除、压缩/上传失败和发送后清理。
 6. 真实浏览器经 clipboard event 上传匿名 PNG，并由 tmux receiver 确认只提交一次。
 7. 390x844 与 1440x900 composer 几何、文字 paste、拖放、Attach、发送恢复和 tmux 尺寸
@@ -65,8 +65,8 @@ Owner 对话页已经支持通过 Attach 按钮或拖放上传图片，并具有
   `image/*`，并以纯函数保留 selection range 中的 `text/plain`。
 - composer 仅在 paste event 确实含图片时调用 `preventDefault()`；纯文字 event 的浏览器
   默认行为未被阻止，也没有使用 `navigator.clipboard.read()`。
-- 图片继续复用现有最多 5 个、压缩、进度、缩略图、取消、CSRF 上传、失败保留和发送后
-  Blob URL 清理链路；Gateway 已代理新增静态 helper。
+- 图片继续复用现有最多 35 个、四路压缩/上传、进度、可横向滚动缩略图、取消、CSRF 上传、
+  失败保留和发送后 Blob URL 清理链路；Gateway 已代理新增静态 helper。
 - Node 单元测试覆盖 items/files fallback、非图片排除、异常 clipboard、文本读取和 selection
   替换。
 - 隔离 Owner + 临时 tmux receiver 在 390x844 与 1440x900 Chrome 均通过：匿名 PNG paste

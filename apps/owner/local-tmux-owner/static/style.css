@@ -83,7 +83,8 @@ footer { position: absolute; left: 0; right: 0; bottom: 0; z-index: 6; min-width
 #quotaFill { width: calc(var(--quota-pct, 0) * 1%); }
 #quotaWeekFill { width: calc(var(--quota-week-pct, 0) * 1%); background: color-mix(in srgb, var(--accent) 48%, transparent); }
 .product-mark { flex: 0 0 auto; margin-left: auto; color: var(--muted); font-size: calc(12px + var(--font-step)); line-height: 1; white-space: nowrap; opacity: .78; cursor: pointer; }
-.attachment-preview { flex: 0 1 170px; max-width: 170px; display: inline-flex; flex-direction: row; justify-content: flex-start; align-items: center; gap: 5px; overflow: hidden; }
+.attachment-preview { flex: 0 1 170px; max-width: 170px; display: inline-flex; flex-direction: row; justify-content: flex-start; align-items: center; gap: 5px; overflow-x: auto; overflow-y: hidden; overscroll-behavior-inline: contain; scrollbar-width: none; }
+.attachment-preview::-webkit-scrollbar { display: none; }
 .attachment-thumb { position: relative; width: 30px; height: 30px; min-width: 30px; min-height: 30px; padding: 0; border-radius: 8px; overflow: hidden; background: var(--panel2); border: 1px solid var(--line); }
 .attachment-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .attachment-thumb.compressing, .attachment-thumb.uploading { padding: 2px; border-color: transparent; background: conic-gradient(var(--accent) calc(var(--pct, 0) * 1%), color-mix(in srgb, var(--accent) 22%, transparent) 0); }

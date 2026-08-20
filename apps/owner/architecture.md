@@ -80,6 +80,9 @@ but the default upload destination should come from the Faryo data directory.
 - `static/owner/api-client.mjs` is the native HTTP boundary for route-local API
   paths, Owner headers, cached Gateway CSRF, JSON/FormData request policy and
   bounded non-JSON errors. SSE/rendering state remains in the composition root.
+- `static/owner/attachment-controller.mjs` owns the 35-file queue, four-way
+  compression/upload pool, progress thumbnails, cancel/remove, clipboard paste
+  and drag/drop. Its bounded horizontal strip never widens the page.
 - Low-level command execution and tmux/process-tree/identifier primitives are
   isolated in `tmux_runtime.py`; higher services keep policy and translate
   failures rather than rebuilding subprocess defaults.

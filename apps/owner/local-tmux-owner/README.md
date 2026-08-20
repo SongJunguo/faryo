@@ -291,6 +291,10 @@ consumed as private runtime input and is never printed.
   headers, single-flight Gateway CSRF caching, JSON/FormData headers and
   structured HTTP errors. It receives fetch, route and token dependencies and
   does not own transcript or rendering state.
+- `static/owner/attachment-controller.mjs` owns up to 35 pending files with at
+  most four simultaneous compression/upload tasks, horizontal preview,
+  progress/cancel, clipboard images and drag/drop. The server still enforces
+  the independent 25 MB per-file limit.
 - `tmux_runtime.py` owns UTF-8 subprocess defaults, fixed tmux invocation,
   process-tree parsing and bounded session/thread/message identifiers; product
   policy remains in the higher Owner services.

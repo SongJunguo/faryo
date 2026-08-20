@@ -1,10 +1,14 @@
 (async () => {
   'use strict';
   const apiClientModulePromise = import("./owner/api-client.mjs?v=faryo-owner-api-1");
+  const attachmentControllerModulePromise = import("./owner/attachment-controller.mjs?v=faryo-owner-attachments-1");
   // Workspace review is an optional surface. Start loading it immediately,
   // but never let a transient asset failure block capture/history rendering.
   const changesPanelModulePromise = import("./owner/changes-panel.mjs?v=faryo-owner-changes-1");
-  const { createApiClient, sessionApiPath } = await apiClientModulePromise;
+  const [
+    { createApiClient, sessionApiPath },
+    { createAttachmentController },
+  ] = await Promise.all([apiClientModulePromise, attachmentControllerModulePromise]);
 
   const $ = (id) => document.getElementById(id);
   const outputWrap = $('outputWrap');
@@ -52,7 +56,7 @@
     approvalPendingRe: /(?:^|\n)\s*(?:Reviewing(?:\s+\d+)?\s+approval requests?(?:\s+\(|\s*$)|Automatic approval review\b|Approval requested\b|Allow Codex to run\b|Would you like to (?:run the following command|make the following edits|grant these permissions)\?)/i,
   };
   const COMPACT_CAPTURE_LINES = 320, FULL_CAPTURE_LINES = 800;
-  const FETCH_TIMEOUT_MS = 12000, MAX_ATTACHMENTS = 5;
+  const FETCH_TIMEOUT_MS = 12000, MAX_ATTACHMENTS = 35;
   const TIP_REFRESH_MS = 120000, STATUS_REFRESH_MS = 20000, FULL_REFRESH_MS = 10000, CAPTURE_FALLBACK_MS = 2500;
   const WORKBENCH_CACHE_KEY = 'faryoWorkbenchSnapshot', WORKBENCH_CACHE_MS = 120000;
   const PET_SEND_MS = 1500;
@@ -85,7 +89,7 @@
   let outputMode = 'compact', fullLocked = false, fullRefreshTimer = null, preserveErrorUntil = 0, seenInitialPageShow = false, needsConfirmUI = false, errorTimer = null, currentPromptTip = '';
   let markdownRenderRevision = 0, highlighterRenderFrame = 0;
   const markdownHtmlCache = new Map();
-  let pendingAttachments = [];
+  const pendingAttachments = [];
   const routeMatch = location.pathname.match(/^\/(hp|pc|txy)(?:\/|$)/);
   const routeBase = routeMatch ? `/${routeMatch[1]}` : '';
   const isStandalone = window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone;
@@ -112,11 +116,10 @@
   const ownerApiClient = createApiClient({
     routeBase,
     ownerToken,
-    fetch: window.fetch.bind(window),
+    fetch: (...args) => window.fetch(...args),
     FormData: window.FormData,
   });
   const api = ownerApiClient.request;
-  const gatewayCsrfHeaders = ownerApiClient.csrfHeaders;
   let selectedSession = params.get('session') || '';
   const HISTORY_PAGE_TURNS = 12;
   const HISTORY_REFRESH_MIN_MS = 2500;
@@ -2071,56 +2074,10 @@
     setFullRefresh(outputMode === 'full' && !fullLocked);
   }
 
-  function isImageFile(file) {
-    return /^image\//i.test(file.type || '') || /\.(jpe?g|png|webp|gif|heic|heif)$/i.test(file.name || '');
-  }
-
-  function attachmentLabel(file) {
-    const match = (file.name || '').match(/\.([^.]{1,5})$/);
-    return match ? match[1].toUpperCase() : 'FILE';
-  }
-
   function toggleClassState(selector, cls, key, force) {
     const enabled = force ?? localStorage.getItem(key) === '1';
     document.querySelector(selector).classList.toggle(cls, enabled);
     localStorage.setItem(key, enabled ? '1' : '0');
-  }
-
-  function renderAttachmentPreview() {
-    attachmentPreview.textContent = '';
-    attachmentPreview.classList.toggle('hidden', pendingAttachments.length === 0);
-    for (const item of pendingAttachments) {
-      const button = document.createElement('button');
-      button.type = 'button';
-      button.className = `attachment-thumb ${item.kind === 'file' ? 'file' : ''} ${item.status || ''}`.trim();
-      button.style.setProperty('--pct', item.progress || 0);
-      button.title = ['compressing', 'uploading'].includes(item.status) ? 'Tap to cancel upload' : 'Tap to remove';
-      if (item.url) {
-        const img = document.createElement('img');
-        img.alt = 'Uploaded image thumbnail';
-        img.src = item.url;
-        button.appendChild(img);
-      } else {
-        const label = document.createElement('span');
-        label.className = 'file-label';
-        label.textContent = item.label || 'FILE';
-        button.appendChild(label);
-      }
-      if (['compressing', 'uploading'].includes(item.status)) {
-        const pct = document.createElement('span');
-        pct.className = 'upload-pct';
-        pct.textContent = item.status === 'compressing' ? 'Prep' : (Number.isFinite(item.progress) ? `${item.progress}%` : '...');
-        button.appendChild(pct);
-      }
-      const x = document.createElement('span');
-      x.className = 'upload-x';
-      x.textContent = '×';
-      button.appendChild(x);
-      button.addEventListener('click', () => removePendingAttachment(item));
-      attachmentPreview.appendChild(button);
-    }
-    updateStatusLineAutoExpand();
-    updateSendVisibility();
   }
 
   function hasConfirmUI(text, rules = runtimeCompactRules) {
@@ -2137,87 +2094,33 @@
     document.querySelector('footer')?.classList.toggle('auto-expanded', on);
   }
 
-  function removePendingAttachment(item) {
-    if (item.xhr && item.status === 'uploading') item.xhr.abort();
-    if (item.url) URL.revokeObjectURL(item.url);
-    pendingAttachments = pendingAttachments.filter((entry) => entry !== item);
-    renderAttachmentPreview();
-  }
+  const attachmentController = createAttachmentController({
+    view: window,
+    document,
+    items: pendingAttachments,
+    preview: attachmentPreview,
+    input: attachmentInput,
+    trigger: $('attachmentBtn'),
+    promptInput,
+    maximum: MAX_ATTACHMENTS,
+    uploadConcurrency: 4,
+    imageMaxEdge: IMAGE_MAX_EDGE,
+    imageQuality: IMAGE_JPEG_QUALITY,
+    routeBase,
+    csrfHeaders: ownerApiClient.csrfHeaders,
+    ownerHeaders: ownerApiClient.ownerHeaders,
+    clipboardImageApi,
+    setBusy,
+    setError,
+    userErrorMessage,
+    closeDockMenu,
+    onChange: () => {
+      updateStatusLineAutoExpand();
+      updateSendVisibility();
+    },
+  });
+  attachmentController.connect();
 
-  function clearSubmittedAttachments(paths) {
-    const submitted = new Set((paths || []).filter(Boolean));
-    if (!submitted.size) return;
-    for (const item of pendingAttachments) {
-      if (submitted.has(item.path) && item.url) URL.revokeObjectURL(item.url);
-    }
-    pendingAttachments = pendingAttachments.filter((item) => !submitted.has(item.path));
-    renderAttachmentPreview();
-  }
-
-  function jpegName(name) {
-    return `${(name || 'image').replace(/\.[^.]*$/, '') || 'image'}.jpg`;
-  }
-
-  function loadImage(file) {
-    return new Promise((resolve, reject) => {
-      const url = URL.createObjectURL(file);
-      const img = new Image();
-      img.onload = () => { URL.revokeObjectURL(url); resolve(img); };
-      img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('Image could not be read')); };
-      img.src = url;
-    });
-  }
-
-  async function compressImage(file) {
-    if (!/^image\/(jpeg|png|webp)$/i.test(file.type || '')) return { blob: file, name: file.name || 'image' };
-    try {
-      const img = await loadImage(file);
-      const scale = Math.min(1, IMAGE_MAX_EDGE / Math.max(img.naturalWidth || img.width, img.naturalHeight || img.height));
-      const canvas = document.createElement('canvas');
-      canvas.width = Math.max(1, Math.round((img.naturalWidth || img.width) * scale));
-      canvas.height = Math.max(1, Math.round((img.naturalHeight || img.height) * scale));
-      canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
-      const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', IMAGE_JPEG_QUALITY));
-      return blob && blob.size < file.size ? { blob, name: jpegName(file.name) } : { blob: file, name: file.name || 'image' };
-    } catch (_) {
-      return { blob: file, name: file.name || 'image' };
-    }
-  }
-
-  async function uploadAttachmentItem(item) {
-    item.status = item.kind === 'image' ? 'compressing' : 'uploading';
-    item.progress = item.kind === 'image' ? 0 : 1;
-    renderAttachmentPreview();
-    const upload = item.kind === 'image' ? await compressImage(item.file) : { blob: item.file, name: item.file.name || 'attachment' };
-    if (!pendingAttachments.includes(item)) { const err = new Error('Upload canceled'); err.canceled = true; throw err; }
-    item.status = 'uploading';
-    item.progress = Math.max(1, item.progress || 1);
-    renderAttachmentPreview();
-    const csrfHeaders = await gatewayCsrfHeaders();
-    return new Promise((resolve, reject) => {
-      const form = new FormData();
-      form.append('file', upload.blob, upload.name);
-      const xhr = new XMLHttpRequest();
-      item.xhr = xhr;
-      xhr.upload.onprogress = (event) => {
-        if (!event.lengthComputable) return;
-        item.progress = Math.max(1, Math.min(99, Math.round((event.loaded / event.total) * 100)));
-        renderAttachmentPreview();
-      };
-      xhr.onload = () => {
-        let data = null;
-        try { data = JSON.parse(xhr.responseText || '{}'); } catch (_) {}
-        if (xhr.status >= 200 && xhr.status < 300 && data && data.ok !== false) resolve(data);
-        else reject(new Error((data && data.error) || `Upload failed ${xhr.status}`));
-      };
-      xhr.onerror = () => reject(new Error('Upload failed'));
-      xhr.onabort = () => { const err = new Error('Upload canceled'); err.canceled = true; reject(err); };
-      xhr.open('POST', `${routeBase}/api/attachment`);
-      if (ownerToken) xhr.setRequestHeader('X-Owner-Token', ownerToken);
-      for (const [name, value] of Object.entries(csrfHeaders)) xhr.setRequestHeader(name, value);
-      xhr.send(form);
-    });
-  }
 
   async function refreshStatus(options = {}) {
     if (statusRefreshInFlight) return;
@@ -2320,80 +2223,6 @@
       return sendDeliveryAttempt(payload);
     }
   }
-
-  async function uploadAttachments(files) {
-    const selected = Array.from(files || []).slice(0, MAX_ATTACHMENTS - pendingAttachments.length);
-    if (!selected.length) { attachmentInput.value = ''; if (pendingAttachments.length >= MAX_ATTACHMENTS) setError(`Attach up to ${MAX_ATTACHMENTS} files`); return; }
-    const items = selected.map((file) => {
-      const kind = isImageFile(file) ? 'image' : 'file';
-      return { file, kind, label: attachmentLabel(file), url: kind === 'image' ? URL.createObjectURL(file) : '', status: kind === 'image' ? 'compressing' : 'uploading', progress: 0 };
-    });
-    pendingAttachments.push(...items);
-    renderAttachmentPreview();
-    setBusy(true);
-    setError('');
-    try {
-      await Promise.allSettled(items.map(async (item) => {
-        try {
-          const data = await uploadAttachmentItem(item);
-          if (!pendingAttachments.includes(item)) return;
-          item.path = data.path;
-          item.kind = data.kind || item.kind;
-          item.progress = 100;
-          item.status = 'ready';
-        } catch (err) {
-          if (err.canceled || !pendingAttachments.includes(item)) return;
-          item.status = 'error';
-          setError(userErrorMessage(err));
-        } finally {
-          item.xhr = null;
-          renderAttachmentPreview();
-        }
-      }));
-      if ((files || []).length > selected.length) setError(`Attach up to ${MAX_ATTACHMENTS} files`);
-    } finally {
-      attachmentInput.value = '';
-      setBusy(false);
-    }
-  }
-  promptInput.addEventListener('paste', (event) => {
-    const images = typeof clipboardImageApi.filesFromClipboard === 'function'
-      ? clipboardImageApi.filesFromClipboard(event.clipboardData)
-      : [];
-    if (!images.length) return;
-    event.preventDefault();
-    const pastedText = typeof clipboardImageApi.plainTextFromClipboard === 'function'
-      ? clipboardImageApi.plainTextFromClipboard(event.clipboardData)
-      : '';
-    if (pastedText && typeof clipboardImageApi.insertText === 'function') {
-      const inserted = clipboardImageApi.insertText(
-        promptInput.value,
-        promptInput.selectionStart,
-        promptInput.selectionEnd,
-        pastedText,
-      );
-      promptInput.value = inserted.value;
-      promptInput.setSelectionRange(inserted.selectionStart, inserted.selectionStart);
-      promptInput.dispatchEvent(new Event('input', { bubbles: true }));
-    }
-    closeDockMenu();
-    uploadAttachments(images).catch((err) => setError(userErrorMessage(err)));
-  });
-  function hasDraggedFiles(event) {
-    return event.dataTransfer && Array.from(event.dataTransfer.types || []).includes('Files');
-  }
-  document.addEventListener('dragover', (event) => {
-    if (!hasDraggedFiles(event)) return;
-    event.preventDefault();
-    event.stopPropagation();
-    event.dataTransfer.dropEffect = 'copy';
-  }, true);
-  document.addEventListener('drop', async (event) => {
-    if (!hasDraggedFiles(event)) return;
-    event.preventDefault();
-    event.stopPropagation();
-    try { await uploadAttachments(event.dataTransfer && event.dataTransfer.files); } catch (err) { setError(userErrorMessage(err)); }
-  }, true);
 
   renderOutputModeButton();
   toggleClassState('header', 'collapsed', 'rdHeaderCollapsed'); toggleClassState('.app', 'header-collapsed', 'rdHeaderCollapsed'); syncStatusRefresh(false);
@@ -2499,7 +2328,7 @@
       await sendWithDeliveryRecovery({ session: submission.session, text: submission.outboundText, clientMessageId: submission.id });
       clearDeliveredPromptDraft(submission);
       clearPendingSubmission(submission);
-      clearSubmittedAttachments(submission.attachmentPaths);
+      attachmentController.clearSubmitted(submission.attachmentPaths);
       if (pendingSubmission?.id === submission.id) pendingSubmission = null;
       if (selectedSession === submission.session) {
         if (promptInput.value === submission.browserText) promptInput.value = '';
@@ -2567,19 +2396,6 @@
     const on = !document.querySelector('.status-line').classList.contains('collapsed');
     toggleClassState('.status-line', 'collapsed', statusCollapseKey, on);
     toggleClassState('footer', 'status-collapsed', statusCollapseKey, on);
-  });
-
-  $('attachmentBtn').addEventListener('click', () => {
-    if (pendingAttachments.length >= MAX_ATTACHMENTS) { setError(`Attach up to ${MAX_ATTACHMENTS} files`); return; }
-    closeDockMenu();
-    attachmentInput.click();
-  });
-  attachmentInput.addEventListener('change', async () => {
-    try {
-      await uploadAttachments(attachmentInput.files);
-    } catch (err) {
-      setError(userErrorMessage(err));
-    }
   });
 
   async function navKey(path) {
