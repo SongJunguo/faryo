@@ -84,6 +84,8 @@ class OwnerContractFixture(BaseHTTPRequestHandler):
             result["archived"] = False
         elif self.path == "/api/agent/resume":
             result["session"] = "faryo3"
+        elif self.path == "/api/agent/new":
+            result["session"] = "faryo4"
         data = json.dumps(result).encode("utf-8")
         self.send_response(HTTPStatus.OK)
         self.send_header("Content-Type", "application/json; charset=utf-8")
@@ -396,6 +398,48 @@ class AsgiReadContractTest(unittest.TestCase):
         self.assertEqual(normalized[0], normalized[1])
         self.assertEqual(normalized[0]["action"], "resume")
         self.assertEqual(normalized[0]["target"], "thread-fixture")
+
+    def test_agent_new_and_audit_contract_match(self) -> None:
+        body = json.dumps({"route": "lab", "command": "codex", "client_launch_id": "launch-fixture"}).encode("utf-8")
+        csrf = gateway_security.csrf_token(self.config.cookie_secret, "tester", self.config.auth_epoch("tester"))
+        headers = {legacy.CSRF_HEADER: csrf, "Content-Type": "application/json"}
+        self.config.audit_calls.clear()
+        legacy_result = self.request(
+            self.legacy_base, "/api/agent/new", authenticated=True, method="POST", body=body, extra_headers=headers,
+        )
+        asgi_result = self.request(
+            self.asgi_base, "/api/agent/new", authenticated=True, method="POST", body=body, extra_headers=headers,
+        )
+        self.assertEqual(asgi_result[0], legacy_result[0])
+        self.assertEqual(json.loads(asgi_result[2]), json.loads(legacy_result[2]))
+        self.assertEqual(json.loads(asgi_result[2])["session"], "faryo4")
+        normalized = [
+            {key: value for key, value in call.items() if key not in {"request_id", "duration_ms"}}
+            for call in self.config.audit_calls
+        ]
+        self.assertEqual(normalized[0], normalized[1])
+        self.assertEqual(normalized[0]["action"], "start")
+        self.assertEqual(normalized[0]["target"], "faryo4")
+
+    def test_agent_new_rejects_invalid_cwd_token_equally(self) -> None:
+        body = json.dumps({
+            "route": "lab",
+            "command": "codex",
+            "cwd": "/workspace/fixture",
+            "cwd_token": "invalid",
+            "client_launch_id": "launch-fixture",
+        }).encode("utf-8")
+        csrf = gateway_security.csrf_token(self.config.cookie_secret, "tester", self.config.auth_epoch("tester"))
+        headers = {legacy.CSRF_HEADER: csrf, "Content-Type": "application/json"}
+        legacy_result = self.request(
+            self.legacy_base, "/api/agent/new", authenticated=True, method="POST", body=body, extra_headers=headers,
+        )
+        asgi_result = self.request(
+            self.asgi_base, "/api/agent/new", authenticated=True, method="POST", body=body, extra_headers=headers,
+        )
+        self.assertEqual(asgi_result[0], legacy_result[0])
+        self.assertEqual(json.loads(asgi_result[2]), json.loads(legacy_result[2]))
+        self.assertEqual(asgi_result[0], HTTPStatus.BAD_REQUEST)
 
 
 if __name__ == "__main__":
