@@ -15,6 +15,7 @@ from starlette.datastructures import MutableHeaders
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, RedirectResponse, Response, StreamingResponse
 from starlette.routing import Route
+import bcrypt
 
 import gateway_security
 import owner_client
@@ -137,6 +138,26 @@ def create_app(legacy: Any, config: Any) -> Starlette:
 
     async def login(request: Request) -> Response:
         target = gateway_security.safe_target(request.query_params.get("next", "/"))
+        if request.method == "POST":
+            body = await request.body()
+            form = legacy.parse_qs(body[:8192].decode("utf-8", errors="replace"))
+            candidate = form.get("username", [""])[0].strip()
+            password = form.get("password", [""])[0]
+            target = gateway_security.safe_target(form.get("next", [target])[0] or "/")
+            peer = request.client.host if request.client else ""
+            rate_key = gateway_security.login_rate_key(peer, request.headers.get("cf-connecting-ip", ""))
+            user = config.user(candidate)
+            valid = not legacy.LOGIN_LIMITER.limited(rate_key) and bool(user)
+            if valid:
+                valid = await to_thread.run_sync(lambda: bcrypt.checkpw(password.encode("utf-8"), config.password_hash(candidate)))
+            if not valid:
+                legacy.LOGIN_LIMITER.record_failure(rate_key)
+                return html_page(request, legacy.login_html(target, "Invalid username or password", config.icp_record))
+            legacy.LOGIN_LIMITER.clear(rate_key)
+            response = RedirectResponse(target, status_code=HTTPStatus.SEE_OTHER)
+            response.raw_headers.append((b"set-cookie", codec().issue(candidate, config.auth_epoch(candidate)).encode("latin-1")))
+            response.raw_headers.append((b"set-cookie", codec().expire(legacy.LEGACY_COOKIE_NAME).encode("latin-1")))
+            return response
         if username(request):
             return RedirectResponse(target, status_code=HTTPStatus.SEE_OTHER)
         return html_page(request, legacy.login_html(target, icp=config.icp_record))
@@ -736,7 +757,7 @@ def create_app(legacy: Any, config: Any) -> Starlette:
     routes = [
         Route("/manifest.json", manifest, methods=["GET"]),
         Route("/sw.js", service_worker, methods=["GET"]),
-        Route("/login", login, methods=["GET"]),
+        Route("/login", login, methods=["GET", "POST"]),
         Route("/logout", logout, methods=["GET"]),
         Route("/api/csrf", csrf, methods=["GET"]),
         Route("/{route}/api/{tail:path}", owner_get, methods=["GET"]),

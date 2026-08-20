@@ -16,6 +16,7 @@ from typing import Any
 import unittest
 
 import uvicorn
+import bcrypt
 
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
@@ -36,6 +37,8 @@ class ContractConfig:
     def __init__(self) -> None:
         self.cookie_secret = b"contract-cookie-secret"
         self.users = {"tester": {"auth_epoch": 7, "routes": ["lab"]}}
+        self.password = "contract-password-long"
+        self.password_digest = bcrypt.hashpw(self.password.encode("utf-8"), bcrypt.gensalt())
         self.icp_record = ""
         self.mcp_user = "mcp"
         self.audit_calls: list[dict[str, Any]] = []
@@ -46,6 +49,12 @@ class ContractConfig:
 
     def auth_epoch(self, username: str) -> int:
         return int(self.users[username]["auth_epoch"])
+
+    def user(self, username: str) -> dict[str, Any] | None:
+        return self.users.get(username)
+
+    def password_hash(self, username: str) -> bytes:
+        return self.password_digest
 
     def user_routes(self, username: str) -> list[str]:
         return list(self.users[username]["routes"])
@@ -272,6 +281,20 @@ class AsgiReadContractTest(unittest.TestCase):
         for path in ("/manifest.json", "/sw.js", "/workbench.css", "/appearance.js", "/login?next=%2F"):
             with self.subTest(path=path):
                 self.assert_contract(path)
+
+    def test_login_success_and_failure_contracts_match(self) -> None:
+        headers = {"Content-Type": "application/x-www-form-urlencoded"}
+        valid = legacy.urlencode({"username": "tester", "password": self.config.password, "next": "/"}).encode("utf-8")
+        legacy_success = self.request(self.legacy_base, "/login", method="POST", body=valid, extra_headers=headers)
+        asgi_success = self.request(self.asgi_base, "/login", method="POST", body=valid, extra_headers=headers)
+        self.assertEqual(asgi_success[0], legacy_success[0])
+        self.assertEqual(self.selected_headers(asgi_success[1]), self.selected_headers(legacy_success[1]))
+
+        invalid = legacy.urlencode({"username": "tester", "password": "wrong", "next": "/"}).encode("utf-8")
+        legacy_failure = self.request(self.legacy_base, "/login", method="POST", body=invalid, extra_headers=headers)
+        asgi_failure = self.request(self.asgi_base, "/login", method="POST", body=invalid, extra_headers=headers)
+        self.assertEqual(asgi_failure[0], legacy_failure[0])
+        self.assertEqual(self.normalized_body("/login", asgi_failure[2]), self.normalized_body("/login", legacy_failure[2]))
 
     def test_csrf_contract_matches_with_and_without_authentication(self) -> None:
         self.assert_contract("/api/csrf")
