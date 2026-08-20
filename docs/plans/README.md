@@ -5,7 +5,9 @@
 
 ## Active
 
-当前没有活动计划。
+- [`v1.5-unified-cli-and-service-installation-plan.md`](v1.5-unified-cli-and-service-installation-plan.md)：
+  用统一 `faryo` CLI、私有标准 venv、直接 Owner/Gateway systemd user services、版本化安装与
+  健康门禁 rollback 隐藏部署复杂度；Codex 继续留在 tmux，公网配置保持可选且独立。
 
 ## Completed or maintenance mode
 
