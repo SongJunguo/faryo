@@ -83,6 +83,10 @@ but the default upload destination should come from the Faryo data directory.
 - Reliable-send durable checkpoints are isolated in `delivery_store.py`; it
   enforces ID bounds, privacy-minimal records, atomic fsync, 0700/0600 modes,
   TTL cleanup and corrupt/symlink rejection without owning submit decisions.
+- Pure Codex message extraction, complete-turn budgeting, previews and
+  revision-bound cursors are isolated in `codex_history.py`; incremental file
+  indexing and caches remain higher services until their state boundary is
+  explicit.
 - Capability and diagnostics payloads use an explicit allowlist and counts; they
   never expose private runtime configuration.
 - Upstream control headers: use Faryo header names.

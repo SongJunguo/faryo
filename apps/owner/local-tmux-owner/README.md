@@ -293,6 +293,9 @@ consumed as private runtime input and is never printed.
 - `delivery_store.py` owns body-free accepted/pasted checkpoints, atomic fsync,
   private permissions, TTL cleanup and corrupt/symlink rejection. The exact
   paste/Tab/Enter confirmation state machine remains separate.
+- `codex_history.py` owns rollout/App Server message extraction, intact recent
+  turn budgets, question previews and revision-bound cursor syntax without
+  reading tmux, HTTP, SQLite or private paths.
 - Local file preview is token-protected and limited to supported file suffixes.
 - `send` targets the controlled tmux pane and is maintained for Codex; generic
   terminal interfaces retain the conservative tmux path.

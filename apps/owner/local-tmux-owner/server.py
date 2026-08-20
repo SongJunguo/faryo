@@ -52,6 +52,7 @@ import attachment_storage
 import path_policy
 import tmux_runtime
 import delivery_store
+import codex_history
 
 SHARED_DIR = Path(__file__).resolve().parents[2] / "shared"
 if str(SHARED_DIR) not in sys.path:
@@ -1633,132 +1634,36 @@ def cached_codex_thread(thread_id: str) -> dict[str, Any] | None:
     return thread
 
 
-def codex_user_message_text(item: dict[str, Any]) -> str:
-    values: list[str] = []
-    for content in item.get("content") or []:
-        if not isinstance(content, dict):
-            continue
-        if text := str(content.get("text") or "").strip():
-            values.append(text)
-        elif path := str(content.get("path") or content.get("url") or "").strip():
-            values.append(f"Attachment: {path}")
-    return "\n".join(values).strip()
-
-
-def turn_exceeds_recent_budget(
-    selected_count: int,
-    used_lines: int,
-    used_chars: int,
-    turn_lines: int,
-    turn_chars: int,
-    *,
-    line_budget: int,
-    char_budget: int,
-    min_turns: int,
-) -> bool:
-    """Apply a soft line budget, a minimum turn window, and a hard char cap."""
-    if selected_count <= 0:
-        return False
-    if used_chars + turn_chars > char_budget:
-        return True
-    return selected_count >= min_turns and used_lines + turn_lines > line_budget
+codex_user_message_text = codex_history.user_message_text
+turn_exceeds_recent_budget = codex_history.turn_exceeds_recent_budget
 
 
 def codex_thread_transcript(thread: dict[str, Any], max_lines: int) -> str:
-    turns: list[str] = []
-    for turn in thread.get("turns") or []:
-        if not isinstance(turn, dict):
-            continue
-        messages: list[str] = []
-        for item in turn.get("items") or []:
-            if not isinstance(item, dict):
-                continue
-            item_type = item.get("type")
-            if item_type == "userMessage":
-                if text := codex_user_message_text(item):
-                    messages.append(f"› {text}")
-            elif item_type == "agentMessage":
-                if text := str(item.get("text") or "").strip():
-                    messages.append(f"• {text}")
-            elif item_type == "plan":
-                if text := str(item.get("text") or "").strip():
-                    messages.append(f"• Updated Plan\n{text}")
-        if messages:
-            turns.append("\n\n".join(messages))
-
-    selected: list[str] = []
-    used_lines = 0
-    used_chars = 0
-    for turn in reversed(turns):
-        if len(selected) >= CODEX_TRANSCRIPT_PAGE_TURNS:
-            break
-        turn_lines = turn.count("\n") + 1
-        turn_chars = len(turn)
-        if turn_exceeds_recent_budget(
-            len(selected),
-            used_lines,
-            used_chars,
-            turn_lines,
-            turn_chars,
-            line_budget=max_lines,
-            char_budget=CODEX_TRANSCRIPT_CHAR_BUDGET,
-            min_turns=CODEX_TRANSCRIPT_MIN_TURNS,
-        ):
-            break
-        selected.append(turn)
-        used_lines += turn_lines
-        used_chars += turn_chars
-    return "\n\n".join(reversed(selected)).strip()
+    return codex_history.thread_transcript(
+        thread,
+        max_lines,
+        page_turns=CODEX_TRANSCRIPT_PAGE_TURNS,
+        char_budget=CODEX_TRANSCRIPT_CHAR_BUDGET,
+        min_turns=CODEX_TRANSCRIPT_MIN_TURNS,
+    )
 
 
-def codex_rollout_message(event: Any) -> tuple[str, str] | None:
-    """Extract one displayable user/assistant message from a Codex rollout."""
-    if not isinstance(event, dict) or event.get("type") != "response_item":
-        return None
-    payload = event.get("payload")
-    if not isinstance(payload, dict) or payload.get("type") != "message":
-        return None
-    role = str(payload.get("role") or "")
-    if role not in {"user", "assistant"}:
-        return None
-
-    values: list[str] = []
-    for item in payload.get("content") or []:
-        if not isinstance(item, dict):
-            continue
-        content_type = str(item.get("type") or "")
-        if content_type in {"input_text", "output_text", "text"}:
-            if text := str(item.get("text") or "").strip():
-                values.append(text)
-        elif role == "user":
-            if path := str(item.get("path") or item.get("url") or "").strip():
-                values.append(f"Attachment: {path}")
-    text = "\n".join(values).strip()
-    return (role, text) if text else None
+codex_rollout_message = codex_history.rollout_message
 
 
 def codex_history_preview(text: str, max_chars: int = CODEX_HISTORY_PREVIEW_CHARS) -> str:
-    compact = " ".join(str(text or "").split()) or "Untitled question"
-    limit = max(8, int(max_chars))
-    return compact if len(compact) <= limit else compact[:limit - 1] + "…"
+    return codex_history.history_preview(text, max_chars)
 
 
-def codex_history_revision(identity: tuple[int, ...]) -> str:
-    value = ":".join(str(part) for part in identity).encode("ascii")
-    return hashlib.sha256(value).hexdigest()[:16]
-
-
-def codex_history_cursor(revision: str, before: int) -> str:
-    return f"{revision}.{max(0, int(before)):x}"
+codex_history_revision = codex_history.history_revision
+codex_history_cursor = codex_history.history_cursor
 
 
 def decode_codex_history_cursor(cursor: str, revision: str) -> int:
-    match = re.fullmatch(r"([0-9a-f]{16})\.([0-9a-f]+)", str(cursor or "").strip().lower())
-    if not match:
-        raise OwnerError("invalid conversation history cursor")
-    if not secrets.compare_digest(match.group(1), revision):
-        raise OwnerError("conversation history cursor expired", HTTPStatus.CONFLICT)
-    return int(match.group(2), 16)
+    try:
+        return codex_history.decode_history_cursor(cursor, revision)
+    except codex_history.HistoryCursorError as exc:
+        raise OwnerError(str(exc), HTTPStatus.CONFLICT if exc.expired else HTTPStatus.BAD_REQUEST) from exc
 
 
 def store_codex_history_cache(key: str, state: dict[str, Any]) -> None:
@@ -1963,40 +1868,13 @@ def codex_history_page_for_config(
 
 
 def bounded_codex_rollout_messages(messages: list[tuple[str, str]]) -> list[tuple[str, str]]:
-    """Keep recent complete turns within explicit line and character budgets."""
-    turns: list[list[tuple[str, str]]] = []
-    current: list[tuple[str, str]] = []
-    for role, text in messages:
-        if role == "user" and current:
-            turns.append(current)
-            current = []
-        current.append((role, text))
-    if current:
-        turns.append(current)
-
-    selected: list[list[tuple[str, str]]] = []
-    used_lines = 0
-    used_chars = 0
-    for turn in reversed(turns):
-        if len(selected) >= CODEX_TRANSCRIPT_PAGE_TURNS:
-            break
-        turn_lines = sum(text.count("\n") + 1 for _role, text in turn)
-        turn_chars = sum(len(text) for _role, text in turn)
-        if turn_exceeds_recent_budget(
-            len(selected),
-            used_lines,
-            used_chars,
-            turn_lines,
-            turn_chars,
-            line_budget=CODEX_ROLLOUT_CACHE_LINE_BUDGET,
-            char_budget=CODEX_ROLLOUT_CACHE_CHAR_BUDGET,
-            min_turns=CODEX_ROLLOUT_CACHE_MIN_TURNS,
-        ):
-            break
-        selected.append(turn)
-        used_lines += turn_lines
-        used_chars += turn_chars
-    return [message for turn in reversed(selected) for message in turn]
+    return codex_history.bounded_rollout_messages(
+        messages,
+        page_turns=CODEX_TRANSCRIPT_PAGE_TURNS,
+        line_budget=CODEX_ROLLOUT_CACHE_LINE_BUDGET,
+        char_budget=CODEX_ROLLOUT_CACHE_CHAR_BUDGET,
+        min_turns=CODEX_ROLLOUT_CACHE_MIN_TURNS,
+    )
 
 
 def store_codex_rollout_cache(key: str, state: dict[str, Any]) -> None:
@@ -2168,42 +2046,13 @@ def codex_rollout_messages(history_path: str | None) -> list[tuple[str, str]]:
 
 
 def codex_message_transcript(messages: list[tuple[str, str]], max_lines: int) -> str:
-    """Group chronological rollout messages into intact recent turns."""
-    turns: list[list[str]] = []
-    current: list[str] = []
-    for role, text in messages:
-        block = f"› {text}" if role == "user" else f"• {text}"
-        if role == "user" and current:
-            turns.append(current)
-            current = []
-        current.append(block)
-    if current:
-        turns.append(current)
-
-    selected: list[str] = []
-    used_lines = 0
-    used_chars = 0
-    for turn_blocks in reversed(turns):
-        if len(selected) >= CODEX_TRANSCRIPT_PAGE_TURNS:
-            break
-        turn = "\n\n".join(turn_blocks)
-        turn_lines = turn.count("\n") + 1
-        turn_chars = len(turn)
-        if turn_exceeds_recent_budget(
-            len(selected),
-            used_lines,
-            used_chars,
-            turn_lines,
-            turn_chars,
-            line_budget=max_lines,
-            char_budget=CODEX_TRANSCRIPT_CHAR_BUDGET,
-            min_turns=CODEX_TRANSCRIPT_MIN_TURNS,
-        ):
-            break
-        selected.append(turn)
-        used_lines += turn_lines
-        used_chars += turn_chars
-    return "\n\n".join(reversed(selected)).strip()
+    return codex_history.message_transcript(
+        messages,
+        max_lines,
+        page_turns=CODEX_TRANSCRIPT_PAGE_TURNS,
+        char_budget=CODEX_TRANSCRIPT_CHAR_BUDGET,
+        min_turns=CODEX_TRANSCRIPT_MIN_TURNS,
+    )
 
 
 def codex_rollout_transcript(history_path: str | None, max_lines: int) -> str:
