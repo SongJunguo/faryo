@@ -7,6 +7,7 @@ from dataclasses import replace
 import json
 import os
 from pathlib import Path
+from pathlib import PurePosixPath
 import re
 import shlex
 import shutil
@@ -24,6 +25,7 @@ from faryo_cli.operations import OperationError
 
 BUILD_REQUIREMENTS = ("setuptools==83.0.0", "wheel==0.47.0")
 VERSION_RE = re.compile(r"v[0-9]+\.[0-9]+\.[0-9]+(?:\.(?:dev|rc)[0-9]+)?$")
+MAX_EXTRACTED_SOURCE_BYTES = 128 * 1024 * 1024
 
 
 @dataclass(frozen=True)
@@ -101,17 +103,42 @@ def source_is_clean(source: Path) -> bool:
 
 
 def safe_extract(archive: Path, destination: Path) -> None:
+    destination.mkdir(parents=True, exist_ok=True)
     root = destination.resolve()
-    with tarfile.open(archive, "r:") as handle:
-        for member in handle.getmembers():
-            target = (destination / member.name).resolve()
-            if root not in target.parents and target != root:
-                raise OperationError("source archive escapes its destination")
-            if member.issym() or member.islnk():
-                link = Path(member.linkname)
-                if link.is_absolute() or ".." in link.parts:
-                    raise OperationError("source archive contains an unsafe link")
-        handle.extractall(destination, filter="data")
+    extracted_bytes = 0
+    try:
+        handle = tarfile.open(archive, "r:*")
+    except (OSError, tarfile.TarError) as exc:
+        raise OperationError("source archive is unreadable") from exc
+    try:
+        with handle:
+            for member in handle.getmembers():
+                relative = PurePosixPath(member.name)
+                if relative.is_absolute() or not relative.parts or ".." in relative.parts:
+                    raise OperationError("source archive escapes its destination")
+                target = (destination / Path(*relative.parts)).resolve()
+                if root not in target.parents and target != root:
+                    raise OperationError("source archive escapes its destination")
+                if member.isdir():
+                    target.mkdir(parents=True, exist_ok=True)
+                    target.chmod(0o755)
+                    continue
+                if not member.isreg():
+                    raise OperationError("source archive contains an unsupported entry")
+                extracted_bytes += member.size
+                if extracted_bytes > MAX_EXTRACTED_SOURCE_BYTES:
+                    raise OperationError("source archive is too large after extraction")
+                source = handle.extractfile(member)
+                if source is None:
+                    raise OperationError("source archive entry is unreadable")
+                target.parent.mkdir(parents=True, exist_ok=True)
+                with source, target.open("xb") as output:
+                    shutil.copyfileobj(source, output)
+                target.chmod(0o755 if member.mode & 0o111 else 0o644)
+    except OperationError:
+        raise
+    except (OSError, tarfile.TarError) as exc:
+        raise OperationError("source archive extraction failed") from exc
 
 
 def copy_source(source: Path, destination: Path) -> str:

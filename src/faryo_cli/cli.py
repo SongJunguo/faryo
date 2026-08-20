@@ -13,6 +13,7 @@ from faryo_cli.diagnostics import build_report, compact_status
 from faryo_cli.maintenance import rollback_application, uninstall_application
 from faryo_cli.operations import OperationError, journal, open_gateway, service_operation
 from faryo_cli.runtime import exec_process, gateway_process, owner_process
+from faryo_cli.updates import update_application
 
 
 def parser() -> argparse.ArgumentParser:
@@ -42,6 +43,11 @@ def parser() -> argparse.ArgumentParser:
     install.add_argument("--migrate-owner", action="store_true", help="Replace legacy Owner tmux supervision after rollback checks")
     install.add_argument("--python", dest="bootstrap_python", help="Python 3.10+ interpreter used to create the private venv")
     install.add_argument("--workspace", help="Initial allowed workspace directory for a fresh private config")
+    update = commands.add_parser("update", help="Install a verified release and switch after health checks")
+    update.add_argument("--version", help="Exact release tag; defaults to the latest stable GitHub release")
+    update.add_argument("--archive", help="Use a local release archive instead of downloading")
+    update.add_argument("--checksum", help="SHA-256 value or checksum file for --archive")
+    update.add_argument("--python", dest="bootstrap_python", help="Python 3.10+ interpreter used for the new private venv")
     commands.add_parser("rollback", help="Switch back to the previously active healthy version")
     uninstall = commands.add_parser("uninstall", help="Remove Faryo services and program files while preserving private data")
     uninstall.add_argument("--purge-data", action="store_true", help="Also remove private Faryo config, history cache, and attachments")
@@ -104,6 +110,19 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(f"Faryo rollback failed: {exc}", file=sys.stderr)
             return 1
         print(f"Faryo rollback: {result}")
+        return 0
+    if arguments.command == "update":
+        try:
+            result = update_application(
+                version=arguments.version,
+                archive=arguments.archive,
+                checksum=arguments.checksum,
+                bootstrap_python=arguments.bootstrap_python,
+            )
+        except OperationError as exc:
+            print(f"Faryo update failed: {exc}", file=sys.stderr)
+            return 1
+        print(f"Faryo update: {result}")
         return 0
     if arguments.command == "uninstall":
         try:

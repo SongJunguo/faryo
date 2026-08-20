@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 from contextlib import redirect_stdout
+import hashlib
 from io import StringIO
+import io
 import json
 import os
 from pathlib import Path
 import subprocess
 import sys
+import tarfile
 import tempfile
 import unittest
 from unittest import mock
@@ -17,7 +20,7 @@ SRC = ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
-from faryo_cli import application, cli, diagnostics, installer, maintenance, migration, operations, runtime
+from faryo_cli import application, cli, diagnostics, installer, maintenance, migration, operations, runtime, updates
 
 
 class FaryoCliTest(unittest.TestCase):
@@ -766,6 +769,93 @@ class FaryoCliTest(unittest.TestCase):
 
             self.assertEqual(set(removed), set(expected))
             self.assertTrue((unit_dir / "unrelated.service").is_file())
+
+    def release_archive(self, root: Path, version: str = "v1.5.0") -> Path:
+        source = root / f"faryo-{version}"
+        release = source / "apps/owner/RELEASE"
+        release.parent.mkdir(parents=True)
+        release.write_text(f"repo=faryo/apps/owner\nversion={version}\nrole=endpoint-runtime\npackage=faryo\n", encoding="utf-8")
+        (source / "pyproject.toml").write_text(
+            f'[project]\nname = "faryo"\nversion = "{version.removeprefix("v")}"\n',
+            encoding="utf-8",
+        )
+        archive = root / f"faryo-{version}.tar.gz"
+        with tarfile.open(archive, "w:gz") as handle:
+            handle.add(source, arcname=source.name)
+        return archive
+
+    def test_release_checksum_and_metadata_gate_local_update(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            archive = self.release_archive(root)
+            checksum = hashlib.sha256(archive.read_bytes()).hexdigest()
+            layout = self.layout(root)
+
+            def install(selected, **kwargs):
+                self.assertTrue((selected.source_root / "apps/owner/RELEASE").is_file())
+                self.assertEqual(kwargs["version"], "v1.5.0")
+                return "v1.5.0"
+
+            with mock.patch.object(updates, "install_versioned_application", side_effect=install) as install_mock:
+                result = updates.update_application(
+                    layout,
+                    version="1.5.0",
+                    archive=str(archive),
+                    checksum=checksum,
+                )
+
+            self.assertEqual(result, "v1.5.0")
+            install_mock.assert_called_once()
+
+    def test_release_checksum_mismatch_stops_before_install(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            archive = self.release_archive(root)
+            layout = self.layout(root)
+            with mock.patch.object(updates, "install_versioned_application") as install_mock:
+                with self.assertRaisesRegex(operations.OperationError, "checksum mismatch"):
+                    updates.update_application(
+                        layout,
+                        version="v1.5.0",
+                        archive=str(archive),
+                        checksum="0" * 64,
+                    )
+            install_mock.assert_not_called()
+
+    def test_checksum_manifest_rejects_paths_and_wrong_asset(self) -> None:
+        digest = "a" * 64
+        self.assertEqual(updates.parse_checksum(f"{digest}  faryo-v1.5.0.tar.gz\n", "faryo-v1.5.0.tar.gz"), digest)
+        for body in (
+            f"{digest}  ../faryo-v1.5.0.tar.gz\n",
+            f"{digest}  other.tar.gz\n",
+            f"{digest}  faryo-v1.5.0.tar.gz\n{digest}  second.tar.gz\n",
+        ):
+            with self.assertRaisesRegex(operations.OperationError, "manifest"):
+                updates.parse_checksum(body, "faryo-v1.5.0.tar.gz")
+
+    def test_safe_extract_rejects_traversal_and_links(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            for name, member in (
+                ("traversal.tar", tarfile.TarInfo("../outside")),
+                ("link.tar", tarfile.TarInfo("root/link")),
+            ):
+                archive = root / name
+                if name == "link.tar":
+                    member.type = tarfile.SYMTYPE
+                    member.linkname = "target"
+                else:
+                    member.size = 1
+                with tarfile.open(archive, "w") as handle:
+                    handle.addfile(member, io.BytesIO(b"x") if member.size else None)
+                with self.assertRaises(operations.OperationError):
+                    application.safe_extract(archive, root / f"extract-{name}")
+
+    def test_release_download_allows_only_github_https_hosts(self) -> None:
+        self.assertTrue(updates.trusted_release_url("https://github.com/SongJunguo/faryo/releases"))
+        self.assertTrue(updates.trusted_release_url("https://release-assets.githubusercontent.com/file"))
+        self.assertFalse(updates.trusted_release_url("http://github.com/file"))
+        self.assertFalse(updates.trusted_release_url("https://github.com.example.invalid/file"))
 
 
 if __name__ == "__main__":
