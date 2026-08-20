@@ -15,6 +15,10 @@ UNIT_NAMES = {
     "owner": "faryo-owner.service",
     "gateway": "faryo-gateway.service",
 }
+LEGACY_UNIT_NAMES = (
+    "faryo-owner-keepalive.service",
+    "faryo-owner-keepalive.timer",
+)
 
 
 def unit_escape(value: str) -> str:
@@ -169,6 +173,8 @@ def install_services(
             systemctl("daemon-reload")
             if legacy and not migration.legacy_owner_exists():
                 migration.restore_legacy(selected)
+            if not legacy and previous["owner"] is not None:
+                systemctl("restart", "faryo-owner.service", check=False)
             if previous["gateway"] is not None:
                 systemctl("restart", "faryo-gateway.service", check=False)
         except Exception as rollback_exc:
@@ -177,3 +183,23 @@ def install_services(
             raise
         raise OperationError("service install failed") from exc
     return "installed"
+
+
+def uninstall_user_services(layout: Layout | None = None) -> list[str]:
+    from faryo_cli import migration
+
+    selected = layout or Layout.from_environment()
+    names = [*UNIT_NAMES.values(), *LEGACY_UNIT_NAMES]
+    systemctl("disable", "--now", *names, check=False)
+    if migration.legacy_owner_exists():
+        migration.stop_legacy_owner()
+    target_dir = unit_directory(selected)
+    removed: list[str] = []
+    for name in names:
+        target = target_dir / name
+        if target.is_symlink() or target.is_file():
+            target.unlink()
+            removed.append(name)
+    systemctl("daemon-reload")
+    systemctl("reset-failed", *names, check=False)
+    return removed

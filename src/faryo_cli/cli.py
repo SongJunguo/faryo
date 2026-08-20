@@ -10,6 +10,7 @@ from typing import Any, Sequence
 from faryo_cli import __version__
 from faryo_cli.application import install_versioned_application
 from faryo_cli.diagnostics import build_report, compact_status
+from faryo_cli.maintenance import rollback_application, uninstall_application
 from faryo_cli.operations import OperationError, journal, open_gateway, service_operation
 from faryo_cli.runtime import exec_process, gateway_process, owner_process
 
@@ -40,6 +41,10 @@ def parser() -> argparse.ArgumentParser:
     install.add_argument("--no-start", action="store_true", help="Install units without changing running services")
     install.add_argument("--migrate-owner", action="store_true", help="Replace legacy Owner tmux supervision after rollback checks")
     install.add_argument("--python", dest="bootstrap_python", help="Python 3.10+ interpreter used to create the private venv")
+    commands.add_parser("rollback", help="Switch back to the previously active healthy version")
+    uninstall = commands.add_parser("uninstall", help="Remove Faryo services and program files while preserving private data")
+    uninstall.add_argument("--purge-data", action="store_true", help="Also remove private Faryo config, history cache, and attachments")
+    uninstall.add_argument("--yes", action="store_true", help="Confirm irreversible private-data deletion")
     internal = commands.add_parser("internal", help=argparse.SUPPRESS)
     internal_commands = internal.add_subparsers(dest="internal_command", required=True)
     internal_commands.add_parser("run-owner")
@@ -89,6 +94,22 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(f"Faryo install failed: {exc}", file=sys.stderr)
             return 1
         print(f"Faryo install: {result}")
+        return 0
+    if arguments.command == "rollback":
+        try:
+            result = rollback_application()
+        except OperationError as exc:
+            print(f"Faryo rollback failed: {exc}", file=sys.stderr)
+            return 1
+        print(f"Faryo rollback: {result}")
+        return 0
+    if arguments.command == "uninstall":
+        try:
+            result = uninstall_application(purge_data=arguments.purge_data, confirmed=arguments.yes)
+        except OperationError as exc:
+            print(f"Faryo uninstall failed: {exc}", file=sys.stderr)
+            return 1
+        print(f"Faryo {result}")
         return 0
     if arguments.command in {"start", "stop", "restart"}:
         try:

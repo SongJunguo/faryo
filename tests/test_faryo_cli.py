@@ -17,7 +17,7 @@ SRC = ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
-from faryo_cli import application, cli, diagnostics, installer, migration, operations, runtime
+from faryo_cli import application, cli, diagnostics, installer, maintenance, migration, operations, runtime
 
 
 class FaryoCliTest(unittest.TestCase):
@@ -416,6 +416,29 @@ class FaryoCliTest(unittest.TestCase):
             self.assertEqual(gateway.read_text(encoding="utf-8"), "old gateway unit\n")
             self.assertFalse((unit_dir / "faryo-owner.service").exists())
 
+    def test_failed_service_upgrade_restarts_both_previous_services(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            layout = self.layout(root)
+            xdg = root / "config"
+            unit_dir = xdg / "systemd/user"
+            unit_dir.mkdir(parents=True)
+            for name in installer.UNIT_NAMES.values():
+                (unit_dir / name).write_text(f"old {name}\n", encoding="utf-8")
+            calls = []
+            with (
+                mock.patch.dict(os.environ, {"XDG_CONFIG_HOME": str(xdg)}, clear=False),
+                mock.patch.object(migration, "legacy_owner_exists", return_value=False),
+                mock.patch.object(installer, "systemctl", side_effect=lambda *args, **kwargs: calls.append((args, kwargs))),
+                mock.patch.object(operations, "control_service"),
+                mock.patch.object(operations, "wait_for_health", side_effect=operations.OperationError("not healthy")),
+            ):
+                with self.assertRaisesRegex(operations.OperationError, "not healthy"):
+                    installer.install_services(layout, python=sys.executable)
+
+            self.assertIn((("restart", "faryo-owner.service"), {"check": False}), calls)
+            self.assertIn((("restart", "faryo-gateway.service"), {"check": False}), calls)
+
     def test_runtime_python_update_preserves_private_config(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             path = Path(temp) / "faryo.env"
@@ -554,6 +577,110 @@ class FaryoCliTest(unittest.TestCase):
         ):
             with self.assertRaisesRegex(operations.OperationError, "Python 3.10"):
                 application.select_bootstrap_python("/old/python")
+
+    def test_version_switch_updates_runtime_and_records_previous(self) -> None:
+        with tempfile.TemporaryDirectory() as temp, mock.patch.dict(
+            os.environ,
+            {"FARYO_PROGRAM_HOME": str(Path(temp) / ".local/share/faryo")},
+            clear=False,
+        ):
+            layout = self.layout(Path(temp))
+            program = application.ProgramLayout.from_layout(layout)
+            current = program.versions / "v1.4.1"
+            target = program.versions / "v1.5.0"
+            for version in (current, target):
+                for name in ("python", "faryo"):
+                    path = version / f".venv/bin/{name}"
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    path.write_text(name, encoding="utf-8")
+            application.activate_version(current, layout)
+            with (
+                mock.patch.object(maintenance, "prepared_version_is_healthy", return_value=True),
+                mock.patch.object(installer, "install_services") as install_services,
+            ):
+                result = maintenance.switch_version(target, layout)
+
+            self.assertEqual(result, "v1.5.0")
+            self.assertEqual(program.current.resolve(), target)
+            self.assertEqual((program.state / "previous-version").read_text(encoding="utf-8"), "v1.4.1\n")
+            self.assertIn(str(target / ".venv/bin/python"), layout.owner_env.read_text(encoding="utf-8"))
+            install_services.assert_called_once()
+
+    def test_failed_version_switch_restores_config_activation_and_marker(self) -> None:
+        with tempfile.TemporaryDirectory() as temp, mock.patch.dict(
+            os.environ,
+            {"FARYO_PROGRAM_HOME": str(Path(temp) / ".local/share/faryo")},
+            clear=False,
+        ):
+            layout = self.layout(Path(temp))
+            program = application.ProgramLayout.from_layout(layout)
+            current = program.versions / "v1.4.1"
+            target = program.versions / "v1.5.0"
+            for version in (current, target):
+                for name in ("python", "faryo"):
+                    path = version / f".venv/bin/{name}"
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    path.write_text(name, encoding="utf-8")
+            application.activate_version(current, layout)
+            marker = program.state / "previous-version"
+            marker.write_text("v1.3.0\n", encoding="utf-8")
+            before = layout.owner_env.read_text(encoding="utf-8")
+            with (
+                mock.patch.object(maintenance, "prepared_version_is_healthy", return_value=True),
+                mock.patch.object(installer, "install_services", side_effect=operations.OperationError("not healthy")),
+            ):
+                with self.assertRaisesRegex(operations.OperationError, "not healthy"):
+                    maintenance.switch_version(target, layout)
+
+            self.assertEqual(program.current.resolve(), current)
+            self.assertEqual(marker.read_text(encoding="utf-8"), "v1.3.0\n")
+            self.assertEqual(layout.owner_env.read_text(encoding="utf-8"), before)
+
+    def test_uninstall_preserves_private_data_by_default(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            layout = self.layout(Path(temp))
+            program = application.ProgramLayout.from_layout(layout)
+            managed_cli = program.root / "current/.venv/bin/faryo"
+            managed_cli.parent.mkdir(parents=True)
+            managed_cli.write_text("cli", encoding="utf-8")
+            program.bin_path.parent.mkdir(parents=True)
+            program.bin_path.symlink_to(managed_cli)
+            private = layout.faryo_home / "owner/data/private.txt"
+            private.parent.mkdir(parents=True, exist_ok=True)
+            private.write_text("private", encoding="utf-8")
+            with mock.patch.object(installer, "uninstall_user_services"):
+                result = maintenance.uninstall_application(layout)
+
+            self.assertEqual(result, "uninstalled; private data preserved")
+            self.assertFalse(program.root.exists())
+            self.assertFalse(program.bin_path.exists())
+            self.assertEqual(private.read_text(encoding="utf-8"), "private")
+
+    def test_private_data_purge_requires_explicit_confirmation(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            layout = self.layout(Path(temp))
+            with self.assertRaisesRegex(operations.OperationError, "requires --yes"):
+                maintenance.uninstall_application(layout, purge_data=True)
+
+    def test_service_uninstall_removes_only_exact_faryo_units(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            layout = self.layout(root)
+            xdg = root / "config"
+            unit_dir = xdg / "systemd/user"
+            unit_dir.mkdir(parents=True)
+            expected = [*installer.UNIT_NAMES.values(), *installer.LEGACY_UNIT_NAMES]
+            for name in [*expected, "unrelated.service"]:
+                (unit_dir / name).write_text(name, encoding="utf-8")
+            with (
+                mock.patch.dict(os.environ, {"XDG_CONFIG_HOME": str(xdg)}, clear=False),
+                mock.patch.object(installer, "systemctl"),
+                mock.patch.object(migration, "legacy_owner_exists", return_value=False),
+            ):
+                removed = installer.uninstall_user_services(layout)
+
+            self.assertEqual(set(removed), set(expected))
+            self.assertTrue((unit_dir / "unrelated.service").is_file())
 
 
 if __name__ == "__main__":
