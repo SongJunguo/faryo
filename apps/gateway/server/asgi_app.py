@@ -18,6 +18,7 @@ from starlette.routing import Route
 
 import gateway_security
 import owner_client
+import mcp_service
 
 
 class SecurityHeadersMiddleware:
@@ -44,6 +45,13 @@ def create_app(legacy: Any, config: Any) -> Starlette:
     static_dir = Path(legacy.STATIC_DIR)
     shared_static_dir = Path(legacy.SHARED_STATIC_DIR)
     client = owner_client.OwnerClient(legacy.BACKENDS, config, encode_label=legacy.owner_label_header_value)
+    mcp = mcp_service.McpService(
+        config,
+        protocol_version=legacy.MCP_PROTOCOL_VERSION,
+        server_version=legacy.MCP_SERVER_VERSION,
+        tool_name=legacy.MCP_TOOL_NAME,
+        tool_schema=legacy.MCP_TOOL_SCHEMAS[legacy.MCP_TOOL_NAME],
+    )
 
     def codec() -> gateway_security.SessionCookieCodec:
         return gateway_security.SessionCookieCodec(
@@ -596,6 +604,66 @@ def create_app(legacy: Any, config: Any) -> Starlette:
         )
         return response
 
+    def mcp_headers(request: Request) -> dict[str, str]:
+        headers = {"Cache-Control": "no-store"}
+        if origin := mcp.cors_origin(request.headers.get("origin", "")):
+            headers["Access-Control-Allow-Origin"] = origin
+            headers["Vary"] = "Origin"
+        return headers
+
+    def mcp_authorized(request: Request) -> bool:
+        return mcp.authorized(
+            request.headers.get("authorization", ""),
+            request.headers.get("x-faryo-mcp-token", ""),
+        )
+
+    def mcp_json(request: Request, value: Any, status: int = HTTPStatus.OK) -> Response:
+        body = json.dumps(value, ensure_ascii=False).encode("utf-8")
+        headers = {**mcp_headers(request), "Content-Type": "application/json; charset=utf-8"}
+        return Response(body, status_code=status, headers=headers)
+
+    async def mcp_options(request: Request) -> Response:
+        headers = mcp_headers(request)
+        headers.pop("Cache-Control", None)
+        headers["Access-Control-Allow-Headers"] = "authorization, content-type, mcp-protocol-version, mcp-session-id, x-faryo-mcp-token"
+        headers["Access-Control-Allow-Methods"] = "GET, POST, DELETE, OPTIONS"
+        return Response(status_code=HTTPStatus.NO_CONTENT, headers=headers)
+
+    async def mcp_get(request: Request) -> Response:
+        if not config.mcp_token:
+            return mcp_json(request, mcp.error(None, -32001, "mcp disabled"), HTTPStatus.NOT_FOUND)
+        if not mcp_authorized(request):
+            return mcp_json(request, mcp.error(None, -32001, "unauthorized"), HTTPStatus.UNAUTHORIZED)
+        headers = mcp_headers(request)
+        headers["Allow"] = "POST, OPTIONS"
+        return Response(status_code=HTTPStatus.METHOD_NOT_ALLOWED, headers=headers)
+
+    async def mcp_post(request: Request) -> Response:
+        if not config.mcp_token:
+            return mcp_json(request, mcp.error(None, -32001, "mcp disabled"), HTTPStatus.NOT_FOUND)
+        if not mcp_authorized(request):
+            return mcp_json(request, mcp.error(None, -32001, "unauthorized"), HTTPStatus.UNAUTHORIZED)
+        try:
+            body = await request.body()
+            if not body:
+                raise ValueError("empty JSON body")
+            if len(body) > legacy.BRIDGE_PACKAGE_MAX_BYTES:
+                raise ValueError("request too large")
+            payload = json.loads(body.decode("utf-8"))
+            result = await to_thread.run_sync(lambda: mcp.response(payload, public_base_url(request)))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            return mcp_json(request, mcp.error(None, -32700, "invalid JSON body"), HTTPStatus.BAD_REQUEST)
+        except ValueError as exc:
+            return mcp_json(request, mcp.error(None, -32700, str(exc)), HTTPStatus.BAD_REQUEST)
+        if result is None:
+            return Response(status_code=HTTPStatus.ACCEPTED, headers=mcp_headers(request))
+        return mcp_json(request, result)
+
+    def public_base_url(request: Request) -> str:
+        scheme = request.headers.get("x-forwarded-proto") or "https"
+        host = request.headers.get("x-forwarded-host") or request.headers.get("host") or ""
+        return f"{scheme}://{host}".rstrip("/")
+
     async def proxy_owner_get(request: Request, current: str, route: str, upstream_path: str) -> Response:
         try:
             stream = await to_thread.run_sync(
@@ -681,6 +749,9 @@ def create_app(legacy: Any, config: Any) -> Starlette:
         Route("/api/bridge-packages", bridge_package_create, methods=["POST"]),
         Route("/api/bridge-package-assets", bridge_package_assets, methods=["POST"]),
         Route("/api/bridge-inject", bridge_inject, methods=["POST"]),
+        Route("/mcp", mcp_options, methods=["OPTIONS"]),
+        Route("/mcp", mcp_get, methods=["GET"]),
+        Route("/mcp", mcp_post, methods=["POST"]),
         Route("/", home, methods=["GET"]),
         Route("/{route}/{tail:path}", owner_resource, methods=["GET"]),
         Route("/{filename}", static_asset, methods=["GET"]),

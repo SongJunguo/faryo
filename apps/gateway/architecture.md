@@ -25,6 +25,10 @@ internal headers, JSON/raw calls and bounded multipart forwarding. Forwarded
 browser headers cannot replace internal identity/scope fields. Both HTTP stacks
 use it so Owner tokens and workspace/inbox scopes cannot drift.
 
+`server/mcp_service.py` is the HTTP-independent MCP JSON-RPC/tool service used
+by both stacks. Token/CORS remain adapter concerns, while protocol methods,
+batch/notification behavior and handoff creation have one implementation.
+
 ## 1. Entry Flow
 
 ```text

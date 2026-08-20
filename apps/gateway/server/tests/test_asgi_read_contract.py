@@ -41,6 +41,8 @@ class ContractConfig:
         self.audit_calls: list[dict[str, Any]] = []
         self.packages: dict[str, dict[str, Any]] = {}
         self.bridge_root = Path("/nonexistent")
+        self.mcp_token = "contract-mcp-token"
+        self.mcp_cors_origin = "https://client.invalid"
 
     def auth_epoch(self, username: str) -> int:
         return int(self.users[username]["auth_epoch"])
@@ -145,6 +147,7 @@ class OwnerContractFixture(BaseHTTPRequestHandler):
 
 
 class AsgiReadContractTest(unittest.TestCase):
+    maxDiff = None
     @classmethod
     def setUpClass(cls) -> None:
         cls.config = ContractConfig()
@@ -224,6 +227,10 @@ class AsgiReadContractTest(unittest.TestCase):
     @staticmethod
     def selected_headers(headers: list[tuple[str, str]]) -> dict[str, list[str]]:
         selected = {
+            "access-control-allow-headers",
+            "access-control-allow-methods",
+            "access-control-allow-origin",
+            "allow",
             "cache-control",
             "content-security-policy",
             "content-type",
@@ -234,6 +241,7 @@ class AsgiReadContractTest(unittest.TestCase):
             "strict-transport-security",
             "x-content-type-options",
             "x-frame-options",
+            "vary",
         }
         result: dict[str, list[str]] = {}
         for name, value in headers:
@@ -544,6 +552,55 @@ class AsgiReadContractTest(unittest.TestCase):
         for upload in uploads:
             self.assertIn(b'name="file"', upload["body"])
             self.assertEqual(upload["headers"]["X-Owner-Token"], "contract-owner-token")
+
+    def test_mcp_auth_options_initialize_notification_batch_and_tool_contracts_match(self) -> None:
+        cors_headers = {"Origin": self.config.mcp_cors_origin}
+        legacy_options = self.request(self.legacy_base, "/mcp", method="OPTIONS", extra_headers=cors_headers)
+        asgi_options = self.request(self.asgi_base, "/mcp", method="OPTIONS", extra_headers=cors_headers)
+        self.assertEqual(asgi_options[0], legacy_options[0])
+        self.assertEqual(self.selected_headers(asgi_options[1]), self.selected_headers(legacy_options[1]))
+
+        legacy_denied = self.request(self.legacy_base, "/mcp")
+        asgi_denied = self.request(self.asgi_base, "/mcp")
+        self.assertEqual(asgi_denied[0], legacy_denied[0])
+        self.assertEqual(json.loads(asgi_denied[2]), json.loads(legacy_denied[2]))
+
+        headers = {
+            "Authorization": f"Bearer {self.config.mcp_token}",
+            "Content-Type": "application/json",
+            "Origin": self.config.mcp_cors_origin,
+            "X-Forwarded-Proto": "https",
+            "X-Forwarded-Host": "gateway.invalid",
+        }
+        payloads = [
+            {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": legacy.MCP_PROTOCOL_VERSION}},
+            {"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}},
+            [
+                {"jsonrpc": "2.0", "id": 3, "method": "ping"},
+                {"jsonrpc": "2.0", "id": 4, "method": "resources/list"},
+            ],
+            {
+                "jsonrpc": "2.0",
+                "id": 5,
+                "method": "tools/call",
+                "params": {"name": legacy.MCP_TOOL_NAME, "arguments": {"title": "fixture", "intent": "handoff", "context": "context", "prompt": "prompt"}},
+            },
+        ]
+        for payload in payloads:
+            with self.subTest(payload=payload):
+                body = json.dumps(payload).encode("utf-8")
+                self.config.packages.clear()
+                legacy_result = self.request(self.legacy_base, "/mcp", method="POST", body=body, extra_headers=headers)
+                self.config.packages.clear()
+                asgi_result = self.request(self.asgi_base, "/mcp", method="POST", body=body, extra_headers=headers)
+                self.assertEqual(asgi_result[0], legacy_result[0])
+                self.assertEqual(json.loads(asgi_result[2]), json.loads(legacy_result[2]))
+
+        notification = json.dumps({"jsonrpc": "2.0", "method": "notifications/initialized"}).encode("utf-8")
+        legacy_notification = self.request(self.legacy_base, "/mcp", method="POST", body=notification, extra_headers=headers)
+        asgi_notification = self.request(self.asgi_base, "/mcp", method="POST", body=notification, extra_headers=headers)
+        self.assertEqual(asgi_notification[0], legacy_notification[0])
+        self.assertEqual(asgi_notification[0], HTTPStatus.ACCEPTED)
 
 
 if __name__ == "__main__":

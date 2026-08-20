@@ -33,6 +33,7 @@ if str(GATEWAY_MODULE_DIR) not in sys.path:
     sys.path.insert(0, str(GATEWAY_MODULE_DIR))
 import gateway_security
 import owner_client
+import mcp_service
 
 SHARED_DIR = Path(__file__).resolve().parents[2] / "shared"
 SHARED_STATIC_DIR = SHARED_DIR / "static"
@@ -1112,49 +1113,31 @@ class GatewayHandler(BaseHTTPRequestHandler):
         self.write_mcp_json(response)
 
     def mcp_response(self, payload: Any) -> dict[str, Any] | list[dict[str, Any]] | None:
-        if isinstance(payload, list):
-            responses = []
-            for item in payload:
-                response = self.mcp_response(item) if isinstance(item, dict) else self.mcp_error(None, -32600, "invalid JSON-RPC message")
-                if isinstance(response, list): responses.extend(response)
-                elif response is not None: responses.append(response)
-            return responses or None
-        if not isinstance(payload, dict): return self.mcp_error(None, -32600, "invalid JSON-RPC message")
-        request_id = payload.get("id"); method = str(payload.get("method") or ""); params = payload.get("params") if isinstance(payload.get("params"), dict) else {}
-        if request_id is None: return None
-        try:
-            if method == "initialize": return self.mcp_result(request_id, {"protocolVersion": str(params.get("protocolVersion") or MCP_PROTOCOL_VERSION), "capabilities": {"tools": {"listChanged": True}}, "serverInfo": {"name": "faryo-bridge", "version": MCP_SERVER_VERSION}, "instructions": "Create Faryo handoff packages for cross-session, cross-device, or external workflow transfer."})
-            if method == "tools/list": return self.mcp_result(request_id, {"tools": self.mcp_tool_descriptors()})
-            if method == "resources/list": return self.mcp_result(request_id, {"resources": []})
-            if method == "resources/read": return self.mcp_result(request_id, {"contents": []})
-            if method == "ping": return self.mcp_result(request_id, {})
-            if method == "tools/call":
-                name = str(params.get("name") or ""); arguments = params.get("arguments") if isinstance(params.get("arguments"), dict) else {}
-                if name == MCP_TOOL_NAME: return self.mcp_result(request_id, self.mcp_create_handoff(arguments))
-                return self.mcp_error(request_id, -32602, f"unknown tool: {name}")
-            return self.mcp_error(request_id, -32601, f"method not found: {method}")
-        except ValueError as exc: return self.mcp_error(request_id, -32602, str(exc))
-        except Exception as exc: return self.mcp_error(request_id, -32000, str(exc))
+        return self.shared_mcp_service().response(payload, self.public_base_url())
 
-    def mcp_result(self, request_id: Any, result: dict[str, Any]) -> dict[str, Any]: return {"jsonrpc": "2.0", "id": request_id, "result": result}
-    def mcp_error(self, request_id: Any, code: int, message: str) -> dict[str, Any]: return {"jsonrpc": "2.0", "id": request_id, "error": {"code": code, "message": message}}
+    def shared_mcp_service(self) -> mcp_service.McpService:
+        return mcp_service.McpService(
+            self.config,
+            protocol_version=MCP_PROTOCOL_VERSION,
+            server_version=MCP_SERVER_VERSION,
+            tool_name=MCP_TOOL_NAME,
+            tool_schema=MCP_TOOL_SCHEMAS[MCP_TOOL_NAME],
+        )
+
+    def mcp_result(self, request_id: Any, result: dict[str, Any]) -> dict[str, Any]: return self.shared_mcp_service().result(request_id, result)
+    def mcp_error(self, request_id: Any, code: int, message: str) -> dict[str, Any]: return self.shared_mcp_service().error(request_id, code, message)
 
     def mcp_tool_descriptors(self) -> list[dict[str, Any]]:
-        return [
-            {"name": MCP_TOOL_NAME, "title": "Create Faryo handoff package", "description": "Create a Faryo Inbox handoff package for cross-session, cross-device, or external workflow transfer. Attachments may be file objects, data_url strings, https URLs, or base64_data; do not pass local sandbox paths such as /mnt/data.", "inputSchema": MCP_TOOL_SCHEMAS[MCP_TOOL_NAME], "annotations": {"readOnlyHint": False, "destructiveHint": False, "idempotentHint": False, "openWorldHint": False}, "_meta": {"openai/fileParams": ["attachment", "attachments", "image", "images"], "openai/toolInvocation/invoking": "Creating Faryo handoff package...", "openai/toolInvocation/invoked": "Faryo handoff package created."}},
-        ]
+        return self.shared_mcp_service().tool_descriptors()
 
     def mcp_create_handoff(self, arguments: dict[str, Any]) -> dict[str, Any]:
-        package = self.config.save_bridge_package({"title": str(arguments.get("title") or "").strip(), "source": "Faryo MCP", "intent": str(arguments.get("intent") or "").strip(), "context": str(arguments.get("context") or arguments.get("summary") or "").strip(), "prompt": str(arguments.get("prompt") or "").strip(), "attachment": arguments.get("attachment"), "attachments": arguments.get("attachments") if isinstance(arguments.get("attachments"), list) else [], "image": arguments.get("image"), "images": arguments.get("images") if isinstance(arguments.get("images"), list) else []}, self.config.mcp_user)
-        structured = {"ok": True, "package_id": package["id"], "title": package["title"], "assets": package["assets"], "gateway_url": self.public_base_url() + "/"}
-        return {"structuredContent": structured, "content": [{"type": "text", "text": json.dumps(structured, ensure_ascii=False)}], "_meta": {}}
+        return self.shared_mcp_service().create_handoff(arguments, self.public_base_url())
 
     def public_base_url(self) -> str:
         return f"{self.headers.get('X-Forwarded-Proto') or 'https'}://{self.headers.get('X-Forwarded-Host') or self.headers.get('Host') or ''}".rstrip("/")
 
     def mcp_cors_allowed(self) -> str:
-        origin = self.headers.get("Origin", "").strip()
-        return origin if origin and origin == self.config.mcp_cors_origin else ""
+        return self.shared_mcp_service().cors_origin(self.headers.get("Origin", ""))
 
     def send_mcp_cors_headers(self) -> None:
         origin = self.mcp_cors_allowed()
@@ -1169,11 +1152,10 @@ class GatewayHandler(BaseHTTPRequestHandler):
         if not self.config.mcp_token:
             self.write_mcp_json(self.mcp_error(None, -32001, "mcp disabled"), HTTPStatus.NOT_FOUND)
             return False
-        auth = self.headers.get("Authorization", "").strip()
-        token = self.headers.get("X-Faryo-Mcp-Token", "").strip()
-        if auth.lower().startswith("bearer "):
-            token = auth[7:].strip()
-        if self.config.mcp_token and token and hmac.compare_digest(token, self.config.mcp_token):
+        if self.shared_mcp_service().authorized(
+            self.headers.get("Authorization", ""),
+            self.headers.get("X-Faryo-Mcp-Token", ""),
+        ):
             return True
         self.write_mcp_json(self.mcp_error(None, -32001, "unauthorized"), HTTPStatus.UNAUTHORIZED)
         return False
