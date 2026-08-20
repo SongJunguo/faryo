@@ -299,6 +299,9 @@ consumed as private runtime input and is never printed.
   complete question indexes, paged turn merging, around/cursor fetches, 409
   retry and debounced refresh. It receives scroll anchors and render callbacks
   instead of owning Markdown DOM.
+- `static/owner/capture-controller.mjs` owns bounded capture requests, late
+  response cancellation, SSE fetch/parser lifecycle, reconnect backoff,
+  polling fallback and unlocked Raw refresh. Rendering remains in `app.js`.
 - `tmux_runtime.py` owns UTF-8 subprocess defaults, fixed tmux invocation,
   process-tree parsing and bounded session/thread/message identifiers; product
   policy remains in the higher Owner services.

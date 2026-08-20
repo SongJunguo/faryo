@@ -86,6 +86,9 @@ but the default upload destination should come from the Faryo data directory.
 - `static/owner/history-controller.mjs` owns revision-bound turn maps, question
   indexes, latest/around/cursor loads, 409 reset, refresh debounce and near-top
   older-page loading. DOM anchor capture and rendering remain injected actions.
+- `static/owner/capture-controller.mjs` owns capture request cancellation,
+  coalescing, authenticated SSE parsing, reconnect backoff, polling fallback and
+  Raw refresh timers. Capture rendering and scroll decisions remain callbacks.
 - Low-level command execution and tmux/process-tree/identifier primitives are
   isolated in `tmux_runtime.py`; higher services keep policy and translate
   failures rather than rebuilding subprocess defaults.

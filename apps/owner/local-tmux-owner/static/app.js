@@ -3,6 +3,7 @@
   const apiClientModulePromise = import("./owner/api-client.mjs?v=faryo-owner-api-1");
   const attachmentControllerModulePromise = import("./owner/attachment-controller.mjs?v=faryo-owner-attachments-1");
   const historyControllerModulePromise = import("./owner/history-controller.mjs?v=faryo-owner-history-1");
+  const captureControllerModulePromise = import("./owner/capture-controller.mjs?v=faryo-owner-capture-1");
   // Workspace review is an optional surface. Start loading it immediately,
   // but never let a transient asset failure block capture/history rendering.
   const changesPanelModulePromise = import("./owner/changes-panel.mjs?v=faryo-owner-changes-1");
@@ -10,10 +11,12 @@
     { createApiClient, sessionApiPath },
     { createAttachmentController },
     { createHistoryController, isStructuredCapture },
+    { createCaptureController },
   ] = await Promise.all([
     apiClientModulePromise,
     attachmentControllerModulePromise,
     historyControllerModulePromise,
+    captureControllerModulePromise,
   ]);
 
   const $ = (id) => document.getElementById(id);
@@ -87,12 +90,12 @@
     'Tap folder to switch sessions',
     'Set font on home',
   ];
-  let captureRefreshInFlight = false, pendingCaptureRefreshLines = null, pendingDeferredCapture = null, activeCaptureRefreshController = null, captureRefreshRunId = 0;
+  let captureController = null, pendingDeferredCapture = null;
   let statusRefreshInFlight = false, activeStatusRefreshController = null, statusRefreshRunId = 0, statusRefreshTimer = null;
-  let eventStreamController = null, eventStreamRunId = 0, eventRetryTimer = null, captureFallbackTimer = null, eventRetryDelayMs = 1800, liveState = 'fallback';
+  let liveState = 'fallback';
   let petSending = false, petSendTimer = null, petStopping = false, petStopTimer = null, agentRunning = false, lastPetPhase = '';
   let outputActivity = 0, outputActivityTimer = null, lastCaptureSignature = '', lastCompactCapture = null, lastFullCapture = null;
-  let outputMode = 'compact', fullLocked = false, fullRefreshTimer = null, preserveErrorUntil = 0, seenInitialPageShow = false, needsConfirmUI = false, errorTimer = null, currentPromptTip = '';
+  let outputMode = 'compact', fullLocked = false, preserveErrorUntil = 0, seenInitialPageShow = false, needsConfirmUI = false, errorTimer = null, currentPromptTip = '';
   let markdownRenderRevision = 0, highlighterRenderFrame = 0;
   const markdownHtmlCache = new Map();
   const pendingAttachments = [];
@@ -994,102 +997,59 @@
     updatePetControl();
   }
 
-  function eventUrl() {
-    return routeBase + apiPath(`/api/events?lines=${COMPACT_CAPTURE_LINES}`);
-  }
-
-  function closeEventStream() {
-    if (eventRetryTimer) clearTimeout(eventRetryTimer);
-    eventRetryTimer = null;
-    eventStreamRunId += 1;
-    eventStreamController?.abort();
-    eventStreamController = null;
-  }
-
   function setStatusRefresh(on) { if (statusRefreshTimer) clearInterval(statusRefreshTimer); statusRefreshTimer = null; if (on && !document.hidden) statusRefreshTimer = setInterval(() => refreshStatus({ silent: true }).catch(handleBackgroundError), STATUS_REFRESH_MS); }
   function headerStatusVisible() { return !document.querySelector('header')?.classList.contains('collapsed'); }
   function syncStatusRefresh(refreshNow = false) { const on = headerStatusVisible(); setStatusRefresh(on); if (on && refreshNow) refreshStatus({ silent: true }).catch(handleBackgroundError); }
 
-  function setFullRefresh(on) {
-    if (fullRefreshTimer) clearInterval(fullRefreshTimer);
-    fullRefreshTimer = null;
-    if (on && !document.hidden) fullRefreshTimer = setInterval(() => {
-      refreshCapture(FULL_CAPTURE_LINES, { silent: true }).catch(handleBackgroundError);
-    }, FULL_REFRESH_MS);
-  }
-
-  function setCaptureFallback(on) { if (captureFallbackTimer) clearInterval(captureFallbackTimer); captureFallbackTimer = null; if (on && !document.hidden && outputMode === 'compact') captureFallbackTimer = setInterval(() => refreshCapture(COMPACT_CAPTURE_LINES, { silent: true }).catch(handleBackgroundError), CAPTURE_FALLBACK_MS); }
-
-  function applyCaptureEvent(event) {
-    if (event.type !== 'capture') return;
-    const keepBottom = isNearBottom();
-    const capture = JSON.parse(event.data || '{}');
-    setLiveState('live');
-    if (capture.sessionTitle) renderSessionLabel(capture.sessionTitle);
-    if (Object.prototype.hasOwnProperty.call(capture, 'agentRunning')) {
-      const nextRunning = Boolean(capture.agentRunning);
-      if (nextRunning !== agentRunning) {
-        agentRunning = nextRunning;
-        updatePetControl();
+  captureController = createCaptureController({
+    view: window,
+    compactLines: COMPACT_CAPTURE_LINES,
+    fullLines: FULL_CAPTURE_LINES,
+    fetchTimeoutMs: FETCH_TIMEOUT_MS,
+    fullRefreshMs: FULL_REFRESH_MS,
+    fallbackRefreshMs: CAPTURE_FALLBACK_MS,
+    currentLines: currentCaptureLines,
+    getOutputMode: () => outputMode,
+    isHidden: () => document.hidden,
+    setError,
+    setLiveState,
+    loadCapture: (lines, signal) => {
+      const format = outputMode === 'compact' ? '' : '&format=html';
+      return api(apiPath(`/api/capture?lines=${lines}${format}`), { signal });
+    },
+    onCapture: (capture, meta) => {
+      const keepBottom = isNearBottom();
+      if (capture.sessionTitle) renderSessionLabel(capture.sessionTitle);
+      if (Object.prototype.hasOwnProperty.call(capture, 'agentRunning')) {
+        const nextRunning = Boolean(capture.agentRunning);
+        if (meta.source === 'refresh' || nextRunning !== agentRunning) {
+          agentRunning = nextRunning;
+          updatePetControl();
+        }
       }
-    }
-    if (outputMode === 'compact') renderCaptureWhenSafe(capture, keepBottom);
-  }
+      if (meta.source === 'refresh' || outputMode === 'compact') {
+        renderCaptureWhenSafe(capture, keepBottom);
+      }
+    },
+    handleBackgroundError,
+    refreshStatusIfVisible: () => {
+      if (headerStatusVisible()) refreshStatus({ silent: true }).catch(handleBackgroundError);
+    },
+    fetch: (...args) => window.fetch(...args),
+    eventUrl: () => routeBase + apiPath(`/api/events?lines=${COMPACT_CAPTURE_LINES}`),
+    ownerHeaders: ownerApiClient.ownerHeaders,
+    eventStreamParser,
+    debug: (...args) => console.debug(...args),
+  });
 
-  function retryEventStream(controller, runId, error) {
-    if (controller.signal.aborted || eventStreamController !== controller || eventStreamRunId !== runId) return;
-    eventStreamController = null;
-    setLiveState('reconnecting');
-    if (headerStatusVisible()) refreshStatus({ silent: true }).catch(handleBackgroundError);
-    setCaptureFallback(true);
-    if (error && error.name !== 'AbortError') console.debug('event stream reconnecting', error);
-    const delay = eventRetryDelayMs;
-    eventRetryDelayMs = Math.min(15000, Math.round(eventRetryDelayMs * 1.7));
-    if (outputMode === 'compact' && !document.hidden) eventRetryTimer = setTimeout(startEventStream, delay);
+  function refreshCapture(lines = currentCaptureLines(), options = {}) {
+    return captureController.refresh(lines, options);
   }
+  function startEventStream() { captureController.startEventStream(); }
+  function closeEventStream() { captureController.closeEventStream(); }
+  function setCaptureFallback(on) { captureController.setFallback(on); }
+  function setFullRefresh(on) { captureController.setFullRefresh(on); }
 
-  async function consumeEventStream(controller, runId) {
-    const headers = ownerApiClient.ownerHeaders();
-    const response = await fetch(eventUrl(), {
-      headers,
-      cache: 'no-store',
-      credentials: 'same-origin',
-      signal: controller.signal,
-    });
-    if (!response.ok) {
-      const error = new Error(`Event stream failed ${response.status}`);
-      error.status = response.status;
-      throw error;
-    }
-    if (!response.body || typeof eventStreamParser.createParser !== 'function') throw new Error('Streaming response is unavailable');
-    eventRetryDelayMs = 1800;
-    setCaptureFallback(false);
-    setLiveState('live');
-    const parser = eventStreamParser.createParser(applyCaptureEvent);
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-    while (eventStreamController === controller && eventStreamRunId === runId) {
-      const chunk = await reader.read();
-      if (chunk.done) break;
-      parser.push(decoder.decode(chunk.value, { stream: true }));
-    }
-    parser.push(decoder.decode(), true);
-    if (!controller.signal.aborted) throw new Error('Event stream ended');
-  }
-
-  function startEventStream() {
-    if (!window.fetch || !window.ReadableStream || outputMode !== 'compact' || document.hidden) {
-      setLiveState('fallback');
-      setCaptureFallback(outputMode === 'compact' && !document.hidden);
-      return;
-    }
-    closeEventStream();
-    setLiveState('reconnecting');
-    const controller = new AbortController();
-    const runId = eventStreamRunId;
-    eventStreamController = controller;
-    consumeEventStream(controller, runId).catch((error) => retryEventStream(controller, runId, error));
-  }
 
   function compactGitLabel(git) {
     if (!git) return 'git --';
@@ -1827,13 +1787,11 @@
   }
 
   function cancelActiveRefreshes() {
-    captureRefreshRunId += 1;
+    captureController.cancelRefresh();
     statusRefreshRunId += 1;
-    if (activeCaptureRefreshController) activeCaptureRefreshController.abort();
     if (activeStatusRefreshController) activeStatusRefreshController.abort();
-    activeCaptureRefreshController = activeStatusRefreshController = null;
-    captureRefreshInFlight = statusRefreshInFlight = false;
-    pendingCaptureRefreshLines = null;
+    activeStatusRefreshController = null;
+    statusRefreshInFlight = false;
   }
 
   function handlePageShow(event) {
@@ -1988,43 +1946,6 @@
       clearTimeout(timeoutId);
       if (activeStatusRefreshController === controller) activeStatusRefreshController = null;
       if (runId === statusRefreshRunId) statusRefreshInFlight = false;
-    }
-  }
-
-  async function refreshCapture(lines = currentCaptureLines(), options = {}) {
-    if (captureRefreshInFlight) {
-      pendingCaptureRefreshLines = Math.max(pendingCaptureRefreshLines || 0, lines);
-      return;
-    }
-    captureRefreshInFlight = true;
-    const runId = ++captureRefreshRunId;
-    const controller = new AbortController();
-    activeCaptureRefreshController = controller;
-    const timeoutId = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
-    if (!options.silent) setError('');
-    try {
-      const keepBottom = isNearBottom();
-      const format = outputMode === 'compact' ? '' : '&format=html';
-      const capture = await api(apiPath(`/api/capture?lines=${lines}${format}`), { signal: controller.signal });
-      if (runId !== captureRefreshRunId) return;
-      if (capture.sessionTitle) renderSessionLabel(capture.sessionTitle);
-      if (Object.prototype.hasOwnProperty.call(capture, 'agentRunning')) {
-        agentRunning = Boolean(capture.agentRunning);
-        updatePetControl();
-      }
-      renderCaptureWhenSafe(capture, keepBottom);
-    } catch (err) {
-      if (err.name === 'AbortError') return;
-      throw err;
-    } finally {
-      clearTimeout(timeoutId);
-      if (activeCaptureRefreshController === controller) activeCaptureRefreshController = null;
-      if (runId === captureRefreshRunId) {
-        captureRefreshInFlight = false;
-        const pendingLines = pendingCaptureRefreshLines;
-        pendingCaptureRefreshLines = null;
-        if (pendingLines) refreshCapture(pendingLines, { silent: true }).catch(handleBackgroundError);
-      }
     }
   }
 
