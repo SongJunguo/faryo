@@ -5,13 +5,14 @@
 
 ## Active
 
-- [`v1.4-backend-modernization-and-modularization-plan.md`](v1.4-backend-modernization-and-modularization-plan.md)：
-  保留 Python/Conda 和既有安全/可靠性边界，拆分 Owner/Gateway/前端职责，将 Gateway HTTP
-  层迁移到 Starlette/Uvicorn，并以量化门槛采用 Gateway keyed-list Preact 试点；完整试点评估
-  位于 [`../preact-pilot-evaluation.md`](../preact-pilot-evaluation.md)。
+当前没有活动计划。
 
 ## Completed or maintenance mode
 
+- [`v1.4-backend-modernization-and-modularization-plan.md`](v1.4-backend-modernization-and-modularization-plan.md)：
+  保留 Python/Conda 和既有安全/可靠性边界，完成 Owner/Gateway/前端职责拆分、唯一
+  Starlette/Uvicorn Gateway、35 附件与量化 keyed-list Preact 采用，并发布 source-only v1.4.0；
+  完整试点评估位于 [`../preact-pilot-evaluation.md`](../preact-pilot-evaluation.md)。
 - [`v1.3-maintainability-and-product-capabilities-plan.md`](v1.3-maintainability-and-product-capabilities-plan.md)：
   用 Playwright/Ruff 与选择性前端库降低维护成本，拆分 Gateway portal，并实施 capability、
   脱敏 diagnostics、只读 diff review 和 body-free attention；pending queue 仅走正式协议。
