@@ -70,6 +70,11 @@ cookies, epoch revoke, CSRF, trusted login-rate keys, safe redirects, CSP and
 browser hardening headers. It has no dependency on either the legacy HTTP
 handler or Starlette so both migration stacks can share exact behavior.
 
+The v1.4 development tree also contains a non-production `server/asgi_app.py`
+Starlette adapter. It is exercised only on an isolated socket by normalized
+legacy/ASGI contract tests until write, proxy, stream and upload coverage is
+complete; `run-gateway.sh` continues to launch the legacy server meanwhile.
+
 Gateway serves one root-scoped installable PWA manifest with `display:
 standalone`. The home page exposes the browser install prompt when available,
 and every maintained Owner session page references the same manifest. Launching

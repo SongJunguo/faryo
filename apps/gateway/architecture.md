@@ -13,6 +13,11 @@ redirect allowlisting and browser security headers are shared pure policy in
 `server/gateway_security.py`. The legacy handler and the migrating ASGI app
 must consume the same module rather than reproduce these boundaries.
 
+`server/asgi_app.py` is currently a non-production Starlette adapter used for
+dual-stack contract comparison. It covers public manifest/service-worker/static
+assets, login/logout, CSRF and the authenticated home page. POST, Owner proxy,
+SSE, MCP and uploads remain on the legacy stack until their contracts match.
+
 ## 1. Entry Flow
 
 ```text

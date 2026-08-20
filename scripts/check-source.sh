@@ -88,6 +88,7 @@ release_checks() {
     "$ROOT/apps/owner/local-tmux-owner/tests/owner-archive-roundtrip.py" \
     "$ROOT/apps/gateway/server/server.py" \
     "$ROOT/apps/gateway/server/gateway_security.py" \
+    "$ROOT/apps/gateway/server/asgi_app.py" \
     "$ROOT/apps/gateway/scripts/generate-gateway-auth-config.py"
   for js_file in \
     "$ROOT/apps/owner/local-tmux-owner/static/compact-rules-codex.js" \
