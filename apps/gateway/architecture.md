@@ -55,8 +55,10 @@ OwnerClient-backed model rather than maintaining parallel session semantics.
 `server/control_audit.py` owns the body-free HMAC target digest, mode-600 JSONL
 append/read, retention and corrupt-tail recovery. `server/bridge_packages.py`
 owns package persistence, bounded attachment files, owner visibility and
-status-dependent cleanup. `GatewayConfig` delegates to both stores and no
-longer carries their locks or mutable counters itself.
+status-dependent cleanup. `server/gateway_config.py` owns private env parsing,
+route limits, user scopes, cookie-secret loading and store composition. The
+production runner constructs it directly; the legacy module retains only a
+thin compatibility subclass during removal.
 
 ## 1. Entry Flow
 

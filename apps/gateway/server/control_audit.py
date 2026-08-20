@@ -20,13 +20,13 @@ CONTROL_AUDIT_PRUNE_INTERVAL_SECONDS = 60 * 60
 def result_for_status(status: int) -> str:
     if 200 <= status < 300:
         return "success"
-    if status == 409:
-        return "conflict"
     if status in {401, 403}:
         return "denied"
-    if status == 404:
-        return "not-found"
-    return "failed"
+    if status in {408, 504}:
+        return "timeout"
+    if status == 409:
+        return "conflict"
+    return "error"
 
 
 class ControlAuditStore:

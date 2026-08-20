@@ -13,7 +13,6 @@ import json
 import os
 import re
 import secrets
-import shlex
 import socket
 import sys
 import time
@@ -33,8 +32,8 @@ import gateway_security
 import owner_client
 import mcp_service
 import workbench_service
-import control_audit
 import bridge_packages
+import gateway_config
 
 SHARED_DIR = Path(__file__).resolve().parents[2] / "shared"
 SHARED_STATIC_DIR = SHARED_DIR / "static"
@@ -121,9 +120,6 @@ HISTORY_PERIODS = {"all", "today", "7d", "30d"}
 HISTORY_ARCHIVE_FILTERS = {"active", "archived", "all"}
 SESSION_STATES = {"starting", "running", "waiting", "exited", "desktop", "resumable", "archived"}
 SESSION_STATE_PRIORITY = {"running": 6, "starting": 5, "waiting": 4, "desktop": 3, "exited": 2, "resumable": 1, "archived": 0}
-CONTROL_AUDIT_MAX_ROWS = control_audit.CONTROL_AUDIT_MAX_ROWS
-CONTROL_AUDIT_RETENTION_SECONDS = control_audit.CONTROL_AUDIT_RETENTION_SECONDS
-CONTROL_AUDIT_PRUNE_INTERVAL_SECONDS = control_audit.CONTROL_AUDIT_PRUNE_INTERVAL_SECONDS
 PROXY_CONTROL_ACTIONS = {
     "/api/send": "send",
     "/api/interrupt": "interrupt",
@@ -225,30 +221,6 @@ LOGIN_LIMITER = gateway_security.LoginRateLimiter(
     max_failures=LOGIN_RATE_MAX_FAILURES,
 )
 CSP_NONCE_PLACEHOLDER = "__FARYO_CSP_NONCE__"
-
-
-def read_env(path: Path) -> dict[str, str]:
-    values: dict[str, str] = {}
-    for line in path.read_text(encoding="utf-8").splitlines():
-        if not line or line.lstrip().startswith("#") or "=" not in line:
-            continue
-        key, raw = line.split("=", 1)
-        try:
-            parsed = shlex.split(raw, posix=True)
-        except ValueError as exc:
-            raise ValueError(f"invalid shell value for {key}") from exc
-        values[key] = parsed[0] if len(parsed) == 1 else raw.strip()
-    return values
-
-
-def load_secret(path: Path) -> bytes:
-    if path.exists():
-        return path.read_text(encoding="utf-8").strip().encode("utf-8")
-    path.parent.mkdir(parents=True, exist_ok=True)
-    secret = secrets.token_urlsafe(48)
-    path.write_text(secret + "\n", encoding="utf-8")
-    os.chmod(path, 0o600)
-    return secret.encode("utf-8")
 
 
 def html_escape(value: str) -> str:
@@ -364,18 +336,6 @@ def owner_history_query(limit: int, offset: int, filters: dict[str, Any] | None 
     if applied["archive"] != "active":
         params.append(("archive", applied["archive"]))
     return "/api/agent-sessions?" + urlencode(params)
-
-
-def control_result_for_status(status: int) -> str:
-    if 200 <= status < 300:
-        return "success"
-    if status in {HTTPStatus.UNAUTHORIZED, HTTPStatus.FORBIDDEN}:
-        return "denied"
-    if status in {HTTPStatus.REQUEST_TIMEOUT, HTTPStatus.GATEWAY_TIMEOUT}:
-        return "timeout"
-    if status == HTTPStatus.CONFLICT:
-        return "conflict"
-    return "error"
 
 
 def control_target_from_json(raw: bytes | None) -> str:
@@ -532,211 +492,26 @@ def bridge_prompt_text(package: dict[str, Any]) -> str:
     return "\n".join(parts).strip() + "\n"
 
 
+GATEWAY_CONFIG_RUNTIME = gateway_config.GatewayConfigRuntime(
+    backends=BACKENDS,
+    load_backends=load_backends,
+    route_max_defaults=SESSION_MAX_RUNNING_DEFAULTS,
+    route_max_limit=SESSION_MAX_RUNNING_LIMIT,
+    clean_package_id=clean_package_id,
+    normalize_bridge_asset=normalize_bridge_asset_payload,
+    bridge_asset_bytes=bridge_asset_bytes_from_payload,
+    bridge_mime_extensions=BRIDGE_MIME_EXT,
+    now_ts=now_ts,
+)
+
+
 class ReusableThreadingHTTPServer(ThreadingHTTPServer):
     allow_reuse_address = True
 
 
-class GatewayConfig:
-    def __init__(self, auth_config: Path, owner_env: Path, portal_dir: Path, secret_file: Path):
-        self.auth_config = auth_config
-        auth = json.loads(auth_config.read_text(encoding="utf-8"))
-        env = read_env(owner_env)
-        BACKENDS.clear()
-        BACKENDS.update(load_backends(env))
-        self.route_max_running = self.load_route_max_running(env)
-        self.mcp_token = env.get("FARYO_MCP_TOKEN", "").strip()
-        self.mcp_cors_origin = env.get("FARYO_MCP_CORS_ORIGIN", "").strip()
-        self.mcp_user = env.get("FARYO_MCP_USER", "").strip()
-        self.users = self.load_users(auth)
-        self.owner_tokens = self.load_owner_tokens(env)
-        self.portal_dir = portal_dir
-        self.cookie_secret = load_secret(secret_file)
-        self.icp_record = env.get("FARYO_ICP_RECORD", "").strip()
-        self.bridge_root = secret_file.parent / "bridge-packages"
-        self.control_audit_path = secret_file.parent / "control-audit.jsonl"
-        self._bridge_store = bridge_packages.BridgePackageStore(
-            self.bridge_root,
-            self.mcp_user,
-            clean_package_id=clean_package_id,
-            normalize_asset=normalize_bridge_asset_payload,
-            asset_bytes=bridge_asset_bytes_from_payload,
-            mime_extensions=BRIDGE_MIME_EXT,
-            now_ts=now_ts,
-        )
-        self._control_audit_store = control_audit.ControlAuditStore(
-            self.cookie_secret,
-            self.control_audit_path,
-            self.user_routes,
-        )
-
-    def load_owner_tokens(self, env: dict[str, str]) -> dict[str, str]:
-        tokens: dict[str, str] = {}
-        missing = []
-        for route in BACKENDS:
-            key = f"FARYO_{route.upper()}_OWNER_TOKEN"
-            value = env.get(key, "").strip()
-            if not value:
-                missing.append(key)
-                continue
-            tokens[route] = value
-        if missing:
-            raise ValueError("missing route owner token env: " + ", ".join(missing))
-        return tokens
-
-    def load_route_max_running(self, env: dict[str, str]) -> dict[str, int]:
-        limits: dict[str, int] = {}
-        for route in BACKENDS:
-            key = f"FARYO_{route.upper()}_MAX_RUNNING"
-            raw = env.get(key, str(SESSION_MAX_RUNNING_DEFAULTS[route])).strip()
-            try:
-                value = int(raw)
-            except ValueError as exc:
-                raise ValueError(f"{key} must be an integer from 1 to {SESSION_MAX_RUNNING_LIMIT}") from exc
-            if not 1 <= value <= SESSION_MAX_RUNNING_LIMIT:
-                raise ValueError(f"{key} must be an integer from 1 to {SESSION_MAX_RUNNING_LIMIT}")
-            limits[route] = value
-        return limits
-
-    def max_running(self, route: str) -> int:
-        return self.route_max_running[route]
-
-    def load_users(self, auth: dict[str, Any]) -> dict[str, dict[str, Any]]:
-        if "users" in auth and isinstance(auth["users"], dict):
-            source = auth["users"]
-        else:
-            username = str(auth["username"])
-            source = {username: {"bcrypt_hash": str(auth["bcrypt_hash"]), "auth_epoch": int(auth.get("auth_epoch") or 0), "routes": list(BACKENDS)}}
-        users: dict[str, dict[str, Any]] = {}
-        for username, payload in source.items():
-            if not isinstance(payload, dict):
-                continue
-            name = str(username).strip()
-            if not name:
-                continue
-            configured = payload.get("routes")
-            if configured is None:
-                routes = list(BACKENDS)
-            elif isinstance(configured, list):
-                routes = [route for route in configured if route in BACKENDS]
-            else:
-                raise ValueError(f"gateway user {name!r} routes must be a list")
-            if not routes:
-                raise ValueError(f"gateway user {name!r} has no enabled routes")
-            default_route = str(payload.get("default_route") or (routes[0] if routes else "txy"))
-            if default_route not in routes and routes:
-                default_route = routes[0]
-            users[name] = {
-                "bcrypt_hash": str(payload["bcrypt_hash"]),
-                "auth_epoch": int(payload.get("auth_epoch") or 0),
-                "routes": routes,
-                "default_route": default_route,
-                "file_inbox_roots": dict(payload.get("file_inbox_roots") or {}),
-                "workspace_roots": dict(payload.get("workspace_roots") or {}),
-            }
-        if not users:
-            raise ValueError("gateway auth config has no valid users")
-        if not self.mcp_user or self.mcp_user not in users:
-            self.mcp_user = next(iter(users))
-        return users
-
-    def save_users(self) -> None:
-        payload = {"users": self.users}
-        tmp = self.auth_config.with_name(f".{self.auth_config.name}.tmp")
-        tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-        os.chmod(tmp, 0o600)
-        os.replace(tmp, self.auth_config)
-
-    def user(self, username: str) -> dict[str, Any] | None:
-        return self.users.get(username)
-
-    def user_routes(self, username: str) -> list[str]:
-        user = self.users.get(username) or {}
-        return [route for route in user.get("routes", []) if route in BACKENDS]
-
-    def allowed_route(self, username: str, route: str) -> bool:
-        return route in self.user_routes(username)
-
-    def password_hash(self, username: str) -> bytes:
-        return str(self.users[username]["bcrypt_hash"]).encode("utf-8")
-
-    def auth_epoch(self, username: str) -> int:
-        return int(self.users[username].get("auth_epoch") or 0)
-
-    def revoke_sessions(self, username: str) -> None:
-        if username not in self.users:
-            raise ValueError("unknown user")
-        self.users[username]["auth_epoch"] = max(int(time.time()), self.auth_epoch(username) + 1)
-        self.save_users()
-
-    def control_target_digest(self, value: str) -> str:
-        return self._control_audit_store.target_digest(value)
-
-    def _prune_control_audit_locked(self, now: float) -> None:
-        self._control_audit_store._prune_locked(now)
-
-    def append_control_audit(self, *, username: str, route: str, action: str, target: str, request_id: str, status: int, duration_ms: int, idempotent: bool = False) -> None:
-        self._control_audit_store.append(
-            username=username,
-            route=route,
-            action=action,
-            target=target,
-            request_id=request_id,
-            status=status,
-            duration_ms=duration_ms,
-            idempotent=idempotent,
-        )
-
-    def control_activity(self, username: str, limit: int = 30) -> list[dict[str, Any]]:
-        return self._control_audit_store.activity(username, limit)
-
-    def set_password(self, username: str, password: str) -> None:
-        if username not in self.users:
-            raise ValueError("unknown user")
-        self.users[username]["bcrypt_hash"] = bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
-        self.users[username]["auth_epoch"] = int(time.time())
-        self.save_users()
-
-    def file_inbox_root(self, username: str, route: str) -> str | None:
-        value = (self.users.get(username) or {}).get("file_inbox_roots", {}).get(route)
-        return str(value) if value else None
-
-    def workspace_root(self, username: str, route: str) -> str | None:
-        value = (self.users.get(username) or {}).get("workspace_roots", {}).get(route)
-        return str(value) if value else None
-
-    def owner_token(self, route: str) -> str:
-        return self.owner_tokens[route]
-
-
-    def bridge_asset_sources(self, payload: dict[str, Any]) -> list[Any]:
-        return self._bridge_store.asset_sources(payload)
-
-    def attachment_only_prompt(self, title: str) -> str:
-        return self._bridge_store.attachment_only_prompt(title)
-
-    def save_bridge_assets(self, package_id: str, package_dir: Path, asset_sources: list[Any], start_index: int = 1) -> list[dict[str, Any]]:
-        return self._bridge_store.save_assets(package_id, package_dir, asset_sources, start_index)
-
-    def user_can_access_package(self, username: str, package: dict[str, Any]) -> bool:
-        return self._bridge_store.user_can_access(username, package)
-
-    def save_bridge_package(self, payload: dict[str, Any], username: str) -> dict[str, Any]:
-        return self._bridge_store.save(payload, username)
-
-    def append_bridge_package_assets(self, package_id: str, asset_sources: list[Any], username: str) -> dict[str, Any]:
-        return self._bridge_store.append_assets(package_id, asset_sources, username)
-
-    def list_bridge_packages(self, username: str, status: str | None = None) -> list[dict[str, Any]]:
-        return self._bridge_store.list(username, status)
-
-    def cleanup_bridge_packages(self, current_time: int | None = None, force: bool = False) -> int:
-        return self._bridge_store.cleanup(current_time, force)
-
-    def bridge_package(self, package_id: str, username: str | None = None) -> dict[str, Any] | None:
-        return self._bridge_store.get(package_id, username)
-
-    def update_bridge_package(self, package: dict[str, Any]) -> None:
-        self._bridge_store.update(package)
+class GatewayConfig(gateway_config.GatewayConfig):
+    def __init__(self, auth_config: Path, owner_env: Path, portal_dir: Path, secret_file: Path) -> None:
+        super().__init__(auth_config, owner_env, portal_dir, secret_file, GATEWAY_CONFIG_RUNTIME)
 
 
 class WorkbenchRuntime:

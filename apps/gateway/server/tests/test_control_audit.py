@@ -24,6 +24,13 @@ import control_audit
 
 
 class ControlAuditTest(unittest.TestCase):
+    def test_result_mapping_matches_control_contract(self) -> None:
+        self.assertEqual(control_audit.result_for_status(200), "success")
+        self.assertEqual(control_audit.result_for_status(403), "denied")
+        self.assertEqual(control_audit.result_for_status(408), "timeout")
+        self.assertEqual(control_audit.result_for_status(409), "conflict")
+        self.assertEqual(control_audit.result_for_status(404), "error")
+
     def setUp(self) -> None:
         self.original_backends = dict(gateway.BACKENDS)
         self.temp = tempfile.TemporaryDirectory()

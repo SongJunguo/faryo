@@ -9,6 +9,7 @@ from pathlib import Path
 import uvicorn
 
 import asgi_app
+import gateway_config
 import server as legacy
 
 
@@ -24,11 +25,12 @@ def parse_args() -> argparse.Namespace:
 
 
 def create_runtime_app(args: argparse.Namespace):
-    config = legacy.GatewayConfig(
+    config = gateway_config.GatewayConfig(
         Path(args.auth_config),
         Path(args.owner_env),
         Path(args.portal_dir),
         Path(args.secret_file),
+        legacy.GATEWAY_CONFIG_RUNTIME,
     )
     return asgi_app.create_app(legacy, config)
 
