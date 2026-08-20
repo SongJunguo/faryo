@@ -117,10 +117,10 @@ def gateway_process(layout: Layout | None = None) -> ProcessSpec:
     host = loopback(values, "GATEWAY_HOST", "127.0.0.1")
     gateway_port = port(values, "GATEWAY_PORT", 8780)
     runner = selected.source_root / "apps/gateway/server/run_asgi.py"
-    owner_env = selected.owner_env
+    gateway_env = selected.gateway_env
     portal_dir = selected.faryo_home / "gateway/portal"
     secret_file = selected.faryo_home / "gateway/state/gateway-cookie-secret"
-    if not runner.is_file() or private_file_state(owner_env) != "ok":
+    if not runner.is_file() or private_file_state(gateway_env) != "ok":
         raise OperationError("Gateway application inputs are unavailable")
     environment = normalized_environment(values, selected.home)
     environment["FARYO_HOME"] = str(selected.faryo_home)
@@ -136,7 +136,7 @@ def gateway_process(layout: Layout | None = None) -> ProcessSpec:
             "--auth-config",
             str(selected.gateway_auth),
             "--owner-env",
-            str(owner_env),
+            str(gateway_env),
             "--portal-dir",
             str(portal_dir),
             "--secret-file",

@@ -5,6 +5,7 @@ from io import StringIO
 import json
 import os
 from pathlib import Path
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -38,6 +39,7 @@ class FaryoCliTest(unittest.TestCase):
         gateway_env.write_text(
             "GATEWAY_HOST=127.0.0.1\n"
             "GATEWAY_PORT=8780\n"
+            "FARYO_GATEWAY_ROUTES=txy\n"
             "FARYO_GATEWAY_SESSION_HOURS=720\n"
             f"FARYO_PYTHON={sys.executable}\n"
             "FARYO_TXY_OWNER_TOKEN=private-owner-token\n",
@@ -226,8 +228,24 @@ class FaryoCliTest(unittest.TestCase):
 
         self.assertIn("--auth-config", spec.argv)
         self.assertIn("--owner-env", spec.argv)
+        self.assertEqual(spec.argv[spec.argv.index("--owner-env") + 1], str(layout.gateway_env))
         self.assertNotIn("private-owner-token", " ".join(spec.argv))
         self.assertEqual(spec.environment["FARYO_GATEWAY_SESSION_HOURS"], "720")
+
+        probe = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                "import sys; sys.path.insert(0, sys.argv[1]); import server; print(','.join(server.BACKENDS))",
+                str(ROOT / "apps/gateway/server"),
+            ],
+            env=spec.environment,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(probe.returncode, 0, probe.stderr)
+        self.assertEqual(probe.stdout.strip(), "txy")
 
     def test_direct_runtime_rejects_non_loopback_owner(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
