@@ -13,12 +13,27 @@ redirect allowlisting and browser security headers are shared pure policy in
 `server/gateway_security.py`. The legacy handler and the migrating ASGI app
 must consume the same module rather than reproduce these boundaries.
 
-`server/asgi_app.py` is currently a non-production Starlette adapter used for
-dual-stack contract comparison. It covers public manifest/service-worker/static
-assets, login/logout, CSRF, the authenticated home page, tmux control POST,
-ordinary Owner API GET/SSE, session pages and allowlisted Owner assets. MCP,
-most direct Gateway writes and uploads remain on the legacy stack until their
-contracts match; Archive/Restore is already covered by the dual-stack adapter.
+`server/asgi_app.py` is the production Starlette application run by Uvicorn;
+the legacy handler remains only as a temporary cutover fallback and contract
+oracle until its release removal gate passes. The ASGI stack covers public manifest/service-worker/static
+assets, login/logout/password/CSRF, the authenticated home page, tmux control
+POST, ordinary Owner API GET/SSE, session pages, allowlisted Owner assets, MCP,
+Archive/Restore, revoke, Codex start/resume and bridge package upload/injection.
+The route inventory and deployment cutover gates have passed; release still
+requires deleting the temporary legacy HTTP implementation.
+
+The Starlette HTTP adapters are split by responsibility:
+
+- `asgi_auth.py`: login, signed cookies, CSRF and password rotation;
+- `asgi_read.py`: public/read-only pages, assets, status and workbench payloads;
+- `asgi_owner_proxy.py`: Owner API GET, SSE and allowlisted resource streaming;
+- `asgi_control.py`: Owner control POST, Archive/Restore and revoke audit flow;
+- `asgi_agents.py`: Codex start/resume validation and idempotent retry;
+- `asgi_bridge.py`: bridge package create/append/inject and bounded uploads;
+- `asgi_mcp.py`: MCP authorization, CORS and JSON-RPC HTTP mapping.
+
+`asgi_app.py` is only the composition root and route-order declaration; business
+state remains in shared services and configuration rather than route globals.
 
 `server/owner_client.py` is the shared authenticated Owner client for scoped
 internal headers, JSON/raw calls and bounded multipart forwarding. Forwarded
@@ -95,8 +110,8 @@ establish reverse tunnels to it.
   merged Session History display budget.
 - Login cookie: uses the Faryo cookie name.
 - Browser sessions use a host-only `__Host-` cookie with `Secure`, `HttpOnly`,
-  `SameSite=Strict`, and a server-enforced absolute lifetime. The default is 12
-  hours; private `FARYO_GATEWAY_SESSION_HOURS` configuration accepts `1`–`168`.
+  `SameSite=Strict`, and a server-enforced absolute lifetime. The default is 30
+  days; private `FARYO_GATEWAY_SESSION_HOURS` configuration accepts `1`–`720`.
 - Owner tokens: private runtime config, never committed to Git.
 - Route auth: private runtime config, never committed to Git.
 - Upstream control headers: use Faryo header names.

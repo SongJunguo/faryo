@@ -392,14 +392,14 @@ class GatewayCsrfContractTest(unittest.TestCase):
         self.assertEqual(self.config.audit_calls[-1]["action"], "archive")
         self.assertEqual(self.config.audit_calls[-1]["status"], HTTPStatus.CONFLICT)
 
-    def test_auth_cookie_defaults_to_twelve_hours_host_only_and_strict(self) -> None:
+    def test_auth_cookie_defaults_to_thirty_days_host_only_and_strict(self) -> None:
         handler = object.__new__(gateway.GatewayHandler)
         handler.server = self.server
 
         cookie = handler.auth_cookie("tester")
 
         self.assertTrue(cookie.startswith(f"{gateway.COOKIE_NAME}="))
-        self.assertIn("Max-Age=43200", cookie)
+        self.assertIn("Max-Age=2592000", cookie)
         self.assertIn("HttpOnly", cookie)
         self.assertIn("Secure", cookie)
         self.assertIn("SameSite=Strict", cookie)

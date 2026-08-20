@@ -59,9 +59,9 @@ requires a token for the enabled route. Re-running it preserves an existing
 login config. Set `FARYO_GATEWAY_RESET_AUTH=1` only when intentionally rotating
 the Gateway login.
 
-The inner Faryo login defaults to a 12-hour absolute session. Set
+The inner Faryo login defaults to a 30-day absolute session. Set
 `FARYO_GATEWAY_SESSION_HOURS` in the private Gateway environment to an integer
-from 1 through 168 when a different operator-selected lifetime is required.
+from 1 through 720 when a different operator-selected lifetime is required.
 Changing it does not alter Cloudflare Access sessions; the two layers are
 configured independently.
 
@@ -70,15 +70,16 @@ cookies, epoch revoke, CSRF, trusted login-rate keys, safe redirects, CSP and
 browser hardening headers. It has no dependency on either the legacy HTTP
 handler or Starlette so both migration stacks can share exact behavior.
 
-The v1.4 development tree also contains a non-production `server/asgi_app.py`
-Starlette adapter. It is exercised only on an isolated socket by normalized
-legacy/ASGI contract tests until write, proxy, stream and upload coverage is
-complete; `run-gateway.sh` continues to launch the legacy server meanwhile.
+The v1.4 development tree runs `server/asgi_app.py` through Uvicorn by default.
+Normalized dual-port contracts cover login, writes, proxying, SSE, uploads,
+MCP and fallback routes. During the cutover window only,
+`FARYO_GATEWAY_HTTP_ENGINE=legacy` restores the previous HTTP shell; that
+temporary branch is removed before the v1.4.0 release.
 
 `server/owner_client.py` centralizes Owner Token, route label, user,
 history-scope, workspace and inbox headers plus JSON and multipart requests.
-The legacy handler now delegates to this client; the ASGI proxy will use the
-same implementation.
+The legacy handler and ASGI adapters both delegate to this client during the
+cutover window.
 
 Gateway serves one root-scoped installable PWA manifest with `display:
 standalone`. The home page exposes the browser install prompt when available,

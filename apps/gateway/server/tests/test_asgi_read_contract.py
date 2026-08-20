@@ -288,9 +288,81 @@ class AsgiReadContractTest(unittest.TestCase):
         self.assertEqual(self.normalized_body(path, asgi_result[2]), self.normalized_body(path, legacy_result[2]), path)
 
     def test_public_read_contracts_match(self) -> None:
-        for path in ("/manifest.json", "/sw.js", "/workbench.css", "/appearance.js", "/login?next=%2F"):
+        for path in (
+            "/manifest.json",
+            "/sw.js",
+            "/workbench.css",
+            "/appearance.js",
+            "/icons/faryo-mark.png",
+            "/favicon.ico",
+            "/login?next=%2F",
+        ):
             with self.subTest(path=path):
                 self.assert_contract(path)
+
+    def test_generic_options_contract_matches(self) -> None:
+        for path in ("/api/csrf", "/not-real"):
+            with self.subTest(path=path):
+                legacy_result = self.request(self.legacy_base, path, method="OPTIONS")
+                asgi_result = self.request(self.asgi_base, path, method="OPTIONS")
+                self.assertEqual(asgi_result[0], legacy_result[0])
+                self.assertEqual(self.selected_headers(asgi_result[1]), self.selected_headers(legacy_result[1]))
+
+    def test_asgi_head_support_is_read_only_and_keeps_auth_boundaries(self) -> None:
+        cases = (
+            ("/manifest.json", False, HTTPStatus.OK),
+            ("/", False, HTTPStatus.SEE_OTHER),
+            ("/api/csrf", False, HTTPStatus.UNAUTHORIZED),
+            ("/api/csrf", True, HTTPStatus.OK),
+        )
+        for path, authenticated, expected in cases:
+            with self.subTest(path=path, authenticated=authenticated):
+                status, headers, body = self.request(
+                    self.asgi_base,
+                    path,
+                    authenticated=authenticated,
+                    method="HEAD",
+                )
+                self.assertEqual(status, expected)
+                self.assertEqual(body, b"")
+                selected = self.selected_headers(headers)
+                self.assertEqual(selected["x-content-type-options"], ["nosniff"])
+                self.assertEqual(selected["strict-transport-security"], ["max-age=31536000"])
+
+    def test_unknown_page_keeps_the_inner_login_boundary(self) -> None:
+        self.assert_contract("/projects")
+        self.assert_contract("/projects", authenticated=True)
+
+    def test_unknown_direct_api_get_and_post_contracts_match(self) -> None:
+        self.assert_contract("/api/not-real")
+        self.assert_contract("/api/not-real", authenticated=True)
+        body = json.dumps({"fixture": True}).encode("utf-8")
+        legacy_unauthorized = self.request(self.legacy_base, "/api/not-real", method="POST", body=body)
+        asgi_unauthorized = self.request(self.asgi_base, "/api/not-real", method="POST", body=body)
+        self.assertEqual(json.loads(asgi_unauthorized[2]), json.loads(legacy_unauthorized[2]))
+        legacy_csrf = self.request(self.legacy_base, "/api/not-real", authenticated=True, method="POST", body=body)
+        asgi_csrf = self.request(self.asgi_base, "/api/not-real", authenticated=True, method="POST", body=body)
+        self.assertEqual(json.loads(asgi_csrf[2]), json.loads(legacy_csrf[2]))
+        csrf = gateway_security.csrf_token(self.config.cookie_secret, "tester", self.config.auth_epoch("tester"))
+        headers = {legacy.CSRF_HEADER: csrf, "Content-Type": "application/json"}
+        legacy_missing = self.request(
+            self.legacy_base,
+            "/api/not-real",
+            authenticated=True,
+            method="POST",
+            body=body,
+            extra_headers=headers,
+        )
+        asgi_missing = self.request(
+            self.asgi_base,
+            "/api/not-real",
+            authenticated=True,
+            method="POST",
+            body=body,
+            extra_headers=headers,
+        )
+        self.assertEqual(asgi_missing[0], legacy_missing[0])
+        self.assertEqual(json.loads(asgi_missing[2]), json.loads(legacy_missing[2]))
 
     def test_login_success_and_failure_contracts_match(self) -> None:
         headers = {"Content-Type": "application/x-www-form-urlencoded"}
@@ -418,6 +490,33 @@ class AsgiReadContractTest(unittest.TestCase):
         asgi_result = self.request(self.asgi_base, "/lab/api/down", authenticated=True, method="POST", body=body)
         self.assertEqual(asgi_result[0], legacy_result[0])
         self.assertEqual(json.loads(asgi_result[2]), json.loads(legacy_result[2]))
+
+    def test_unmapped_owner_api_post_is_proxied_without_control_audit(self) -> None:
+        body = json.dumps({"session": "fixture-session"}).encode("utf-8")
+        csrf = gateway_security.csrf_token(self.config.cookie_secret, "tester", self.config.auth_epoch("tester"))
+        headers = {legacy.CSRF_HEADER: csrf, "Content-Type": "application/json"}
+        self.config.audit_calls.clear()
+        OwnerContractFixture.requests.clear()
+        legacy_result = self.request(
+            self.legacy_base,
+            "/lab/api/custom-action",
+            authenticated=True,
+            method="POST",
+            body=body,
+            extra_headers=headers,
+        )
+        asgi_result = self.request(
+            self.asgi_base,
+            "/lab/api/custom-action",
+            authenticated=True,
+            method="POST",
+            body=body,
+            extra_headers=headers,
+        )
+        self.assertEqual(asgi_result[0], legacy_result[0])
+        self.assertEqual(json.loads(asgi_result[2]), json.loads(legacy_result[2]))
+        self.assertEqual(len(OwnerContractFixture.requests), 2)
+        self.assertEqual(self.config.audit_calls, [])
 
     def test_owner_json_get_contract_matches(self) -> None:
         self.assert_contract("/lab/api/status?session=fixture", authenticated=True)
@@ -669,6 +768,11 @@ class AsgiReadContractTest(unittest.TestCase):
         self.assertEqual(asgi_denied[0], legacy_denied[0])
         self.assertEqual(json.loads(asgi_denied[2]), json.loads(legacy_denied[2]))
 
+        legacy_delete_denied = self.request(self.legacy_base, "/mcp", method="DELETE")
+        asgi_delete_denied = self.request(self.asgi_base, "/mcp", method="DELETE")
+        self.assertEqual(asgi_delete_denied[0], legacy_delete_denied[0])
+        self.assertEqual(json.loads(asgi_delete_denied[2]), json.loads(legacy_delete_denied[2]))
+
         headers = {
             "Authorization": f"Bearer {self.config.mcp_token}",
             "Content-Type": "application/json",
@@ -676,6 +780,10 @@ class AsgiReadContractTest(unittest.TestCase):
             "X-Forwarded-Proto": "https",
             "X-Forwarded-Host": "gateway.invalid",
         }
+        legacy_delete = self.request(self.legacy_base, "/mcp", method="DELETE", extra_headers=headers)
+        asgi_delete = self.request(self.asgi_base, "/mcp", method="DELETE", extra_headers=headers)
+        self.assertEqual(asgi_delete[0], legacy_delete[0])
+        self.assertEqual(self.selected_headers(asgi_delete[1]), self.selected_headers(legacy_delete[1]))
         payloads = [
             {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": legacy.MCP_PROTOCOL_VERSION}},
             {"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}},

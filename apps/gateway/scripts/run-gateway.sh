@@ -12,10 +12,20 @@ GATEWAY_AUTH_CONFIG="${GATEWAY_AUTH_CONFIG:-$FARYO_HOME/gateway/config/gateway-a
 GATEWAY_SECRET_FILE="${GATEWAY_SECRET_FILE:-$FARYO_HOME/gateway/state/gateway-cookie-secret}"
 PORTAL_DIR="${PORTAL_DIR:-$FARYO_HOME/gateway/portal}"
 FARYO_PYTHON="${FARYO_PYTHON:-python3}"
-FARYO_GATEWAY_SESSION_HOURS="${FARYO_GATEWAY_SESSION_HOURS:-12}"
+FARYO_GATEWAY_SESSION_HOURS="${FARYO_GATEWAY_SESSION_HOURS:-720}"
+FARYO_GATEWAY_HTTP_ENGINE="${FARYO_GATEWAY_HTTP_ENGINE:-asgi}"
 export FARYO_GATEWAY_SESSION_HOURS
 
-exec "$FARYO_PYTHON" "$FARYO_GATEWAY_ROOT/server/server.py" \
+case "$FARYO_GATEWAY_HTTP_ENGINE" in
+  asgi) gateway_entry="$FARYO_GATEWAY_ROOT/server/run_asgi.py" ;;
+  legacy) gateway_entry="$FARYO_GATEWAY_ROOT/server/server.py" ;;
+  *)
+    echo "FARYO_GATEWAY_HTTP_ENGINE must be asgi or legacy" >&2
+    exit 2
+    ;;
+esac
+
+exec "$FARYO_PYTHON" "$gateway_entry" \
   --host "$GATEWAY_HOST" \
   --port "$GATEWAY_PORT" \
   --auth-config "$GATEWAY_AUTH_CONFIG" \

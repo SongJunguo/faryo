@@ -43,13 +43,13 @@ if str(SHARED_DIR) not in sys.path:
 
 
 def gateway_session_max_age(values: Any) -> int:
-    raw = str(values.get("FARYO_GATEWAY_SESSION_HOURS", "12")).strip()
+    raw = str(values.get("FARYO_GATEWAY_SESSION_HOURS", "720")).strip()
     try:
         hours = int(raw)
     except ValueError as exc:
-        raise ValueError("FARYO_GATEWAY_SESSION_HOURS must be an integer from 1 to 168") from exc
-    if not 1 <= hours <= 168:
-        raise ValueError("FARYO_GATEWAY_SESSION_HOURS must be an integer from 1 to 168")
+        raise ValueError("FARYO_GATEWAY_SESSION_HOURS must be an integer from 1 to 720") from exc
+    if not 1 <= hours <= 720:
+        raise ValueError("FARYO_GATEWAY_SESSION_HOURS must be an integer from 1 to 720")
     return hours * 60 * 60
 
 
@@ -972,11 +972,18 @@ class GatewayHandler(BaseHTTPRequestHandler):
             self.send_response(HTTPStatus.NO_CONTENT)
             self.send_mcp_cors_headers()
             self.send_header("Access-Control-Allow-Headers", "authorization, content-type, mcp-protocol-version, mcp-session-id, x-faryo-mcp-token")
-            self.send_header("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
+            self.send_header("Access-Control-Allow-Methods", "POST, OPTIONS")
             self.end_headers()
             return
         self.send_response(HTTPStatus.NO_CONTENT)
         self.end_headers()
+
+    def do_DELETE(self) -> None:
+        parsed = urlparse(self.path)
+        if parsed.path == "/mcp":
+            self.handle_mcp_get(parsed)
+            return
+        self.send_error(HTTPStatus.NOT_IMPLEMENTED, "Unsupported method ('DELETE')")
 
     def do_GET(self) -> None:
         parsed = urlparse(self.path)

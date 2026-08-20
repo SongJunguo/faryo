@@ -48,14 +48,14 @@ class GatewayRouteConfigTest(unittest.TestCase):
             gateway.load_backends({"FARYO_GATEWAY_ROUTES": "txy,unknown"})
 
     def test_gateway_session_lifetime_is_configurable_and_bounded(self) -> None:
-        self.assertEqual(gateway.gateway_session_max_age({}), 12 * 60 * 60)
+        self.assertEqual(gateway.gateway_session_max_age({}), 720 * 60 * 60)
         self.assertEqual(
             gateway.gateway_session_max_age({"FARYO_GATEWAY_SESSION_HOURS": "24"}),
             24 * 60 * 60,
         )
-        for value in ("0", "169", "invalid"):
+        for value in ("0", "721", "invalid"):
             with self.subTest(value=value):
-                with self.assertRaisesRegex(ValueError, "integer from 1 to 168"):
+                with self.assertRaisesRegex(ValueError, "integer from 1 to 720"):
                     gateway.gateway_session_max_age({"FARYO_GATEWAY_SESSION_HOURS": value})
 
     def test_unicode_owner_label_is_http_header_safe(self) -> None:

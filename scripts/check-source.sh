@@ -89,7 +89,15 @@ release_checks() {
     "$ROOT/apps/gateway/server/server.py" \
     "$ROOT/apps/gateway/server/gateway_security.py" \
     "$ROOT/apps/gateway/server/asgi_app.py" \
+    "$ROOT/apps/gateway/server/asgi_agents.py" \
+    "$ROOT/apps/gateway/server/asgi_auth.py" \
+    "$ROOT/apps/gateway/server/asgi_bridge.py" \
+    "$ROOT/apps/gateway/server/asgi_control.py" \
+    "$ROOT/apps/gateway/server/asgi_mcp.py" \
+    "$ROOT/apps/gateway/server/asgi_owner_proxy.py" \
+    "$ROOT/apps/gateway/server/asgi_read.py" \
     "$ROOT/apps/gateway/server/asgi_support.py" \
+    "$ROOT/apps/gateway/server/run_asgi.py" \
     "$ROOT/apps/gateway/server/owner_client.py" \
     "$ROOT/apps/gateway/server/mcp_service.py" \
     "$ROOT/apps/gateway/server/workbench_service.py" \

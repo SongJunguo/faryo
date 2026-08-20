@@ -94,7 +94,7 @@ DeepSeek Harness 启发的现代 Agent 工作台：桌面端具有清晰、安�
 | Markdown/TeX | 本地离线加载；禁用原始 HTML；危险协议、路径越界和 XSS 继续被拒绝 |
 | 手机输入 | 保留 `visualViewport`、安全区、草稿恢复和输入框失焦后尺寸稳定 |
 | tmux/TUI | `FARYO_OWNER_PANE_WIDTH=0` 的语义保持不变，不执行 `resize-window` |
-| Gateway | CSRF、严格 Cookie、登录限速、CSP 和 Cloudflare Access 精确身份/无 Bypass 外层边界不弱化；Access 使用操作者选定的 7 天会话且关闭独立 MFA，Faryo 内层 Cookie 仍为 24 小时 |
+| Gateway | CSRF、严格 Cookie、登录限速、CSP 和 Cloudflare Access 精确身份/无 Bypass 外层边界不弱化；Access 使用操作者选定的 7 天会话且关闭独立 MFA，Faryo 内层 Cookie 按可信私有设备选择为 30 天 |
 
 ## 4. 目标信息架构
 
@@ -405,11 +405,11 @@ Sessions、Session History 和 Projects。Gateway 的服务端分页、活动会
   两个精确邮箱 Allow 规则，无 `Everyone`、无 `Bypass`，应用会话现为 7 天，应用级
   独立 MFA 已关闭；Email One-time PIN、Google 与 GitHub 均可选且不自动跳转到单一
   提供商。该低摩擦策略是操作者明确确认的当前部署基线，不是待修复项，后续自动化不得
-  擅自重新开启独立 MFA；Faryo 内层登录新增 `1`–`168` 小时的私有配置边界，
-  当前内层 Cookie 仍设为 24 小时，Owner Token 继续保留。
-- Gateway user service 重启后进程环境确认使用 24 小时；一次真实本地登录返回 303，
-  `__Host-` Cookie 的 `Max-Age=86400`，同时保持 `Secure`、`HttpOnly` 与
-  `SameSite=Strict`。重启前后 5 个既有 tmux 窗口尺寸均未变化。
+  擅自重新开启独立 MFA；Faryo 内层登录配置边界现为 `1`–`720` 小时，
+  当前内层 Cookie 按可信私有设备选择设为 30 天，Owner Token 继续保留。
+- Gateway user service 的内层 Cookie 配置现为 30 天；`__Host-` Cookie 继续保持
+  `Secure`、`HttpOnly` 与 `SameSite=Strict`，并可通过 auth epoch 全设备撤销。服务重启前后
+  既有 tmux 窗口尺寸必须保持不变。
 - 对 4 个真实 Agent 会话逐一执行 Owner 状态与 capture 读取，受控前后宽高完全不变；
   先前遗留且无进程占用的两个匿名 Chrome 测试 profile 已清理。
 - 已执行已知邮箱、域名、历史 Token、私有主目录、会话名、私钥和常见云密钥模式扫描；
@@ -516,7 +516,7 @@ git switch -c recovery/pre-deepseek-ui pre-deepseek-ui-20260815
 | 实时更新、可靠提交与 Live 滚动 | 两种视口各 20 条精确 ACK、附件、断网/后台恢复、失败草稿和真实 Live 滚动位置回归均通过 | 已证明 |
 | 长历史结构化可靠性 | 所有活动 Codex 会话均从增量 `codex-jsonl` 返回结构化 Markdown/TeX；每会话缓存、半行、文件替换和 App Server 暂时失败均有单元回归 | 已证明 |
 | 上下文与周额度状态 | 上下文显示 agent 实报的 used/window；周额度使用单飞异步缓存，NVM CLI 在非登录服务环境中可启动，缺失元数据不影响聊天 | 已证明 |
-| Owner/Gateway 认证与公开仓库隐私 | Owner 401/200、Gateway Cookie/CSRF、Access 精确身份且无宽泛放行；Access 7 天、内层 Cookie 24 小时且关闭独立 MFA 是操作者选定基线；资源 DOM 无 Token，隐私扫描通过 | 已证明 |
+| Owner/Gateway 认证与公开仓库隐私 | Owner 401/200、Gateway Cookie/CSRF、Access 精确身份且无宽泛放行；Access 7 天、内层 Cookie 30 天且关闭独立 MFA 是操作者选定基线；资源 DOM 无 Token，隐私扫描通过 | 已证明 |
 | tmux/Codex TUI 尺寸不变 | 运行配置保持 pane width 0；临时矩阵与 5 个真实 Codex 会话在 Owner 读取前后尺寸一致 | 已证明 |
 | Fork、部署与回滚 | 完整功能线已提升到个人 `origin/main`；冗余开发/备份分支已删除，固定标签仍存在；运行 Owner 已提供新版静态资源 | 已证明 |
 | 最终实际观感 | 操作者已在自己的实际页面完成主观确认；周额度文字增强另通过 340x740 与 390x844 浏览器布局检查 | 已确认 |

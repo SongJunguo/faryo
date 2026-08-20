@@ -50,8 +50,8 @@ Gateway implements the following inner controls:
 - bcrypt password hashes and generic login failures;
 - an HMAC-signed `__Host-` session cookie with `Secure`, `HttpOnly`,
   `SameSite=Strict`, no `Domain`, and a server-enforced absolute limit; the
-  default is 12 hours and private `FARYO_GATEWAY_SESSION_HOURS` configuration is
-  bounded to `1`–`168`;
+  default is 30 days and private `FARYO_GATEWAY_SESSION_HOURS` configuration is
+  bounded to `1`–`720`;
 - password-change session invalidation;
 - session-bound CSRF headers for every browser state-changing API, including
   requests proxied to Owner; the CSRF header is removed before proxying;

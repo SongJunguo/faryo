@@ -29,7 +29,7 @@
 
 - 只开发和验证 Codex 路径；后续源码清理已正式移除不再维护的 Claude 兼容层。
 - 本计划不修改 Codex 权限参数或当时的 Access/MFA 选择；操作者后来单独把外层 Access
-  延长为 7 天，内层 Gateway Cookie 仍为 24 小时。
+  延长为 7 天；内层 Gateway Cookie 后续按可信私有设备选择延长为 30 天。
 - 不修改任何 Codex tmux 窗口宽高，不调用 `resize-window`。
 - 不替换已经确认可用的复制按钮。
 - 不把完整 DeepSeek Harness/Cordis/React 运行时搬入 Faryo。
