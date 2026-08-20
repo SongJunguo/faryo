@@ -1755,6 +1755,12 @@ def parse_codex_rollout_event(raw_line: bytes) -> dict[str, Any]:
     }
 
 
+def goal_status_before_newer_user_turn(snapshot: dict[str, Any], newer_user_turn: bool) -> dict[str, Any]:
+    if newer_user_turn and snapshot.get("status") == "complete":
+        return {"status": "none"}
+    return snapshot
+
+
 def initial_codex_rollout_state(path: Path, identity: tuple[int, int]) -> dict[str, Any]:
     """Build a bounded state by scanning complete JSONL records from the tail."""
     messages_reversed: list[tuple[str, str]] = []
@@ -1766,6 +1772,7 @@ def initial_codex_rollout_state(path: Path, identity: tuple[int, int]) -> dict[s
     goal_status: dict[str, Any] | None = None
     goal_call_ids: set[str] = set()
     pending_goal_outputs: dict[str, dict[str, Any]] = {}
+    newer_user_turn = False
     try:
         with path.open("rb") as fh:
             if os.fstat(fh.fileno()).st_size <= 0:
@@ -1802,12 +1809,14 @@ def initial_codex_rollout_state(path: Path, identity: tuple[int, int]) -> dict[s
                     usage = signals["contextUsage"]
                     if context_usage is None and usage is not None:
                         context_usage = usage
+                    if message is not None and message[0] == "user":
+                        newer_user_turn = True
                     if goal_status is None:
                         direct_goal = signals["goalStatus"]
                         goal_output = signals["goalOutput"]
                         goal_call_id = signals["goalCallId"]
                         if direct_goal is not None:
-                            goal_status = direct_goal
+                            goal_status = goal_status_before_newer_user_turn(direct_goal, newer_user_turn)
                         elif goal_output is not None:
                             output_call_id, snapshot = goal_output
                             pending_goal_outputs[output_call_id] = snapshot
@@ -1816,7 +1825,7 @@ def initial_codex_rollout_state(path: Path, identity: tuple[int, int]) -> dict[s
                         elif goal_call_id:
                             snapshot = pending_goal_outputs.pop(goal_call_id, None)
                             if snapshot is not None:
-                                goal_status = snapshot
+                                goal_status = goal_status_before_newer_user_turn(snapshot, newer_user_turn)
                             else:
                                 goal_call_ids.add(goal_call_id)
                     if message is not None:
@@ -1910,6 +1919,8 @@ def codex_rollout_state(history_path: str | None) -> dict[str, Any] | None:
             usage = signals["contextUsage"]
             if message is not None:
                 messages.append(message)
+                if message[0] == "user" and isinstance(goal_status, dict) and goal_status.get("status") == "complete":
+                    goal_status = {"status": "none"}
             if usage is not None:
                 context_usage = usage
             if signals["goalStatus"] is not None:

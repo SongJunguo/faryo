@@ -173,8 +173,16 @@ function List({ items, emptyText, children }) {
 export function createWorkbenchRenderer(options) {
   const containers = options.containers;
   const actions = options.actions;
+  const claimedContainers = new WeakSet();
+  function renderInto(vnode, container) {
+    if (!claimedContainers.has(container)) {
+      container.replaceChildren();
+      claimedContainers.add(container);
+    }
+    render(vnode, container);
+  }
   function renderWorkbenchLists(model) {
-    render(
+    renderInto(
       <List
         items={model.packages}
         emptyText="Choose files, then send them to a session."
@@ -185,13 +193,13 @@ export function createWorkbenchRenderer(options) {
       </List>,
       containers.packages,
     );
-    render(
+    renderInto(
       <List items={model.launchers} emptyText="No launchers available">
         {(item) => <LauncherCard key={item.id} item={item} actions={actions} />}
       </List>,
       containers.launchers,
     );
-    render(
+    renderInto(
       <List items={model.activeSessions} emptyText="No active agent sessions">
         {(item) => (
           <SessionCard
@@ -204,7 +212,7 @@ export function createWorkbenchRenderer(options) {
       </List>,
       containers.activeSessions,
     );
-    render(
+    renderInto(
       <List items={model.sessions} emptyText={model.historyEmptyText}>
         {(item) => (
           <SessionCard
@@ -219,7 +227,7 @@ export function createWorkbenchRenderer(options) {
     );
   }
   function renderSessionFixture(item, container) {
-    render(
+    renderInto(
       <SessionCard
         item={item}
         routeLabels={options.routeLabels || {}}
@@ -230,8 +238,8 @@ export function createWorkbenchRenderer(options) {
     return container.firstElementChild;
   }
   function renderError(text) {
-    render(<Empty text={text} />, containers.activeSessions);
-    render(<Empty text={text} />, containers.sessions);
+    renderInto(<Empty text={text} />, containers.activeSessions);
+    renderInto(<Empty text={text} />, containers.sessions);
   }
   return { render: renderWorkbenchLists, renderSessionFixture, renderError };
 }

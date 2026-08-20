@@ -88,7 +88,7 @@ Historical distribution and non-Codex platform paths may remain in the tree for
 upstream compatibility, but they are not part of this project's current validation
 or support claims.
 
-Current release: [Faryo 1.5.1](https://github.com/SongJunguo/faryo-codex-web-ui/releases/tag/v1.5.1).
+Current release: [Faryo 1.5.2](https://github.com/SongJunguo/faryo-codex-web-ui/releases/tag/v1.5.2).
 
 ## Current Functionality
 
@@ -288,7 +288,7 @@ initial allowed workspace:
 
 ```bash
 sha256sum --check install-faryo.sh.sha256
-bash install-faryo.sh --version v1.5.1 --workspace "$PWD"
+bash install-faryo.sh --version v1.5.2 --workspace "$PWD"
 ```
 
 Upgrading a pre-v1.5 checkout that still uses the dedicated Owner keepalive
@@ -348,7 +348,7 @@ layer while keeping Faryo's inner login enabled.
 
 The `main` branch was revalidated on 2026-08-20 with privacy-safe fixtures:
 
-- source checks plus 130 Owner, 112 Gateway, and 51 unified-CLI Python tests;
+- source checks plus 131 Owner, 112 Gateway, and 51 unified-CLI Python tests;
 - Ruff fatal/Pyflakes checks, a Playwright system-browser fixture, deterministic
   diff-review rebuild comparison and zero npm audit findings;
 - a workspace Git security matrix covering scope/symlink escape, disabled

@@ -90,6 +90,7 @@ await withBrowser({
       const style = historyList ? getComputedStyle(historyList) : null;
       const rootStyle = getComputedStyle(document.documentElement);
       const launchers = [...document.querySelectorAll('#newSessionSlot .launcher-card')];
+      const maintainedLists = [packageList, document.getElementById('newSessionSlot'), activeList, historyList];
       const lifecycleStates = [...active, ...history].map((item) => item.dataset.state || '');
       const packageList = document.getElementById('packageList');
       window.__faryoHistoryPageOne = historySignature;
@@ -112,6 +113,9 @@ await withBrowser({
           && (packageList?.querySelector('.send-package') || packageList?.textContent.includes('send them to a session'))
         ),
         launcherCount: launchers.length,
+        launcherChildrenExact: document.getElementById('newSessionSlot')?.childElementCount === launchers.length,
+        staleLoadingPlaceholders: maintainedLists.flatMap((item) => [...(item?.querySelectorAll('.empty-state') || [])]).filter((item) => item.textContent.trim().startsWith('Loading ')).length,
+        packageEmptyStateCount: packageList?.querySelectorAll('.empty-state').length || 0,
         launcherLabelsClear: launchers.every((item) => item.textContent.includes('Start ') && !item.textContent.includes('$ ')),
         launcherIsCodexOnly: launchers.length === 1 && launchers[0].textContent.includes('Start Codex'),
         palette: {
@@ -139,6 +143,7 @@ await withBrowser({
   if (!first.fileTransferReady) throw new Error('Files-to-session controls are not discoverable');
   if (!first.launcherCount || !first.launcherLabelsClear) throw new Error('New-session launchers are unclear');
   if (!first.launcherIsCodexOnly) throw new Error('Retired agent launchers are still visible');
+  if (!first.launcherChildrenExact || first.staleLoadingPlaceholders || first.packageEmptyStateCount > 1) throw new Error(`Server placeholders survived Preact ownership: ${JSON.stringify(first)}`);
   if (!first.historyToolsReady || !first.firstHistoryTitle) throw new Error('Session History search controls are not ready');
   if (!first.lifecycleStatesValid) throw new Error('Session cards do not expose explicit lifecycle states');
   if (!first.securityControlsReady) throw new Error('Security activity controls are not available');

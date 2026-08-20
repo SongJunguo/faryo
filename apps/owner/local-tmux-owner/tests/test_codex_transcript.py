@@ -274,10 +274,43 @@ class CodexTranscriptTest(unittest.TestCase):
                 ):
                     fh.write(json.dumps(event) + "\n")
             second = server.latest_goal_status(str(history))
+            with history.open("a", encoding="utf-8") as fh:
+                fh.write(json.dumps({
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": [{"type": "input_text", "text": "next task after clear"}],
+                    },
+                }) + "\n")
+            cleared_by_next_turn = server.latest_goal_status(str(history))
 
         self.assertEqual(first, {"status": "active", "tokensUsed": 10, "timeUsedSeconds": 12})
         self.assertEqual(second, {"status": "complete", "tokensUsed": 20, "timeUsedSeconds": 12})
+        self.assertEqual(cleared_by_next_turn, {"status": "none"})
         self.assertNotIn("SECRET_GOAL_OBJECTIVE", json.dumps(first) + json.dumps(second))
+
+    def test_initial_tail_hides_completed_goal_before_newer_user_turn(self):
+        events = [
+            {
+                "type": "response_item",
+                "payload": {"type": "thread_goal_updated", "goal": {"status": "complete", "objective": "private"}},
+            },
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "message",
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": "new work"}],
+                },
+            },
+        ]
+        with tempfile.TemporaryDirectory() as root:
+            history = Path(root) / "rollout.jsonl"
+            history.write_text("\n".join(json.dumps(event) for event in events) + "\n", encoding="utf-8")
+            status = server.latest_goal_status(str(history))
+
+        self.assertEqual(status, {"status": "none"})
 
     def test_rollout_direct_goal_clear_hides_older_status(self):
         events = [
