@@ -74,6 +74,9 @@ but the default upload destination should come from the Faryo data directory.
 - Local-file and start-directory policy is a separate module: configured roots,
   suffix allowlists, symlink resolution, directory limits and selection tokens
   are tested without tmux or HTTP globals.
+- The read-only Changes browser controller is a native ES module with injected
+  API/session/panel dependencies; `app.js` remains the composition root and the
+  diff renderer stays a lazy local asset.
 - Capability and diagnostics payloads use an explicit allowlist and counts; they
   never expose private runtime configuration.
 - Upstream control headers: use Faryo header names.

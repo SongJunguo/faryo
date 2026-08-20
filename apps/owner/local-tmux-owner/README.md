@@ -284,6 +284,9 @@ consumed as private runtime input and is never printed.
 - `path_policy.py` owns local-file suffix lookup and start-directory root,
   symlink, listing-limit and selection-token rules independently of the tmux
   runtime.
+- `static/owner/changes-panel.mjs` owns the read-only Changes payload, files,
+  line/split state and lazy sanitized diff assets. It receives API, session and
+  panel functions explicitly and does not read the Owner token.
 - Local file preview is token-protected and limited to supported file suffixes.
 - `send` targets the controlled tmux pane and is maintained for Codex; generic
   terminal interfaces retain the conservative tmux path.

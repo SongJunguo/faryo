@@ -81,6 +81,7 @@ release_checks() {
     "$ROOT/apps/owner/local-tmux-owner/static/clipboard-images.js" \
     "$ROOT/apps/owner/local-tmux-owner/static/immersive-mode.js" \
     "$ROOT/apps/owner/local-tmux-owner/static/scroll-surface.js" \
+    "$ROOT/apps/owner/local-tmux-owner/static/owner/changes-panel.mjs" \
     "$ROOT/apps/owner/local-tmux-owner/static/vendor/markdown-ast/markdown-ast.min.js" \
     "$ROOT/apps/owner/local-tmux-owner/static/live-scroll.js" \
     "$ROOT/apps/shared/static/appearance.js" \
@@ -108,6 +109,7 @@ release_checks() {
   "$NODE_BIN" "$ROOT/apps/owner/local-tmux-owner/tests/clipboard-images.test.js"
   "$NODE_BIN" "$ROOT/apps/owner/local-tmux-owner/tests/immersive-mode.test.js"
   "$NODE_BIN" "$ROOT/apps/owner/local-tmux-owner/tests/scroll-surface.test.js"
+  "$NODE_BIN" --test "$ROOT/apps/owner/local-tmux-owner/tests/changes-panel.test.mjs"
   "$NODE_BIN" --test "$ROOT/apps/owner/local-tmux-owner/tests/terminal-delivery-receiver.test.mjs"
   "$PYTHON_BIN" -m unittest discover -s "$ROOT/apps/owner/local-tmux-owner/tests" -p 'test_*.py'
   "$PYTHON_BIN" -m unittest discover -s "$ROOT/apps/gateway/server/tests" -p 'test_*.py'
@@ -227,6 +229,7 @@ for relative in (
     assert (root / "apps/owner/local-tmux-owner/static/vendor/katex" / relative).is_file(), f"missing vendored KaTeX asset: {relative}"
 assert "cdn.jsdelivr.net" not in index, "Markdown and math must not require an external CDN"
 assert '"vendor/diff-review/"' in gateway, "Gateway must proxy local diff-review assets"
+assert '"owner/"' in gateway, "Gateway must proxy Owner native ES modules"
 diff_review_root = root / "apps/owner/local-tmux-owner/static/vendor/diff-review"
 diff_review_manifest = json.loads((diff_review_root / "manifest.json").read_text(encoding="utf-8"))
 assert diff_review_manifest.get("schemaVersion") == 1, "unsupported diff-review manifest"
@@ -251,7 +254,9 @@ for grammar in ("python", "latex", "lean", "matlab", "markdown", "yaml", "html",
     assert any(Path(relative).name.startswith(grammar + "-") for relative in manifest_paths), f"missing lazy Shiki grammar: {grammar}"
 assert (root / "tools/markdown-engine/package-lock.json").is_file(), "AST Markdown build must have a lockfile"
 app = (root / "apps/owner/local-tmux-owner/static/app.js").read_text(encoding="utf-8")
-assert "/api/workspace-changes" in owner_server and "/api/workspace-changes" in app, "workspace changes must use the scoped read-only Owner API"
+changes_panel_source = (root / "apps/owner/local-tmux-owner/static/owner/changes-panel.mjs").read_text(encoding="utf-8")
+assert 'import("./owner/changes-panel.mjs?v=faryo-owner-changes-1")' in app, "Owner Changes must use its native ES module"
+assert "/api/workspace-changes" in owner_server and "/api/workspace-changes" in changes_panel_source, "workspace changes must use the scoped read-only Owner API"
 assert "/api/capabilities" in owner_server and "/api/diagnostics" in owner_server and "loadOwnerCapabilities" in app, "Owner must expose versioned redacted diagnostics"
 assert '"pendingQueueManagement": False' in runtime_diagnostics_source and '"pendingQueue": "unsupported"' in runtime_diagnostics_source, "Faryo must not overclaim editable Codex queues"
 assert "shell=True" not in workspace_changes_source and "--no-ext-diff" in workspace_changes_source and "--no-textconv" in workspace_changes_source, "workspace diff must remain fixed and read-only"

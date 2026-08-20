@@ -190,7 +190,7 @@ self.addEventListener('fetch',()=>{});
 """
 
 OWNER_STATIC_FILES = {"appearance.css", "appearance.js", "app.js", "style.css", "index.html", "event-stream.js", "internal-annotations.js", "local-file-view.js", "stable-blocks.js", "question-navigator.js", "live-scroll.js", "compact-rules-codex.js", "codex-commands.js", "copy-fidelity.js", "clipboard-images.js", "immersive-mode.js", "scroll-surface.js"}
-OWNER_STATIC_PREFIXES = ("icons/", "pet/", "vendor/katex/", "vendor/markdown-ast/", "vendor/diff-review/")
+OWNER_STATIC_PREFIXES = ("icons/", "pet/", "owner/", "vendor/katex/", "vendor/markdown-ast/", "vendor/diff-review/")
 SHARED_STATIC_FILES = {
     "appearance.css": "text/css; charset=utf-8",
     "appearance.js": "text/javascript; charset=utf-8",
