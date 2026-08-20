@@ -45,7 +45,7 @@ def rendered_unit(component: str, layout: Layout, python: str) -> str:
         "@FARYO_ROOT_PATH@": unit_path_escape(str(layout.source_root)),
         "@FARYO_ROOT@": unit_escape(str(layout.source_root)),
         "@FARYO_HOME@": unit_escape(str(layout.faryo_home)),
-        "@FARYO_PYTHON@": unit_escape(str(Path(python).resolve())),
+        "@FARYO_PYTHON@": unit_escape(os.path.abspath(python)),
     }
     for marker, value in replacements.items():
         source = source.replace(marker, value)

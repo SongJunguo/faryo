@@ -227,7 +227,7 @@ def build_report(layout: Layout | None = None) -> dict[str, Any]:
     gateway = read_env(selected.gateway_env)
     checks: list[dict[str, str]] = []
 
-    python_ok = sys.version_info >= (3, 11)
+    python_ok = sys.version_info >= (3, 10)
     checks.append(check("python", "ok" if python_ok else "error", f"Python {sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"))
     try:
         venv_available = importlib.util.find_spec("venv") is not None

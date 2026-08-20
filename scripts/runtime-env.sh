@@ -14,6 +14,20 @@ faryo_command_path() {
   command -v -- "$value" 2>/dev/null
 }
 
+faryo_python_command_path() {
+  local value="${1:-}" candidate directory base
+  [[ -n "$value" ]] || return 1
+  if [[ "$value" == */* ]]; then
+    candidate="$value"
+  else
+    candidate=$(command -v -- "$value" 2>/dev/null) || return 1
+  fi
+  [[ -x "$candidate" ]] || return 1
+  directory=$(cd "$(dirname "$candidate")" && pwd -P)
+  base=$(basename "$candidate")
+  printf '%s/%s\n' "$directory" "$base"
+}
+
 faryo_resolve_conda() {
   local candidate
   for candidate in \
@@ -32,7 +46,7 @@ faryo_resolve_conda() {
 faryo_resolve_python() {
   local candidate conda_bin env_root
   if [[ -n "${FARYO_PYTHON:-}" ]]; then
-    candidate=$(faryo_command_path "$FARYO_PYTHON") || {
+    candidate=$(faryo_python_command_path "$FARYO_PYTHON") || {
       echo "FARYO_PYTHON is not executable: $FARYO_PYTHON" >&2
       return 1
     }
@@ -40,18 +54,18 @@ faryo_resolve_python() {
     return 0
   fi
   if [[ -n "${CONDA_PREFIX:-}" && -x "$CONDA_PREFIX/bin/python" ]]; then
-    readlink -f -- "$CONDA_PREFIX/bin/python"
+    faryo_python_command_path "$CONDA_PREFIX/bin/python"
     return 0
   fi
   if conda_bin=$(faryo_resolve_conda); then
     env_root=$("$conda_bin" env list 2>/dev/null | awk '$1 == "faryo" { print $NF; exit }')
     if [[ -n "$env_root" && -x "$env_root/bin/python" ]]; then
-      readlink -f -- "$env_root/bin/python"
+      faryo_python_command_path "$env_root/bin/python"
       return 0
     fi
   fi
   if candidate=$(command -v python3 2>/dev/null) && [[ -x "$candidate" ]]; then
-    readlink -f -- "$candidate"
+    faryo_python_command_path "$candidate"
     return 0
   fi
   echo "Python was not found. Set FARYO_PYTHON or activate the project Conda environment." >&2

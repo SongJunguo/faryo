@@ -131,7 +131,9 @@ check. Production never loads these assets from a CDN.
   `apps/gateway/requirements.txt`. v1.4 adopts Starlette 1.6.0 and Uvicorn
   0.52.4 under BSD-3-Clause, with base-only transitive pins AnyIO 4.14.2
   (MIT), Click 8.4.2 (BSD-3-Clause), h11 0.16.0 (MIT), and idna 3.19
-  (BSD-3-Clause). No `full`/`standard` extras, multipart parser, uvloop,
+  (BSD-3-Clause). Python 3.10 additionally installs the exact MIT-licensed
+  `tomli` 2.4.1 backport; Python 3.11+ uses standard-library `tomllib`.
+  No `full`/`standard` extras, multipart parser, uvloop,
   watchfiles or WebSocket package is installed. bcrypt is now exact-pinned at
   5.0.0 under Apache-2.0.
 - The six pure-Python ASGI/base wheels total about 507 KB; bcrypt's platform

@@ -48,8 +48,9 @@ FARYO_PYTHON="$(conda run -n faryo python -c 'import sys; print(sys.executable)'
 "$FARYO_PYTHON" -c 'import bcrypt; print(bcrypt.__version__)'
 ```
 
-Python 3.13 is supported by the current Gateway dependency set. Reuse an
-existing suitable environment instead of recreating it.
+Python 3.10 and 3.13 are supported by the current Gateway dependency set;
+Python 3.10 installs the pinned `tomli` backport. Reuse an existing suitable
+environment instead of recreating it.
 
 ## Initialize One Local Route
 

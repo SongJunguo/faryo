@@ -250,7 +250,7 @@ lazy bundled UI asset remains local and independently documented.
 ### Requirements
 
 - Ubuntu/Linux
-- Python 3.11 or newer; Python 3.13 is the validated project environment
+- Python 3.10 or newer; Python 3.10 and 3.13 are the maintained CI environments
 - Node.js 20 or newer for source validation; Node.js 24 is validated
 - `tmux`, `curl`, and `git`
 - Codex CLI

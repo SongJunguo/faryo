@@ -26,6 +26,12 @@ ln -s "$codex_stub" "$codex_launcher"
 resolved=$(FARYO_PYTHON="$python_stub" faryo_resolve_python)
 [[ "$resolved" == "$python_stub" ]]
 
+venv_python="$fixture/venv/bin/python"
+mkdir -p "$(dirname "$venv_python")"
+ln -s "$python_stub" "$venv_python"
+resolved=$(FARYO_PYTHON="$venv_python" faryo_resolve_python)
+[[ "$resolved" == "$venv_python" ]]
+
 resolved=$(env -u FARYO_PYTHON CONDA_PREFIX="$fixture/conda-env" bash -c \
   'source "$1"; faryo_resolve_python' bash "$ROOT/scripts/runtime-env.sh")
 [[ "$resolved" == "$python_stub" ]]

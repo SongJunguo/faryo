@@ -8,8 +8,8 @@ import sys
 from typing import Any, Sequence
 
 from faryo_cli import __version__
+from faryo_cli.application import install_versioned_application
 from faryo_cli.diagnostics import build_report, compact_status
-from faryo_cli.installer import install_services
 from faryo_cli.operations import OperationError, journal, open_gateway, service_operation
 from faryo_cli.runtime import exec_process, gateway_process, owner_process
 
@@ -78,8 +78,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
     if arguments.command == "install":
         try:
-            result = install_services(
-                python=sys.executable,
+            result = install_versioned_application(
+                bootstrap_python=sys.executable,
                 dry_run=arguments.dry_run,
                 no_start=arguments.no_start,
                 migrate_owner=arguments.migrate_owner,

@@ -7,7 +7,7 @@ name = "faryo"
 version = "1.5.0.dev0"
 description = "Self-hosted Codex workbench for tmux-backed Ubuntu sessions"
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.10"
 license = "MIT"
 dependencies = [
   "anyio==4.14.2",
@@ -16,6 +16,7 @@ dependencies = [
   "h11==0.16.0",
   "idna==3.19",
   "starlette==1.6.0",
+  "tomli==2.4.1; python_version < \"3.11\"",
   "uvicorn==0.52.4",
 ]
 
@@ -29,7 +30,7 @@ package-dir = {"" = "src"}
 where = ["src"]
 
 [tool.ruff]
-target-version = "py311"
+target-version = "py310"
 line-length = 160
 extend-exclude = [
   "apps/owner/local-tmux-owner/static/vendor",

@@ -17,7 +17,7 @@ SRC = ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
-from faryo_cli import cli, diagnostics, installer, migration, operations, runtime
+from faryo_cli import application, cli, diagnostics, installer, migration, operations, runtime
 
 
 class FaryoCliTest(unittest.TestCase):
@@ -278,6 +278,22 @@ class FaryoCliTest(unittest.TestCase):
         self.assertNotIn("run-gateway.sh", gateway)
         self.assertNotIn("@FARYO_", owner + gateway)
 
+    def test_service_unit_preserves_private_venv_python_symlink(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            layout = self.layout(root)
+            target = root / "runtime/python3.10"
+            venv_python = root / "version/.venv/bin/python"
+            target.parent.mkdir(parents=True)
+            venv_python.parent.mkdir(parents=True)
+            target.write_text("python", encoding="utf-8")
+            target.chmod(0o700)
+            venv_python.symlink_to(target)
+
+            unit = installer.rendered_unit("owner", layout, str(venv_python))
+
+        self.assertIn(f'ExecStart="{venv_python}" -m faryo_cli', unit)
+
     def test_atomic_unit_install_backs_up_existing_unit(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
@@ -399,6 +415,85 @@ class FaryoCliTest(unittest.TestCase):
 
             self.assertEqual(gateway.read_text(encoding="utf-8"), "old gateway unit\n")
             self.assertFalse((unit_dir / "faryo-owner.service").exists())
+
+    def test_runtime_python_update_preserves_private_config(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "faryo.env"
+            path.write_text("FARYO_OWNER_TOKEN=private-token\nFARYO_PYTHON=/old/python\n", encoding="utf-8")
+            path.chmod(0o600)
+
+            application.replace_env_value(path, "FARYO_PYTHON", "/new venv/bin/python")
+
+            body = path.read_text(encoding="utf-8")
+            self.assertIn("FARYO_OWNER_TOKEN=private-token", body)
+            self.assertIn("FARYO_PYTHON='/new venv/bin/python'", body)
+            self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+
+    def test_version_activation_and_restore_are_atomic_and_relative(self) -> None:
+        with tempfile.TemporaryDirectory() as temp, mock.patch.dict(
+            os.environ,
+            {"FARYO_PROGRAM_HOME": str(Path(temp) / "program")},
+            clear=False,
+        ):
+            root = Path(temp)
+            layout = self.layout(root)
+            program = application.ProgramLayout.from_layout(layout)
+            first = program.versions / "v1.4.1"
+            second = program.versions / "v1.5.0.dev0"
+            for version in (first, second):
+                cli_path = version / ".venv/bin/faryo"
+                cli_path.parent.mkdir(parents=True)
+                cli_path.write_text("cli", encoding="utf-8")
+
+            self.assertIsNone(application.activate_version(first, layout))
+            previous = application.activate_version(second, layout)
+            self.assertEqual(previous, first)
+            self.assertEqual(program.current.resolve(), second)
+            self.assertEqual(program.bin_path.resolve(), second / ".venv/bin/faryo")
+            self.assertEqual((program.state / "previous-version").read_text(encoding="utf-8"), "v1.4.1\n")
+
+            application.restore_activation(previous, layout)
+            self.assertEqual(program.current.resolve(), first)
+            self.assertEqual(program.bin_path.resolve(), first / ".venv/bin/faryo")
+
+    def test_prepare_version_cleans_failed_bounded_stage(self) -> None:
+        with tempfile.TemporaryDirectory() as temp, mock.patch.dict(
+            os.environ,
+            {"FARYO_PROGRAM_HOME": str(Path(temp) / "program")},
+            clear=False,
+        ):
+            layout = self.layout(Path(temp))
+            with (
+                mock.patch.object(application, "copy_source", return_value="fixture-revision"),
+                mock.patch.object(application, "create_private_venv", side_effect=operations.OperationError("venv failed")),
+            ):
+                with self.assertRaisesRegex(operations.OperationError, "venv failed"):
+                    application.prepare_version(layout)
+
+            versions = application.ProgramLayout.from_layout(layout).versions
+            self.assertEqual(list(versions.glob(".stage-*")), [])
+
+    def test_versioned_install_restores_activation_and_configs_on_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            layout = self.layout(Path(temp))
+            version = Path(temp) / "program/versions/v1.5.0.dev0"
+            python = version / ".venv/bin/python"
+            faryo = version / ".venv/bin/faryo"
+            faryo.parent.mkdir(parents=True)
+            python.write_text("python", encoding="utf-8")
+            faryo.write_text("faryo", encoding="utf-8")
+            before = layout.owner_env.read_text(encoding="utf-8")
+            with (
+                mock.patch.object(application, "prepare_version", return_value=version),
+                mock.patch.object(application, "activate_version", return_value=None),
+                mock.patch.object(application, "restore_activation") as restore,
+                mock.patch("faryo_cli.installer.install_services", side_effect=operations.OperationError("service failed")),
+            ):
+                with self.assertRaisesRegex(operations.OperationError, "service failed"):
+                    application.install_versioned_application(layout)
+
+            self.assertEqual(layout.owner_env.read_text(encoding="utf-8"), before)
+            restore.assert_called_once_with(None, layout)
 
 
 if __name__ == "__main__":

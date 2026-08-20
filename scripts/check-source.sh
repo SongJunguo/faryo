@@ -22,8 +22,8 @@ source "$ROOT/scripts/runtime-env.sh"
 PYTHON_BIN="$(faryo_resolve_python)"
 NODE_BIN="$(faryo_resolve_node)"
 export FARYO_PYTHON="$PYTHON_BIN" FARYO_NODE_BIN="$NODE_BIN" PYTHONDONTWRITEBYTECODE=1
-"$PYTHON_BIN" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 11) else 1)' || {
-  echo "Faryo requires Python 3.11 or newer: $PYTHON_BIN" >&2
+"$PYTHON_BIN" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)' || {
+  echo "Faryo requires Python 3.10 or newer: $PYTHON_BIN" >&2
   exit 1
 }
 "$PYTHON_BIN" -c 'import bcrypt, starlette, uvicorn' >/dev/null 2>&1 || {
@@ -115,6 +115,7 @@ release_checks() {
   "$PYTHON_BIN" -m py_compile \
     "$ROOT/src/faryo_cli/__init__.py" \
     "$ROOT/src/faryo_cli/__main__.py" \
+    "$ROOT/src/faryo_cli/application.py" \
     "$ROOT/src/faryo_cli/cli.py" \
     "$ROOT/src/faryo_cli/diagnostics.py" \
     "$ROOT/src/faryo_cli/installer.py" \
@@ -187,7 +188,10 @@ from pathlib import Path
 import json
 import re
 import sys
-import tomllib
+try:
+    import tomllib
+except ModuleNotFoundError:
+    import tomli as tomllib
 root = Path(sys.argv[1])
 
 def reject_duplicate_json_keys(pairs):
