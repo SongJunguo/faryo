@@ -75,6 +75,11 @@ Starlette adapter. It is exercised only on an isolated socket by normalized
 legacy/ASGI contract tests until write, proxy, stream and upload coverage is
 complete; `run-gateway.sh` continues to launch the legacy server meanwhile.
 
+`server/owner_client.py` centralizes Owner Token, route label, user,
+history-scope, workspace and inbox headers plus JSON and multipart requests.
+The legacy handler now delegates to this client; the ASGI proxy will use the
+same implementation.
+
 Gateway serves one root-scoped installable PWA manifest with `display:
 standalone`. The home page exposes the browser install prompt when available,
 and every maintained Owner session page references the same manifest. Launching

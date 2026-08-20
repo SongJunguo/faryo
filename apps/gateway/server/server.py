@@ -32,6 +32,7 @@ GATEWAY_MODULE_DIR = Path(__file__).resolve().parent
 if str(GATEWAY_MODULE_DIR) not in sys.path:
     sys.path.insert(0, str(GATEWAY_MODULE_DIR))
 import gateway_security
+import owner_client
 
 SHARED_DIR = Path(__file__).resolve().parents[2] / "shared"
 SHARED_STATIC_DIR = SHARED_DIR / "static"
@@ -1409,51 +1410,15 @@ class GatewayHandler(BaseHTTPRequestHandler):
         except ValueError as exc: self.write_json({"ok": False, "error": str(exc)}, HTTPStatus.BAD_REQUEST)
 
     def owner_headers(self, route: str, username: str) -> dict[str, str]:
-        host, port, label = BACKENDS[route]; headers = {"Host": f"{host}:{port}", "X-Faryo-Owner-Label": owner_label_header_value(label), "X-Owner-Token": self.config.owner_token(route), "X-Faryo-User": username}
-        if username != self.config.mcp_user: headers["X-Faryo-History-Scope"] = "workspace"
-        if file_root := self.config.file_inbox_root(username, route): headers["X-Faryo-File-Inbox-Root"] = file_root
-        if workspace_root := self.config.workspace_root(username, route): headers["X-Faryo-Workspace-Root"] = workspace_root
-        return headers
+        return owner_client.OwnerClient(BACKENDS, self.config, encode_label=owner_label_header_value).headers(route, username)
 
     def owner_json_request(self, route: str, path: str, payload: dict[str, Any] | None, username: str, method: str = "POST", timeout: float = 10, extra_headers: dict[str, str] | None = None) -> dict[str, Any]:
-        host, port, _label = BACKENDS[route]; headers = self.owner_headers(route, username); body = None
-        if extra_headers:
-            headers.update({key: value for key, value in extra_headers.items() if value})
-        if payload is not None: body = json.dumps(payload, ensure_ascii=False).encode("utf-8"); headers.update({"Content-Type": "application/json; charset=utf-8", "Content-Length": str(len(body))})
-        conn = http.client.HTTPConnection(host, port, timeout=timeout)
-        try: conn.request(method, path, body=body, headers=headers); resp = conn.getresponse(); data = resp.read()
-        except (OSError, UnicodeError) as exc: return {"ok": False, "error": str(exc), "retryable": True, "transportError": True}
-        finally: conn.close()
-        try: result = json.loads(data.decode("utf-8"))
-        except Exception: result = {"ok": False, "error": f"owner returned HTTP {resp.status}"}
-        if resp.status >= 400 and isinstance(result, dict): result.update({"ok": False, "httpStatus": resp.status})
-        return result if isinstance(result, dict) else {"ok": False, "error": "invalid owner response"}
+        client = owner_client.OwnerClient(BACKENDS, self.config, encode_label=owner_label_header_value)
+        return client.json_request(route, path, payload, username, method=method, timeout=timeout, extra_headers=extra_headers)
 
     def owner_attachment_request(self, route: str, path: Path, mime_type: str, filename: str, username: str) -> dict[str, Any]:
-        host, port, _label = BACKENDS[route]
-        boundary = "----FaryoBoundary" + secrets.token_hex(12)
-        safe_name = Path(filename).name.replace('"', "_").replace("\r", "_").replace("\n", "_") or path.name
-        data = path.read_bytes()
-        body = (
-            f"--{boundary}\r\n"
-            f"Content-Disposition: form-data; name=\"file\"; filename=\"{safe_name}\"\r\n"
-            f"Content-Type: {mime_type}\r\n\r\n"
-        ).encode("utf-8") + data + f"\r\n--{boundary}--\r\n".encode("utf-8")
-        headers = self.owner_headers(route, username)
-        headers.update({"Content-Type": f"multipart/form-data; boundary={boundary}", "Content-Length": str(len(body))})
-        conn = http.client.HTTPConnection(host, port, timeout=20)
-        try:
-            conn.request("POST", "/api/attachment", body=body, headers=headers); resp = conn.getresponse(); response_body = resp.read()
-        except OSError as exc:
-            return {"ok": False, "error": str(exc)}
-        finally:
-            conn.close()
-        try:
-            result = json.loads(response_body.decode("utf-8"))
-        except Exception:
-            result = {"ok": False, "error": f"owner returned HTTP {resp.status}"}
-        if resp.status >= 400 and isinstance(result, dict): result.update({"ok": False, "httpStatus": resp.status})
-        return result if isinstance(result, dict) else {"ok": False, "error": "invalid owner response"}
+        client = owner_client.OwnerClient(BACKENDS, self.config, encode_label=owner_label_header_value)
+        return client.attachment_request(route, path, mime_type, filename, username)
 
     def max_running_for(self, username: str, route: str) -> int:
         return self.config.max_running(route)
