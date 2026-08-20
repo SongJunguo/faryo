@@ -19,7 +19,7 @@ from faryo_cli.updates import update_application
 def parser() -> argparse.ArgumentParser:
     root = argparse.ArgumentParser(prog="faryo", description="Manage the local Faryo Owner and Gateway")
     root.add_argument("--version", action="version", version=f"Faryo {__version__}")
-    commands = root.add_subparsers(dest="command", required=True)
+    commands = root.add_subparsers(dest="command", required=True, metavar="COMMAND")
     for name, help_text in (
         ("doctor", "Check runtime, configuration, services, and loopback health"),
         ("status", "Show a compact read-only service summary"),
@@ -52,7 +52,8 @@ def parser() -> argparse.ArgumentParser:
     uninstall = commands.add_parser("uninstall", help="Remove Faryo services and program files while preserving private data")
     uninstall.add_argument("--purge-data", action="store_true", help="Also remove private Faryo config, history cache, and attachments")
     uninstall.add_argument("--yes", action="store_true", help="Confirm irreversible private-data deletion")
-    internal = commands.add_parser("internal", help=argparse.SUPPRESS)
+    internal = commands.add_parser("internal")
+    commands._choices_actions = [action for action in commands._choices_actions if action.dest != "internal"]
     internal_commands = internal.add_subparsers(dest="internal_command", required=True)
     internal_commands.add_parser("run-owner")
     internal_commands.add_parser("run-gateway")

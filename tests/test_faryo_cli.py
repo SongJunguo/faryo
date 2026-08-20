@@ -119,6 +119,13 @@ class FaryoCliTest(unittest.TestCase):
             self.assertEqual(code, 0)
             self.assertIn("Owner:  active", output.getvalue())
 
+    def test_public_help_hides_internal_service_entry_points(self) -> None:
+        help_text = cli.parser().format_help()
+        self.assertNotIn("internal", help_text)
+        self.assertNotIn("SUPPRESS", help_text)
+        for command in ("install", "update", "rollback", "uninstall", "doctor"):
+            self.assertIn(command, help_text)
+
     def test_source_root_discovery_uses_application_markers(self) -> None:
         self.assertEqual(diagnostics.discover_source_root({"FARYO_INSTALL_ROOT": str(ROOT)}), ROOT)
         with tempfile.TemporaryDirectory() as temp:
