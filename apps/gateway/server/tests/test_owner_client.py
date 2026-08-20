@@ -102,6 +102,22 @@ class OwnerClientTest(unittest.TestCase):
         self.assertIn(b'name="file"', request["body"])
         self.assertNotIn(b"\r\nname.png", request["body"])
 
+    def test_raw_request_keeps_body_and_replaces_internal_headers(self) -> None:
+        body = b'{"session":"fixture"}'
+        response = self.client.raw_request(
+            "lab",
+            "POST",
+            "/api/send?fixture=1",
+            body,
+            "tester",
+            forwarded_headers={"Content-Type": "application/json", "X-Owner-Token": "spoofed"},
+        )
+        self.assertEqual(response.status, HTTPStatus.OK)
+        request = OwnerFixture.requests[-1]
+        self.assertEqual(request["path"], "/api/send?fixture=1")
+        self.assertEqual(request["body"], body)
+        self.assertEqual(request["headers"]["X-Owner-Token"], "token-lab")
+
 
 if __name__ == "__main__":
     unittest.main()

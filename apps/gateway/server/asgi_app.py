@@ -6,8 +6,10 @@ from http import HTTPStatus
 import json
 from pathlib import Path
 import secrets
+import time
 from typing import Any
 
+from anyio import to_thread
 from starlette.applications import Starlette
 from starlette.datastructures import MutableHeaders
 from starlette.requests import Request
@@ -15,6 +17,7 @@ from starlette.responses import HTMLResponse, RedirectResponse, Response
 from starlette.routing import Route
 
 import gateway_security
+import owner_client
 
 
 class SecurityHeadersMiddleware:
@@ -40,6 +43,7 @@ class SecurityHeadersMiddleware:
 def create_app(legacy: Any, config: Any) -> Starlette:
     static_dir = Path(legacy.STATIC_DIR)
     shared_static_dir = Path(legacy.SHARED_STATIC_DIR)
+    client = owner_client.OwnerClient(legacy.BACKENDS, config, encode_label=legacy.owner_label_header_value)
 
     def codec() -> gateway_security.SessionCookieCodec:
         return gateway_security.SessionCookieCodec(
@@ -102,12 +106,81 @@ def create_app(legacy: Any, config: Any) -> Starlette:
             return RedirectResponse("/login?" + legacy.urlencode({"next": target}), status_code=HTTPStatus.SEE_OTHER)
         return html_page(request, legacy.portal_html(current, config.user_routes(current)))
 
+    async def owner_control(request: Request) -> Response:
+        current = username(request)
+        if not current:
+            return json_response({"ok": False, "error": "unauthorized"}, HTTPStatus.UNAUTHORIZED)
+        route = str(request.path_params["route"])
+        upstream_path = "/api/" + str(request.path_params["tail"])
+        action = legacy.PROXY_CONTROL_ACTIONS.get(upstream_path)
+        if route not in legacy.BACKENDS or not action:
+            return json_response({"ok": False, "error": "not found"}, HTTPStatus.NOT_FOUND)
+        request_id = secrets.token_hex(8)
+        started = time.monotonic()
+        status = HTTPStatus.BAD_GATEWAY
+        target = ""
+        idempotent = False
+        if not config.allowed_route(current, route):
+            status = HTTPStatus.FORBIDDEN
+            response = json_response({"ok": False, "error": "forbidden"}, status)
+        else:
+            supplied_csrf = request.headers.get(legacy.CSRF_HEADER, "").strip()
+            expected_csrf = gateway_security.csrf_token(config.cookie_secret, current, config.auth_epoch(current))
+            if not supplied_csrf or not secrets.compare_digest(supplied_csrf, expected_csrf):
+                status = HTTPStatus.FORBIDDEN
+                response = json_response({"ok": False, "error": "csrf required"}, status)
+            else:
+                body = await request.body()
+                target = legacy.control_target_from_json(body)
+                forwarded = {
+                    key: value for key, value in request.headers.items()
+                    if key.lower() not in legacy.HOP_BY_HOP_HEADERS and key.lower() not in owner_client.INTERNAL_HEADER_NAMES
+                }
+                path = upstream_path + (f"?{request.url.query}" if request.url.query else "")
+                try:
+                    upstream = await to_thread.run_sync(
+                        lambda: client.raw_request(route, request.method, path, body, current, forwarded_headers=forwarded)
+                    )
+                    status = upstream.status
+                    try:
+                        result = json.loads(upstream.body.decode("utf-8"))
+                    except (UnicodeDecodeError, json.JSONDecodeError):
+                        result = {}
+                    if isinstance(result, dict):
+                        target = str(result.get("session") or target)
+                        idempotent = bool(result.get("duplicate") or result.get("idempotent"))
+                    response_headers = {}
+                    for key, value in upstream.headers:
+                        lower = key.lower()
+                        if lower in legacy.HOP_BY_HOP_HEADERS or lower in legacy.UPSTREAM_SECURITY_HEADERS or lower == "content-length":
+                            continue
+                        response_headers[key] = value
+                    response = Response(upstream.body, status_code=status, headers=response_headers)
+                except owner_client.OwnerTransportError:
+                    status = HTTPStatus.BAD_GATEWAY
+                    response = json_response({"ok": False, "error": "upstream unavailable"}, status)
+        response.headers["X-Faryo-Request-Id"] = request_id
+        writer = getattr(config, "append_control_audit", None)
+        if callable(writer):
+            writer(
+                username=current,
+                route=route,
+                action=action,
+                target=target,
+                request_id=request_id,
+                status=int(status),
+                duration_ms=round((time.monotonic() - started) * 1000),
+                idempotent=idempotent,
+            )
+        return response
+
     routes = [
         Route("/manifest.json", manifest, methods=["GET"]),
         Route("/sw.js", service_worker, methods=["GET"]),
         Route("/login", login, methods=["GET"]),
         Route("/logout", logout, methods=["GET"]),
         Route("/api/csrf", csrf, methods=["GET"]),
+        Route("/{route}/api/{tail:path}", owner_control, methods=["POST"]),
         Route("/", home, methods=["GET"]),
         Route("/{filename}", static_asset, methods=["GET"]),
     ]

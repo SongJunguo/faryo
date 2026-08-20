@@ -19,8 +19,9 @@ assets, login/logout, CSRF and the authenticated home page. POST, Owner proxy,
 SSE, MCP and uploads remain on the legacy stack until their contracts match.
 
 `server/owner_client.py` is the shared authenticated Owner client for scoped
-internal headers, JSON calls and bounded multipart forwarding. Both HTTP stacks
-must use it so Owner tokens and workspace/inbox scopes cannot drift.
+internal headers, JSON/raw calls and bounded multipart forwarding. Forwarded
+browser headers cannot replace internal identity/scope fields. Both HTTP stacks
+use it so Owner tokens and workspace/inbox scopes cannot drift.
 
 ## 1. Entry Flow
 

@@ -4,9 +4,35 @@ from __future__ import annotations
 
 import http.client
 import json
+from dataclasses import dataclass
 from pathlib import Path
 import secrets
 from typing import Any, Callable, Mapping
+
+
+INTERNAL_HEADER_NAMES = {
+    "host",
+    "content-length",
+    "x-owner-token",
+    "x-faryo-owner-label",
+    "x-faryo-user",
+    "x-faryo-history-scope",
+    "x-faryo-file-inbox-root",
+    "x-faryo-workspace-root",
+    "x-faryo-csrf",
+}
+
+
+@dataclass(frozen=True)
+class OwnerResponse:
+    status: int
+    reason: str
+    headers: list[tuple[str, str]]
+    body: bytes
+
+
+class OwnerTransportError(Exception):
+    pass
 
 
 class OwnerClient:
@@ -72,6 +98,33 @@ class OwnerClient:
         if response.status >= 400 and isinstance(result, dict):
             result.update({"ok": False, "httpStatus": response.status})
         return result if isinstance(result, dict) else {"ok": False, "error": "invalid owner response"}
+
+    def raw_request(
+        self,
+        route: str,
+        method: str,
+        path: str,
+        body: bytes | None,
+        username: str,
+        *,
+        forwarded_headers: Mapping[str, str] | None = None,
+        timeout: float = 20,
+    ) -> OwnerResponse:
+        host, port, _label = self.backends[route]
+        headers = self.headers(route, username)
+        if forwarded_headers:
+            headers.update({key: value for key, value in forwarded_headers.items() if key.lower() not in INTERNAL_HEADER_NAMES})
+        if body is not None:
+            headers["Content-Length"] = str(len(body))
+        connection = http.client.HTTPConnection(host, port, timeout=timeout)
+        try:
+            connection.request(method, path, body=body, headers=headers)
+            response = connection.getresponse()
+            return OwnerResponse(response.status, response.reason, response.getheaders(), response.read())
+        except (OSError, UnicodeError) as exc:
+            raise OwnerTransportError("upstream unavailable") from exc
+        finally:
+            connection.close()
 
     def attachment_request(self, route: str, path: Path, mime_type: str, filename: str, username: str) -> dict[str, Any]:
         host, port, _label = self.backends[route]
