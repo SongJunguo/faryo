@@ -5,11 +5,13 @@
 
 ## Active
 
-- [`v1.3-maintainability-and-product-capabilities-plan.md`](v1.3-maintainability-and-product-capabilities-plan.md)：
-  正在完成最终发布、远程 CI 与 source-only release 验收。
+当前没有未完成的实施计划。
 
 ## Completed or maintenance mode
 
+- [`v1.3-maintainability-and-product-capabilities-plan.md`](v1.3-maintainability-and-product-capabilities-plan.md)：
+  用 Playwright/Ruff 与选择性前端库降低维护成本，拆分 Gateway portal，并实施 capability、
+  脱敏 diagnostics、只读 diff review 和 body-free attention；pending queue 仅走正式协议。
 - [`codebase-architecture-and-mobile-immersive-plan.md`](codebase-architecture-and-mobile-immersive-plan.md)：
   审计代码/依赖/同类项目，实施 Edge 文档滚动、可退出 Fullscreen 与 PWA 补强，并形成
   渐进重构路线。
