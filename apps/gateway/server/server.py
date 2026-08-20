@@ -21,13 +21,17 @@ import threading
 import time
 import urllib.request
 from http import HTTPStatus
-from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, urlencode, urlparse
 
 import bcrypt
+
+GATEWAY_MODULE_DIR = Path(__file__).resolve().parent
+if str(GATEWAY_MODULE_DIR) not in sys.path:
+    sys.path.insert(0, str(GATEWAY_MODULE_DIR))
+import gateway_security
 
 SHARED_DIR = Path(__file__).resolve().parents[2] / "shared"
 SHARED_STATIC_DIR = SHARED_DIR / "static"
@@ -212,8 +216,11 @@ UPSTREAM_SECURITY_HEADERS = {
     "x-content-type-options",
     "x-frame-options",
 }
-LOGIN_RATE_STATE: dict[str, dict[str, Any]] = {}
-LOGIN_RATE_LOCK = threading.Lock()
+LOGIN_LIMITER = gateway_security.LoginRateLimiter(
+    window_seconds=LOGIN_RATE_WINDOW_SECONDS,
+    block_seconds=LOGIN_RATE_BLOCK_SECONDS,
+    max_failures=LOGIN_RATE_MAX_FAILURES,
+)
 CSP_NONCE_PLACEHOLDER = "__FARYO_CSP_NONCE__"
 
 
@@ -934,30 +941,8 @@ class GatewayHandler(BaseHTTPRequestHandler):
         audit = getattr(self, "_control_audit", None)
         if isinstance(audit, dict) and audit.get("requestId"):
             self.send_header("X-Faryo-Request-Id", str(audit["requestId"]))
-        script_src = "'self'" + (f" 'nonce-{nonce}'" if nonce else "")
-        self.send_header(
-            "Content-Security-Policy",
-            "; ".join([
-                "default-src 'self'",
-                f"script-src {script_src}",
-                "script-src-attr 'none'",
-                "style-src 'self' 'unsafe-inline'",
-                "img-src 'self' data: blob:",
-                "font-src 'self'",
-                "connect-src 'self'",
-                "worker-src 'self'",
-                "manifest-src 'self'",
-                "object-src 'none'",
-                "base-uri 'none'",
-                "frame-ancestors 'none'",
-                "form-action 'self'",
-            ]),
-        )
-        self.send_header("X-Content-Type-Options", "nosniff")
-        self.send_header("X-Frame-Options", "DENY")
-        self.send_header("Referrer-Policy", "no-referrer")
-        self.send_header("Permissions-Policy", "camera=(), microphone=(), geolocation=(), fullscreen=(self)")
-        self.send_header("Strict-Transport-Security", "max-age=31536000")
+        for name, value in gateway_security.browser_security_headers(nonce).items():
+            self.send_header(name, value)
         super().end_headers()
 
     def do_OPTIONS(self) -> None:
@@ -1193,8 +1178,7 @@ class GatewayHandler(BaseHTTPRequestHandler):
         return False
 
     def csrf_token(self, username: str) -> str:
-        message = f"{username}|{self.config.auth_epoch(username)}".encode("utf-8")
-        return hmac.new(self.config.cookie_secret, message, hashlib.sha256).hexdigest()
+        return gateway_security.csrf_token(self.config.cookie_secret, username, self.config.auth_epoch(username))
 
     def require_csrf_header(self, username: str) -> bool:
         token = self.headers.get(CSRF_HEADER, "").strip()
@@ -1204,36 +1188,16 @@ class GatewayHandler(BaseHTTPRequestHandler):
         return False
 
     def login_rate_key(self) -> str:
-        peer = str(self.client_address[0])
-        try:
-            peer_is_loopback = ipaddress.ip_address(peer).is_loopback
-        except ValueError:
-            peer_is_loopback = False
-        if peer_is_loopback:
-            cloudflare_ip = self.headers.get("CF-Connecting-IP", "").strip()
-            try:
-                return ipaddress.ip_address(cloudflare_ip).compressed
-            except ValueError:
-                pass
-        return peer
+        return gateway_security.login_rate_key(str(self.client_address[0]), self.headers.get("CF-Connecting-IP", ""))
 
     def login_rate_limited(self, key: str) -> bool:
-        now = time.monotonic()
-        with LOGIN_RATE_LOCK:
-            entry = LOGIN_RATE_STATE.get(key)
-            return bool(entry and entry.get("blocked_until", 0) > now)
+        return LOGIN_LIMITER.limited(key)
 
     def record_login_failure(self, key: str) -> None:
-        now = time.monotonic()
-        with LOGIN_RATE_LOCK:
-            entry = LOGIN_RATE_STATE.setdefault(key, {"failures": [], "blocked_until": 0.0})
-            entry["failures"] = [ts for ts in entry["failures"] if now - ts < LOGIN_RATE_WINDOW_SECONDS] + [now]
-            if len(entry["failures"]) >= LOGIN_RATE_MAX_FAILURES:
-                entry["blocked_until"] = now + LOGIN_RATE_BLOCK_SECONDS
+        LOGIN_LIMITER.record_failure(key)
 
     def clear_login_rate(self, key: str) -> None:
-        with LOGIN_RATE_LOCK:
-            LOGIN_RATE_STATE.pop(key, None)
+        LOGIN_LIMITER.clear(key)
 
     def handle_login(self, parsed: Any) -> None:
         length = int(self.headers.get("Content-Length", "0") or "0")
@@ -1716,56 +1680,37 @@ class GatewayHandler(BaseHTTPRequestHandler):
         return self.current_username() is not None
 
     def current_username(self) -> str | None:
-        raw = self.headers.get("Cookie", "")
-        if not raw:
-            return None
-        cookie = SimpleCookie(raw)
-        morsel = cookie.get(COOKIE_NAME)
-        if not morsel:
-            return None
-        try:
-            payload_b64, sig = morsel.value.rsplit(".", 1)
-            payload = base64.urlsafe_b64decode(payload_b64.encode("ascii")).decode("utf-8")
-            expected = hmac.new(self.config.cookie_secret, payload_b64.encode("ascii"), hashlib.sha256).hexdigest()
-            if not hmac.compare_digest(sig, expected):
-                return None
-            parts = payload.split("|")
-            if len(parts) == 3:
-                username, issued_at, _nonce = parts
-                cookie_epoch = 0
-            elif len(parts) == 4:
-                username, issued_at, epoch, _nonce = parts
-                cookie_epoch = int(epoch)
-            else:
-                return None
-            if username not in self.config.users:
-                return None
-            auth_epoch = self.config.auth_epoch(username)
-            if auth_epoch and cookie_epoch != auth_epoch:
-                return None
-            if time.time() - int(issued_at) >= COOKIE_MAX_AGE:
-                return None
-            return username
-        except Exception:
-            return None
+        codec = gateway_security.SessionCookieCodec(
+            self.config.cookie_secret,
+            name=COOKIE_NAME,
+            max_age=COOKIE_MAX_AGE,
+            same_site=COOKIE_SAME_SITE,
+        )
+        return codec.username(self.headers.get("Cookie", ""), self.config.users, self.config.auth_epoch)
 
     def auth_cookie(self, username: str) -> str:
-        epoch = self.config.auth_epoch(username)
-        payload = f"{username}|{int(time.time())}|{epoch}|{secrets.token_urlsafe(18)}"
-        payload_b64 = base64.urlsafe_b64encode(payload.encode("utf-8")).decode("ascii")
-        sig = hmac.new(self.config.cookie_secret, payload_b64.encode("ascii"), hashlib.sha256).hexdigest()
-        return f"{COOKIE_NAME}={payload_b64}.{sig}; Path=/; Max-Age={COOKIE_MAX_AGE}; HttpOnly; Secure; SameSite={COOKIE_SAME_SITE}"
+        codec = gateway_security.SessionCookieCodec(
+            self.config.cookie_secret,
+            name=COOKIE_NAME,
+            max_age=COOKIE_MAX_AGE,
+            same_site=COOKIE_SAME_SITE,
+        )
+        return codec.issue(username, self.config.auth_epoch(username))
 
     def expired_cookie(self, name: str = COOKIE_NAME) -> str:
-        return f"{name}=; Path=/; Max-Age=0; HttpOnly; Secure; SameSite={COOKIE_SAME_SITE}"
+        codec = gateway_security.SessionCookieCodec(
+            self.config.cookie_secret,
+            name=COOKIE_NAME,
+            max_age=COOKIE_MAX_AGE,
+            same_site=COOKIE_SAME_SITE,
+        )
+        return codec.expire(name)
 
     def safe_next(self, parsed: Any) -> str:
         return self.safe_target(parse_qs(parsed.query).get("next", ["/"])[0])
 
     def safe_target(self, value: str) -> str:
-        if not value.startswith("/") or value.startswith("//"):
-            return "/"
-        return value
+        return gateway_security.safe_target(value)
 
     def request_target(self) -> str:
         return self.path if self.path.startswith("/") and not self.path.startswith("//") else "/"

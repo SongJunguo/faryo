@@ -26,11 +26,27 @@ export FARYO_PYTHON="$PYTHON_BIN" FARYO_NODE_BIN="$NODE_BIN" PYTHONDONTWRITEBYTE
   echo "Faryo requires Python 3.11 or newer: $PYTHON_BIN" >&2
   exit 1
 }
-"$PYTHON_BIN" -c 'import bcrypt' >/dev/null 2>&1 || {
-  echo "Gateway dependency bcrypt is missing from: $PYTHON_BIN" >&2
+"$PYTHON_BIN" -c 'import bcrypt, starlette, uvicorn' >/dev/null 2>&1 || {
+  echo "Gateway runtime dependencies are missing from: $PYTHON_BIN" >&2
   echo "Install apps/gateway/requirements.txt in the selected environment." >&2
   exit 1
 }
+"$PYTHON_BIN" - <<'PY'
+from importlib.metadata import version
+
+expected = {
+    "anyio": "4.14.2",
+    "bcrypt": "5.0.0",
+    "click": "8.4.2",
+    "h11": "0.16.0",
+    "idna": "3.19",
+    "starlette": "1.6.0",
+    "uvicorn": "0.52.4",
+}
+actual = {name: version(name) for name in expected}
+if actual != expected:
+    raise SystemExit(f"Gateway runtime dependency drift: {actual}")
+PY
 "$PYTHON_BIN" -c 'import ruff' >/dev/null 2>&1 || {
   echo "Ruff is missing from: $PYTHON_BIN" >&2
   echo "Install requirements-dev.txt in the selected environment." >&2
@@ -71,6 +87,7 @@ release_checks() {
     "$ROOT/apps/owner/local-tmux-owner/runtime_diagnostics.py" \
     "$ROOT/apps/owner/local-tmux-owner/tests/owner-archive-roundtrip.py" \
     "$ROOT/apps/gateway/server/server.py" \
+    "$ROOT/apps/gateway/server/gateway_security.py" \
     "$ROOT/apps/gateway/scripts/generate-gateway-auth-config.py"
   for js_file in \
     "$ROOT/apps/owner/local-tmux-owner/static/compact-rules-codex.js" \

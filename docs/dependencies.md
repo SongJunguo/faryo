@@ -101,8 +101,20 @@ check. Production never loads these assets from a CDN.
 
 ## Runtime and bundled assets
 
-- Gateway runtime Python dependencies remain in
-  `apps/gateway/requirements.txt`.
+- Gateway runtime Python dependencies are exact-pinned in
+  `apps/gateway/requirements.txt`. v1.4 adopts Starlette 1.6.0 and Uvicorn
+  0.52.4 under BSD-3-Clause, with base-only transitive pins AnyIO 4.14.2
+  (MIT), Click 8.4.2 (BSD-3-Clause), h11 0.16.0 (MIT), and idna 3.19
+  (BSD-3-Clause). No `full`/`standard` extras, multipart parser, uvloop,
+  watchfiles or WebSocket package is installed. bcrypt is now exact-pinned at
+  5.0.0 under Apache-2.0.
+- The six pure-Python ASGI/base wheels total about 507 KB; bcrypt's platform
+  wheel is about 482 KB. These are Gateway runtime dependencies and add no
+  browser bytes or background process beyond the Uvicorn process replacing the
+  legacy server.
+- Removal path before cutover: remove Starlette/Uvicorn and their five base
+  transitive pins, then retain the legacy entrypoint. After cutover, formal
+  rollback uses the `v1.3.0` requirements and service scripts.
 - KaTeX and the Markdown/Shiki bundle remain local, versioned vendor assets with
   their own notices under the Owner static tree.
 - Floating UI was evaluated but not adopted: the tested `placeSheet` function is

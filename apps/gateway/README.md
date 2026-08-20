@@ -65,6 +65,11 @@ from 1 through 168 when a different operator-selected lifetime is required.
 Changing it does not alter Cloudflare Access sessions; the two layers are
 configured independently.
 
+`server/gateway_security.py` is the single policy implementation for signed
+cookies, epoch revoke, CSRF, trusted login-rate keys, safe redirects, CSP and
+browser hardening headers. It has no dependency on either the legacy HTTP
+handler or Starlette so both migration stacks can share exact behavior.
+
 Gateway serves one root-scoped installable PWA manifest with `display:
 standalone`. The home page exposes the browser install prompt when available,
 and every maintained Owner session page references the same manifest. Launching

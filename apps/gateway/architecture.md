@@ -8,6 +8,11 @@ Faryo Gateway is the public entry layer. It owns public web access, login
 state, user-to-route authorization, path routing, the handoff workbench, and
 controlled headers injected into local execution endpoints.
 
+Cookie signing/validation, CSRF derivation, trusted login-rate identity,
+redirect allowlisting and browser security headers are shared pure policy in
+`server/gateway_security.py`. The legacy handler and the migrating ASGI app
+must consume the same module rather than reproduce these boundaries.
+
 ## 1. Entry Flow
 
 ```text
