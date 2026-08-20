@@ -305,6 +305,9 @@ consumed as private runtime input and is never printed.
 - `static/owner/composer-delivery.mjs` owns session-scoped draft/pending storage,
   stable client message IDs, success-only clearing, failed-draft preservation
   and one same-ID recovery attempt for ambiguous delivery errors.
+- `owner_http.py` owns CSP/security headers, private-query log stripping,
+  header/query token authentication, bounded JSON/multipart bodies, gzip JSON
+  and file responses. Handler methods are thin route-facing delegates.
 - `tmux_runtime.py` owns UTF-8 subprocess defaults, fixed tmux invocation,
   process-tree parsing and bounded session/thread/message identifiers; product
   policy remains in the higher Owner services.

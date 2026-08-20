@@ -9,9 +9,6 @@ from __future__ import annotations
 
 import argparse
 import datetime as _dt
-from email import policy
-from email.parser import BytesParser
-import gzip
 import hmac
 import html as _html
 import io
@@ -49,12 +46,13 @@ import path_policy
 import tmux_runtime
 import delivery_store
 import delivery_service
+import owner_http
 import codex_history
 
 SHARED_DIR = Path(__file__).resolve().parents[2] / "shared"
 if str(SHARED_DIR) not in sys.path:
     sys.path.insert(0, str(SHARED_DIR))
-from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
+from urllib.parse import parse_qs, unquote, urlencode, urlparse
 
 try:
     from rich.console import Console as RichConsole
@@ -2698,13 +2696,6 @@ def clean_session_title(value: Any) -> str:
     return compact_text(value)[:48]
 
 
-class MultipartFile:
-    def __init__(self, filename: str, content_type: str, data: bytes) -> None:
-        self.filename = filename
-        self.type = content_type
-        self.file = io.BytesIO(data)
-
-
 class DeliveryRuntime:
     @property
     def delivery_store(self) -> delivery_store.DeliveryStore:
@@ -2907,36 +2898,29 @@ class Handler(SimpleHTTPRequestHandler):
     def config(self) -> Config:
         return self.server.config  # type: ignore[attr-defined]
 
+    @property
+    def http_support(self) -> owner_http.OwnerHttpSupport:
+        support = getattr(self, "_owner_http_support", None)
+        if support is None:
+            support = owner_http.OwnerHttpSupport(
+                self,
+                error_factory=lambda message, status: OwnerError(message, status),
+                token=lambda: self.config.token,
+                max_attachment_bytes=MAX_ATTACHMENT_UPLOAD_BYTES,
+            )
+            self._owner_http_support = support
+        return support
+
     def log_message(self, fmt: str, *args: Any) -> None:
         # Query strings may contain Owner tokens, local paths, or a private
         # session-history search. Keep routine access logs useful without
         # persisting any of those values.
-        safe_path = urlparse(self.path).path
+        safe_path = owner_http.safe_log_path(self.path)
         sys.stderr.write("[%s] %s %s\n" % (now_iso(), self.command, safe_path))
 
     def end_headers(self) -> None:
-        self.send_header("Cache-Control", "no-store")
-        self.send_header(
-            "Content-Security-Policy",
-            "; ".join([
-                "default-src 'self'",
-                "script-src 'self'",
-                "script-src-attr 'none'",
-                "style-src 'self' 'unsafe-inline'",
-                "img-src 'self' data: blob:",
-                "font-src 'self'",
-                "connect-src 'self'",
-                "worker-src 'self'",
-                "object-src 'none'",
-                "base-uri 'none'",
-                "frame-ancestors 'none'",
-                "form-action 'self'",
-            ]),
-        )
-        self.send_header("X-Content-Type-Options", "nosniff")
-        self.send_header("X-Frame-Options", "DENY")
-        self.send_header("Referrer-Policy", "no-referrer")
-        self.send_header("Permissions-Policy", "camera=(), microphone=(), geolocation=(), fullscreen=(self)")
+        for name, value in owner_http.browser_security_headers().items():
+            self.send_header(name, value)
         super().end_headers()
 
     def do_GET(self) -> None:
@@ -3328,96 +3312,20 @@ class Handler(SimpleHTTPRequestHandler):
         return agent_session_items(self.config, self.history_root())
 
     def read_multipart_form(self) -> dict[str, Any]:
-        content_type = self.headers.get("Content-Type", "")
-        if not content_type.lower().startswith("multipart/form-data"):
-            raise OwnerError("expected multipart/form-data")
-        try:
-            length = int(self.headers.get("Content-Length", "0") or "0")
-        except ValueError as exc:
-            raise OwnerError("invalid content length") from exc
-        if length <= 0:
-            raise OwnerError("empty request")
-        if length > MAX_ATTACHMENT_UPLOAD_BYTES + 1_000_000:
-            raise OwnerError("request too large", HTTPStatus.REQUEST_ENTITY_TOO_LARGE)
-        raw = self.rfile.read(length)
-        message = BytesParser(policy=policy.default).parsebytes(
-            b"Content-Type: " + content_type.encode("utf-8") + b"\r\n\r\n" + raw
-        )
-        form: dict[str, Any] = {}
-        for part in message.iter_parts():
-            name = part.get_param("name", header="content-disposition")
-            if not name:
-                continue
-            item = MultipartFile(
-                part.get_filename() or "",
-                part.get_content_type(),
-                part.get_payload(decode=True) or b"",
-            )
-            if name in form:
-                form[name] = form[name] + [item] if isinstance(form[name], list) else [form[name], item]
-            else:
-                form[name] = item
-        return form
+        return self.http_support.read_multipart_form()
 
     def read_json(self) -> dict[str, Any]:
-        length = int(self.headers.get("Content-Length", "0") or "0")
-        if length > 1_000_000:
-            raise OwnerError("request too large", HTTPStatus.REQUEST_ENTITY_TOO_LARGE)
-        raw = self.rfile.read(length).decode("utf-8", errors="replace") if length else "{}"
-        try:
-            data = json.loads(raw)
-        except json.JSONDecodeError as exc:
-            raise OwnerError(f"invalid json: {exc}") from exc
-        if not isinstance(data, dict):
-            raise OwnerError("json body must be an object")
-        return data
+        return self.http_support.read_json()
 
     def require_token(self, parsed: Any) -> None:
-        expected = self.config.token
-        query = parse_qs(parsed.query)
-        got = self.headers.get("X-Owner-Token") or query.get("token", [None])[0]
-        if not got or not secrets.compare_digest(got, expected):
-            raise OwnerError("unauthorized", HTTPStatus.UNAUTHORIZED)
+        self.http_support.require_token(parsed)
 
     def write_json(self, data: dict[str, Any], status: HTTPStatus = HTTPStatus.OK) -> None:
-        body = json.dumps(data, ensure_ascii=False, indent=2).encode("utf-8")
-        accepts_gzip = "gzip" in self.headers.get("Accept-Encoding", "").lower()
-        compressed = False
-        if accepts_gzip and len(body) >= 1024:
-            body = gzip.compress(body, compresslevel=6)
-            compressed = True
-        self.send_response(status)
-        self.send_header("Content-Type", "application/json; charset=utf-8")
-        self.send_header("Cache-Control", "no-store")
-        self.send_header("Vary", "Accept-Encoding")
-        if compressed:
-            self.send_header("Content-Encoding", "gzip")
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        try:
-            self.wfile.write(body)
-        except (BrokenPipeError, ConnectionResetError):
-            return
+        self.http_support.write_json(data, status)
 
     def write_file(self, path: Path, content_type: str, download: bool = False) -> None:
-        try:
-            size = path.stat().st_size
-            fh = path.open("rb")
-        except OSError as exc:
-            raise OwnerError("file not found", HTTPStatus.NOT_FOUND) from exc
-        with fh:
-            self.send_response(HTTPStatus.OK)
-            self.send_header("Content-Type", content_type)
-            self.send_header("Content-Length", str(size))
-            filename = re.sub(r"[^A-Za-z0-9._-]", "_", path.name) or "file"
-            disposition = "attachment" if download else "inline"
-            self.send_header("Content-Disposition", f"{disposition}; filename=\"{filename}\"; filename*=UTF-8''{quote(path.name)}")
-            self.send_header("X-Content-Type-Options", "nosniff")
-            self.end_headers()
-            try:
-                shutil.copyfileobj(fh, self.wfile)
-            except (BrokenPipeError, ConnectionResetError):
-                return
+        self.http_support.write_file(path, content_type, download)
+
 
     def write_index(self) -> None:
         try:

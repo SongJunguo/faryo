@@ -83,6 +83,7 @@ release_checks() {
     "$ROOT/apps/owner/local-tmux-owner/tmux_runtime.py" \
     "$ROOT/apps/owner/local-tmux-owner/delivery_store.py" \
     "$ROOT/apps/owner/local-tmux-owner/delivery_service.py" \
+    "$ROOT/apps/owner/local-tmux-owner/owner_http.py" \
     "$ROOT/apps/owner/local-tmux-owner/codex_history.py" \
     "$ROOT/apps/owner/local-tmux-owner/workspace_changes.py" \
     "$ROOT/apps/owner/local-tmux-owner/runtime_diagnostics.py" \
@@ -183,6 +184,7 @@ index = (root / "apps/owner/local-tmux-owner/static/index.html").read_text(encod
 owner_server = (root / "apps/owner/local-tmux-owner/server.py").read_text(encoding="utf-8")
 workspace_changes_source = (root / "apps/owner/local-tmux-owner/workspace_changes.py").read_text(encoding="utf-8")
 runtime_diagnostics_source = (root / "apps/owner/local-tmux-owner/runtime_diagnostics.py").read_text(encoding="utf-8")
+owner_http_source = (root / "apps/owner/local-tmux-owner/owner_http.py").read_text(encoding="utf-8")
 gateway = (root / "apps/gateway/server/server.py").read_text(encoding="utf-8")
 gateway_config_source = (root / "apps/gateway/server/gateway_config.py").read_text(encoding="utf-8")
 gateway_audit_source = (root / "apps/gateway/server/control_audit.py").read_text(encoding="utf-8")
@@ -229,7 +231,7 @@ command_inventory_source = (test_script_root / "codex-command-inventory.sh").rea
 assert "faryo_resolve_codex" in command_inventory_source and "faryo_resolve_node" in command_inventory_source, "Codex inventory must use shared runtime discovery"
 assert 'id="historySearchInput"' in gateway and 'data-history-period="7d"' in gateway, "Gateway must expose metadata history search"
 assert "agent_history_text_matches" in owner_server and "codex_conversation_history_page" not in owner_server[owner_server.index("def codex_history_page("):owner_server.index("def codex_history_items(")], "session search must not scan conversation history"
-assert "safe_path = urlparse(self.path).path" in owner_server, "Owner logs must omit private query strings"
+assert "owner_http.safe_log_path(self.path)" in owner_server and "def safe_log_path" in owner_http_source, "Owner logs must omit private query strings"
 assert "ControlAuditStore" in gateway_config_source and "target_digest" in gateway_audit_source and "append_audit" in gateway_asgi_support and 'id="securityActivity"' in gateway, "Gateway must expose body-free control auditing"
 assert "GatewayHandler" not in gateway and "ThreadingHTTPServer" not in gateway, "legacy Gateway HTTP server must not return"
 assert "run_asgi.py" in gateway_runner and "FARYO_GATEWAY_HTTP_ENGINE" not in gateway_runner, "Gateway runner must remain ASGI-only"

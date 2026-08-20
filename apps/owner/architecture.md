@@ -92,6 +92,9 @@ but the default upload destination should come from the Faryo data directory.
 - `static/owner/composer-delivery.mjs` owns route/session-scoped drafts, pending
   message identity, success-only clearing, failed-draft restoration and one
   same-ID retry for ambiguous network/502/504 outcomes. DOM/animation stay out.
+- `owner_http.py` owns browser security headers, query-redacted log paths,
+  Owner-token validation, bounded JSON/multipart parsing, gzip JSON and file
+  byte responses. The Handler delegates these primitives and keeps routing.
 - Low-level command execution and tmux/process-tree/identifier primitives are
   isolated in `tmux_runtime.py`; higher services keep policy and translate
   failures rather than rebuilding subprocess defaults.
