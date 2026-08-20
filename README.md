@@ -1,20 +1,33 @@
-# Faryo
+# Faryo — Self-hosted Codex Web UI for tmux
 
-Faryo is a self-hosted mobile and desktop workbench for controlling the same
-live `tmux`-backed Codex CLI session that is already running on an Ubuntu/Linux
-workstation.
+[![Release](https://img.shields.io/github/v/release/SongJunguo/faryo?display_name=tag&sort=semver)](https://github.com/SongJunguo/faryo/releases/latest)
+[![Source CI](https://github.com/SongJunguo/faryo/actions/workflows/ci.yml/badge.svg)](https://github.com/SongJunguo/faryo/actions/workflows/ci.yml)
+[![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white)](docs/local-installation.md)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
-It lets one trusted operator read structured Codex history, inspect live terminal
-activity, send follow-ups, attach files, approve or interrupt work, and return to
-the same desktop session. It is not remote desktop, a hosted IDE, a browser
-terminal, or a second AI chat history.
+**Faryo is an open-source, self-hosted Codex CLI Web UI and mobile agent
+workbench for the same live `tmux`-backed coding-agent session on an
+Ubuntu/Linux workstation.**
 
-This repository is a personal fork of
+Use it from a phone or desktop to read structured Codex history, render
+Markdown and LaTeX with local KaTeX, inspect live terminal activity, send
+reliable follow-ups, attach files, manage sessions, approve or interrupt work,
+and return to the same TUI. Faryo is a lightweight Codex agent UI and session
+harness over your existing terminal—not remote desktop, a hosted IDE, a generic
+browser terminal, or a second AI chat history.
+
+[Install](#installation) · [Screenshots](#real-ui-screenshots) ·
+[Features](#current-functionality) · [Security](#security-boundary) ·
+[Latest release](https://github.com/SongJunguo/faryo/releases/latest)
+
+## Project Status
+
+This repository is an actively maintained, Codex-focused fork of
 [Snailflyer/faryo](https://github.com/Snailflyer/faryo). The original project is
 tracked as `upstream`; this fork is maintained at
 [SongJunguo/faryo](https://github.com/SongJunguo/faryo).
 
-## Why This Fork
+## Why Faryo
 
 Most lightweight tmux web bridges can only reproduce terminal text. This fork
 uses Codex's structured rollout history for the reading experience while keeping
