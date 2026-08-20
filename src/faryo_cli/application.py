@@ -162,11 +162,24 @@ def create_private_venv(version_dir: Path, bootstrap_python: str) -> None:
         raise OperationError("installed Faryo CLI failed its version check")
 
 
-def remove_staging(path: Path, versions: Path) -> None:
-    if path.parent != versions or not path.name.startswith(".stage-"):
-        raise OperationError("refusing to remove an unbounded staging path")
+def remove_incomplete_version(path: Path, versions: Path) -> None:
+    if path.parent != versions or not VERSION_RE.fullmatch(path.name):
+        raise OperationError("refusing to remove an unbounded version path")
+    if not (path / ".installing").is_file():
+        raise OperationError("refusing to remove a version without its installation marker")
     if path.exists():
         shutil.rmtree(path)
+
+
+def prepared_version_is_healthy(path: Path) -> bool:
+    if not (path / "app/apps/owner/RELEASE").is_file():
+        return False
+    if not (path / "install-manifest.json").is_file() or (path / ".installing").exists():
+        return False
+    cli = venv_cli(path)
+    if not cli.is_file():
+        return False
+    return run_binary([str(cli), "--version"], timeout=15).returncode == 0
 
 
 def prepare_version(
@@ -183,13 +196,19 @@ def prepare_version(
     if not VERSION_RE.fullmatch(name):
         raise OperationError("Faryo application version is invalid")
     final = program.versions / name
-    if venv_cli(final).is_file() and (final / "app/apps/owner/RELEASE").is_file():
+    if prepared_version_is_healthy(final):
         return final
     program.versions.mkdir(parents=True, exist_ok=True)
-    stage = Path(tempfile.mkdtemp(prefix=f".stage-{name}-", dir=program.versions))
+    if final.exists():
+        raise OperationError("incomplete version directory already exists")
+    final.mkdir(mode=0o700)
+    atomic_write(final / ".installing", "preparing\n", 0o600)
     try:
-        revision = copy_source(selected.source_root, stage / "app")
-        create_private_venv(stage, select_bootstrap_python(bootstrap_python))
+        revision = copy_source(selected.source_root, final / "app")
+        # Virtual-environment entry points contain absolute interpreter paths.
+        # Build in the immutable final version directory and atomically expose
+        # only the `current` symlink after preparation succeeds.
+        create_private_venv(final, select_bootstrap_python(bootstrap_python))
         manifest = {
             "schemaVersion": 1,
             "version": name,
@@ -197,13 +216,13 @@ def prepare_version(
             "python": f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}",
             "createdAt": int(time.time()),
         }
-        atomic_write(stage / "install-manifest.json", json.dumps(manifest, sort_keys=True, separators=(",", ":")) + "\n", 0o600)
-        if final.exists():
-            raise OperationError("incomplete version directory already exists")
-        stage.replace(final)
+        atomic_write(final / "install-manifest.json", json.dumps(manifest, sort_keys=True, separators=(",", ":")) + "\n", 0o600)
+        (final / ".installing").unlink()
+        if not prepared_version_is_healthy(final):
+            raise OperationError("prepared Faryo version failed its final-path check")
         return final
     except Exception:
-        remove_staging(stage, program.versions)
+        remove_incomplete_version(final, program.versions)
         raise
 
 

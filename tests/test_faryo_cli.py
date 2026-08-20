@@ -456,7 +456,40 @@ class FaryoCliTest(unittest.TestCase):
             self.assertEqual(program.current.resolve(), first)
             self.assertEqual(program.bin_path.resolve(), first / ".venv/bin/faryo")
 
-    def test_prepare_version_cleans_failed_bounded_stage(self) -> None:
+    def test_prepare_version_builds_venv_at_its_final_path(self) -> None:
+        with tempfile.TemporaryDirectory() as temp, mock.patch.dict(
+            os.environ,
+            {"FARYO_PROGRAM_HOME": str(Path(temp) / "program")},
+            clear=False,
+        ):
+            layout = self.layout(Path(temp))
+            program = application.ProgramLayout.from_layout(layout)
+
+            def fake_source(_source, destination):
+                release = destination / "apps/owner/RELEASE"
+                release.parent.mkdir(parents=True)
+                release.write_text("test\n", encoding="utf-8")
+                return "fixture-revision"
+
+            def fake_venv(path, _python):
+                cli_path = application.venv_cli(path)
+                cli_path.parent.mkdir(parents=True)
+                cli_path.write_text("cli", encoding="utf-8")
+
+            with (
+                mock.patch.object(application, "copy_source", side_effect=fake_source),
+                mock.patch.object(application, "create_private_venv", side_effect=fake_venv) as create,
+                mock.patch.object(application, "select_bootstrap_python", return_value=sys.executable),
+                mock.patch.object(application, "run_binary", return_value=subprocess.CompletedProcess([], 0)),
+            ):
+                prepared = application.prepare_version(layout, bootstrap_python=sys.executable)
+
+            self.assertEqual(prepared, program.versions / "v1.5.0.dev0")
+            create.assert_called_once_with(prepared, sys.executable)
+            self.assertFalse((prepared / ".installing").exists())
+            self.assertEqual(list(program.versions.glob(".stage-*")), [])
+
+    def test_prepare_version_cleans_failed_bounded_version(self) -> None:
         with tempfile.TemporaryDirectory() as temp, mock.patch.dict(
             os.environ,
             {"FARYO_PROGRAM_HOME": str(Path(temp) / "program")},
@@ -471,7 +504,17 @@ class FaryoCliTest(unittest.TestCase):
                     application.prepare_version(layout, bootstrap_python=sys.executable)
 
             versions = application.ProgramLayout.from_layout(layout).versions
+            self.assertFalse((versions / "v1.5.0.dev0").exists())
             self.assertEqual(list(versions.glob(".stage-*")), [])
+
+    def test_incomplete_version_cleanup_requires_bounded_marker(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            versions = Path(temp) / "versions"
+            version = versions / "v1.5.0"
+            version.mkdir(parents=True)
+            with self.assertRaisesRegex(operations.OperationError, "installation marker"):
+                application.remove_incomplete_version(version, versions)
+            self.assertTrue(version.exists())
 
     def test_versioned_install_restores_activation_and_configs_on_failure(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
