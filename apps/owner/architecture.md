@@ -95,6 +95,9 @@ but the default upload destination should come from the Faryo data directory.
 - `owner_http.py` owns browser security headers, query-redacted log paths,
   Owner-token validation, bounded JSON/multipart parsing, gzip JSON and file
   byte responses. The Handler delegates these primitives and keeps routing.
+- `codex_app_server.py` owns the serialized stdio process, initialize handshake,
+  request IDs, retry/reap lifecycle and JSON-RPC result/error mapping. Higher
+  history/archive/rate-limit services call thin Owner wrappers.
 - Low-level command execution and tmux/process-tree/identifier primitives are
   isolated in `tmux_runtime.py`; higher services keep policy and translate
   failures rather than rebuilding subprocess defaults.

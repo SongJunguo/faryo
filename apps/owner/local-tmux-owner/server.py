@@ -17,7 +17,6 @@ import mmap
 import os
 import re
 import secrets
-import select
 import shlex
 import shutil
 import signal
@@ -48,6 +47,7 @@ import delivery_store
 import delivery_service
 import owner_http
 import codex_history
+import codex_app_server
 
 SHARED_DIR = Path(__file__).resolve().parents[2] / "shared"
 if str(SHARED_DIR) not in sys.path:
@@ -251,9 +251,6 @@ _rate_limit_cache: dict[str, Any] | None = None
 _rate_limit_cache_at = 0.0
 _rate_limit_lock = threading.Lock()
 _rate_limit_refreshing = False
-_codex_app_server_process: subprocess.Popen[str] | None = None
-_codex_app_server_request_id = 0
-_codex_app_server_lock = threading.Lock()
 _codex_thread_cache: dict[str, tuple[float, dict[str, Any]]] = {}
 _codex_thread_cache_lock = threading.Lock()
 _codex_rollout_cache: dict[str, dict[str, Any]] = {}
@@ -838,6 +835,12 @@ def codex_cli_argv(*args: str) -> list[str]:
 
 def codex_app_server_argv(*args: str) -> list[str]:
     return codex_cli_argv(*args)
+
+
+_codex_app_server_client = codex_app_server.CodexAppServerClient(
+    argv=codex_app_server_argv,
+    client_version=lambda: release_version() or "0",
+)
 
 
 def agent_login_shell() -> str:
@@ -1429,146 +1432,27 @@ def codex_rollout_context_usage(event: Any) -> dict[str, int | float] | None:
 
 
 def send_app_server_message(process: subprocess.Popen[str], message: dict[str, Any]) -> bool:
-    if process.stdin is None:
-        return False
-    try:
-        process.stdin.write(json.dumps(message, ensure_ascii=False) + "\n")
-        process.stdin.flush()
-    except OSError:
-        return False
-    return True
+    return _codex_app_server_client.send(process, message)
 
 
 def read_app_server_message(process: subprocess.Popen[str], deadline: float) -> dict[str, Any] | None:
-    if process.stdout is None:
-        return None
-
-    remaining = deadline - time.monotonic()
-    if remaining <= 0:
-        return None
-    ready, _write, _error = select.select([process.stdout], [], [], remaining)
-    if not ready:
-        return None
-
-    line = process.stdout.readline()
-    if not line:
-        return None
-    try:
-        message = json.loads(line)
-    except json.JSONDecodeError:
-        return None
-    return message if isinstance(message, dict) else None
+    return _codex_app_server_client.read(process, deadline)
 
 
 def _stop_codex_app_server_locked() -> None:
-    global _codex_app_server_process
-    process = _codex_app_server_process
-    _codex_app_server_process = None
-    if process is None:
-        return
-    if process.stdin is not None:
-        try:
-            process.stdin.close()
-        except OSError:
-            pass
-    if process.poll() is None:
-        process.terminate()
-        try:
-            process.wait(timeout=0.5)
-        except subprocess.TimeoutExpired:
-            process.kill()
-            try:
-                process.wait(timeout=0.5)
-            except subprocess.TimeoutExpired:
-                pass
+    _codex_app_server_client.stop_locked()
 
 
 def stop_codex_app_server() -> None:
-    with _codex_app_server_lock:
-        _stop_codex_app_server_locked()
+    _codex_app_server_client.stop()
 
 
 def _start_codex_app_server_locked(timeout: float) -> subprocess.Popen[str] | None:
-    global _codex_app_server_process, _codex_app_server_request_id
-    process = _codex_app_server_process
-    if process is not None and process.poll() is None:
-        return process
-    _stop_codex_app_server_locked()
-    try:
-        process = subprocess.Popen(
-            codex_app_server_argv("app-server", "--listen", "stdio://"),
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-        )
-    except OSError:
-        return None
-    _codex_app_server_process = process
-    _codex_app_server_request_id += 1
-    request_id = _codex_app_server_request_id
-    if not send_app_server_message(
-        process,
-        {
-            "id": request_id,
-            "method": "initialize",
-            "params": {
-                "clientInfo": {"name": "local-tmux-owner", "title": "Faryo Owner", "version": release_version() or "0"},
-                "capabilities": {},
-            },
-        },
-    ):
-        _stop_codex_app_server_locked()
-        return None
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        message = read_app_server_message(process, deadline)
-        if message is None:
-            break
-        if message.get("id") != request_id:
-            continue
-        if isinstance(message.get("result"), dict):
-            if not send_app_server_message(process, {"method": "initialized", "params": {}}):
-                break
-            return process
-        break
-    _stop_codex_app_server_locked()
-    return None
+    return _codex_app_server_client.start_locked(timeout)
 
 
 def codex_app_server_rpc(method: str, params: dict[str, Any], timeout: float = 2.5) -> dict[str, Any]:
-    global _codex_app_server_request_id
-    with _codex_app_server_lock:
-        for _attempt in range(2):
-            process = _start_codex_app_server_locked(timeout)
-            if process is None:
-                continue
-            _codex_app_server_request_id += 1
-            request_id = _codex_app_server_request_id
-            if not send_app_server_message(process, {"id": request_id, "method": method, "params": params}):
-                _stop_codex_app_server_locked()
-                continue
-            deadline = time.monotonic() + timeout
-            while time.monotonic() < deadline:
-                message = read_app_server_message(process, deadline)
-                if message is None:
-                    break
-                if message.get("id") != request_id:
-                    continue
-                if isinstance(message.get("error"), dict):
-                    error = message["error"]
-                    return {
-                        "ok": False,
-                        "code": int(error.get("code") or 0),
-                        "error": str(error.get("message") or "Codex App Server request failed"),
-                    }
-                if "result" in message:
-                    return {"ok": True, "result": message.get("result")}
-                return {"ok": False, "code": 0, "error": "Codex App Server returned an invalid response"}
-            _stop_codex_app_server_locked()
-    return {"ok": False, "code": 0, "error": "Codex App Server is unavailable"}
+    return _codex_app_server_client.rpc(method, params, timeout)
 
 
 def codex_app_server_request(method: str, params: dict[str, Any], timeout: float = 2.5) -> dict[str, Any] | None:

@@ -85,6 +85,7 @@ release_checks() {
     "$ROOT/apps/owner/local-tmux-owner/delivery_service.py" \
     "$ROOT/apps/owner/local-tmux-owner/owner_http.py" \
     "$ROOT/apps/owner/local-tmux-owner/codex_history.py" \
+    "$ROOT/apps/owner/local-tmux-owner/codex_app_server.py" \
     "$ROOT/apps/owner/local-tmux-owner/workspace_changes.py" \
     "$ROOT/apps/owner/local-tmux-owner/runtime_diagnostics.py" \
     "$ROOT/apps/owner/local-tmux-owner/tests/owner-archive-roundtrip.py" \
