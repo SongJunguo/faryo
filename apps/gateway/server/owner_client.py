@@ -67,6 +67,17 @@ class OwnerStream:
     def readline(self) -> bytes:
         return self._read(self.response.readline)
 
+    def set_timeout(self, value: float | None) -> None:
+        with self._close_lock:
+            if self._closed:
+                return
+            upstream_socket = self._upstream_socket
+        if upstream_socket is not None:
+            try:
+                upstream_socket.settimeout(value)
+            except OSError:
+                return
+
     def close(self) -> None:
         with self._close_lock:
             if self._closed:

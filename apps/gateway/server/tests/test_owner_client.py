@@ -128,10 +128,12 @@ class OwnerClientTest(unittest.TestCase):
         response.readline.return_value = b"data: fixture\n"
         stream = OwnerStream(connection, response)
 
+        stream.set_timeout(None)
         stream.close()
         stream.close()
 
         self.assertEqual(stream.readline(), b"")
+        connection.sock.settimeout.assert_called_once_with(None)
         connection.sock.shutdown.assert_called_once_with(socket.SHUT_RDWR)
         connection.close.assert_called_once_with()
         response.readline.assert_not_called()

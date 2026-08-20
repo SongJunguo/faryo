@@ -65,6 +65,7 @@ class OwnerProxyRoutes:
         headers = self.support.forwarded_response_headers(stream.headers)
         content_type = next((value for key, value in stream.headers if key.lower() == "content-type"), "")
         if content_type.lower().startswith("text/event-stream"):
+            stream.set_timeout(None)
             headers["Cache-Control"] = "no-store, no-transform"
 
             async def body_iterator():
