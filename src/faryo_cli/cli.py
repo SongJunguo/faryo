@@ -41,6 +41,7 @@ def parser() -> argparse.ArgumentParser:
     install.add_argument("--no-start", action="store_true", help="Install units without changing running services")
     install.add_argument("--migrate-owner", action="store_true", help="Replace legacy Owner tmux supervision after rollback checks")
     install.add_argument("--python", dest="bootstrap_python", help="Python 3.10+ interpreter used to create the private venv")
+    install.add_argument("--workspace", help="Initial allowed workspace directory for a fresh private config")
     commands.add_parser("rollback", help="Switch back to the previously active healthy version")
     uninstall = commands.add_parser("uninstall", help="Remove Faryo services and program files while preserving private data")
     uninstall.add_argument("--purge-data", action="store_true", help="Also remove private Faryo config, history cache, and attachments")
@@ -89,6 +90,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 dry_run=arguments.dry_run,
                 no_start=arguments.no_start,
                 migrate_owner=arguments.migrate_owner,
+                workspace=arguments.workspace,
             )
         except OperationError as exc:
             print(f"Faryo install failed: {exc}", file=sys.stderr)

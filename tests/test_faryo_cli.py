@@ -561,6 +561,91 @@ class FaryoCliTest(unittest.TestCase):
             self.assertEqual(layout.owner_env.read_text(encoding="utf-8"), before)
             restore.assert_called_once_with(None, layout)
 
+    def test_fresh_install_initializes_private_config_in_selected_workspace(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            faryo_home = root / ".faryo"
+            layout = diagnostics.Layout(
+                root,
+                faryo_home,
+                faryo_home / "owner/config/faryo.env",
+                faryo_home / "gateway/config/faryo.env",
+                faryo_home / "gateway/config/gateway-auth.json",
+                ROOT,
+            )
+            version = root / ".local/share/faryo/versions/v1.5.0"
+            version.mkdir(parents=True)
+            (version / "app").symlink_to(ROOT, target_is_directory=True)
+            python = version / ".venv/bin/python"
+            python.parent.mkdir(parents=True)
+            python.symlink_to(sys.executable)
+            codex = root / "bin/codex"
+            codex.parent.mkdir(parents=True)
+            codex.write_text("#!/bin/sh\n", encoding="utf-8")
+            codex.chmod(0o700)
+            workspace = root / "workspace"
+            workspace.mkdir()
+
+            with mock.patch.object(diagnostics, "resolve_codex", return_value=str(codex)):
+                created = application.initialize_private_config(layout, version, workspace=str(workspace))
+
+            self.assertTrue(created)
+            owner = diagnostics.read_env(layout.owner_env)
+            gateway = diagnostics.read_env(layout.gateway_env)
+            self.assertEqual(owner["FARYO_START_DIRECTORY_ROOTS"], str(workspace))
+            self.assertEqual(owner["FARYO_CODEX_BIN"], str(codex))
+            self.assertEqual(gateway["FARYO_GATEWAY_SESSION_HOURS"], "720")
+            self.assertEqual(gateway["FARYO_DEFAULT_WORKSPACE"], str(workspace))
+            self.assertEqual(gateway["FARYO_PYTHON"], str(python))
+            self.assertTrue((layout.gateway_env.parent / "initial-password").is_file())
+            for path in (layout.owner_env, layout.gateway_env, layout.gateway_auth):
+                self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+            for path in (layout.faryo_home, layout.owner_env.parent, layout.gateway_env.parent):
+                self.assertEqual(path.stat().st_mode & 0o777, 0o700)
+
+    def test_existing_private_config_is_never_regenerated(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            layout = self.layout(Path(temp))
+            with mock.patch.object(application.subprocess, "run") as run:
+                self.assertFalse(application.initialize_private_config(layout, Path(temp) / "version"))
+            run.assert_not_called()
+
+    def test_fresh_private_files_are_removed_when_install_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            faryo_home = root / ".faryo"
+            layout = diagnostics.Layout(
+                root,
+                faryo_home,
+                faryo_home / "owner/config/faryo.env",
+                faryo_home / "gateway/config/faryo.env",
+                faryo_home / "gateway/config/gateway-auth.json",
+                ROOT,
+            )
+            version = root / ".local/share/faryo/versions/v1.5.0"
+            python = version / ".venv/bin/python"
+            python.parent.mkdir(parents=True)
+            python.write_text("python", encoding="utf-8")
+
+            def initialize(selected, _version, **_kwargs):
+                for path in application.private_install_paths(selected):
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    path.write_text("generated\n", encoding="utf-8")
+                    path.chmod(0o600)
+                return True
+
+            with (
+                mock.patch.object(application, "prepare_version", return_value=version),
+                mock.patch.object(application, "initialize_private_config", side_effect=initialize),
+                mock.patch.object(application, "activate_version", return_value=None),
+                mock.patch.object(application, "restore_activation"),
+                mock.patch("faryo_cli.installer.install_services", side_effect=operations.OperationError("service failed")),
+            ):
+                with self.assertRaisesRegex(operations.OperationError, "service failed"):
+                    application.install_versioned_application(layout, version="v1.5.0")
+
+            self.assertTrue(all(not path.exists() for path in application.private_install_paths(layout)))
+
     def test_bootstrap_python_prefers_supported_system_runtime(self) -> None:
         with (
             mock.patch.object(application.Path, "is_file", return_value=True),

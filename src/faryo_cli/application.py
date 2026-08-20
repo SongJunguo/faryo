@@ -294,6 +294,126 @@ def replace_env_value(path: Path, key: str, value: str) -> None:
     atomic_write(path, "\n".join(updated).rstrip() + "\n", 0o600)
 
 
+def private_install_paths(layout: Layout) -> tuple[Path, ...]:
+    return (
+        layout.owner_env,
+        layout.gateway_env,
+        layout.gateway_auth,
+        layout.gateway_env.parent / "initial-password",
+        layout.faryo_home / "gateway/state/gateway-cookie-secret",
+    )
+
+
+def snapshot_private_files(paths: tuple[Path, ...]) -> dict[Path, bytes | None]:
+    result: dict[Path, bytes | None] = {}
+    for path in paths:
+        try:
+            result[path] = path.read_bytes()
+        except FileNotFoundError:
+            result[path] = None
+        except OSError as exc:
+            raise OperationError("private runtime config is unreadable") from exc
+    return result
+
+
+def restore_private_files(snapshot: dict[Path, bytes | None]) -> None:
+    for path, body in snapshot.items():
+        if body is None:
+            path.unlink(missing_ok=True)
+            continue
+        path.parent.mkdir(parents=True, exist_ok=True)
+        descriptor, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+        temporary = Path(temporary_name)
+        try:
+            with os.fdopen(descriptor, "wb") as handle:
+                handle.write(body)
+                handle.flush()
+                os.fsync(handle.fileno())
+            temporary.chmod(0o600)
+            temporary.replace(path)
+        finally:
+            temporary.unlink(missing_ok=True)
+
+
+def initialize_private_config(
+    layout: Layout,
+    version_dir: Path,
+    *,
+    workspace: str | None = None,
+) -> bool:
+    required = (layout.owner_env, layout.gateway_env, layout.gateway_auth)
+    if all(path.is_file() for path in required):
+        return False
+    from faryo_cli.diagnostics import read_env, resolve_codex
+
+    requested_workspace = Path(workspace).expanduser() if workspace else Path.cwd()
+    try:
+        selected_workspace = requested_workspace.resolve(strict=True)
+    except OSError as exc:
+        raise OperationError("initial workspace does not exist") from exc
+    if not selected_workspace.is_dir():
+        raise OperationError("initial workspace is not a directory")
+    owner_values = read_env(layout.owner_env)
+    codex = resolve_codex(owner_values.get("FARYO_CODEX_BIN") or "", layout.home)
+    if not codex:
+        raise OperationError("Codex CLI was not found for the initial Owner config")
+    bash = shutil.which("bash")
+    if not bash:
+        raise OperationError("bash is required to initialize Faryo config")
+    environment = dict(os.environ)
+    environment.update(
+        {
+            "HOME": str(layout.home),
+            "FARYO_HOME": str(layout.faryo_home),
+            "FARYO_OWNER_ENV": str(layout.owner_env),
+            "FARYO_GATEWAY_ENV": str(layout.gateway_env),
+            "GATEWAY_AUTH_CONFIG": str(layout.gateway_auth),
+            "FARYO_PYTHON": str(venv_python(version_dir)),
+            "FARYO_CODEX_BIN": codex,
+            "FARYO_START_DIRECTORY_ROOTS": str(selected_workspace),
+            "FARYO_GATEWAY_WORKSPACE_ROOT": str(selected_workspace),
+            "FARYO_GATEWAY_ROUTE": "txy",
+            "FARYO_GATEWAY_RESET_AUTH": "0",
+            "FARYO_OWNER_TOKEN_ROTATE": "0",
+        }
+    )
+    app = version_dir / "app"
+    scripts = (
+        app / "apps/owner/scripts/init-owner-env.sh",
+        app / "apps/gateway/scripts/init-local-gateway.sh",
+    )
+    for script in scripts:
+        if not script.is_file():
+            raise OperationError("Faryo configuration initializer is unavailable")
+        try:
+            result = subprocess.run(
+                [bash, str(script)],
+                cwd=selected_workspace,
+                env=environment,
+                check=False,
+                capture_output=True,
+                timeout=60,
+            )
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            raise OperationError("Faryo configuration initialization failed") from exc
+        if result.returncode != 0:
+            raise OperationError("Faryo configuration initialization failed")
+    for directory in (
+        layout.faryo_home,
+        layout.owner_env.parent,
+        layout.faryo_home / "owner/data",
+        layout.gateway_env.parent,
+        layout.faryo_home / "gateway/state",
+    ):
+        directory.mkdir(parents=True, exist_ok=True)
+        directory.chmod(0o700)
+    for path in required:
+        if not path.is_file():
+            raise OperationError("Faryo configuration initialization was incomplete")
+        path.chmod(0o600)
+    return True
+
+
 def install_versioned_application(
     layout: Layout | None = None,
     *,
@@ -301,29 +421,34 @@ def install_versioned_application(
     dry_run: bool = False,
     no_start: bool = False,
     migrate_owner: bool = False,
+    workspace: str | None = None,
+    version: str | None = None,
 ) -> str:
     from faryo_cli.installer import install_services
 
     selected = layout or Layout.from_environment()
     if selected.source_root is None:
         raise OperationError("Faryo source application is unavailable")
+    requested_version = version or version_name()
+    if not VERSION_RE.fullmatch(requested_version):
+        raise OperationError("Faryo application version is invalid")
     if dry_run:
         if (selected.source_root / ".git").exists() and not source_is_clean(selected.source_root):
             raise OperationError("source checkout has uncommitted changes")
-        return f"{version_name()} dry-run"
+        return f"{requested_version} dry-run"
 
-    original_configs: dict[Path, str] = {}
-    for path in (selected.owner_env, selected.gateway_env):
-        try:
-            original_configs[path] = path.read_text(encoding="utf-8")
-        except OSError as exc:
-            raise OperationError("private runtime config is unavailable") from exc
-    version_dir = prepare_version(selected, bootstrap_python=bootstrap_python)
+    version_dir = prepare_version(selected, bootstrap_python=bootstrap_python, version=requested_version)
+    private_snapshot = snapshot_private_files(private_install_paths(selected))
+    try:
+        initialize_private_config(selected, version_dir, workspace=workspace)
+    except Exception:
+        restore_private_files(private_snapshot)
+        raise
     previous = activate_version(version_dir, selected)
     python = str(venv_python(version_dir))
     version_layout = replace(selected, source_root=version_dir / "app")
     try:
-        for path in original_configs:
+        for path in (selected.owner_env, selected.gateway_env):
             replace_env_value(path, "FARYO_PYTHON", python)
         install_services(
             version_layout,
@@ -332,8 +457,7 @@ def install_versioned_application(
             migrate_owner=migrate_owner,
         )
     except Exception:
-        for path, body in original_configs.items():
-            atomic_write(path, body, 0o600)
+        restore_private_files(private_snapshot)
         restore_activation(previous, selected)
         raise
     return version_dir.name
