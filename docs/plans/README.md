@@ -5,12 +5,13 @@
 
 ## Active
 
-- [`v1.5-unified-cli-and-service-installation-plan.md`](v1.5-unified-cli-and-service-installation-plan.md)：
-  用统一 `faryo` CLI、私有标准 venv、直接 Owner/Gateway systemd user services、版本化安装与
-  健康门禁 rollback 隐藏部署复杂度；Codex 继续留在 tmux，公网配置保持可选且独立。
+当前没有未完成的版本实施计划。
 
 ## Completed or maintenance mode
 
+- [`v1.5-unified-cli-and-service-installation-plan.md`](v1.5-unified-cli-and-service-installation-plan.md)：
+  用统一 `faryo` CLI、Python 3.10+ 私有标准 venv、直接 Owner/Gateway systemd user services、
+  checksum update、rollback 和 data-preserving uninstall 隐藏部署复杂度；已发布 v1.5.0。
 - [`v1.4-backend-modernization-and-modularization-plan.md`](v1.4-backend-modernization-and-modularization-plan.md)：
   保留 Python/Conda 和既有安全/可靠性边界，完成 Owner/Gateway/前端职责拆分、唯一
   Starlette/Uvicorn Gateway、35 附件与量化 keyed-list Preact 采用，并发布 source-only v1.4.0；
