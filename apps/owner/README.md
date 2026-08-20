@@ -23,8 +23,13 @@ Runtime configuration defaults to:
 ## Local Run
 
 ```bash
+./scripts/init-owner-env.sh
 ./scripts/start-web-owner.sh
 ```
+
+Re-running the initializer preserves the Owner token and explicit start roots.
+From v1.2.1 it also removes retired Project Orchestration keys, migrating the
+old allowed-root value only when no `FARYO_START_DIRECTORY_ROOTS` value exists.
 
 Set `FARYO_PYTHON` in the private Owner env file to pin the service to a
 dedicated virtual environment instead of whichever `python3` is first on PATH.
@@ -42,6 +47,11 @@ deploy/user-systemd/faryo-owner-keepalive.timer
 
 Use `/health` for liveness and `/api/status` for authenticated runtime checks.
 The status payload includes the source version for deployment acceptance.
+
+Inactive Codex history can be archived or restored through the authenticated
+Owner lifecycle endpoints. Owner delegates those changes to Codex App Server's
+`thread/archive` and `thread/unarchive`; it does not directly edit Codex state
+or expose hard deletion.
 
 ## Joining Gateway
 

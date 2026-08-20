@@ -124,7 +124,6 @@ class AgentSessionTest(unittest.TestCase):
             (workspace / "escape").symlink_to(outside, target_is_directory=True)
             with mock.patch.dict(server.os.environ, {
                 "FARYO_START_DIRECTORY_ROOTS": str(workspace),
-                "FARYO_PROJECT_WORKBENCH_ALLOWED_ROOTS": "",
             }, clear=False):
                 payload = server.directory_browser_payload(self.config, str(workspace))
                 child = server.directory_browser_payload(self.config, str(visible))

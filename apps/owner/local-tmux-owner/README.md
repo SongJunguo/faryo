@@ -290,5 +290,12 @@ unavailable.
 - `GET /api/status`
 - `GET /api/capture?lines=240`
 - `GET /api/events?lines=320` (SSE structured capture plus transient live tail)
+- `GET /api/agent-sessions` (active and paginated Current/Archived metadata)
+- `POST /api/agent-session/archive` (inactive Codex thread only)
+- `POST /api/agent-session/unarchive`
 - `POST /api/send` with `text`, `session`, and optional `clientMessageId`
 - `POST /api/approve`
+
+Archive and unarchive use Codex App Server thread lifecycle RPC, verify the
+resulting metadata state, reject active threads, and honor the Gateway-provided
+workspace scope. There is intentionally no thread-delete endpoint.

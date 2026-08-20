@@ -225,10 +225,23 @@ try {
   if (expectedPalette && `${first.palette.bg}:${first.palette.accent}` !== expectedPalette) throw new Error(`Theme palette mismatch: ${JSON.stringify(first.palette)}`);
   if (first.pageHorizontalOverflow) throw new Error(`Gateway workbench overflowed horizontally: ${JSON.stringify(first.viewport)}`);
 
-  const lifecycleFixture = await evaluate(`(() => {const states=['starting','running','waiting','exited','desktop','resumable'],labels={starting:'Starting',running:'Running',waiting:'Waiting',exited:'Exited',desktop:'Desktop',resumable:'Resume'};return states.map(state=>{const active=!['resumable'].includes(state),card=sessionCard({id:'anonymous-thread',title:'Anonymous session',route:'txy',routeLabel:'Workstation',source:'codex-cli',tmuxSession:active?'anonymous-tmux':'',managed:active&&state!=='desktop',agentRunning:state==='running',state,updatedTs:1});return{state:card.dataset.state,label:card.querySelector('.session-meta')?.textContent.includes(labels[state])||false,close:Boolean(card.querySelector('.close-session'))};});})()`);
-  if (!Array.isArray(lifecycleFixture) || lifecycleFixture.some((item) => !item.label || item.state === 'desktop' && item.close || ['starting','running','waiting','exited'].includes(item.state) && !item.close)) {
+  const lifecycleFixture = await evaluate(`(() => {const states=['starting','running','waiting','exited','desktop','resumable','archived'],labels={starting:'Starting',running:'Running',waiting:'Waiting',exited:'Exited',desktop:'Desktop',resumable:'Resume',archived:'Archived'};return states.map(state=>{const active=!['resumable','archived'].includes(state),card=sessionCard({id:'anonymous-thread',title:'Anonymous session',route:'txy',routeLabel:'Workstation',source:'codex-cli',tmuxSession:active?'anonymous-tmux':'',managed:active&&state!=='desktop',agentRunning:state==='running',archived:state==='archived',state,updatedTs:1});return{state:card.dataset.state,label:card.querySelector('.session-meta')?.textContent.includes(labels[state])||false,close:Boolean(card.querySelector('.close-session')),archive:Boolean(card.querySelector('.archive-session')),restore:Boolean(card.querySelector('.restore-session'))};});})()`);
+  if (!Array.isArray(lifecycleFixture) || lifecycleFixture.some((item) => !item.label || item.state === 'desktop' && item.close || ['starting','running','waiting','exited'].includes(item.state) && !item.close || item.state==='resumable'&&!item.archive || item.state==='archived'&&!item.restore || !['resumable'].includes(item.state)&&item.archive || item.state!=='archived'&&item.restore)) {
     throw new Error(`Session lifecycle cards are inconsistent: ${JSON.stringify(lifecycleFixture)}`);
   }
+
+  await evaluate(`(() => {const card=sessionCard({id:'anonymous-archive-thread',title:'Anonymous archive fixture',route:'txy',routeLabel:'Workstation',source:'codex-cli',state:'resumable',updatedTs:1});card.id='faryoArchiveFixtureCard';card.hidden=true;document.body.appendChild(card);card.querySelector('.archive-session')?.click();})()`);
+  let archiveSheet = {};
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    await delay(50);
+    archiveSheet = await evaluate(`(() => ({open:document.getElementById('modal')?.classList.contains('open')||false,title:document.getElementById('modalTitle')?.textContent||'',reversible:document.getElementById('modalBody')?.textContent?.includes('restore it')||false,deleteAbsent:!document.getElementById('modal')?.textContent?.includes('Delete')}))()`);
+    if (archiveSheet?.open) break;
+  }
+  if (!archiveSheet.open || archiveSheet.title !== 'Archive session' || !archiveSheet.reversible || !archiveSheet.deleteAbsent) {
+    throw new Error(`Archive confirmation is unclear: ${JSON.stringify(archiveSheet)}`);
+  }
+  await evaluate(`(() => {[...document.querySelectorAll('#modalActions button')].find(item=>item.textContent==='Cancel')?.click();document.getElementById('faryoArchiveFixtureCard')?.remove();})()`);
+  await delay(20);
 
   await evaluate("document.getElementById('securityActivity').click()");
   let activityPanel = {};

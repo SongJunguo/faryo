@@ -51,8 +51,8 @@ release_checks() {
     "$ROOT"/apps/gateway/scripts/*.sh
   bash "$ROOT/scripts/runtime-env.test.sh"
   "$PYTHON_BIN" -m py_compile \
-    "$ROOT/apps/shared/pd_state.py" \
     "$ROOT/apps/owner/local-tmux-owner/server.py" \
+    "$ROOT/apps/owner/local-tmux-owner/tests/owner-archive-roundtrip.py" \
     "$ROOT/apps/gateway/server/server.py" \
     "$ROOT/apps/gateway/scripts/generate-gateway-auth-config.py"
   for js_file in \
@@ -68,8 +68,7 @@ release_checks() {
     "$ROOT/apps/owner/local-tmux-owner/static/vendor/markdown-ast/markdown-ast.min.js" \
     "$ROOT/apps/owner/local-tmux-owner/static/live-scroll.js" \
     "$ROOT/apps/shared/static/appearance.js" \
-    "$ROOT/apps/owner/local-tmux-owner/static/app.js" \
-    "$ROOT/apps/gateway/server/static/projects.js"
+    "$ROOT/apps/owner/local-tmux-owner/static/app.js"
   do
     "$NODE_BIN" --check "$js_file"
   done
@@ -113,6 +112,11 @@ assert 'id="historySearchInput"' in gateway and 'data-history-period="7d"' in ga
 assert "agent_history_text_matches" in owner_server and "codex_conversation_history_page" not in owner_server[owner_server.index("def codex_history_page("):owner_server.index("def codex_history_items(")], "session search must not scan conversation history"
 assert "safe_path = urlparse(self.path).path" in owner_server, "Owner logs must omit private query strings"
 assert "append_control_audit" in gateway and 'id="securityActivity"' in gateway, "Gateway must expose body-free control auditing"
+assert "/api/session-history/archive" in gateway and "/api/session-history/unarchive" in gateway, "Gateway must expose reversible history lifecycle controls"
+assert "/api/session-history/delete" not in gateway and '"thread/delete"' not in owner_server, "Faryo must not expose hard thread deletion"
+assert 'class="brand" href="/" aria-label="Faryo home"' in gateway, "Gateway brand must remain on the session home"
+for retired_marker in ("/projects", "/api/project-workbench", "/api/faryo/start", "/api/faryo/dispatch", "/api/workorder"):
+    assert retired_marker not in gateway and retired_marker not in owner_server, f"retired project orchestration route returned: {retired_marker}"
 assert '"starting", "running", "waiting", "exited", "desktop", "resumable"' in gateway, "Gateway must expose explicit session lifecycle states"
 assert "compact-rules-codex.js" in index, "index.html must load compact-rules-codex.js"
 assert "compact-rules-codex.js" in gateway, "gateway must allow compact-rules-codex.js"
@@ -211,6 +215,14 @@ for retired in (
     "apps/owner/local-tmux-owner/static/pet/pet-offline.png",
     "apps/owner/local-tmux-owner/static/pet/pet-resting.png",
     "apps/owner/local-tmux-owner/static/pet/pet-working.png",
+    "apps/gateway/server/static/projects.html",
+    "apps/gateway/server/static/projects.css",
+    "apps/gateway/server/static/projects.js",
+    "apps/gateway/server/faryo_profile.md",
+    "apps/gateway/server/templates/workorder.md",
+    "apps/owner/local-tmux-owner/workbench_state.py",
+    "apps/owner/scripts/sync-project-workbench.sh",
+    "apps/shared/pd_state.py",
 ):
     assert not (root / retired).exists(), f"retired source returned: {retired}"
 PY

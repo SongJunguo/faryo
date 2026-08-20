@@ -5,11 +5,14 @@
 
 ## Active
 
-当前没有未完成的实施计划；`v1.2.0` 已完成并发布。新的功能使用新的版本计划，不改写已发布
-tag。
+当前没有未完成的实施计划。
 
 ## Completed or maintenance mode
 
+- [`session-history-archive-plan.md`](session-history-archive-plan.md)：通过 Codex App Server
+  正式 RPC 为 Session History 增加可恢复 Archive/Unarchive，不暴露硬删除。
+- [`retire-project-orchestration-plan.md`](retire-project-orchestration-plan.md)：退役零配置、零数据
+  且含义不清的 `/projects` 编排页面与不可达后端，让 `/` 成为唯一主页。
 - [`source-only-ci-release-plan.md`](source-only-ci-release-plan.md)：source-only CI、Python/Node
   运行时发现和已发布的 `v1.2.0` 发布链。
 - [`control-audit-session-state-plan.md`](control-audit-session-state-plan.md)：不记录正文的控制

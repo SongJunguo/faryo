@@ -61,7 +61,10 @@ Gateway implements the following inner controls:
 - a nonce-based Content Security Policy, framing denial, no referrer leakage,
   restricted browser permissions, HSTS, and MIME sniffing protection;
 - server-side Owner-token injection, so public browser URLs do not contain Owner
-  tokens.
+  tokens;
+- authenticated, route-scoped, CSRF-protected Archive/Restore controls that
+  delegate to Codex App Server thread lifecycle RPC; Faryo never directly
+  rewrites Codex SQLite/rollout state and exposes no hard-delete endpoint;
 - a best-effort control audit at private Gateway state: mode `600`, seven-day or
   5000-row retention, per-user/route read scope, HMAC-pseudonymous targets, and
   no prompt, answer, title, cwd, raw session ID, token, Cookie, CSRF value, or IP
@@ -104,6 +107,9 @@ Gateway implements the following inner controls:
   stop working after a password change.
 - Browser write operations work, while the same authenticated POST without a
   valid CSRF header returns `403`.
+- Archive/Restore is visible only for eligible inactive history, produces a
+  body-free HMAC-target audit entry, and no browser or Faryo API exposes
+  `thread/delete`.
 - Private control audit is mode `600`; a denied fixture appears with an empty or
   HMAC target, while its request body and raw identifier do not appear in the
   file or Security activity API.

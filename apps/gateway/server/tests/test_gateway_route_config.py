@@ -195,6 +195,10 @@ class GatewayRouteConfigTest(unittest.TestCase):
         self.assertIn('id="historySearchInput"', page)
         self.assertIn('data-history-period="7d"', page)
         self.assertIn('data-history-archive="archived"', page)
+        self.assertIn("/api/session-history/${archived?'archive':'unarchive'}", page)
+        self.assertIn('class="mini-btn archive-session"', page)
+        self.assertIn('class="mini-btn restore-session"', page)
+        self.assertNotIn('/api/session-history/delete', page)
         self.assertIn("active&&managed?", page)
 
     def test_history_filters_are_bounded_encoded_and_forwarded(self) -> None:
@@ -562,6 +566,11 @@ class GatewayRouteConfigTest(unittest.TestCase):
             )
             original_auth = '{"users":{"tester":{"bcrypt_hash":"preserve-me","routes":["txy"]}}}\n'
             auth.write_text(original_auth, encoding="utf-8")
+            gateway_env.write_text(
+                "FARYO_DEFAULT_WORKSPACE=/preserved/workspace\n"
+                "FARYO_GATEWAY_SESSION_HOURS=24\n",
+                encoding="utf-8",
+            )
             process_env = {
                 "HOME": str(root),
                 "PATH": os.environ.get("PATH", ""),
@@ -586,7 +595,8 @@ class GatewayRouteConfigTest(unittest.TestCase):
             self.assertEqual(auth.stat().st_mode & 0o777, 0o600)
             self.assertEqual(gateway_env.stat().st_mode & 0o777, 0o600)
             self.assertIn("FARYO_TXY_MAX_RUNNING=8\n", gateway_env.read_text(encoding="utf-8"))
-            self.assertIn("FARYO_GATEWAY_SESSION_HOURS=12\n", gateway_env.read_text(encoding="utf-8"))
+            self.assertIn("FARYO_GATEWAY_SESSION_HOURS=24\n", gateway_env.read_text(encoding="utf-8"))
+            self.assertIn("FARYO_DEFAULT_WORKSPACE=/preserved/workspace\n", gateway_env.read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":

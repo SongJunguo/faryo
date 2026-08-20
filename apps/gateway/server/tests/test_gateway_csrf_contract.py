@@ -32,7 +32,6 @@ spec.loader.exec_module(gateway)
 class StubConfig:
     def __init__(self, owner_route: str):
         self.cookie_secret = b"test-cookie-secret"
-        self.guard_token = "guard-token"
         self.mcp_user = "tester"
         self.users = {"tester": {"auth_epoch": 7, "routes": [owner_route]}}
         self.owner_tokens = {owner_route: "owner-token"}
@@ -90,8 +89,23 @@ class OwnerHandler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:
         body = self.rfile.read(int(self.headers.get("Content-Length", "0") or "0"))
         self.__class__.requests.append({"path": self.path, "headers": dict(self.headers), "body": body})
-        data = json.dumps({"ok": True, "path": self.path}).encode("utf-8")
-        self.send_response(HTTPStatus.OK)
+        payload = {"ok": True, "path": self.path}
+        status = HTTPStatus.OK
+        try:
+            request_payload = json.loads(body.decode("utf-8")) if body else {}
+        except json.JSONDecodeError:
+            request_payload = {}
+        if self.path.startswith("/api/agent-session/") and request_payload.get("agent_session_id") == "thread-active":
+            payload = {"ok": False, "error": "active agent sessions cannot be archived"}
+            status = HTTPStatus.CONFLICT
+        if self.path == "/api/agent-session/archive":
+            if status == HTTPStatus.OK:
+                payload.update({"archived": True, "duplicate": False})
+        elif self.path == "/api/agent-session/unarchive":
+            if status == HTTPStatus.OK:
+                payload.update({"archived": False, "duplicate": False})
+        data = json.dumps(payload).encode("utf-8")
+        self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(data)))
         self.end_headers()
@@ -214,6 +228,20 @@ class GatewayCsrfContractTest(unittest.TestCase):
         self.assertIn("Start ${label}", body)
         self.assertIn("Start on ${e.label", body)
         self.assertNotIn("No handoff package", body)
+        self.assertIn('class="brand" href="/" aria-label="Faryo home"', body)
+        self.assertNotIn('href="/projects"', body)
+
+    def test_retired_projects_page_is_not_routable(self) -> None:
+        connection = http.client.HTTPConnection(*self.base, timeout=5)
+        try:
+            connection.request("GET", "/projects", headers={"Cookie": self.cookie})
+            response = connection.getresponse()
+            body = response.read().decode("utf-8")
+        finally:
+            connection.close()
+
+        self.assertEqual(response.status, HTTPStatus.NOT_FOUND)
+        self.assertNotIn("Import Project", body)
 
     def test_authenticated_send_audit_never_receives_message_body(self) -> None:
         csrf = self.csrf_token()
@@ -306,6 +334,8 @@ class GatewayCsrfContractTest(unittest.TestCase):
         cases = (
             ("/api/agent/new", {"route": self.route, "command": "codex", "client_launch_id": "web-launch-audit"}, "start", HTTPStatus.BAD_GATEWAY),
             ("/api/agent/resume", {"route": self.route, "agent_session_id": "thread-a", "source": "codex-cli"}, "resume", HTTPStatus.BAD_GATEWAY),
+            ("/api/session-history/archive", {"route": self.route, "agent_session_id": "thread-a"}, "archive", HTTPStatus.OK),
+            ("/api/session-history/unarchive", {"route": self.route, "agent_session_id": "thread-a"}, "unarchive", HTTPStatus.OK),
             ("/api/bridge-inject", {"package_id": "123-aabbccdd", "route": self.route, "session": "session-a"}, "file-inject", HTTPStatus.OK),
         )
 
@@ -314,6 +344,21 @@ class GatewayCsrfContractTest(unittest.TestCase):
             self.assertEqual(status, expected_status)
             self.assertEqual(self.config.audit_calls[-1]["action"], action)
             self.assertEqual(self.config.audit_calls[-1]["route"], self.route)
+
+    def test_archive_conflict_preserves_owner_http_status_and_audit(self) -> None:
+        csrf = self.csrf_token()
+
+        status, data = self.request(
+            "POST",
+            "/api/session-history/archive",
+            {"route": self.route, "agent_session_id": "thread-active"},
+            {gateway.CSRF_HEADER: csrf},
+        )
+
+        self.assertEqual(status, HTTPStatus.CONFLICT)
+        self.assertEqual(data["error"], "active agent sessions cannot be archived")
+        self.assertEqual(self.config.audit_calls[-1]["action"], "archive")
+        self.assertEqual(self.config.audit_calls[-1]["status"], HTTPStatus.CONFLICT)
 
     def test_auth_cookie_defaults_to_twelve_hours_host_only_and_strict(self) -> None:
         handler = object.__new__(gateway.GatewayHandler)
@@ -404,29 +449,6 @@ class GatewayCsrfContractTest(unittest.TestCase):
 
         handler.client_address = ("198.51.100.10", 12345)
         self.assertEqual(handler.login_rate_key(), "198.51.100.10")
-
-    def test_dispatch_with_cookie_requires_csrf_not_guard_token(self) -> None:
-        status, data = self.request("POST", "/api/faryo/dispatch", {})
-        self.assertEqual(status, HTTPStatus.FORBIDDEN)
-        self.assertEqual(data.get("error"), "csrf required")
-
-    def test_dispatch_accepts_cookie_with_valid_csrf(self) -> None:
-        csrf = self.csrf_token()
-        status, data = self.request("POST", "/api/faryo/dispatch", {}, {gateway.CSRF_HEADER: csrf})
-        self.assertEqual(status, HTTPStatus.BAD_REQUEST)
-        self.assertEqual(data.get("error"), "project_id is required")
-
-    def test_dispatch_rejects_guard_token_without_cookie(self) -> None:
-        status, data = self.request(
-            "POST",
-            "/api/faryo/dispatch",
-            {},
-            {"X-Faryo-Guard-Token": "guard-token"},
-            include_cookie=False,
-        )
-        self.assertEqual(status, HTTPStatus.UNAUTHORIZED)
-        self.assertEqual(data.get("error"), "unauthorized")
-
 
 if __name__ == "__main__":
     unittest.main()

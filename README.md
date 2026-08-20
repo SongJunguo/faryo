@@ -70,8 +70,8 @@ or support claims.
 ### Structured Codex conversation
 
 - Reads finalized user/assistant messages incrementally from Codex rollout JSONL.
-- Uses Codex App Server only as a compatibility fallback and tmux capture as
-  conservative terminal evidence.
+- Uses Codex App Server for thread lifecycle operations and as a structured
+  compatibility fallback; tmux capture remains conservative terminal evidence.
 - Keeps the initial payload to at most 12 recent complete turns, then exposes
   older turns through a revision-bound cursor API. Formula-heavy answers cannot
   silently erase the complete question index.
@@ -127,6 +127,8 @@ micromark -> mdast -> CommonMark/GFM/math nodes -> safe HTML -> KaTeX
 
 ### Workbench interaction
 
+- Uses `/` as the single Gateway home. The older Project Orchestration surface
+  has been retired; generic Files-to-session handoff remains available.
 - Uses the Faryo logo as a direct return to the Gateway home page while the
   adjacent session title keeps its independent header-collapse action.
 - Keeps a large composer geometry across focus, blur, and mobile keyboard state.
@@ -173,6 +175,9 @@ micromark -> mdast -> CommonMark/GFM/math nodes -> safe HTML -> KaTeX
   explicit Codex `/rename` name, or working-folder basename, with Today/7-day/
   30-day and Current/Archived filters. Search never scans rollout or message
   content, never changes Active Sessions, and is not stored in browser storage.
+- Archives resumable history and restores archived history through Codex App
+  Server `thread/archive` and `thread/unarchive`. Faryo never edits Codex's
+  SQLite/rollout files directly and deliberately exposes no hard-delete action.
 - Allows remote Close only for sessions that Faryo created and stamped.
 - `Start Codex` resolves the configured CLI with its matching Node runtime,
   selects an available login shell, and returns success only after the Codex
@@ -237,12 +242,10 @@ conda activate faryo
 python -m pip install -r apps/gateway/requirements.txt
 ```
 
-Initialize private Owner configuration with the Gateway URL that will be used by
-the deployment:
+Initialize private Owner configuration:
 
 ```bash
 FARYO_PYTHON="$CONDA_PREFIX/bin/python" \
-FARYO_PROJECT_WORKBENCH_GATEWAY_URL="https://gateway.example" \
   ./apps/owner/scripts/init-owner-env.sh
 ```
 
@@ -277,7 +280,10 @@ or an equivalent exact-identity layer.
 
 The `main` branch was revalidated on 2026-08-20 with privacy-safe fixtures:
 
-- source checks plus 76 Owner and 63 Gateway Python tests;
+- source checks plus 82 Owner and 62 Gateway Python tests;
+- an isolated real Codex App Server Current→Archived→Current round trip through
+  Owner, with stable totals, unchanged rollout SHA-256, and the real Codex home
+  untouched;
 - a 20-message browser delivery matrix including Chinese, multiline Markdown,
   TeX, clipboard-image attachment, offline/background recovery, and failed-draft
   cases at mobile and desktop sizes;
@@ -318,6 +324,9 @@ The `main` branch was revalidated on 2026-08-20 with privacy-safe fixtures:
   revoke-all auth epochs; production Start→ready→Close leaves no test tmux.
 - explicit Starting/Running/Waiting/Exited/Desktop/Resumable state fixtures and
   real workbench state counts, with Enter labelled as a TUI selection key.
+- authenticated `/projects` retirement checks, `/` brand navigation, preserved
+  generic Files-to-session handoff, and roughly 4,000 net lines of unreachable
+  Project Orchestration code removed without touching private runtime data.
 
 Run the canonical source checks:
 

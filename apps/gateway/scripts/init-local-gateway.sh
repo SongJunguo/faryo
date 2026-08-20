@@ -78,9 +78,14 @@ if reset_auth or (generate_auth and not password_file.exists()):
 if password_file.exists():
     password_file.chmod(0o600)
 
+owner_start_roots = [
+    part for part in owner.get("FARYO_START_DIRECTORY_ROOTS", "").split(os.pathsep)
+    if part.strip()
+]
 workspace = (
     os.environ.get("FARYO_GATEWAY_WORKSPACE_ROOT")
-    or owner.get("FARYO_PROJECT_WORKBENCH_PROJECTS_ROOT")
+    or existing.get("FARYO_DEFAULT_WORKSPACE")
+    or (owner_start_roots[0] if owner_start_roots else "")
     or str(Path.home() / "brain" / "projects")
 )
 inbox = owner.get("FARYO_OWNER_INBOX_DIR") or str(Path.home() / ".faryo" / "owner" / "data" / "inbox")

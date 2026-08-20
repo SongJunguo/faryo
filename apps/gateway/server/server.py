@@ -16,8 +16,6 @@ import secrets
 import shutil
 import shlex
 import socket
-import sqlite3
-import subprocess
 import sys
 import threading
 import time
@@ -35,7 +33,6 @@ SHARED_DIR = Path(__file__).resolve().parents[2] / "shared"
 SHARED_STATIC_DIR = SHARED_DIR / "static"
 if str(SHARED_DIR) not in sys.path:
     sys.path.insert(0, str(SHARED_DIR))
-import pd_state
 
 
 def gateway_session_max_age(values: Any) -> int:
@@ -131,12 +128,12 @@ PROXY_CONTROL_ACTIONS = {
 DIRECT_CONTROL_ACTIONS = {
     "/api/agent/new": "start",
     "/api/agent/resume": "resume",
+    "/api/session-history/archive": "archive",
+    "/api/session-history/unarchive": "unarchive",
     "/api/bridge-inject": "file-inject",
     "/api/auth/revoke-all": "revoke-sessions",
 }
 STATIC_DIR = Path(__file__).resolve().parent / "static"
-FARYO_PROFILE_SOURCE = Path(__file__).resolve().parent / "faryo_profile.md"
-WORKORDER_TEMPLATE_SOURCE = Path(__file__).resolve().parent / "templates" / "workorder.md"
 BRIDGE_PACKAGE_MAX_BYTES = 120 * 1024 * 1024
 BRIDGE_ASSET_MAX_BYTES = 20 * 1024 * 1024
 BRIDGE_ASSET_LIMIT = 4
@@ -193,30 +190,10 @@ self.addEventListener('fetch',()=>{});
 
 OWNER_STATIC_FILES = {"appearance.css", "appearance.js", "app.js", "style.css", "index.html", "event-stream.js", "internal-annotations.js", "local-file-view.js", "stable-blocks.js", "question-navigator.js", "live-scroll.js", "compact-rules-codex.js", "codex-commands.js", "copy-fidelity.js", "clipboard-images.js"}
 OWNER_STATIC_PREFIXES = ("icons/", "pet/", "vendor/katex/", "vendor/markdown-ast/")
-GATEWAY_STATIC_FILES = {
-    "projects.css": "text/css; charset=utf-8",
-    "projects.js": "text/javascript; charset=utf-8",
-}
 SHARED_STATIC_FILES = {
     "appearance.css": "text/css; charset=utf-8",
     "appearance.js": "text/javascript; charset=utf-8",
 }
-PROJECT_ITEM_TYPES = {"decision", "action", "watch"}
-PROJECT_ITEM_TYPE_LIMIT = 10
-PROJECT_BUCKETS = {"S", "A", "B"}
-PROJECT_DONE_STATUSES = {"accepted", "done", "skipped", "seen", "rejected", "completed", "closed"}
-PROJECT_DEFINITION_SUBMIT_STATUSES = {"submitted", "converted"}
-PROJECT_ITEM_STAGES = {
-    "awaiting_owner",
-    "approved_for_workorder",
-    "workorder_created",
-    "in_progress",
-    "receipt_submitted",
-    "needs_fix",
-    "paused",
-}
-PROJECT_BUCKET_ORDER = {"S": 0, "A": 1, "B": 2}
-
 HOP_BY_HOP_HEADERS = {
     "connection",
     "keep-alive",
@@ -563,71 +540,15 @@ class GatewayConfig:
         self.owner_tokens = self.load_owner_tokens(env)
         self.portal_dir = portal_dir
         self.cookie_secret = load_secret(secret_file)
-        self.guard_token = env.get("FARYO_GUARD_TOKEN", "")
         self.icp_record = env.get("FARYO_ICP_RECORD", "").strip()
         self.bridge_root = secret_file.parent / "bridge-packages"
         self.control_audit_path = secret_file.parent / "control-audit.jsonl"
-        self.project_workbench_index = secret_file.parent / "project-workbench.jsonl"
-        self.project_downlink_root = secret_file.parent / "project-workbench-downlinks"
-        self.gateway_home = secret_file.parent.parent
-        self.faryo_profile_name = env.get("FARYO_CONTROLLER_CODEX_PROFILE", "faryo").strip() or "faryo"
-        self.faryo_session_title = clean_session_title(env.get("FARYO_CONTROLLER_SESSION_TITLE") or "Faryo")
-        self.faryo_work_root = Path(env.get("FARYO_CONTROLLER_WORK_ROOT", str(Path(__file__).resolve().parents[3]))).expanduser()
-        self.faryo_code_root = Path(env.get("FARYO_CONTROLLER_CODE_ROOT", str(Path(__file__).resolve().parents[3]))).expanduser()
-        self.owner_project_roots = self.load_owner_project_roots(env)
-        self.faryo_codex_home = Path(env.get("CODEX_HOME") or os.environ.get("CODEX_HOME") or str(Path.home() / ".codex")).expanduser()
-        self.faryo_codex_config = self.faryo_codex_home / f"{self.faryo_profile_name}.config.toml"
-        self.faryo_codex_state = self.faryo_codex_home / "state_5.sqlite"
-        self.faryo_profile_runtime = self.gateway_home / "codex" / "faryo-profile.md"
         self.bridge_root.mkdir(parents=True, exist_ok=True)
-        self.project_downlink_root.mkdir(parents=True, exist_ok=True)
         self._bridge_cleanup_lock = threading.Lock()
         self._bridge_cleanup_at = 0.0
         self._control_audit_lock = threading.Lock()
         self._control_audit_count: int | None = None
         self._control_audit_prune_at = 0.0
-
-    def install_faryo_codex_profile(self) -> None:
-        self.faryo_work_root.mkdir(parents=True, exist_ok=True)
-        self.faryo_profile_runtime.parent.mkdir(parents=True, exist_ok=True)
-        self.faryo_codex_home.mkdir(parents=True, exist_ok=True)
-        profile_text = FARYO_PROFILE_SOURCE.read_text(encoding="utf-8") + "\n".join([
-            "",
-            "## Runtime Paths",
-            "",
-            f"- Faryo controller work root: `{self.faryo_work_root}`",
-            f"- Faryo code root: `{self.faryo_code_root}`",
-            f"- Gateway workbench projection: `{self.project_workbench_index}`",
-            f"- Gateway downlink packages: `{self.project_downlink_root}`",
-            "",
-        ])
-        self.faryo_profile_runtime.write_text(profile_text, encoding="utf-8")
-        config_text = "\n".join([
-            "# Generated by Faryo Gateway. Do not edit here; update apps/gateway/server/faryo_profile.md.",
-            'model = "gpt-5.5"',
-            'model_reasoning_effort = "high"',
-            'personality = "pragmatic"',
-            'approval_policy = "on-request"',
-            'sandbox_mode = "workspace-write"',
-            f"model_instructions_file = {json.dumps(str(self.faryo_profile_runtime))}",
-            "",
-            f'[projects.{json.dumps(str(self.faryo_work_root))}]',
-            'trust_level = "trusted"',
-            "",
-        ])
-        self.faryo_codex_config.write_text(config_text, encoding="utf-8")
-
-    def load_owner_project_roots(self, env: dict[str, str]) -> dict[str, str]:
-        roots: dict[str, str] = {}
-        default_root = str(Path.home() / "brain" / "projects")
-        for route in BACKENDS:
-            value = (
-                env.get(f"FARYO_{route.upper()}_PROJECTS_ROOT")
-                or env.get(f"FARYO_{route.upper()}_PROJECT_ROOT")
-                or default_root
-            ).strip()
-            roots[route] = str(Path(value).expanduser())
-        return roots
 
     def load_owner_tokens(self, env: dict[str, str]) -> dict[str, str]:
         tokens: dict[str, str] = {}
@@ -1069,8 +990,6 @@ class GatewayHandler(BaseHTTPRequestHandler):
             self.handle_mcp_get(parsed)
             return
         username = self.current_username()
-        if not username and parsed.path == "/api/faryo/status":
-            username = self.controller_token_username()
         if parsed.path == "/login":
             if username:
                 self.redirect(self.safe_next(parsed))
@@ -1115,15 +1034,6 @@ class GatewayHandler(BaseHTTPRequestHandler):
                 history_page = 1
             self.write_json(self.workbench_payload(username, history_page, history_filters_from_query(query)), HTTPStatus.OK)
             return
-        if parsed.path == "/api/project-workbench":
-            self.write_json(self.read_project_workbench(username), HTTPStatus.OK)
-            return
-        if parsed.path == "/api/project-workbench/git-status":
-            self.write_json({"ok": True, "statuses": self.project_git_statuses(username)}, HTTPStatus.OK)
-            return
-        if parsed.path == "/api/faryo/status":
-            self.handle_faryo_status(username)
-            return
         if parsed.path == "/api/bridge-packages":
             self.write_json({"ok": True, "packages": self.config.list_bridge_packages(username)}, HTTPStatus.OK)
             return
@@ -1136,13 +1046,6 @@ class GatewayHandler(BaseHTTPRequestHandler):
         route = self.route_for(parsed)
         if route:
             self.proxy(parsed, route, username)
-            return
-        if parsed.path == "/projects":
-            self.write_static_file("projects.html", "text/html; charset=utf-8", "no-store")
-            return
-        if parsed.path.lstrip("/") in GATEWAY_STATIC_FILES:
-            filename = parsed.path.lstrip("/")
-            self.write_static_file(filename, GATEWAY_STATIC_FILES[filename], "no-store")
             return
         if parsed.path == "/":
             self.serve_portal(username)
@@ -1157,23 +1060,7 @@ class GatewayHandler(BaseHTTPRequestHandler):
         if parsed.path == "/login":
             self.handle_login(parsed)
             return
-        if parsed.path == "/api/project-workbench/sync":
-            self.handle_project_workbench_sync()
-            return
-        if parsed.path == "/api/project-workbench/downlink/claim":
-            self.handle_project_workbench_downlink_claim()
-            return
-        if parsed.path == "/api/project-workbench/downlink/ack":
-            self.handle_project_workbench_downlink_ack()
-            return
-        controller_paths = {"/api/faryo/workorder/verify"}
-        flex_token_paths = {"/api/faryo/start", "/api/project-workbench/transition"}
-        if parsed.path in controller_paths:
-            username = self.controller_token_username()
-        elif parsed.path in flex_token_paths:
-            username = self.controller_token_username() or self.current_username()
-        else:
-            username = self.current_username()
+        username = self.current_username()
         if not username:
             self.write_json({"ok": False, "error": "unauthorized"}, HTTPStatus.UNAUTHORIZED)
             return
@@ -1195,6 +1082,12 @@ class GatewayHandler(BaseHTTPRequestHandler):
         if parsed.path == "/api/auth/revoke-all":
             self.handle_revoke_sessions(username)
             return
+        if parsed.path == "/api/session-history/archive":
+            self.handle_session_history_lifecycle(username, True)
+            return
+        if parsed.path == "/api/session-history/unarchive":
+            self.handle_session_history_lifecycle(username, False)
+            return
         if parsed.path == "/api/bridge-packages":
             self.handle_bridge_package_create(username)
             return
@@ -1203,39 +1096,6 @@ class GatewayHandler(BaseHTTPRequestHandler):
             return
         if parsed.path == "/api/bridge-inject":
             self.handle_bridge_inject(username)
-            return
-        if parsed.path == "/api/project-workbench":
-            self.handle_project_workbench_save()
-            return
-        if parsed.path == "/api/project-workbench/submit-stage":
-            self.handle_project_workbench_submit(username)
-            return
-        if parsed.path == "/api/project-workbench/sync-project":
-            self.handle_project_workbench_sync_project(username)
-            return
-        if parsed.path == "/api/project-workbench/transition":
-            self.handle_project_workbench_transition(username)
-            return
-        if parsed.path == "/api/project-workbench/direction":
-            self.handle_project_direction(username)
-            return
-        if parsed.path == "/api/project-workbench/stage-state":
-            self.handle_project_stage_state(username)
-            return
-        if parsed.path == "/api/project-workbench/stage-dod":
-            self.handle_project_stage_dod(username)
-            return
-        if parsed.path == "/api/project-workbench/import":
-            self.handle_project_workbench_import(username)
-            return
-        if parsed.path == "/api/faryo/start":
-            self.handle_faryo_start(username)
-            return
-        if parsed.path == "/api/faryo/dispatch":
-            self.handle_faryo_dispatch(username)
-            return
-        if parsed.path == "/api/faryo/workorder/verify":
-            self.handle_faryo_workorder_verify(username)
             return
         if parsed.path == "/api/agent/new":
             self.handle_agent_new(username)
@@ -1332,8 +1192,6 @@ class GatewayHandler(BaseHTTPRequestHandler):
         return hmac.new(self.config.cookie_secret, message, hashlib.sha256).hexdigest()
 
     def require_csrf_header(self, username: str) -> bool:
-        if self.controller_token_username() == username:
-            return True
         token = self.headers.get(CSRF_HEADER, "").strip()
         if token and hmac.compare_digest(token, self.csrf_token(username)):
             return True
@@ -1443,720 +1301,6 @@ class GatewayHandler(BaseHTTPRequestHandler):
         try: return json.loads(self.rfile.read(length).decode("utf-8"))
         except json.JSONDecodeError as exc: raise ValueError("invalid JSON body") from exc
 
-    def read_project_workbench(self, username: str) -> dict[str, Any]:
-        return {"ok": True, "workbench": self.project_workbench_payload(username)}
-
-    def project_workbench_payload(self, username: str | None = None) -> dict[str, Any]:
-        if username:
-            self.recover_workorder_receipts(username)
-        routes = self.config.user_routes(username) if username else list(BACKENDS)
-        return {
-            "projects": self.read_project_rows(),
-            "routes": [{"id": route, "label": BACKENDS[route][2]} for route in routes],
-        }
-
-    def project_git_statuses(self, username: str) -> dict[str, dict[str, Any] | None]:
-        return {row["id"]: self.project_git_status(username, row) for row in self.read_project_rows()}
-
-    def project_git_status(self, username: str, row: dict[str, Any]) -> dict[str, Any] | None:
-        route = self.clean_owner_route(row.get("owner_route"))
-        if not route or not self.config.allowed_route(username, route):
-            return None
-        for cwd in self.project_worker_cwd_candidates(row)[:3]:
-            result = self.owner_json_request(route, "/api/project-workbench/git-status", {"project_root": cwd}, username, timeout=1.5)
-            if result.get("ok"):
-                status = result.get("gitStatus")
-                return status if isinstance(status, dict) else None
-        return None
-
-    def handle_project_workbench_save(self) -> None:
-        try:
-            payload = self.read_json_body(128 * 1024)
-            self.project_rows_from_payload(payload, truth=False, overview=True)
-            self.write_json({"ok": True, "workbench": self.project_workbench_payload()}, HTTPStatus.OK)
-        except ValueError as exc:
-            self.write_json({"ok": False, "error": str(exc)}, HTTPStatus.BAD_REQUEST)
-
-    def handle_project_workbench_sync_project(self, username: str) -> None:
-        try:
-            payload = self.read_json_body(512 * 1024)
-            scope = self.project_downlink_scope(payload)
-            rows = self.project_rows_from_payload(payload, write=False, truth=True, overview=False)
-            target_rows, downlink = self.sync_project_downlinks(username, rows, payload, scope)
-            if scope == "definition" and target_rows:
-                rows = self.rows_with_definition_sync(rows, target_rows, downlink)
-                self.write_project_rows(rows)
-            elif downlink.get("status") == "applied":
-                self.write_project_rows(rows)
-            self.write_json({
-                "ok": True,
-                "workbench": self.project_workbench_payload(),
-                "downlink": downlink,
-            }, HTTPStatus.OK)
-        except ValueError as exc:
-            self.write_json({"ok": False, "error": str(exc)}, HTTPStatus.BAD_REQUEST)
-
-    def handle_project_workbench_submit(self, username: str) -> None:
-        try:
-            payload = self.read_json_body(64 * 1024)
-            rows = self.read_project_rows()
-            scope = "project" if payload.get("submit_scope") == "project" else "global"
-            active_rows = self.active_project_rows(rows)
-            prompt_rows = self.project_submit_target_rows(rows, payload) if scope == "project" else active_rows
-            if scope == "project" and not prompt_rows:
-                raise ValueError("notify_project_ids must target at least one active project")
-            unsynced = [row["id"] for row in prompt_rows if row.get("definition_sync", {}).get("status") != "applied"]
-            if unsynced:
-                raise ValueError("definition sync must be applied: " + ", ".join(unsynced))
-            faryo = self.wake_faryo_after_project_submit(username, prompt_rows, scope)
-            if not faryo.get("ok"):
-                self.write_json({"ok": False, "error": faryo.get("error") or "faryo controller wake failed", "faryo": faryo}, HTTPStatus.BAD_GATEWAY)
-                return
-            target_ids = {row["id"] for row in prompt_rows}
-            for index, row in enumerate(rows):
-                if row["id"] in target_ids:
-                    rows[index] = self.clean_project_row({**row, "definition_submit": self.project_definition_submit(row, "submitted")}, int(row.get("rank") or index + 1))
-            self.write_project_rows(rows)
-            self.write_json({
-                "ok": True,
-                "workbench": self.project_workbench_payload(),
-                "faryo": faryo,
-            }, HTTPStatus.OK)
-        except ValueError as exc:
-            self.write_json({"ok": False, "error": str(exc)}, HTTPStatus.BAD_REQUEST)
-
-    def project_rows_from_payload(self, payload: dict[str, Any], write: bool = True, truth: bool = True, overview: bool = True) -> list[dict[str, Any]]:
-        source = payload.get("projects")
-        if not isinstance(source, list):
-            raise ValueError("projects must be a list")
-        rows = self.project_projection_rows_from_ui(source, truth, overview)
-        if write:
-            self.write_project_rows(rows)
-        return rows
-
-    def project_projection_rows_from_ui(self, source: list[Any], truth: bool = True, overview: bool = True) -> list[dict[str, Any]]:
-        existing = {row["id"]: row for row in self.read_project_rows()}
-        rows: list[dict[str, Any]] = []
-        for index, project in enumerate(source, 1):
-            if not isinstance(project, dict):
-                continue
-            project_id = self.project_id(project)
-            previous = existing.get(project_id)
-            if not previous:
-                if truth:
-                    rows.append(self.clean_project_row(project, index))
-                continue
-            row = dict(previous)
-            if truth:
-                for key in ("name", "brief", "current_d"):
-                    if key in project:
-                        row[key] = self.compact_text(project.get(key))
-                if isinstance(project.get("definition"), dict):
-                    row["definition"] = project["definition"]
-            if overview:
-                row["bucket"] = self.clean_project_bucket(project.get("bucket") or previous.get("bucket"))
-                row["rank"] = self.clean_rank(project.get("rank") or index)
-                if "archived" in project:
-                    row["archived"] = bool(project.get("archived"))
-            rows.append(self.clean_project_row(row, index))
-        missing = set(existing) - {self.project_id(project) for project in source if isinstance(project, dict)}
-        rows.extend(existing[project_id] for project_id in missing)
-        return rows
-
-    def project_submit_prompt(self, rows: list[dict[str, Any]], scope: str) -> str:
-        projects = []
-        for row in self.sorted_project_rows(self.active_project_rows(rows)):
-            definition = row.get("definition") if isinstance(row.get("definition"), dict) else {}
-            project = {"id": row["id"], "name": row["name"], "owner_route": row.get("owner_route") or "", "workbench_path": row.get("workbench_path") or "", "definition_hash": pd_state.project_definition_downlink_hash(row["id"], definition)}
-            project.update({"brief": row.get("brief") or ""})
-            project.update({key: value for key in ("current_stage_id", "current_stage_title", "stage_goal", "stage_state", "stage_dod", "stage_dod_done", "stage_out_of_scope") if (value := definition.get(key)) not in ("", [], None)})
-            projects.append(project)
-        payload = {"event": "project_stage_submit", "scope": scope, "projects": projects}
-        return "\n".join([
-            "项目阶段定义已提交，请接棒处理。",
-            "只处理 payload.projects 内本次已保存的定义；先核对 definition_hash（定义哈希）与项目真值一致，异常只报阻塞。",
-            "基于阶段目标和 DoD 拟定待 Owner 裁决的 item（事项），用 item_created（事项创建）写入 awaiting_owner（待裁决）；不要创建 WO（工单）或 worker（施工会话）。",
-            "decision（裁决项）如需 Owner 选择，写 decision_prompt（裁决输入定义）；item_created 必须带回对应 definition_hash。",
-            json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
-        ])
-
-    def wake_faryo_after_project_submit(self, username: str, rows: list[dict[str, Any]], scope: str) -> dict[str, Any]:
-        result = self.ensure_faryo_controller(username, self.project_submit_prompt(rows, scope))
-        return {"ok": bool(result.get("ok")), "session": result.get("session") or "", "error": result.get("error") or ""}
-
-    def handle_project_stage_state(self, username: str) -> None:
-        try:
-            payload = self.read_json_body(8 * 1024)
-            self.update_project_definition_row(username, payload, lambda definition: pd_state.definition_with_stage_state(definition, payload.get("stage_state")))
-            self.write_json({"ok": True, "workbench": self.project_workbench_payload(username)}, HTTPStatus.OK)
-        except ValueError as exc:
-            self.write_json({"ok": False, "error": str(exc)}, HTTPStatus.BAD_REQUEST)
-
-    def handle_project_stage_dod(self, username: str) -> None:
-        try:
-            payload = self.read_json_body(16 * 1024)
-            self.update_project_definition_row(username, payload, lambda definition: pd_state.definition_with_stage_dod_update(definition, payload))
-            self.write_json({"ok": True, "workbench": self.project_workbench_payload(username)}, HTTPStatus.OK)
-        except ValueError as exc:
-            self.write_json({"ok": False, "error": str(exc)}, HTTPStatus.BAD_REQUEST)
-
-    def handle_project_direction(self, username: str) -> None:
-        try:
-            payload = self.read_json_body(16 * 1024)
-            project_id = self.project_id({"id": payload.get("project_id")})
-            rows = self.read_project_rows()
-            for index, row in enumerate(rows):
-                if row["id"] != project_id:
-                    continue
-                route = self.clean_owner_route(row.get("owner_route"))
-                if not route or not self.config.allowed_route(username, route):
-                    raise ValueError("project route is not allowed")
-                updated = dict(row)
-                if "brief" in payload:
-                    updated["brief"] = self.compact_text(payload.get("brief"))
-                if "stage_goal" in payload:
-                    stage_goal = self.compact_text(payload.get("stage_goal"))
-                    if not stage_goal:
-                        raise ValueError("stage_goal is required")
-                    definition = pd_state.clean_project_definition(row.get("definition"))
-                    definition["stage_goal"] = stage_goal
-                    updated["current_d"] = stage_goal
-                    updated["definition"] = definition
-                rows[index] = self.clean_project_row(updated, int(row.get("rank") or index + 1))
-                self.write_project_rows(rows)
-                self.write_json({"ok": True, "workbench": self.project_workbench_payload(username)}, HTTPStatus.OK)
-                return
-            raise ValueError("project not found")
-        except ValueError as exc:
-            self.write_json({"ok": False, "error": str(exc)}, HTTPStatus.BAD_REQUEST)
-
-    def update_project_definition_row(self, username: str, payload: dict[str, Any], update: Callable[[dict[str, Any]], dict[str, Any]]) -> tuple[dict[str, Any], str]:
-        project_id = self.project_id({"id": payload.get("project_id")})
-        rows = self.read_project_rows()
-        for index, row in enumerate(rows):
-            if row["id"] != project_id:
-                continue
-            route = self.clean_owner_route(row.get("owner_route"))
-            if not route or not self.config.allowed_route(username, route):
-                raise ValueError("project route is not allowed")
-            updated = dict(row)
-            updated["definition"] = update(pd_state.clean_project_definition(row.get("definition")))
-            rows[index] = self.clean_project_row(updated, int(row.get("rank") or index + 1))
-            self.write_project_rows(rows)
-            return rows[index], route
-        raise ValueError("project not found")
-
-    def handle_project_workbench_import(self, username: str) -> None:
-        try:
-            payload = self.read_json_body(64 * 1024)
-            owner_route = self.clean_owner_route(payload.get("owner_route") or payload.get("owner"))
-            project_root = self.compact_text(payload.get("project_root") or payload.get("path"))
-            if not owner_route:
-                raise ValueError("owner_route is required")
-            if not project_root:
-                raise ValueError("project_root is required")
-            result = self.owner_json_request(owner_route, "/api/project-workbench/import", {"project_root": project_root}, username, timeout=15)
-            if not result.get("ok"):
-                raise ValueError(self.compact_text(result.get("error")) or "import failed")
-            project = result.get("project")
-            if not isinstance(project, dict):
-                raise ValueError("owner returned no project")
-            row = self.merge_project_import(project, owner_route)
-            self.write_json({"ok": True, "project": row, "workbench": self.project_workbench_payload()}, HTTPStatus.OK)
-        except ValueError as exc:
-            self.write_json({"ok": False, "error": str(exc)}, HTTPStatus.BAD_REQUEST)
-
-    def handle_project_workbench_sync(self) -> None:
-        if not self.require_project_sync_owner():
-            return
-        try:
-            payload = self.read_json_body(512 * 1024)
-            source = payload.get("projects")
-            if not isinstance(source, list):
-                raise ValueError("projects must be a list")
-            mode = self.compact_text(payload.get("mode")) or "merge"
-            rows = self.project_sync_rows([project for project in source if isinstance(project, dict)], self.project_sync_owner_route(), mode)
-            self.write_project_rows(rows)
-            self.write_json({"ok": True, "workbench": self.project_workbench_payload()}, HTTPStatus.OK)
-        except ValueError as exc:
-            self.write_json({"ok": False, "error": str(exc)}, HTTPStatus.BAD_REQUEST)
-
-    def require_project_sync_owner(self) -> bool:
-        if self.project_sync_owner_route():
-            return True
-        self.write_json({"ok": False, "error": "forbidden"}, HTTPStatus.FORBIDDEN)
-        return False
-
-    def project_sync_owner_route(self) -> str:
-        owner_label = unquote(self.headers.get("X-Faryo-Owner-Label", "")).strip().lower()
-        owner_route = owner_label if owner_label in self.config.owner_tokens else ""
-        owner_token = self.headers.get("X-Owner-Token", "")
-        if owner_route and hmac.compare_digest(owner_token, self.config.owner_token(owner_route)):
-            return owner_route
-        return ""
-
-    def handle_project_workbench_downlink_claim(self) -> None:
-        if not self.require_project_sync_owner():
-            return
-        try:
-            payload = self.read_json_body(64 * 1024)
-            package = self.project_downlink_package(str(payload.get("package_id") or ""))
-            if not package:
-                raise ValueError("downlink package not found")
-            if package.get("target") != self.project_sync_owner_route():
-                self.write_json({"ok": False, "error": "forbidden"}, HTTPStatus.FORBIDDEN)
-                return
-            self.write_json({"ok": True, "package": package}, HTTPStatus.OK)
-        except ValueError as exc:
-            self.write_json({"ok": False, "error": str(exc)}, HTTPStatus.BAD_REQUEST)
-
-    def handle_project_workbench_downlink_ack(self) -> None:
-        if not self.require_project_sync_owner():
-            return
-        try:
-            payload = self.read_json_body(64 * 1024)
-            package_id = str(payload.get("package_id") or "")
-            package = self.project_downlink_package(package_id)
-            if not package:
-                raise ValueError("downlink package not found")
-            if package.get("target") != self.project_sync_owner_route():
-                self.write_json({"ok": False, "error": "forbidden"}, HTTPStatus.FORBIDDEN)
-                return
-            ack_ok = bool(payload.get("ok"))
-            status = str(payload.get("status") or ("applied" if ack_ok else "failed")).strip() or "failed"
-            message = self.compact_text(payload.get("message"))
-            hash_error = self.project_downlink_hash_error(package, payload) if ack_ok else ""
-            if hash_error:
-                ack_ok = False
-                status = "failed"
-                message = hash_error
-            applied_count = payload.get("applied")
-            package["status"] = status
-            package["ack"] = {
-                "ok": ack_ok,
-                "status": status,
-                "message": message,
-                "applied": applied_count if ack_ok and isinstance(applied_count, int) else 0,
-                "updated_at": now_ts(),
-            }
-            if ack_ok:
-                package["notice"] = {"ok": True, "updated_at": now_ts()}
-            self.write_project_downlink_package(package)
-            self.write_json({"ok": True, "package": {"id": package["id"], "status": package["status"]}}, HTTPStatus.OK)
-        except ValueError as exc:
-            self.write_json({"ok": False, "error": str(exc)}, HTTPStatus.BAD_REQUEST)
-
-    def project_sync_rows(self, source: list[dict[str, Any]], owner_route: str, mode: str = "merge") -> list[dict[str, Any]]:
-        if mode not in {"merge", "replace_owner"}:
-            raise ValueError("invalid project sync mode")
-        existing_rows = self.read_project_rows()
-        existing = {row.get("id"): row for row in existing_rows}
-        incoming_ids = {self.project_id(project) for project in source}
-        if mode == "replace_owner":
-            rows = [row for row in existing_rows if row.get("owner_route") != owner_route]
-        else:
-            rows = [row for row in existing_rows if row.get("id") not in incoming_ids]
-        for index, project in enumerate(source, 1):
-            project_id = self.project_id(project)
-            previous = existing.get(project_id) or {}
-            row = dict(project)
-            if not row.get("bucket"):
-                row["bucket"] = previous.get("bucket") or "B"
-            if not row.get("rank"):
-                row["rank"] = previous.get("rank") or index
-            if not row.get("path"):
-                row["path"] = previous.get("path") or ""
-            if not row.get("owner_route"):
-                row["owner_route"] = previous.get("owner_route") or owner_route
-            if not row.get("workbench_path"):
-                row["workbench_path"] = previous.get("workbench_path") or row.get("path") or ""
-            if not row.get("code_root"):
-                row["code_root"] = previous.get("code_root") or ""
-            if "definition" not in row and isinstance(previous.get("definition"), dict):
-                row["definition"] = previous["definition"]
-                if isinstance(previous.get("definition_sync"), dict):
-                    row["definition_sync"] = previous["definition_sync"]
-            elif isinstance(project.get("definition"), dict):
-                if isinstance(previous.get("definition_sync"), dict):
-                    row["definition_sync"] = previous["definition_sync"]
-                else:
-                    row["definition_sync"] = self.project_definition_sync(row, "pending")
-            if isinstance(previous.get("definition_submit"), dict) and "definition_submit" not in row:
-                row["definition_submit"] = previous["definition_submit"]
-            row.setdefault("archived", previous.get("archived"))
-            rows.append(self.clean_project_row(row, index))
-        return rows
-
-    def merge_project_import(self, project: dict[str, Any], owner_route: str) -> dict[str, Any]:
-        rows = self.read_project_rows()
-        project_id = self.project_id(project)
-        previous = next((row for row in rows if row.get("id") == project_id), {})
-        merged = dict(previous)
-        merged.update(project)
-        merged["owner_route"] = owner_route
-        if not merged.get("bucket"):
-            merged["bucket"] = previous.get("bucket") or "B"
-        if not merged.get("rank"):
-            merged["rank"] = previous.get("rank") or len(rows) + 1
-        if isinstance(project.get("definition"), dict):
-            if isinstance(previous.get("definition_sync"), dict):
-                merged["definition_sync"] = previous["definition_sync"]
-            else:
-                merged["definition_sync"] = self.project_definition_sync(merged, "pending")
-        row = self.clean_project_row(merged, int(merged.get("rank") or len(rows) + 1))
-        self.write_project_rows([item for item in rows if item.get("id") != row["id"]] + [row])
-        return row
-
-    def project_downlink_target_rows(self, rows: list[dict[str, Any]], payload: dict[str, Any]) -> list[dict[str, Any]]:
-        raw_ids = payload.get("downlink_project_ids")
-        if raw_ids is None:
-            return []
-        return self.project_rows_by_ids(rows, raw_ids, "downlink_project_ids")
-
-    def project_submit_target_rows(self, rows: list[dict[str, Any]], payload: dict[str, Any]) -> list[dict[str, Any]]:
-        raw_ids = payload.get("notify_project_ids")
-        if raw_ids is None:
-            return []
-        return self.project_rows_by_ids(rows, raw_ids, "notify_project_ids")
-
-    def project_rows_by_ids(self, rows: list[dict[str, Any]], raw_ids: Any, field: str) -> list[dict[str, Any]]:
-        if not isinstance(raw_ids, list):
-            raise ValueError(f"{field} must be a list")
-        ids = {self.project_id({"id": item}) for item in raw_ids if str(item or "").strip()}
-        if not ids:
-            return []
-        by_id = {row["id"]: row for row in rows}
-        missing = sorted(ids - set(by_id))
-        if missing:
-            raise ValueError(f"unknown {field}: " + ", ".join(missing))
-        return [row for row in self.sorted_project_rows(rows) if row["id"] in ids and not row.get("archived")]
-
-    def active_project_rows(self, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        return [row for row in rows if not row.get("archived")]
-
-    def sync_project_downlinks(self, username: str, rows: list[dict[str, Any]], payload: dict[str, Any], scope: str) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-        target_rows = self.project_downlink_target_rows(rows, payload)
-        if not target_rows:
-            return [], {"status": "skipped"}
-        packages = self.save_project_downlinks(target_rows, username, scope)
-        notices = [self.notify_project_downlink(package, username) for package in packages]
-        return target_rows, self.project_downlink_response(packages, notices)
-
-    def project_downlink_scope(self, payload: dict[str, Any]) -> str:
-        scope = self.compact_text(payload.get("downlink_scope")) or "project"
-        if scope not in {"project", "definition"}:
-            raise ValueError("invalid downlink_scope")
-        return scope
-
-    def save_project_downlinks(self, rows: list[dict[str, Any]], username: str, scope: str) -> list[dict[str, Any]]:
-        packages = []
-        grouped: dict[str, list[dict[str, Any]]] = {}
-        for row in rows:
-            owner_route = str(row.get("owner_route") or "").strip()
-            if owner_route not in BACKENDS:
-                raise ValueError(f"project {row['id']} has no valid owner_route")
-            grouped.setdefault(owner_route, []).append(row)
-        for owner_route, owner_rows in sorted(grouped.items()):
-            packages.append(self.save_project_downlink(owner_route, owner_rows, username, scope))
-        return packages
-
-    def save_project_downlink(self, owner_route: str, rows: list[dict[str, Any]], username: str, scope: str) -> dict[str, Any]:
-        package = {
-            "id": f"pwb-{int(time.time())}-{secrets.token_hex(4)}",
-            "type": "project-workbench",
-            "scope": scope,
-            "target": owner_route,
-            "status": "pending",
-            "created_at": now_ts(),
-            "created_by": username,
-            "projects": [self.project_downlink_project(row, scope) for row in self.sorted_project_rows(rows)],
-        }
-        self.write_project_downlink_package(package)
-        return package
-
-    def notify_project_downlink(self, package: dict[str, Any], username: str) -> dict[str, Any]:
-        owner_route = str(package.get("target") or "")
-        notice = self.owner_json_request(owner_route, "/api/project-workbench/downlink/apply", {"gateway_url": self.public_base_url(), "package_id": package["id"]}, username, timeout=15)
-        current = self.project_downlink_package(str(package["id"])) or package
-        if notice.get("ok"):
-            current["status"] = str(notice.get("status") or "applied")
-            current["notice"] = {"ok": True, "updated_at": now_ts()}
-        else:
-            current["status"] = "failed"
-            current["notice"] = {"ok": False, "error": self.compact_text(notice.get("error")), "updated_at": now_ts()}
-        self.write_project_downlink_package(current)
-        return {"ok": bool(notice.get("ok")), "status": current.get("status") or "failed", "error": notice.get("error")}
-
-    def project_downlink_response(self, packages: list[dict[str, Any]], notices: list[dict[str, Any]]) -> dict[str, Any]:
-        statuses = [str(notice.get("status") or package.get("status") or "") for package, notice in zip(packages, notices)]
-        if any(status == "failed" for status in statuses):
-            status = "failed"
-        elif statuses and all(status == "applied" for status in statuses):
-            status = "applied"
-        else:
-            status = "pending"
-        return {
-            "status": status,
-            "packages": [{"package_id": package["id"], "target": package["target"], "status": notice.get("status") or package.get("status")} for package, notice in zip(packages, notices)],
-        }
-
-    def rows_with_definition_sync(self, rows: list[dict[str, Any]], target_rows: list[dict[str, Any]], downlink: dict[str, Any]) -> list[dict[str, Any]]:
-        target_ids = {row["id"] for row in target_rows}
-        status = self.clean_definition_sync_status(downlink.get("status"))
-        updated_rows = []
-        for index, row in enumerate(rows, 1):
-            if row["id"] in target_ids:
-                updated = dict(row)
-                updated["definition_sync"] = self.project_definition_sync(row, status)
-                row = self.clean_project_row(updated, int(row.get("rank") or index))
-            updated_rows.append(row)
-        return updated_rows
-
-    def project_downlink_hash_error(self, package: dict[str, Any], payload: dict[str, Any]) -> str:
-        actual = payload.get("hashes")
-        if not isinstance(actual, dict):
-            return "missing downlink hashes"
-        expected = {}
-        for project in package.get("projects") if isinstance(package.get("projects"), list) else []:
-            if isinstance(project, dict):
-                project_id = self.project_id(project)
-                expected[project_id] = self.compact_text(project.get("hash"))
-        if not expected:
-            return "downlink package has no hash"
-        mismatched = [project_id for project_id, digest in expected.items() if not digest or actual.get(project_id) != digest]
-        return "downlink hash mismatch: " + ", ".join(mismatched) if mismatched else ""
-
-    def project_downlink_package(self, package_id: str) -> dict[str, Any] | None:
-        clean_id = re.sub(r"[^A-Za-z0-9._-]", "", package_id)
-        if not clean_id:
-            return None
-        path = self.config.project_downlink_root / clean_id / "package.json"
-        try:
-            payload = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            return None
-        return payload if isinstance(payload, dict) else None
-
-    def write_project_downlink_package(self, package: dict[str, Any]) -> None:
-        package_id = re.sub(r"[^A-Za-z0-9._-]", "", str(package.get("id") or ""))
-        if not package_id:
-            raise ValueError("invalid downlink package id")
-        path = self.config.project_downlink_root / package_id / "package.json"
-        self.write_atomic_text(path, json.dumps(package, ensure_ascii=False, indent=2) + "\n")
-
-    def project_workbench_truth_row(self, row: dict[str, Any]) -> dict[str, Any]:
-        return {
-            "id": row["id"],
-            "name": row["name"],
-            "brief": row["brief"],
-            "current_d": row["current_d"],
-            "items": row["items"],
-        }
-
-    def project_truth_row(self, row: dict[str, Any]) -> dict[str, Any]:
-        truth = self.project_workbench_truth_row(row)
-        if isinstance(row.get("definition"), dict):
-            definition = pd_state.clean_project_definition(row.get("definition"))
-            if definition:
-                truth["definition"] = definition
-        return truth
-
-    def project_downlink_project(self, row: dict[str, Any], scope: str = "project") -> dict[str, Any]:
-        if scope == "definition":
-            definition = pd_state.project_definition_hash_payload(row.get("definition"))
-            if not definition:
-                raise ValueError(f"project {row['id']} has no definition")
-            project = {
-                "id": row["id"],
-                "name": row["name"],
-                "brief": row["brief"],
-                "current_d": row["current_d"],
-                "definition": definition,
-                "workbench_path": row.get("workbench_path") or row.get("path") or "",
-            }
-            project["hash"] = pd_state.project_definition_downlink_hash(row["id"], definition)
-            return project
-        project = self.project_truth_row(row)
-        project["workbench_path"] = row.get("workbench_path") or row.get("path") or ""
-        project["hash"] = self.project_downlink_hash(project)
-        return project
-
-    def project_workbench_hash(self, project: dict[str, Any]) -> str:
-        truth = self.project_workbench_truth_row(project)
-        body = json.dumps(truth, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
-        return hashlib.sha256(body).hexdigest()
-
-    def project_downlink_hash(self, project: dict[str, Any]) -> str:
-        truth = self.project_truth_row(project)
-        if isinstance(truth.get("definition"), dict):
-            definition = pd_state.project_definition_hash_payload(truth.get("definition"))
-            if definition:
-                truth["definition"] = definition
-            else:
-                truth.pop("definition", None)
-        body = json.dumps(truth, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
-        return hashlib.sha256(body).hexdigest()
-
-    def clean_definition_sync_status(self, status: Any) -> str:
-        value = self.compact_text(status)
-        return value if value in {"applied", "failed", "pending"} else "pending"
-
-    def project_definition_sync(self, row: dict[str, Any], status: Any) -> dict[str, Any]:
-        return {
-            "status": self.clean_definition_sync_status(status),
-            "hash": pd_state.project_definition_downlink_hash(self.project_id(row), row.get("definition")),
-            "updated_at": now_ts(),
-        }
-
-    def project_definition_submit(self, row: dict[str, Any], status: Any) -> dict[str, Any]:
-        status = self.compact_text(status)
-        return {
-            "status": status if status in PROJECT_DEFINITION_SUBMIT_STATUSES else "",
-            "hash": pd_state.project_definition_downlink_hash(self.project_id(row), row.get("definition")),
-            "updated_at": now_ts(),
-        }
-
-    def clean_project_definition_sync(self, source: dict[str, Any], project_id: str, definition: dict[str, Any]) -> dict[str, Any]:
-        sync = source.get("definition_sync")
-        if not isinstance(sync, dict):
-            return {}
-        expected_hash = pd_state.project_definition_downlink_hash(project_id, definition)
-        if self.compact_text(sync.get("hash")) != expected_hash:
-            return {"status": "pending", "hash": expected_hash}
-        clean = {"status": self.clean_definition_sync_status(sync.get("status")), "hash": expected_hash}
-        if isinstance(sync.get("updated_at"), int):
-            clean["updated_at"] = sync["updated_at"]
-        return clean
-
-    def read_project_rows(self) -> list[dict[str, Any]]:
-        rows = []
-        try:
-            lines = self.config.project_workbench_index.read_text(encoding="utf-8").splitlines()
-        except OSError:
-            return rows
-        for line in lines:
-            if not line.strip():
-                continue
-            try:
-                row = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if not isinstance(row, dict):
-                continue
-            rows.append(self.clean_project_row(row, len(rows) + 1))
-        return self.sorted_project_rows(rows)
-
-    def write_project_rows(self, rows: list[dict[str, Any]]) -> None:
-        self.config.project_workbench_index.parent.mkdir(parents=True, exist_ok=True)
-        lines = [json.dumps(row, ensure_ascii=False, separators=(",", ":")) for row in self.sorted_project_rows(rows)]
-        self.write_atomic_text(self.config.project_workbench_index, "\n".join(lines) + ("\n" if lines else ""))
-
-    def sorted_project_rows(self, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        return sorted(rows, key=lambda row: (PROJECT_BUCKET_ORDER.get(str(row.get("bucket")), 9), int(row.get("rank") or 9999), str(row.get("id"))))
-
-    def clean_project_row(self, source: dict[str, Any], rank: int) -> dict[str, Any]:
-        project_id = self.project_id(source)
-        row = {
-            "id": project_id,
-            "path": self.compact_text(source.get("path")),
-            "owner_route": self.clean_owner_route(source.get("owner_route")),
-            "workbench_path": self.compact_text(source.get("workbench_path") or source.get("path")),
-            "code_root": self.compact_text(source.get("code_root")),
-            "archived": bool(source.get("archived")),
-            "bucket": self.clean_project_bucket(source.get("bucket")),
-            "rank": self.clean_rank(source.get("rank") or rank),
-            "name": self.compact_text(source.get("name") or project_id),
-            "brief": self.compact_text(source.get("brief")),
-            "current_d": self.compact_text(source.get("current_d")),
-            "items": self.clean_project_items(source.get("items")),
-        }
-        if isinstance(source.get("definition"), dict):
-            definition = pd_state.clean_project_definition(source.get("definition"))
-            if definition:
-                row["definition"] = definition
-                definition_sync = self.clean_project_definition_sync(source, project_id, definition)
-                if definition_sync:
-                    row["definition_sync"] = definition_sync
-                submit = source.get("definition_submit")
-                status = self.compact_text(submit.get("status")) if isinstance(submit, dict) else ""
-                expected_hash = pd_state.project_definition_downlink_hash(project_id, definition)
-                if status in PROJECT_DEFINITION_SUBMIT_STATUSES and self.compact_text(submit.get("hash")) == expected_hash:
-                    row["definition_submit"] = {"status": status, "hash": expected_hash}
-                    if isinstance(submit.get("updated_at"), int):
-                        row["definition_submit"]["updated_at"] = submit["updated_at"]
-        return row
-
-    def clean_project_items(self, items: Any) -> list[dict[str, Any]]:
-        source = items if isinstance(items, list) else []
-        clean_items = []
-        counts = {item_type: 0 for item_type in PROJECT_ITEM_TYPES}
-        for index, item in enumerate(source, 1):
-            if not isinstance(item, dict):
-                continue
-            item_type = str(item.get("type") or "").strip()
-            title = self.compact_text(item.get("title"))
-            if item_type not in PROJECT_ITEM_TYPES or not title:
-                continue
-            status = str(item.get("status") or "open").strip()
-            if status in PROJECT_DONE_STATUSES:
-                continue
-            stage = self.compact_text(item.get("stage"))
-            if stage not in PROJECT_ITEM_STAGES:
-                stage = {"in_progress": "in_progress", "review": "receipt_submitted", "paused": "paused"}.get(status, "awaiting_owner")
-            if counts[item_type] >= PROJECT_ITEM_TYPE_LIMIT:
-                continue
-            counts[item_type] += 1
-            clean = {
-                "id": str(item.get("id") or f"item-{index}").strip(),
-                "type": item_type,
-                "title": title,
-                "body": self.compact_text(item.get("body")),
-                "recommendation": self.compact_text(item.get("recommendation")),
-                "status": status,
-                "stage": stage,
-            }
-            for key in ("workorder_id", "worker_session", "updated_at"):
-                value = self.compact_text(item.get(key))
-                if value:
-                    clean[key] = value
-            prompt = pd_state.clean_item_decision_prompt(item.get("decision_prompt"), item_type)
-            if prompt:
-                clean["decision_prompt"] = prompt
-            decision = pd_state.clean_owner_decision(item.get("owner_decision"))
-            if decision:
-                clean["owner_decision"] = decision
-            clean_items.append(clean)
-        return clean_items
-
-    def project_id(self, data: dict[str, Any]) -> str:
-        raw = str(data.get("id") or data.get("name") or "project").strip().lower()
-        slug = re.sub(r"[^a-z0-9]+", "-", raw).strip("-")
-        return slug or "project"
-
-    def clean_project_bucket(self, value: Any) -> str:
-        bucket = str(value or "B").strip().upper()[:1]
-        return bucket if bucket in PROJECT_BUCKETS else "B"
-
-    def clean_owner_route(self, value: Any) -> str:
-        route = str(value or "").strip().lower()
-        return route if route in BACKENDS else ""
-
-    def clean_rank(self, value: Any) -> int:
-        try:
-            return max(1, int(value))
-        except (TypeError, ValueError):
-            return 9999
-
-    def compact_text(self, value: Any) -> str:
-        return " ".join(str(value or "").split())
-
-    def write_atomic_text(self, path: Path, text: str) -> None:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = path.with_name(f".{path.name}.tmp")
-        tmp.write_text(text, encoding="utf-8")
-        os.chmod(tmp, 0o600)
-        os.replace(tmp, path)
-
     def handle_bridge_package_create(self, username: str) -> None:
         try: self.write_json({"ok": True, "package": self.config.save_bridge_package(self.read_json_body(), username)}, HTTPStatus.OK)
         except ValueError as exc: self.write_json({"ok": False, "error": str(exc)}, HTTPStatus.BAD_REQUEST)
@@ -2216,6 +1360,43 @@ class GatewayHandler(BaseHTTPRequestHandler):
         delivered["owner_path"] = owner_path
         return delivered
 
+    def handle_session_history_lifecycle(self, username: str, archived: bool) -> None:
+        try:
+            payload = self.read_json_body(4096)
+            route = str(payload.get("route") or "").strip().lower()
+            agent_session_id = clean_agent_session_id(str(payload.get("agent_session_id") or payload.get("agentSessionId") or ""))
+            self.set_control_audit_target(agent_session_id or "", route=route)
+            if route not in BACKENDS or not agent_session_id:
+                raise ValueError("route and agent_session_id are required")
+            if not self.config.allowed_route(username, route):
+                self.write_json({"ok": False, "error": "forbidden"}, HTTPStatus.FORBIDDEN)
+                return
+            action = "archive" if archived else "unarchive"
+            response = self.owner_json_request(
+                route,
+                f"/api/agent-session/{action}",
+                {"agent_session_id": agent_session_id},
+                username,
+                timeout=10,
+            )
+            if not response.get("ok"):
+                raw_status = int(response.get("httpStatus") or HTTPStatus.BAD_GATEWAY)
+                try:
+                    status = HTTPStatus(raw_status)
+                except ValueError:
+                    status = HTTPStatus.BAD_GATEWAY
+                self.write_json({"ok": False, "error": str(response.get("error") or f"owner {action} failed")}, status)
+                return
+            self.set_control_audit_target(agent_session_id, idempotent=bool(response.get("duplicate")))
+            self.write_json({
+                "ok": True,
+                "agentSessionId": agent_session_id,
+                "archived": bool(response.get("archived")),
+                "duplicate": bool(response.get("duplicate")),
+            }, HTTPStatus.OK)
+        except (TypeError, ValueError) as exc:
+            self.write_json({"ok": False, "error": str(exc)}, HTTPStatus.BAD_REQUEST)
+
     def handle_agent_resume(self, username: str) -> None:
         try:
             payload = self.read_json_body(65536); route = str(payload.get("route") or "").strip(); agent_session_id = clean_agent_session_id(str(payload.get("agent_session_id") or "")); source = str(payload.get("source") or "")
@@ -2258,602 +1439,6 @@ class GatewayHandler(BaseHTTPRequestHandler):
             self.write_json({"ok": True, "redirect": f"/{route}/?session={target_session}", "session": target_session}, HTTPStatus.OK)
         except ValueError as exc: self.write_json({"ok": False, "error": str(exc)}, HTTPStatus.BAD_REQUEST)
 
-    def handle_faryo_dispatch(self, username: str) -> None:
-        try:
-            payload = self.read_json_body(128 * 1024)
-            project = self.dispatch_project(payload)
-            if self.project_has_active_workorder(project["row"]):
-                raise ValueError("project already has active workorder")
-            item_ids = self.workorder_item_ids(project["row"], payload)
-            route = project["owner_route"]
-            owner_status = self.project_owner_workbench_status(project, username)
-            prompt = str(payload.get("prompt") or "").strip()
-            if not prompt:
-                raise ValueError("prompt is required")
-            title = clean_session_title(payload.get("title") or f"P:{project['name']}")
-            selected_cwd = owner_status["cwd"]
-            launch = {"command": "codex", "cwd": selected_cwd, "title": title, "max_running": self.max_running_for(username, route)}
-            response = self.owner_json_request(route, "/api/agent/new", launch, username, timeout=10, extra_headers={"X-Faryo-Workspace-Root": selected_cwd})
-            session = clean_session_id(str(response.get("session") or "")) if response.get("ok") else ""
-            if not session:
-                self.write_json({"ok": False, "error": self.compact_text(response.get("error")) or "owner new session failed", "route": route}, HTTPStatus.BAD_GATEWAY); return
-            workorder_id = self.new_workorder_id()
-            workorder = self.owner_json_request(route, "/api/workorder/create", {
-                "project_root": selected_cwd,
-                "workorder_id": workorder_id,
-                "content": self.render_workorder(project, selected_cwd, workorder_id, prompt, item_ids, owner_status["hash"]),
-            }, username, timeout=10)
-            if not workorder.get("ok"):
-                self.owner_json_request(route, "/api/session/close", {"session": session}, username, timeout=4)
-                self.write_json({"ok": False, "error": workorder.get("error") or "owner workorder create failed", "route": route, "session": session}, HTTPStatus.BAD_GATEWAY); return
-            transitioned = self.owner_json_request(route, "/api/workbench/transition", {
-                "project_root": selected_cwd,
-                "event_type": "workorder_created",
-                "item_ids": item_ids,
-                "workorder_id": workorder_id,
-                "actor": "faryo-controller",
-                "source": "faryo-dispatch",
-                "summary": f"Faryo created workorder {workorder_id}.",
-            }, username, timeout=10)
-            if not transitioned.get("ok"):
-                self.owner_json_request(route, "/api/session/close", {"session": session}, username, timeout=4)
-                self.write_json({"ok": False, "error": transitioned.get("error") or "owner transition failed", "route": route, "session": session}, HTTPStatus.BAD_GATEWAY); return
-            projected = self.update_projection_from_owner_project(project["id"], transitioned.get("project"))
-            if projected:
-                project["row"] = projected
-            workorder["item_ids"] = item_ids
-            sent = self.owner_json_request(route, "/api/send", {"session": session, "text": self.workorder_dispatch_prompt(project, workorder)}, username, timeout=10)
-            if not sent.get("ok"):
-                self.rollback_failed_dispatch(username, route, selected_cwd, project["id"], item_ids, workorder_id, "Worker prompt send failed; returned items to approved workorder queue.")
-                self.owner_json_request(route, "/api/session/close", {"session": session}, username, timeout=4)
-                self.write_json({"ok": False, "error": sent.get("error") or "owner send failed", "route": route, "session": session}, HTTPStatus.BAD_GATEWAY); return
-            started = self.owner_json_request(route, "/api/workbench/transition", {
-                "project_root": selected_cwd,
-                "event_type": "worker_started",
-                "item_ids": item_ids,
-                "workorder_id": workorder_id,
-                "worker_session": session,
-                "actor": "faryo-controller",
-                "source": "faryo-dispatch",
-                "summary": f"Worker session {session} started for workorder {workorder_id}.",
-            }, username, timeout=10)
-            if not started.get("ok"):
-                self.rollback_failed_dispatch(username, route, selected_cwd, project["id"], item_ids, workorder_id, "Worker start transition failed; returned items to approved workorder queue.")
-                self.owner_json_request(route, "/api/session/close", {"session": session}, username, timeout=4)
-                self.write_json({"ok": False, "error": started.get("error") or "owner worker-start transition failed", "route": route, "session": session}, HTTPStatus.BAD_GATEWAY); return
-            projected = self.update_projection_from_owner_project(project["id"], started.get("project"))
-            if projected:
-                project["row"] = projected
-            self.start_workorder_receipt_watch(username, route, selected_cwd, project, workorder, session)
-            self.write_json({"ok": True, "route": route, "session": session, "title": title, "cwd": selected_cwd, "workorder": workorder, "redirect": f"/{route}/?session={session}"}, HTTPStatus.OK)
-        except ValueError as exc:
-            self.write_json({"ok": False, "error": str(exc)}, HTTPStatus.BAD_REQUEST)
-
-    def handle_faryo_workorder_verify(self, username: str) -> None:
-        try:
-            payload = self.read_json_body(4096)
-            project = self.dispatch_project(payload)
-            workorder_id = self.compact_text(payload.get("workorder_id") or payload.get("workorderId"))
-            if not workorder_id:
-                raise ValueError("workorder_id is required")
-            if self.compact_text(payload.get("result")) not in {"pass", "fail"}:
-                raise ValueError("result must be pass or fail")
-            result = self.verify_project_workorder_result(username, project, workorder_id, payload, actor="faryo-controller")
-            self.write_json(result, HTTPStatus.OK if result.get("ok") else HTTPStatus.BAD_GATEWAY)
-        except ValueError as exc:
-            self.write_json({"ok": False, "error": str(exc)}, HTTPStatus.BAD_REQUEST)
-
-    def handle_project_workbench_transition(self, username: str) -> None:
-        try:
-            payload = self.read_json_body(32 * 1024)
-            project = self.dispatch_project(payload)
-            route = project["owner_route"]
-            last_error = ""
-            for cwd in project["cwd_candidates"]:
-                result = self.owner_json_request(route, "/api/workbench/transition", {**payload, "project_root": cwd}, username, timeout=10)
-                if result.get("ok"):
-                    updated = self.update_projection_from_owner_project(project["id"], result.get("project"))
-                    submitted = self.update_definition_submit_from_transition(project["id"], payload)
-                    if submitted:
-                        updated = submitted
-                    self.write_json({"ok": True, "transition": result, "project": updated, "workbench": self.project_workbench_payload()}, HTTPStatus.OK)
-                    return
-                last_error = self.compact_text(result.get("error")) or "owner transition failed"
-            self.write_json({"ok": False, "error": last_error, "route": route}, HTTPStatus.BAD_GATEWAY)
-        except ValueError as exc:
-            self.write_json({"ok": False, "error": str(exc)}, HTTPStatus.BAD_REQUEST)
-
-    def update_projection_from_owner_project(self, project_id: str, owner_project: Any) -> dict[str, Any] | None:
-        if not isinstance(owner_project, dict):
-            return None
-        rows = self.read_project_rows()
-        changed = False
-        updated_row = None
-        for row in rows:
-            if row["id"] != project_id:
-                continue
-            for key in ("name", "brief", "current_d", "items"):
-                if key in owner_project:
-                    row[key] = owner_project[key]
-            updated_row = self.clean_project_row(row, int(row.get("rank") or 9999))
-            row.update(updated_row)
-            changed = True
-            break
-        if changed:
-            self.write_project_rows(rows)
-        return updated_row
-
-    def update_definition_submit_from_transition(self, project_id: str, payload: dict[str, Any]) -> dict[str, Any] | None:
-        if self.compact_text(payload.get("event_type") or payload.get("eventType")) != "item_created":
-            return None
-        definition_hash = self.compact_text(payload.get("definition_hash") or payload.get("definitionHash"))
-        if not definition_hash:
-            return None
-        rows = self.read_project_rows()
-        for index, row in enumerate(rows):
-            if row["id"] != project_id:
-                continue
-            expected_hash = pd_state.project_definition_downlink_hash(project_id, row.get("definition"))
-            if definition_hash != expected_hash:
-                return None
-            updated = dict(row)
-            updated["definition_submit"] = self.project_definition_submit(row, "converted")
-            rows[index] = self.clean_project_row(updated, int(row.get("rank") or index + 1))
-            self.write_project_rows(rows)
-            return rows[index]
-        return None
-
-    def dispatch_project(self, payload: dict[str, Any]) -> dict[str, Any]:
-        project_id = self.project_id({"id": payload.get("project_id") or payload.get("projectId") or payload.get("id") or ""})
-        if not project_id or project_id == "project":
-            raise ValueError("project_id is required")
-        row = next((item for item in self.read_project_rows() if item["id"] == project_id), None)
-        if not row:
-            raise ValueError("project not found")
-        if row.get("archived"):
-            raise ValueError("project is archived")
-        route = row.get("owner_route") or ""
-        name = row.get("name") or row["id"]
-        if route not in BACKENDS:
-            raise ValueError("project owner_route is invalid")
-        cwd_candidates = self.project_worker_cwd_candidates(row)
-        if not cwd_candidates:
-            raise ValueError("project cwd is missing")
-        return {"id": project_id, "name": name, "owner_route": route, "cwd_candidates": cwd_candidates, "row": row}
-
-    def workorder_dispatch_prompt(self, project: dict[str, Any], workorder: dict[str, Any]) -> str:
-        path = self.compact_text(workorder.get("path"))
-        relative_path = self.compact_text(workorder.get("relative_path"))
-        workorder_id = self.compact_text(workorder.get("id"))
-        item_ids = workorder.get("item_ids") if isinstance(workorder.get("item_ids"), list) else []
-        item_line = "覆盖事项：" + ", ".join(f"`{self.compact_text(item_id)}`" for item_id in item_ids if self.compact_text(item_id)) + "。"
-        return "\n".join([
-            f"执行 Faryo 工单 `{workorder_id}`。",
-            f"项目：`{project['id']}`；Owner route（归属端路由）：`{project['owner_route']}`。",
-            f"工单路径：`{path}`" + (f"（相对路径：`{relative_path}`）" if relative_path else "") + "。",
-            item_line,
-            "先读取工单和 `00-system/workbench.json`，按绑定 item（事项）核对 action（执行项）、decision（裁决项）和 watch（说明项）；decision/watch 只作为本轮上下文，执行范围只限 action。",
-            "不要直接手写 `workbench.json` 或 `workbench.history.jsonl`；Receipt（回执）提交后由主控做业务验收，通过时再由状态机写入历史。",
-            "未写 Receipt 不得声称完成；若发现新事项，只在回执中提出，不要绕过状态机写入。",
-        ])
-
-    def workorder_item_ids(self, row: dict[str, Any], payload: dict[str, Any]) -> list[str]:
-        values = payload.get("item_ids")
-        if not isinstance(values, list):
-            raise ValueError("item_ids is required")
-        requested: list[str] = []
-        for value in values:
-            item_id = self.compact_text(value)
-            if item_id and item_id not in requested:
-                requested.append(item_id)
-        if not requested:
-            raise ValueError("item_ids is required")
-        approved: dict[str, str] = {}
-        for item in row.get("items") if isinstance(row.get("items"), list) else []:
-            if not isinstance(item, dict):
-                continue
-            item_id = self.compact_text(item.get("id"))
-            item_type = self.compact_text(item.get("type"))
-            stage = self.compact_text(item.get("stage"))
-            if item_id and stage == "approved_for_workorder":
-                approved[item_id] = item_type
-        invalid = [item_id for item_id in requested if item_id not in approved]
-        if invalid:
-            raise ValueError("item_ids must target approved items: " + ", ".join(invalid))
-        if not any(approved.get(item_id) == "action" for item_id in requested):
-            raise ValueError("item_ids must include at least one approved action item")
-        return requested
-
-    def project_has_active_workorder(self, row: dict[str, Any]) -> bool:
-        for item in row.get("items") if isinstance(row.get("items"), list) else []:
-            if isinstance(item, dict) and self.compact_text(item.get("stage")) in {"workorder_created", "in_progress", "receipt_submitted", "needs_fix"}:
-                return True
-        return False
-
-    def rollback_failed_dispatch(self, username: str, route: str, cwd: str, project_id: str, item_ids: list[str], workorder_id: str, summary: str) -> None:
-        result = self.owner_json_request(route, "/api/workbench/transition", {
-            "project_root": cwd,
-            "event_type": "workorder_dispatch_failed",
-            "item_ids": item_ids,
-            "workorder_id": workorder_id,
-            "actor": "faryo-controller",
-            "source": "faryo-dispatch",
-            "summary": summary,
-        }, username, timeout=10)
-        if result.get("ok"):
-            self.update_projection_from_owner_project(project_id, result.get("project"))
-
-    def project_owner_workbench_status(self, project: dict[str, Any], username: str) -> dict[str, str]:
-        expected = self.project_workbench_hash(project["row"])
-        route = project["owner_route"]
-        last_error = ""
-        for cwd in project["cwd_candidates"]:
-            result = self.owner_json_request(route, "/api/workbench/status", {"project_root": cwd}, username, timeout=10)
-            if not result.get("ok"):
-                last_error = self.compact_text(result.get("error")) or "owner workbench status failed"
-                continue
-            actual = self.compact_text(result.get("workbenchHash"))
-            if actual == expected:
-                return {"cwd": cwd, "hash": actual}
-            last_error = f"project truth hash mismatch: {project['id']}"
-        raise ValueError(last_error or "owner workbench status failed")
-
-    def new_workorder_id(self) -> str:
-        return f"wo-{time.strftime('%Y%m%d-%H%M%S', time.gmtime())}-{secrets.token_hex(4)}"
-
-    def render_workorder(self, project: dict[str, Any], cwd: str, workorder_id: str, prompt: str, item_ids: list[str], workbench_hash: str) -> str:
-        row = project["row"]
-        items = row.get("items") if isinstance(row.get("items"), list) else []
-        selected_ids = set(item_ids)
-        item_lines = []
-        type_labels = {"action": "action（执行项）", "decision": "decision（裁决项）", "watch": "watch（说明项）"}
-        for item in items:
-            if not isinstance(item, dict):
-                continue
-            item_id = self.compact_text(item.get("id"))
-            if item_id not in selected_ids:
-                continue
-            title = self.compact_text(item.get("title"))
-            if title:
-                item_type = self.compact_text(item.get("type"))
-                item_lines.append(f"- `{item_id}` [{type_labels.get(item_type, item_type or 'item（事项）')}] {title}")
-        values = {
-            "workorder_id": workorder_id,
-            "project_id": project["id"],
-            "project_name": project["name"],
-            "owner_route": project["owner_route"],
-            "project_root": cwd,
-            "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-            "workbench_hash": workbench_hash,
-            "active_items": "\n".join(item_lines),
-            "task": prompt,
-        }
-        template = WORKORDER_TEMPLATE_SOURCE.read_text(encoding="utf-8")
-        for key, value in values.items():
-            template = template.replace("{{" + key + "}}", str(value))
-        return template
-
-    def faryo_receipt_notice(self, project_id: str, project_name: str, route: str, workorder_id: str, worker_session: str, result: dict[str, Any]) -> str:
-        status = "Receipt（回执）已提交，主控现在做业务验收。" if result.get("ok") else f"Receipt（回执）提交状态迁移失败：{self.compact_text(result.get('error')) or 'unknown error'}。"
-        return "\n".join([
-            status,
-            f"项目：`{project_id}` / {project_name}；Owner route（归属端路由）：`{route}`。",
-            f"工单：`{workorder_id}`；worker session（施工会话）：`{worker_session or 'unknown'}`。",
-            f"业务验收通过：调用 Gateway `/api/faryo/workorder/verify`，payload（请求体）：`{{\"project_id\":\"{project_id}\",\"workorder_id\":\"{workorder_id}\",\"result\":\"pass\"}}`。",
-            f"业务验收不通过：调用同一接口并传 `{{\"project_id\":\"{project_id}\",\"workorder_id\":\"{workorder_id}\",\"result\":\"fail\"}}`，再向该 worker session（施工会话）发纠偏指令；不要重复创建 WO（工单）或 worker（施工会话）。",
-        ])
-
-    def start_workorder_receipt_watch(self, username: str, route: str, cwd: str, project: dict[str, Any], workorder: dict[str, Any], worker_session: str) -> None:
-        workorder_id = self.compact_text(workorder.get("id"))
-        if not workorder_id:
-            return
-        args = (username, route, cwd, project["id"], project["name"], workorder_id, worker_session)
-        threading.Thread(target=self.watch_workorder_receipt, args=args, daemon=True, name=f"faryo-wo-watch-{workorder_id[-8:]}").start()
-
-    def watch_workorder_receipt(self, username: str, route: str, cwd: str, project_id: str, project_name: str, workorder_id: str, worker_session: str) -> None:
-        for _attempt in range(WORKORDER_RECEIPT_WATCH_ATTEMPTS):
-            time.sleep(WORKORDER_RECEIPT_WATCH_INTERVAL_SECONDS)
-            if self.submit_workorder_receipt(username, route, cwd, project_id, project_name, workorder_id, worker_session):
-                return
-
-    def recover_workorder_receipts(self, username: str) -> None:
-        now = time.monotonic()
-        if now - float(getattr(self.server, "workorder_recover_at", 0.0)) < WORKORDER_RECEIPT_WATCH_INTERVAL_SECONDS:  # type: ignore[attr-defined]
-            return
-        setattr(self.server, "workorder_recover_at", now)
-        for project in self.active_workorder_projects(username):
-            if project["receipt_submitted"]:
-                self.notify_workorder_receipt(username, project["route"], project["id"], project["name"], project["workorder_id"], project["worker_session"], {"ok": True})
-                continue
-            for cwd in self.project_worker_cwd_candidates(project["row"])[:2]:
-                if self.submit_workorder_receipt(username, project["route"], cwd, project["id"], project["name"], project["workorder_id"], project["worker_session"]):
-                    break
-
-    def active_workorder_projects(self, username: str) -> list[dict[str, Any]]:
-        projects = []
-        for row in self.read_project_rows():
-            route = self.clean_owner_route(row.get("owner_route"))
-            if not route or not self.config.allowed_route(username, route):
-                continue
-            seen: set[str] = set()
-            for item in row.get("items") if isinstance(row.get("items"), list) else []:
-                if not isinstance(item, dict):
-                    continue
-                stage = self.compact_text(item.get("stage"))
-                if stage not in {"in_progress", "receipt_submitted"}:
-                    continue
-                workorder_id = self.compact_text(item.get("workorder_id"))
-                if not workorder_id or workorder_id in seen:
-                    continue
-                seen.add(workorder_id)
-                projects.append({"id": row["id"], "name": row["name"], "route": route, "row": row, "workorder_id": workorder_id, "worker_session": self.compact_text(item.get("worker_session")), "receipt_submitted": stage == "receipt_submitted"})
-        return projects
-
-    def claim_workorder_receipt(self, route: str, workorder_id: str) -> bool:
-        claims = getattr(self.server, "workorder_receipt_claims", set())  # type: ignore[attr-defined]
-        key = f"{route}:{workorder_id}"
-        if key in claims:
-            return False
-        claims.add(key)
-        setattr(self.server, "workorder_receipt_claims", claims)
-        return True
-
-    def release_workorder_receipt(self, route: str, workorder_id: str) -> None:
-        claims = getattr(self.server, "workorder_receipt_claims", set())  # type: ignore[attr-defined]
-        claims.discard(f"{route}:{workorder_id}")
-        setattr(self.server, "workorder_receipt_claims", claims)
-
-    def notify_workorder_receipt(self, username: str, route: str, project_id: str, project_name: str, workorder_id: str, worker_session: str, result: dict[str, Any], claimed: bool = False) -> bool:
-        if not claimed and not self.claim_workorder_receipt(route, workorder_id):
-            return True
-        notice = self.ensure_faryo_controller(username, self.faryo_receipt_notice(project_id, project_name, route, workorder_id, worker_session, result))
-        if not notice.get("ok"):
-            self.release_workorder_receipt(route, workorder_id)
-        return True
-
-    def submit_workorder_receipt(self, username: str, route: str, cwd: str, project_id: str, project_name: str, workorder_id: str, worker_session: str) -> bool:
-        status = self.owner_json_request(route, "/api/workorder/status", {"project_root": cwd, "workorder_id": workorder_id}, username, timeout=6)
-        if not status.get("ok") or not status.get("receiptReady"):
-            return False
-        if not self.claim_workorder_receipt(route, workorder_id):
-            return True
-        result = self.owner_json_request(route, "/api/workbench/transition", {
-            "project_root": cwd,
-            "event_type": "worker_receipt_submitted",
-            "item_ids": status.get("itemIds"),
-            "workorder_id": workorder_id,
-            "actor": "project-worker",
-            "source": "workorder-watch",
-            "summary": "Workorder receipt submitted for controller review.",
-        }, username, timeout=10)
-        if result.get("ok"):
-            self.update_projection_from_owner_project(project_id, result.get("project"))
-        return self.notify_workorder_receipt(username, route, project_id, project_name, workorder_id, worker_session, result, claimed=True)
-
-    def verify_project_workorder_result(self, username: str, project: dict[str, Any], workorder_id: str, source: dict[str, Any], actor: str = "faryo-controller") -> dict[str, Any]:
-        route = project["owner_route"]
-        last_error = ""
-        for cwd in project["cwd_candidates"]:
-            payload = {"project_root": cwd, "workorder_id": workorder_id, "actor": actor, "result": self.compact_text(source.get("result"))}
-            for key in ("summary", "evidence"):
-                if source.get(key):
-                    payload[key] = self.compact_text(source.get(key))
-            result = self.owner_json_request(route, "/api/workorder/verify", payload, username, timeout=10)
-            if result.get("ok"):
-                projected = self.update_projection_from_owner_project(project["id"], result.get("project"))
-                if projected:
-                    project["row"] = projected
-                projection_synced = self.project_workbench_hash(project["row"]) == self.compact_text(result.get("workbenchHash"))
-                result["projectionSynced"] = projection_synced
-                result["closed"] = bool(result.get("closed") and projection_synced)
-                result["needsFix"] = bool(result.get("needsFix") and projection_synced)
-                result.update({"route": route, "project_id": project["id"], "cwd": cwd})
-                return result
-            last_error = self.compact_text(result.get("error")) or "owner verify failed"
-        return {"ok": False, "error": last_error, "route": route, "project_id": project["id"]}
-
-    def project_worker_cwd_candidates(self, row: dict[str, Any]) -> list[str]:
-        marker = "/00-system/workbench.json"
-        path = self.compact_text(row.get("path"))
-        workbench = self.compact_text(row.get("workbench_path"))
-        code_root = self.compact_text(row.get("code_root"))
-        candidates: list[str] = []
-
-        def add(value: Any) -> None:
-            candidate = self.compact_text(value)
-            if candidate and candidate not in candidates:
-                candidates.append(candidate)
-
-        if code_root.startswith("/"):
-            add(code_root)
-        if workbench.endswith(marker):
-            add(workbench[: -len(marker)])
-        if path.endswith(marker):
-            add(path[: -len(marker)])
-        if path.startswith("/"):
-            add(path)
-        if workbench.startswith("/"):
-            add(str(Path(workbench).parent.parent))
-        root = self.config.owner_project_roots.get(self.compact_text(row.get("owner_route")), "")
-        for segment in self.project_dir_segments(row):
-            add(str(Path(root) / segment))
-        return candidates
-
-    def project_dir_segments(self, row: dict[str, Any]) -> list[str]:
-        name = self.compact_text(row.get("name"))
-        values = [name, self.compact_text(row.get("id")), name.lower() if name else ""]
-        segments: list[str] = []
-        for value in values:
-            segment = self.compact_text(value)
-            if not segment or segment in {".", ".."} or "/" in segment or "\\" in segment or "\x00" in segment:
-                continue
-            if segment not in segments:
-                segments.append(segment)
-        return segments
-
-    def handle_faryo_status(self, username: str) -> None:
-        if not self.config.allowed_route(username, "txy"):
-            self.write_json({"ok": False, "error": "forbidden"}, HTTPStatus.FORBIDDEN)
-            return
-        sessions = self.live_faryo_sessions(username)
-        session = sessions[0] if len(sessions) == 1 else ""
-        self.write_json({
-            "ok": True,
-            "route": "txy",
-            "session": session,
-            "running": bool(session),
-            "conflict": len(sessions) > 1,
-            "sessions": sessions,
-            "redirect": f"/txy/?session={session}" if session else "",
-            "updatedAt": now_ts(),
-        }, HTTPStatus.OK)
-
-    def handle_faryo_start(self, username: str) -> None:
-        try:
-            result = self.ensure_faryo_controller(username, self.faryo_start_prompt())
-            if not result.get("ok"):
-                status = HTTPStatus.CONFLICT if result.get("sessions") else HTTPStatus.BAD_GATEWAY
-                if result.get("error") == "forbidden":
-                    status = HTTPStatus.FORBIDDEN
-                self.write_json(result, status)
-                return
-            self.write_json(result, HTTPStatus.OK)
-        except ValueError as exc:
-            self.write_json({"ok": False, "error": str(exc)}, HTTPStatus.BAD_REQUEST)
-
-    def ensure_faryo_controller(self, username: str, prompt: str = "") -> dict[str, Any]:
-        if not self.config.allowed_route(username, "txy"):
-            return {"ok": False, "error": "forbidden"}
-        session = self.faryo_session_name(username)
-        self.config.install_faryo_codex_profile()
-        sessions = self.live_faryo_sessions(username)
-        if len(sessions) > 1:
-            return {"ok": False, "error": "multiple Faryo profile sessions are running; close extras first", "sessions": sessions}
-        started = False
-        if sessions:
-            session = sessions[0]
-        elif self.tmux_session_exists(session):
-            if not self.kill_tmux_session(session):
-                return {"ok": False, "error": "failed to reset stale Faryo session", "session": session}
-            self.start_faryo_session(session, username, self.latest_faryo_thread_id(), prompt)
-            started = True
-        else:
-            self.start_faryo_session(session, username, self.latest_faryo_thread_id(), prompt)
-            started = True
-        if not self.faryo_controller_ready(username, session):
-            return {"ok": False, "error": "Faryo controller did not become ready", "session": session}
-        if prompt and not started:
-            sent = self.owner_json_request("txy", "/api/send", {"session": session, "text": prompt}, username, timeout=6)
-            if not sent.get("ok"):
-                return {"ok": False, "error": self.compact_text(sent.get("error")) or "failed to send prompt to Faryo", "session": session}
-        return {"ok": True, "redirect": f"/txy/?session={session}", "session": session}
-
-    def faryo_start_prompt(self) -> str:
-        length = int(self.headers.get("Content-Length", "0") or "0")
-        if length <= 0:
-            return ""
-        payload = self.read_json_body(65536)
-        return str(payload.get("prompt") or "").strip()
-
-    def faryo_session_name(self, username: str) -> str:
-        return "faryo-main"
-
-    def latest_faryo_thread_id(self) -> str:
-        if not self.config.faryo_codex_state.is_file(): return ""
-        cutoff = int(time.time()) - 48 * 60 * 60
-        sql = "SELECT id, rollout_path FROM threads WHERE source = 'cli' AND thread_source = 'user' AND COALESCE(archived, 0) = 0 AND cwd = ? AND created_at >= ? ORDER BY created_at DESC, updated_at DESC LIMIT 20"
-        try:
-            conn = sqlite3.connect(f"file:{self.config.faryo_codex_state.as_posix()}?mode=ro", uri=True, timeout=1); rows = conn.execute(sql, (str(self.config.faryo_work_root), cutoff)).fetchall(); conn.close()
-        except sqlite3.Error:
-            return ""
-        return next((clean_agent_session_id(str(thread_id)) or "" for thread_id, rollout_path in rows if self.faryo_profile_rollout(rollout_path)), "")
-
-    def faryo_profile_rollout(self, rollout_path: Any) -> bool:
-        try:
-            first_line = next(line for line in Path(str(rollout_path or "")).expanduser().read_text(encoding="utf-8").splitlines() if line.strip())
-            instructions = (((json.loads(first_line).get("payload") or {}).get("base_instructions") or {}).get("text") or "").strip()
-            profile_source = FARYO_PROFILE_SOURCE.read_text(encoding="utf-8").strip()
-        except (OSError, StopIteration, json.JSONDecodeError):
-            return False
-        return bool(profile_source and instructions.startswith(profile_source[: min(240, len(profile_source))]))
-
-    def tmux_session_exists(self, session: str) -> bool:
-        try: return subprocess.run(["tmux", "has-session", "-t", session], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8", timeout=2, check=False).returncode == 0
-        except subprocess.TimeoutExpired: return False
-
-    def kill_tmux_session(self, session: str) -> bool:
-        try: result = subprocess.run(["tmux", "kill-session", "-t", session], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8", timeout=3, check=False)
-        except subprocess.TimeoutExpired: return False
-        return result.returncode == 0 or not self.tmux_session_exists(session)
-
-    def faryo_controller_ready(self, username: str, session: str, timeout: float = 15) -> bool:
-        deadline = time.monotonic() + timeout; path = "/api/status?" + urlencode({"session": session})
-        while time.monotonic() < deadline:
-            status = self.owner_json_request("txy", path, None, username, method="GET", timeout=3)
-            if status.get("ok") and status.get("agentProfile") == "codex": return True
-            time.sleep(0.5)
-        return False
-
-    def tmux_sessions(self) -> list[str]:
-        try:
-            result = subprocess.run(["tmux", "list-sessions", "-F", "#{session_name}"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8", timeout=2, check=False)
-        except subprocess.TimeoutExpired:
-            return []
-        if result.returncode != 0:
-            return []
-        return [line.strip() for line in result.stdout.splitlines() if line.strip()]
-
-    def tmux_session_option(self, session: str, key: str, value: str | None = None) -> str:
-        if value is not None:
-            subprocess.run(["tmux", "set-option", "-q", "-t", session, key, value], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8", timeout=2, check=False)
-            return value
-        try:
-            result = subprocess.run(["tmux", "show-options", "-qv", "-t", session, key], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8", timeout=2, check=False)
-        except subprocess.TimeoutExpired:
-            return ""
-        return result.stdout.strip() if result.returncode == 0 else ""
-
-    def mark_faryo_session(self, session: str, username: str, thread_id: str = "") -> None:
-        self.tmux_session_option(session, "@faryo_agent_source", "codex-cli")
-        self.tmux_session_option(session, "@faryo_session_title", self.config.faryo_session_title)
-        self.tmux_session_option(session, "@faryo_controller_profile", self.config.faryo_profile_name)
-        if self.config.faryo_code_root.is_dir():
-            self.tmux_session_option(session, "@faryo_git_root", str(self.config.faryo_code_root))
-        if thread_id:
-            self.tmux_session_option(session, "@faryo_agent_session_id", thread_id)
-
-    def live_faryo_sessions(self, username: str) -> list[str]:
-        sessions = []
-        for session in self.tmux_sessions():
-            if self.tmux_session_option(session, "@faryo_controller_profile") == self.config.faryo_profile_name:
-                sessions.append(session)
-        return sorted(set(sessions))
-
-    def start_faryo_session(self, session: str, username: str, thread_id: str = "", prompt: str = "") -> None:
-        codex = shutil.which("codex") or "codex"
-        shell = shutil.which("zsh") or "/usr/bin/zsh"
-        initial_prompt = prompt or "启动 Faryo 主控。先读取项目工作台投影和 Faryo 运行真值，给出当前项目优先级、需要用户裁决的事项，并等待用户下一步指令。"
-        if thread_id:
-            command = shlex.join([codex, "resume", "--profile", self.config.faryo_profile_name, "--cd", str(self.config.faryo_work_root), thread_id, initial_prompt])
-        else:
-            command = shlex.join([codex, "--profile", self.config.faryo_profile_name, "--cd", str(self.config.faryo_work_root), initial_prompt])
-        launch = f"{command}; exec {shlex.quote(shell)} -l"
-        try:
-            result = subprocess.run(
-                ["tmux", "new-session", "-d", "-s", session, "-c", str(self.config.faryo_work_root), shell, "-lc", launch],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                encoding="utf-8",
-                timeout=5,
-                check=False,
-            )
-        except subprocess.TimeoutExpired as exc:
-            raise ValueError("timed out starting Faryo") from exc
-        if result.returncode != 0:
-            raise ValueError(result.stderr.strip() or "failed to start Faryo")
-        self.mark_faryo_session(session, username, thread_id)
-
     def owner_headers(self, route: str, username: str) -> dict[str, str]:
         host, port, label = BACKENDS[route]; headers = {"Host": f"{host}:{port}", "X-Faryo-Owner-Label": owner_label_header_value(label), "X-Owner-Token": self.config.owner_token(route), "X-Faryo-User": username}
         if username != self.config.mcp_user: headers["X-Faryo-History-Scope"] = "workspace"
@@ -2872,7 +1457,7 @@ class GatewayHandler(BaseHTTPRequestHandler):
         finally: conn.close()
         try: result = json.loads(data.decode("utf-8"))
         except Exception: result = {"ok": False, "error": f"owner returned HTTP {resp.status}"}
-        if resp.status >= 400 and isinstance(result, dict): result["ok"] = False
+        if resp.status >= 400 and isinstance(result, dict): result.update({"ok": False, "httpStatus": resp.status})
         return result if isinstance(result, dict) else {"ok": False, "error": "invalid owner response"}
 
     def owner_attachment_request(self, route: str, path: Path, mime_type: str, filename: str, username: str) -> dict[str, Any]:
@@ -2898,7 +1483,7 @@ class GatewayHandler(BaseHTTPRequestHandler):
             result = json.loads(response_body.decode("utf-8"))
         except Exception:
             result = {"ok": False, "error": f"owner returned HTTP {resp.status}"}
-        if resp.status >= 400 and isinstance(result, dict): result["ok"] = False
+        if resp.status >= 400 and isinstance(result, dict): result.update({"ok": False, "httpStatus": resp.status})
         return result if isinstance(result, dict) else {"ok": False, "error": "invalid owner response"}
 
     def max_running_for(self, username: str, route: str) -> int:
@@ -3125,12 +1710,6 @@ class GatewayHandler(BaseHTTPRequestHandler):
     def is_authenticated(self) -> bool:
         return self.current_username() is not None
 
-    def controller_token_username(self) -> str | None:
-        token = self.headers.get("X-Faryo-Guard-Token", "")
-        if self.config.guard_token and self.config.mcp_user and hmac.compare_digest(token, self.config.guard_token):
-            return self.config.mcp_user
-        return None
-
     def current_username(self) -> str | None:
         raw = self.headers.get("Cookie", "")
         if not raw:
@@ -3223,13 +1802,6 @@ class GatewayHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.write_bytes(body)
 
-    def write_static_file(self, filename: str, content_type: str, cache: str = "public, max-age=86400") -> None:
-        path = STATIC_DIR / filename
-        if filename != Path(filename).name or not path.is_file():
-            self.write_not_found("/" + filename)
-            return
-        self.write_asset(path.read_bytes(), content_type, cache)
-
     def write_icon(self, filename: str) -> None:
         if filename not in {"pwa-light-192.png", "pwa-light-512.png", "favicon.png", "favicon.ico", "faryo-mark.png"}:
             self.write_not_found("/icons/" + filename)
@@ -3285,6 +1857,8 @@ PORTAL_CSS += """
 .session-card.state-starting{border-color:color-mix(in srgb,var(--accent2) 48%,var(--line));background:color-mix(in srgb,var(--accent2) 8%,var(--panel))}
 .session-card.state-exited{border-color:color-mix(in srgb,var(--danger) 42%,var(--line));background:color-mix(in srgb,var(--danger) 6%,var(--panel));opacity:.82}
 .session-card.state-desktop{border-color:color-mix(in srgb,var(--muted) 42%,var(--line))}
+.archive-session{color:var(--muted)}
+.restore-session{border-color:color-mix(in srgb,var(--accent) 45%,var(--line));background:color-mix(in srgb,var(--accent) 9%,var(--panel));color:var(--accent)}
 .settings-row.danger-row{border-color:color-mix(in srgb,var(--danger) 40%,var(--line));color:var(--danger)}
 .activity-row{padding:9px 10px;border:1px solid var(--line);border-radius:9px;background:var(--panel2)}
 .activity-row strong{display:block;font-size:12px;line-height:1.25}
@@ -3314,7 +1888,7 @@ async function notice(title,body){await sheet(title,body,[{label:'OK',value:'ok'
 async function selectPackageTarget(item){const targets=handoffTargets.filter(target=>target.id||target.tmuxSession);if(!targets.length){await notice('No session available','Start or resume a session before sending files.');return;}const choices=targets.map((target,index)=>{const active=!!target.tmuxSession,agent=target.source==='codex-cli'?'Codex':'Runtime',route=target.routeLabel||labels[target.route]||target.route,state=active?'Active':(target.limitReached?'Limit reached':'Resume and send');return{label:target.title||target.id||'Untitled session',meta:`${route} · ${agent} · ${state}`,value:String(index),disabled:!active&&!!target.limitReached};});const selected=await sheet('Send files to a session',item.title||'Choose the destination session.',choices);if(selected===null)return;const target=targets[Number(selected)];if(target)await injectPackage(item.id,target.route,target.tmuxSession||'',target.id||'',target.source||'');}
 async function withBusy(task){if(actionBusy)return;actionBusy=true;try{return await task();}catch(error){await notice('Action failed',error.message||String(error));}finally{actionBusy=false;}}
 function activityTime(value){const timestamp=Date.parse(String(value||''));if(!Number.isFinite(timestamp))return 'Unknown time';const seconds=Math.max(0,Math.round((Date.now()-timestamp)/1000));if(seconds<60)return 'Just now';if(seconds<3600)return `${Math.floor(seconds/60)}m ago`;if(seconds<86400)return `${Math.floor(seconds/3600)}h ago`;return `${Math.floor(seconds/86400)}d ago`;}
-async function showSecurityActivity(){document.getElementById('settings')?.classList.remove('open');const data=await fetchJson('/api/security-activity?limit=30',{cache:'no-store'},'Security activity'),entries=Array.isArray(data.entries)?data.entries:[],actionLabels={start:'Start',resume:'Resume',close:'Close',send:'Send',interrupt:'Interrupt',enter:'Enter',up:'Up',down:'Down','file-inject':'File transfer','revoke-sessions':'Revoke sessions'},rows=entries.map(item=>({static:true,label:`${actionLabels[item.action]||item.action||'Control'} · ${item.result||'unknown'}`,meta:[activityTime(item.time),item.route?labels[item.route]||item.route:'Gateway',item.target||'no target',item.idempotent?'idempotent retry':''].filter(Boolean).join(' · ')}));await sheet('Security activity','Recent control metadata only. Message text, titles and paths are never recorded.',rows.length?rows:[{static:true,label:'No control activity yet',meta:'Actions will appear here after you use Faryo controls.'}]);}
+async function showSecurityActivity(){document.getElementById('settings')?.classList.remove('open');const data=await fetchJson('/api/security-activity?limit=30',{cache:'no-store'},'Security activity'),entries=Array.isArray(data.entries)?data.entries:[],actionLabels={start:'Start',resume:'Resume',archive:'Archive',unarchive:'Restore',close:'Close',send:'Send',interrupt:'Interrupt',enter:'Enter',up:'Up',down:'Down','file-inject':'File transfer','revoke-sessions':'Revoke sessions'},rows=entries.map(item=>({static:true,label:`${actionLabels[item.action]||item.action||'Control'} · ${item.result||'unknown'}`,meta:[activityTime(item.time),item.route?labels[item.route]||item.route:'Gateway',item.target||'no target',item.idempotent?'idempotent retry':''].filter(Boolean).join(' · ')}));await sheet('Security activity','Recent control metadata only. Message text, titles and paths are never recorded.',rows.length?rows:[{static:true,label:'No control activity yet',meta:'Actions will appear here after you use Faryo controls.'}]);}
 async function revokeSignedInDevices(){document.getElementById('settings')?.classList.remove('open');const confirmed=await sheet('Revoke signed-in devices','This invalidates every inner Faryo login for your account. It does not stop Codex or close tmux.',[{label:'Revoke all Faryo sessions',meta:'You will sign in again on this device.',value:'revoke',danger:true}]);if(confirmed!=='revoke')return;await fetchJson('/api/auth/revoke-all',{method:'POST',headers:{'Content-Type':'application/json',...(await csrfHeaders())},body:JSON.stringify({confirm:'revoke'})},'Revoke sessions');location.href='/logout';}
 async function selectNewRoute(entries,label){const online=(entries||[]).filter(e=>['online','slow'].includes(e.state));if(!online.length){await notice('No endpoint online','No online endpoint can start sessions.');return null;}const choices=online.map(e=>({label:`Start on ${e.label||labels[e.id]||e.id}`,meta:`${e.activeCount||0}/${e.maxRunning||0} sessions${e.canCreate?'':' · limit reached'}`,value:e.id,disabled:!e.canCreate}));if(!choices.some(item=>!item.disabled)){await sheet('Agent limit reached','Close a running session first.',choices);return null;}return sheet(`Start ${label}`,`Choose the workstation. A new ${label} session will be created.`,choices);}
 async function directoryPage(route,path){const query=path?`?path=${encodeURIComponent(path)}`:'';return fetchJson(`/${route}/api/directories${query}`,{cache:'no-store'},'Directory browser');}
@@ -3328,11 +1902,12 @@ function directorySection(title,items,done,more){if(!items.length&&!more)return 
 function directorySheet(data,recent,label){return new Promise(resolve=>{const modal=document.getElementById('modal'),list=document.getElementById('modalChoices'),actions=document.getElementById('modalActions'),toolbar=document.getElementById('directoryToolbar'),breadcrumb=document.getElementById('directoryBreadcrumb'),search=document.getElementById('directorySearch');resetSheetMode();modal.classList.remove('anchored');modal.classList.add('directory-mode');document.getElementById('modalTitle').textContent='Choose working directory';document.getElementById('modalBody').textContent=`Choose where this ${label} session should work.`;toolbar.hidden=false;let expanded=false;const done=value=>{modal.classList.remove('open','anchored','directory-mode');modal.onclick=null;resetSheetMode();resolve(value);},render=()=>{const model=directoryPickerModel(data,recent,search.value,expanded),nodes=[],recentSection=directorySection('Recent',model.recent,done,model.hasMore?()=>{expanded=true;render();}:null),folderSection=directorySection('Folders',model.folders,done,null),locationSection=directorySection('Locations',model.locations,done,null);for(const section of[recentSection,folderSection,locationSection])if(section)nodes.push(section);if(!model.total){const empty=document.createElement('div');empty.className='directory-empty';empty.textContent=search.value?'No matching folders':'This folder has no subfolders';nodes.push(empty);}list.replaceChildren(...nodes);};breadcrumb.replaceChildren(...directoryBreadcrumbItems(data).map(item=>{const button=document.createElement('button');button.type='button';button.className=`directory-crumb${item.collapsed?' directory-crumb-collapsed':''}`;button.textContent=item.label;if(item.current){button.disabled=true;button.setAttribute('aria-current','location');}else button.addEventListener('click',()=>done({path:item.path}));return button;}));search.oninput=render;const cancel=document.createElement('button');cancel.type='button';cancel.className='mini-btn directory-cancel';cancel.textContent='Cancel';cancel.addEventListener('click',()=>done(null));const select=document.createElement('button');select.type='button';select.className='directory-primary';select.textContent=`Start ${label} here`;select.addEventListener('click',()=>done({cwd:String(data.path||''),cwdToken:String(data.selectionToken||'')}));actions.replaceChildren(cancel,select);modal.onclick=event=>{if(event.target===modal)done(null);};render();modal.classList.add('open');requestAnimationFrame(()=>{breadcrumb.scrollLeft=breadcrumb.scrollWidth;});});}
 async function selectNewCwd(route,label,cwdChoices){const recent=Array.isArray(cwdChoices?.[route])?cwdChoices[route]:[];let path=String(recent[0]?.value||''),initial=true;while(true){let data;try{data=await directoryPage(route,path);}catch(error){if(initial&&path){path='';initial=false;continue;}throw error;}initial=false;const selected=await directorySheet(data,recent,label);if(selected===null)return null;if(selected.cwd)return selected;path=String(selected.path||'');}}
 function newAgentCard(item){const {entries,command,label,cwdChoices}=item,card=document.createElement('button');card.type='button';card.className='session-card launcher-card';card.innerHTML=`<div><div class="session-title">Start ${label}</div><div class="session-meta">New CLI session</div></div><div class="arrow">›</div>`;card.addEventListener('click',()=>withBusy(async()=>{const route=await selectNewRoute(entries,label);if(!route)return;const directory=await selectNewCwd(route,label,cwdChoices);if(directory===null)return;const original=card.innerHTML;card.disabled=true;card.innerHTML=`<div><div class="session-title">Starting ${label}…</div><div class="session-meta">Creating session</div></div><div class="arrow">↗</div>`;try{await agentNew(route,command,directory);}finally{card.disabled=false;card.innerHTML=original;}}));return card;}
-function sessionCard(item){const targetSession=item.tmuxSession||'',agentSessionId=item.id||'',source=item.source||'',active=!!targetSession,managed=!!item.managed,archived=!active&&!!item.archived,blocked=!!item.limitReached,lifecycle=String(item.state||(active?(item.agentRunning?'running':'waiting'):(archived?'archived':'resumable'))),canReceive=!['archived','exited','starting'].includes(lifecycle);const card=document.createElement('div');card.className=`session-card state-${lifecycle}${active?'':' inactive'}${lifecycle==='running'?' running':(lifecycle==='waiting'?' waiting':'')}`;card.dataset.route=item.route;card.dataset.session=targetSession;card.dataset.agentSessionId=agentSessionId;card.dataset.source=source;card.dataset.state=lifecycle;const labelsByState={starting:'Starting',running:'Running',waiting:'Waiting',exited:'Exited',desktop:'Desktop',resumable:'Resume',archived:'Archived'},state=blocked&&lifecycle==='resumable'?'Limit reached':(labelsByState[lifecycle]||'Unknown'),ownership=active&&!managed&&lifecycle!=='desktop'?' · Desktop tmux':'',where=item.cwdLabel||item.cwd||'',updatedAt=localSessionTime(item),agent=source==='codex-cli'?'Codex':'Runtime',title=[item.title||item.id||'Untitled session',item.gitLabel||''].filter(Boolean).join(' ');card.innerHTML=`<div><div class="session-title">${escapeHtml(title)}</div><div class="session-meta">${escapeHtml(item.routeLabel||labels[item.route]||item.route)} · ${agent}${ownership}${where?` · ${escapeHtml(where)}`:''} · ${escapeHtml(updatedAt)} · ${state}</div></div><div>${active&&managed?'<button class="mini-btn close-session" type="button">Close</button>':`<span class="arrow">${archived||lifecycle==='exited'?'—':'›'}</span>`}</div>`;card.title=[title,item.cwd||'',updatedAt,state].filter(Boolean).join(' · ');card.addEventListener('click',(event)=>withBusy(async()=>{if(event.target.closest('.close-session')){event.preventDefault();event.stopPropagation();await closeSession(item.route,targetSession);return;}if(lifecycle==='exited'){event.preventDefault();await notice('Codex exited','Close this managed shell; the Codex thread remains available in Session History.');return;}if(active){location.href=`/${item.route}/?session=${encodeURIComponent(targetSession)}`;return;}if(!agentSessionId)return;event.preventDefault();if(archived){await notice('Archived session','Unarchive this thread in Codex before resuming it.');return;}if(blocked){await notice('Agent limit reached','Close a running session first.');return;}await resumeSession(item.route,agentSessionId,source);}));card.addEventListener('dragover',(event)=>{if(draggedPackage&&agentSessionId&&canReceive){event.preventDefault();card.classList.add('drop-target');}});card.addEventListener('dragleave',()=>card.classList.remove('drop-target'));card.addEventListener('drop',async(event)=>{event.preventDefault();card.classList.remove('drop-target');if(!canReceive)return;const packageId=event.dataTransfer.getData('text/plain')||draggedPackage;if(packageId)await injectPackage(packageId,item.route,targetSession,agentSessionId,source);});return card;}
+function sessionCard(item){const targetSession=item.tmuxSession||'',agentSessionId=item.id||'',source=item.source||'',active=!!targetSession,managed=!!item.managed,archived=!active&&!!item.archived,blocked=!!item.limitReached,lifecycle=String(item.state||(active?(item.agentRunning?'running':'waiting'):(archived?'archived':'resumable'))),canReceive=!['archived','exited','starting'].includes(lifecycle);const card=document.createElement('div');card.className=`session-card state-${lifecycle}${active?'':' inactive'}${lifecycle==='running'?' running':(lifecycle==='waiting'?' waiting':'')}`;card.dataset.route=item.route;card.dataset.session=targetSession;card.dataset.agentSessionId=agentSessionId;card.dataset.source=source;card.dataset.state=lifecycle;const labelsByState={starting:'Starting',running:'Running',waiting:'Waiting',exited:'Exited',desktop:'Desktop',resumable:'Resume',archived:'Archived'},state=blocked&&lifecycle==='resumable'?'Limit reached':(labelsByState[lifecycle]||'Unknown'),ownership=active&&!managed&&lifecycle!=='desktop'?' · Desktop tmux':'',where=item.cwdLabel||item.cwd||'',updatedAt=localSessionTime(item),agent=source==='codex-cli'?'Codex':'Runtime',title=[item.title||item.id||'Untitled session',item.gitLabel||''].filter(Boolean).join(' '),historyAction=lifecycle==='resumable'?'<button class="mini-btn archive-session" type="button">Archive</button>':(lifecycle==='archived'?'<button class="mini-btn restore-session" type="button">Restore</button>':'');card.innerHTML=`<div><div class="session-title">${escapeHtml(title)}</div><div class="session-meta">${escapeHtml(item.routeLabel||labels[item.route]||item.route)} · ${agent}${ownership}${where?` · ${escapeHtml(where)}`:''} · ${escapeHtml(updatedAt)} · ${state}</div></div><div>${active&&managed?'<button class="mini-btn close-session" type="button">Close</button>':(historyAction||`<span class="arrow">${archived||lifecycle==='exited'?'—':'›'}</span>`)}</div>`;card.title=[title,item.cwd||'',updatedAt,state].filter(Boolean).join(' · ');card.addEventListener('click',(event)=>withBusy(async()=>{if(event.target.closest('.close-session')){event.preventDefault();event.stopPropagation();await closeSession(item.route,targetSession);return;}if(event.target.closest('.archive-session')){event.preventDefault();event.stopPropagation();await changeSessionArchived(item,true);return;}if(event.target.closest('.restore-session')){event.preventDefault();event.stopPropagation();await changeSessionArchived(item,false);return;}if(lifecycle==='exited'){event.preventDefault();await notice('Codex exited','Close this managed shell; the Codex thread remains available in Session History.');return;}if(active){location.href=`/${item.route}/?session=${encodeURIComponent(targetSession)}`;return;}if(!agentSessionId)return;event.preventDefault();if(archived){await notice('Archived session','Restore this thread before resuming it.');return;}if(blocked){await notice('Agent limit reached','Close a running session first.');return;}await resumeSession(item.route,agentSessionId,source);}));card.addEventListener('dragover',(event)=>{if(draggedPackage&&agentSessionId&&canReceive){event.preventDefault();card.classList.add('drop-target');}});card.addEventListener('dragleave',()=>card.classList.remove('drop-target'));card.addEventListener('drop',async(event)=>{event.preventDefault();card.classList.remove('drop-target');if(!canReceive)return;const packageId=event.dataTransfer.getData('text/plain')||draggedPackage;if(packageId)await injectPackage(packageId,item.route,targetSession,agentSessionId,source);});return card;}
 function newLaunchRequestId(){return globalThis.crypto?.randomUUID?`web-${crypto.randomUUID()}`:`web-${Date.now().toString(36)}-${Math.random().toString(36).slice(2,14)}`;}
 async function agentNew(route,command,directory){const payload={route,command,client_launch_id:newLaunchRequestId()};if(directory?.cwd){payload.cwd=directory.cwd;payload.cwd_token=directory.cwdToken||'';}const request=async()=>fetchJson('/api/agent/new',{method:'POST',headers:{'Content-Type':'application/json',...(await csrfHeaders())},body:JSON.stringify(payload)},'Start Codex');let data;try{data=await request();}catch(error){if(!error.retryable)throw error;await new Promise(resolve=>setTimeout(resolve,350));data=await request();}location.href=data.redirect;}
 async function resumeSession(route,agentSessionId,source){const data=await fetchJson('/api/agent/resume',{method:'POST',headers:{'Content-Type':'application/json',...(await csrfHeaders())},body:JSON.stringify({route,agent_session_id:agentSessionId,source})},'Resume session');location.href=data.redirect||`/${route}/?session=${encodeURIComponent(data.session)}`;}
 async function closeSession(route,session){const ok=await sheet('Close Session','This closes the running session. Busy sessions may refuse to close.',[{label:'Close Session',meta:session,value:'ok',danger:true}]);if(ok!=='ok')return;await fetchJson(`/${route}/api/session/close`,{method:'POST',headers:{'Content-Type':'application/json',...(await csrfHeaders())},body:JSON.stringify({session})},'Close session');await refreshWorkbench();}
+async function changeSessionArchived(item,archived){if(!item?.route||!item?.id)return;if(archived){const confirmed=await sheet('Archive session','Move this Codex thread out of Current history. You can restore it from the Archived filter.',[{label:'Archive session',meta:'Reversible · conversation content is retained',value:'archive'}]);if(confirmed!=='archive')return;}await fetchJson(`/api/session-history/${archived?'archive':'unarchive'}`,{method:'POST',headers:{'Content-Type':'application/json',...(await csrfHeaders())},body:JSON.stringify({route:item.route,agent_session_id:item.id})},archived?'Archive session':'Restore session');await refreshWorkbench();}
 async function injectPackage(packageId,route,session,agentSessionId,source){const payload={package_id:packageId,route};if(session)payload.session=session;if(agentSessionId){payload.agent_session_id=agentSessionId;payload.source=source;}const data=await fetchJson('/api/bridge-inject',{method:'POST',headers:{'Content-Type':'application/json',...(await csrfHeaders())},body:JSON.stringify(payload)},'Send files');location.href=data.redirect||`/${route}/${session?`?session=${encodeURIComponent(session)}`:''}`;}
 function renderWorkbench(data){markRoutes(data.entries||[]);const packages=data.inbox||data.packages||[],rawSessions=data.sessions||[],activeSessions=Array.isArray(data.activeSessions)?data.activeSessions:rawSessions.filter(item=>item.tmuxSession),sessions=Array.isArray(data.activeSessions)?rawSessions:rawSessions.filter(item=>!item.tmuxSession),history=data.history||{},applied=history.filter||historyFilters,entries=data.entries||[],cwdChoices=data.agentCwdChoices||{},pkg=packages[0],packageItems=pkg?[pkg]:[],allowedCommands=new Set(data.newSessionCommands||['codex']),launchers=[{id:'new-codex',command:'codex',label:'Codex',entries,cwdChoices}].filter(item=>allowedCommands.has(item.command));historyFilters.q=String(applied.q||'').slice(0,96);historyFilters.period=validPeriods.has(applied.period)?applied.period:'all';historyFilters.archive=validArchives.has(applied.archive)?applied.archive:'active';const seenTargets=new Set();handoffTargets=[...activeSessions,...sessions].filter(item=>{const key=`${item.route}:${item.id||item.tmuxSession||''}`;if(item.archived||!item.route||seenTargets.has(key))return false;seenTargets.add(key);return true;});historyPage=Math.max(1,Number(history.page||historyPage||1));historyTotalPages=Math.max(1,Number(history.totalPages||1));const historyPageInput=document.getElementById('historyPageInput'),historySearchInput=document.getElementById('historySearchInput'),historySearchClear=document.getElementById('historySearchClear');if(historyPageInput){historyPageInput.max=String(historyTotalPages);if(document.activeElement!==historyPageInput)historyPageInput.value=String(historyPage);}if(historySearchInput&&document.activeElement!==historySearchInput)historySearchInput.value=historyFilters.q;if(historySearchClear)historySearchClear.hidden=!historyFilters.q;document.querySelectorAll('[data-history-period]').forEach(button=>{const active=button.dataset.historyPeriod===historyFilters.period;button.classList.toggle('active',active);button.setAttribute('aria-pressed',String(active));});document.querySelectorAll('[data-history-archive]').forEach(button=>{const active=button.dataset.historyArchive===historyFilters.archive;button.classList.toggle('active',active);button.setAttribute('aria-pressed',String(active));});document.getElementById('packageCount').textContent=pkg?(pkg.status==='pending'?'· Ready':'· Sent'):'· Empty';document.getElementById('activeSessionCount').textContent=`${activeSessions.length} live`;document.getElementById('historyCount').textContent=historyFilterActive()?`${Number(history.total??sessions.length)} matches`:`${Number(history.total??sessions.length)} total`;document.getElementById('historyPageTotal').textContent=String(historyTotalPages);document.getElementById('historyPrev').disabled=history.hasPrevious===false||historyPage<=1;document.getElementById('historyNext').disabled=history.hasNext===false||historyPage>=historyTotalPages;syncChildren(document.getElementById('packageList'),packageItems,item=>`pkg-${item.id}`,packageCard,'Choose files, then send them to a session.');syncChildren(document.getElementById('newSessionSlot'),launchers,item=>item.id,newAgentCard,'No launchers available');syncChildren(document.getElementById('activeSessionList'),activeSessions,item=>`active-${item.route}-${item.tmuxSession||item.id}`,sessionCard,'No active agent sessions');syncChildren(document.getElementById('sessionList'),sessions,item=>`session-${item.route}-${item.id}`,sessionCard,historyFilterActive()?'No sessions match these filters':'No session history');syncHistoryLocation();}
 async function refreshWorkbench(){const requestedPage=historyPage,generation=++workbenchRequestGeneration;workbenchAbortController?.abort();const controller=new AbortController();workbenchAbortController=controller;let data;try{data=await fetchJson(`/api/workbench?${historyRequestQuery()}`,{cache:'no-store',signal:controller.signal},'Workbench');}catch(error){if(error?.name==='AbortError')return null;throw error;}finally{if(workbenchAbortController===controller)workbenchAbortController=null;}if(generation!==workbenchRequestGeneration||requestedPage!==historyPage)return data;storeWorkbench(data);renderWorkbench(data);return data;}
@@ -3382,7 +1957,7 @@ def portal_html(username: str, routes: list[str]) -> str:
 <style nonce="{CSP_NONCE_PLACEHOLDER}">
 {PORTAL_CSS}
 </style></head><body><div class="shell">
-<header><a class="brand" href="/projects" aria-label="Open project table"><img class="brand-logo" src="/icons/faryo-mark.png?v=faryo-ui-1" alt=""><div><h1>Faryo</h1><div class="subtitle">{safe_user} · Carry work forward</div></div></a><div class="settings" id="settings"><button class="settings-trigger" type="button" aria-label="Settings"><span class="settings-icon">⚙</span></button><div class="settings-menu" aria-label="Settings panel"><button id="installApp" class="settings-row install-row" type="button" hidden><span><strong>Install app</strong><small>Add Faryo to home screen</small></span><em>↗</em></button><div class="menu-title">Appearance</div><button id="themeBtn" class="settings-row appearance-btn" type="button"><span><strong>Theme</strong><small>System</small></span><em>↻</em></button><button id="fontBtn" class="settings-row appearance-btn" type="button"><span><strong>Font</strong><small>Default</small></span><em>↻</em></button><button id="sizeBtn" class="settings-row appearance-btn" type="button"><span><strong>Size</strong><small>Normal</small></span><em>↻</em></button><div class="menu-title">Security</div><button id="securityActivity" class="settings-row" type="button"><span><strong>Security activity</strong><small>Body-free control audit</small></span><em>›</em></button><button id="revokeSessions" class="settings-row danger-row" type="button"><span><strong>Revoke signed-in devices</strong><small>Keep Codex and tmux running</small></span><em>!</em></button><div class="menu-title">Account</div><a class="settings-row" href="/password"><span><strong>Change password</strong></span><em>›</em></a><a class="settings-row" href="/logout"><span><strong>Sign out this device</strong></span><em>›</em></a></div></div></header>
+<header><a class="brand" href="/" aria-label="Faryo home"><img class="brand-logo" src="/icons/faryo-mark.png?v=faryo-ui-1" alt=""><div><h1>Faryo</h1><div class="subtitle">{safe_user} · Carry work forward</div></div></a><div class="settings" id="settings"><button class="settings-trigger" type="button" aria-label="Settings"><span class="settings-icon">⚙</span></button><div class="settings-menu" aria-label="Settings panel"><button id="installApp" class="settings-row install-row" type="button" hidden><span><strong>Install app</strong><small>Add Faryo to home screen</small></span><em>↗</em></button><div class="menu-title">Appearance</div><button id="themeBtn" class="settings-row appearance-btn" type="button"><span><strong>Theme</strong><small>System</small></span><em>↻</em></button><button id="fontBtn" class="settings-row appearance-btn" type="button"><span><strong>Font</strong><small>Default</small></span><em>↻</em></button><button id="sizeBtn" class="settings-row appearance-btn" type="button"><span><strong>Size</strong><small>Normal</small></span><em>↻</em></button><div class="menu-title">Security</div><button id="securityActivity" class="settings-row" type="button"><span><strong>Security activity</strong><small>Body-free control audit</small></span><em>›</em></button><button id="revokeSessions" class="settings-row danger-row" type="button"><span><strong>Revoke signed-in devices</strong><small>Keep Codex and tmux running</small></span><em>!</em></button><div class="menu-title">Account</div><a class="settings-row" href="/password"><span><strong>Change password</strong></span><em>›</em></a><a class="settings-row" href="/logout"><span><strong>Sign out this device</strong></span><em>›</em></a></div></div></header>
 <nav class="routes" aria-label="Endpoint status">{chips_html}</nav><div class="handoff-strip"><section class="handoff" id="handoffBox" aria-label="Files to session"><div class="handoff-head"><div><div class="eyebrow">Transfer</div><h2>Files to session <span class="count" id="packageCount">· Empty</span></h2></div><button class="mini-btn primary-btn" id="newPackage" type="button">Choose files</button></div><input id="packageInput" type="file" accept="image/*,.pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx,.odt,.odp,.ods,.md,.txt,.csv,.json,.rtf" multiple hidden><input id="packageAssetInput" type="file" accept="image/*,.pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx,.odt,.odp,.ods,.md,.txt,.csv,.json,.rtf" multiple hidden><div class="package-list" id="packageList"><div class="empty-state">Choose files, then send them to a session.</div></div></section><section class="new-session-panel" aria-labelledby="newSessionTitle"><div class="new-session-head"><div class="eyebrow">Launch</div><h2 id="newSessionTitle">New session</h2></div><div class="new-session-slot" id="newSessionSlot"><div class="empty-state">Loading launchers…</div></div></section></div>
 <main><section class="session-section active-section" aria-labelledby="activeSessionsTitle"><div class="section-head"><h2 id="activeSessionsTitle">Active Sessions</h2><span class="count" id="activeSessionCount">Loading</span></div><section class="sessions" id="activeSessionList"><div class="empty-state">Loading active sessions...</div></section></section><section class="session-section history-section" aria-labelledby="sessionHistoryTitle"><div class="section-head"><h2 id="sessionHistoryTitle">Session History</h2><span class="count" id="historyCount">Loading</span></div><div class="history-tools"><form class="history-search" id="historySearchForm" role="search"><span aria-hidden="true">⌕</span><label class="visually-hidden" for="historySearchInput">Search session title or folder</label><input id="historySearchInput" type="search" inputmode="search" autocomplete="off" spellcheck="false" maxlength="96" placeholder="Search title or folder"><button class="history-search-clear" id="historySearchClear" type="button" aria-label="Clear history search" hidden>×</button></form><div class="history-filter-row" aria-label="Session history filters"><button class="history-filter-chip" type="button" data-history-period="all" aria-pressed="true">All time</button><button class="history-filter-chip" type="button" data-history-period="today" aria-pressed="false">Today</button><button class="history-filter-chip" type="button" data-history-period="7d" aria-pressed="false">7 days</button><button class="history-filter-chip" type="button" data-history-period="30d" aria-pressed="false">30 days</button><span class="history-filter-separator" aria-hidden="true"></span><button class="history-filter-chip" type="button" data-history-archive="active" aria-pressed="true">Current</button><button class="history-filter-chip" type="button" data-history-archive="archived" aria-pressed="false">Archived</button><button class="history-filter-chip" type="button" data-history-archive="all" aria-pressed="false">Any status</button></div></div><section class="sessions history-list" id="sessionList"><div class="empty-state">Loading history...</div></section><nav class="history-pager" aria-label="Session history pages"><button class="mini-btn" id="historyPrev" type="button">Prev</button><form class="history-jump" id="historyJump"><label for="historyPageInput">Page</label><input class="history-page-input" id="historyPageInput" type="number" min="1" max="1" step="1" inputmode="numeric" value="1" aria-label="History page"><span>of <span id="historyPageTotal">1</span></span><button class="mini-btn" type="submit">Go</button></form><button class="mini-btn" id="historyNext" type="button">Next</button></nav></section></main>
 </div><div class="modal" id="modal"><div class="sheet"><div class="sheet-heading"><div class="sheet-heading-copy"><h3 id="modalTitle"></h3><p id="modalBody"></p></div></div><div id="directoryToolbar" class="directory-toolbar" hidden><nav id="directoryBreadcrumb" class="directory-breadcrumb" aria-label="Current folder"></nav><label class="directory-search"><span class="visually-hidden">Filter folders</span><span aria-hidden="true">⌕</span><input id="directorySearch" type="search" inputmode="search" autocomplete="off" spellcheck="false" placeholder="Filter folders"></label></div><div class="choice-list" id="modalChoices"></div><div class="modal-actions" id="modalActions"></div></div></div><script nonce="{CSP_NONCE_PLACEHOLDER}">

@@ -30,6 +30,12 @@ The authenticated Gateway home page keeps two session regions separate:
   search title/folder metadata with date and archive filter chips. Search never
   scans conversation content and never hides Active Sessions.
 
+Resumable cards offer `Archive`; archived cards offer `Restore`. Archive uses a
+clear confirmation because it moves the thread out of Current results, while
+Restore is immediate. Both actions preserve the current search, filter, and
+page query. Active, desktop, running, waiting, starting, and exited cards do not
+offer archive, and the UI has no hard-delete action.
+
 Only sessions created and stamped by Faryo expose remote Close. Desktop-created
 tmux sessions can be opened but are not remotely destroyed.
 
@@ -47,6 +53,10 @@ folders; the selected canonical path is signed and revalidated by Owner.
 
 Gateway route labels come from runtime configuration. Public browser requests
 never receive raw Owner tokens; Gateway injects them while proxying.
+
+`/` is the one maintained Gateway home. The retired `/projects` orchestration
+surface is not redirected or hidden behind the brand; it returns `404`. Generic
+Files-to-session handoff remains part of the home workbench.
 
 Chat and Raw keep separate capture caches. Raw intentionally replaces the
 conversation area with the complete terminal, so it has no nested `Live from

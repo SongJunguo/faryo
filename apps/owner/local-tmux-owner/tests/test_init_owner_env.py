@@ -16,14 +16,15 @@ INIT_SCRIPT = REPO_ROOT / "apps" / "owner" / "scripts" / "init-owner-env.sh"
 
 
 class InitOwnerEnvTest(unittest.TestCase):
-    def test_explicit_gateway_url_overrides_sourced_environment(self) -> None:
+    def test_initializer_needs_no_gateway_and_migrates_legacy_directory_roots(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             faryo_home = Path(temp) / ".faryo"
             env_file = faryo_home / "owner" / "config" / "faryo.env"
             env_file.parent.mkdir(parents=True)
             env_file.write_text(
                 "FARYO_OWNER_TOKEN=generic-owner-token\n"
-                "FARYO_PROJECT_WORKBENCH_GATEWAY_URL=http://old.invalid\n",
+                "FARYO_PROJECT_WORKBENCH_GATEWAY_URL=http://retired.invalid\n"
+                "FARYO_PROJECT_WORKBENCH_ALLOWED_ROOTS=/workspace/a:/workspace/b\n",
                 encoding="utf-8",
             )
             process_env = {
@@ -32,11 +33,10 @@ class InitOwnerEnvTest(unittest.TestCase):
                 "FARYO_HOME": str(faryo_home),
                 "FARYO_OWNER_ENV": str(env_file),
                 "FARYO_PYTHON": sys.executable,
-                "FARYO_PROJECT_WORKBENCH_GATEWAY_URL": "http://old.invalid",
             }
 
             result = subprocess.run(
-                ["bash", str(INIT_SCRIPT), "https://new.invalid"],
+                ["bash", str(INIT_SCRIPT)],
                 env=process_env,
                 check=False,
                 capture_output=True,
@@ -49,8 +49,9 @@ class InitOwnerEnvTest(unittest.TestCase):
                 for line in env_file.read_text(encoding="utf-8").splitlines()
                 if line and "=" in line
             )
-            self.assertEqual(values["FARYO_PROJECT_WORKBENCH_GATEWAY_URL"], "https://new.invalid")
-            self.assertEqual(values["FARYO_PROJECT_WORKBENCH_SYNC_URL"], "https://new.invalid/api/project-workbench/sync")
+            self.assertEqual(values["FARYO_OWNER_TOKEN"], "generic-owner-token")
+            self.assertEqual(values["FARYO_START_DIRECTORY_ROOTS"], "/workspace/a:/workspace/b")
+            self.assertFalse(any(key.startswith("FARYO_PROJECT_WORKBENCH_") for key in values))
             self.assertEqual(env_file.stat().st_mode & 0o777, 0o600)
 
 

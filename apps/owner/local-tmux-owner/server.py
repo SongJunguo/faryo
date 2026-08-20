@@ -46,10 +46,6 @@ from typing import Any, Callable, NamedTuple
 SHARED_DIR = Path(__file__).resolve().parents[2] / "shared"
 if str(SHARED_DIR) not in sys.path:
     sys.path.insert(0, str(SHARED_DIR))
-import pd_state
-import workbench_state as wb_state
-import urllib.error
-import urllib.request
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
 try:
@@ -126,6 +122,7 @@ EMPTY_MANAGED_SESSION_TTL_SECONDS = 60
 MAX_MANAGED_AGENT_IDLE_SECONDS = 24 * 60 * 60
 AGENT_START_READY_TIMEOUT = 15.0
 AGENT_START_STATE_GRACE_SECONDS = 5.0
+AGENT_ARCHIVE_VERIFY_TIMEOUT = 3.0
 START_DIRECTORY_MAX_ENTRIES = 160
 RUNTIME_LOCK = threading.RLock()
 RELEASE_VERSION_CACHE: str | None = None
@@ -166,10 +163,6 @@ ALLOWED_ATTACHMENT_SUFFIXES = {
     ".pdf", ".doc", ".docx", ".ppt", ".pptx", ".xls", ".xlsx",
     ".odt", ".odp", ".ods", ".md", ".txt", ".csv", ".json", ".rtf",
 }
-PROJECT_ITEM_TYPES = wb_state.ITEM_TYPES
-PROJECT_DONE_STATUSES = wb_state.DONE_STATUSES
-PROJECT_ITEM_STAGES = wb_state.ITEM_STAGES
-PROJECT_TERMINAL_STAGES = wb_state.TERMINAL_STAGES
 IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp", ".gif", ".heic", ".heif"}
 IMAGE_CONTENT_TYPES = {
     ".jpg": "image/jpeg",
@@ -820,9 +813,60 @@ def agent_session_items(config: Config, history_root: str | None = None) -> list
     return sorted(items, key=lambda item: float(item.get("updatedTs") or 0), reverse=True)
 
 
-def codex_thread_by_id(thread_id: str) -> dict[str, Any] | None:
-    rows = codex_rows("id = ? AND source IN ('cli', 'vscode') AND COALESCE(archived, 0) = 0", (thread_id,), 1)
+def codex_thread_record(thread_id: str) -> dict[str, Any] | None:
+    rows = codex_rows("id = ? AND source IN ('cli', 'vscode') AND thread_source = 'user'", (thread_id,), 1)
     return rows[0] if rows else None
+
+
+def thread_record_archived(thread: dict[str, Any] | None) -> bool:
+    try:
+        return bool(int((thread or {}).get("archived") or 0))
+    except (TypeError, ValueError):
+        return False
+
+
+def codex_thread_by_id(thread_id: str) -> dict[str, Any] | None:
+    thread = codex_thread_record(thread_id)
+    return thread if thread and not thread_record_archived(thread) else None
+
+
+def codex_thread_lifecycle_error_status(message: str) -> HTTPStatus:
+    value = str(message or "").lower()
+    if "no rollout found" in value or "no archived rollout found" in value:
+        return HTTPStatus.NOT_FOUND
+    if any(marker in value for marker in ("active", "loaded", "owned", "in use", "descendant")):
+        return HTTPStatus.CONFLICT
+    return HTTPStatus.BAD_GATEWAY
+
+
+def change_codex_thread_archive_state(config: Config, thread_id: str, archived: bool, history_root: str | None = None) -> dict[str, Any]:
+    clean_id = clean_agent_session_id(thread_id)
+    if not clean_id:
+        raise OwnerError("invalid agent session id")
+    thread = codex_thread_record(clean_id)
+    if not thread or (history_root is not None and not path_under_root(str(thread.get("cwd") or ""), history_root)):
+        raise OwnerError("agent session not found", HTTPStatus.NOT_FOUND)
+    if thread_record_archived(thread) == archived:
+        return {"agentSessionId": clean_id, "archived": archived, "duplicate": True}
+    active, superseded = active_codex_thread_state(config)
+    if clean_id in active or clean_id in superseded:
+        raise OwnerError("active agent sessions cannot be archived", HTTPStatus.CONFLICT)
+    method = "thread/archive" if archived else "thread/unarchive"
+    response = codex_app_server_rpc(method, {"threadId": clean_id}, timeout=5.0)
+    if not response.get("ok"):
+        raise OwnerError(
+            "Codex thread lifecycle request failed",
+            codex_thread_lifecycle_error_status(str(response.get("error") or "")),
+        )
+    deadline = time.monotonic() + AGENT_ARCHIVE_VERIFY_TIMEOUT
+    while time.monotonic() < deadline:
+        current = codex_thread_record(clean_id)
+        if current and thread_record_archived(current) == archived:
+            with _codex_thread_cache_lock:
+                _codex_thread_cache.pop(clean_id, None)
+            return {"agentSessionId": clean_id, "archived": archived, "duplicate": False}
+        time.sleep(0.05)
+    raise OwnerError("Codex thread state did not settle", HTTPStatus.BAD_GATEWAY)
 
 
 def agent_launch_executable(command: str) -> str:
@@ -1615,7 +1659,7 @@ def _start_codex_app_server_locked(timeout: float) -> subprocess.Popen[str] | No
     return None
 
 
-def codex_app_server_request(method: str, params: dict[str, Any], timeout: float = 2.5) -> dict[str, Any] | None:
+def codex_app_server_rpc(method: str, params: dict[str, Any], timeout: float = 2.5) -> dict[str, Any]:
     global _codex_app_server_request_id
     with _codex_app_server_lock:
         for _attempt in range(2):
@@ -1634,10 +1678,24 @@ def codex_app_server_request(method: str, params: dict[str, Any], timeout: float
                     break
                 if message.get("id") != request_id:
                     continue
-                result = message.get("result")
-                return result if isinstance(result, dict) else None
+                if isinstance(message.get("error"), dict):
+                    error = message["error"]
+                    return {
+                        "ok": False,
+                        "code": int(error.get("code") or 0),
+                        "error": str(error.get("message") or "Codex App Server request failed"),
+                    }
+                if "result" in message:
+                    return {"ok": True, "result": message.get("result")}
+                return {"ok": False, "code": 0, "error": "Codex App Server returned an invalid response"}
             _stop_codex_app_server_locked()
-    return None
+    return {"ok": False, "code": 0, "error": "Codex App Server is unavailable"}
+
+
+def codex_app_server_request(method: str, params: dict[str, Any], timeout: float = 2.5) -> dict[str, Any] | None:
+    response = codex_app_server_rpc(method, params, timeout)
+    result = response.get("result") if response.get("ok") else None
+    return result if isinstance(result, dict) else None
 
 
 def cached_codex_thread(thread_id: str) -> dict[str, Any] | None:
@@ -2939,9 +2997,7 @@ def resolve_local_image_path(path_value: str | None, config: Config, workspace_r
 
 
 def start_directory_roots(workspace_root: str | None = None) -> list[Path]:
-    values = []
-    for name in ("FARYO_START_DIRECTORY_ROOTS", "FARYO_PROJECT_WORKBENCH_ALLOWED_ROOTS"):
-        values.extend(part for part in os.environ.get(name, "").split(os.pathsep) if part.strip())
+    values = [part for part in os.environ.get("FARYO_START_DIRECTORY_ROOTS", "").split(os.pathsep) if part.strip()]
     if workspace_root:
         values.append(workspace_root)
     if not values:
@@ -3012,638 +3068,11 @@ def directory_browser_payload(config: Config, path_value: str | None, workspace_
 
 
 def compact_text(value: Any) -> str:
-    return wb_state.compact_text(value)
+    return " ".join(str(value or "").split())
 
 
 def clean_session_title(value: Any) -> str:
     return compact_text(value)[:48]
-
-
-def project_slug(value: Any) -> str:
-    return wb_state.project_slug(value)
-
-
-def project_workbench_enabled() -> bool:
-    return env_value("FARYO_PROJECT_WORKBENCH_ENABLE", default="1").strip().lower() not in {"0", "false", "no", "off"}
-
-
-def clean_project_item(item: dict[str, Any], index: int) -> dict[str, str]:
-    return wb_state.clean_item(item, index)
-
-
-def clean_project_workbench(project: dict[str, Any]) -> dict[str, Any]:
-    return wb_state.clean_project(project)
-
-
-def project_workbench_root(project: dict[str, Any]) -> Path:
-    root_value = env_value("FARYO_PROJECT_WORKBENCH_PROJECTS_ROOT").strip() or str(Path.home() / "brain" / "projects")
-    root = Path(root_value).expanduser()
-    keys = {project_slug(project.get("id")), project_slug(project.get("name"))}
-    try:
-        for child in root.iterdir():
-            if child.is_dir() and project_slug(child.name) in keys:
-                return child
-    except OSError as exc:
-        raise OwnerError("project root not found", HTTPStatus.NOT_FOUND) from exc
-    raise OwnerError(f"project not found: {project.get('name') or project.get('id')}", HTTPStatus.NOT_FOUND)
-
-
-def project_workbench_allowed_roots() -> list[Path]:
-    default = os.pathsep.join([str(Path.home() / "brain" / "projects"), str(Path.home() / "brain" / "tools"), str(Path.home() / ".faryo" / "projects")])
-    raw_roots = env_value("FARYO_PROJECT_WORKBENCH_ALLOWED_ROOTS").strip() or default
-    roots = []
-    for chunk in raw_roots.split(os.pathsep):
-        item = chunk.strip()
-        if item:
-            roots.append(Path(item).expanduser().resolve())
-    return roots
-
-
-def ensure_project_workbench_path(path: Path) -> Path:
-    resolved = path.expanduser().resolve()
-    if resolved.name != "workbench.json":
-        resolved = resolved / "00-system" / "workbench.json"
-    allowed_roots = project_workbench_allowed_roots()
-    if not allowed_roots or not any(resolved == root or root in resolved.parents for root in allowed_roots):
-        raise OwnerError("project workbench path is outside allowed roots", HTTPStatus.FORBIDDEN)
-    return resolved
-
-
-def project_workbench_path(project: dict[str, Any]) -> Path:
-    raw_path = compact_text(project.get("workbench_path"))
-    if raw_path:
-        path = Path(raw_path).expanduser()
-        if path.is_absolute():
-            return ensure_project_workbench_path(path)
-        roots = project_workbench_allowed_roots()
-        if not roots:
-            raise OwnerError("project workbench allowed roots not configured", HTTPStatus.FORBIDDEN)
-        return ensure_project_workbench_path(roots[0] / path)
-    return project_workbench_root(project) / "00-system" / "workbench.json"
-
-
-def project_workbench_import_path(raw_path: str) -> tuple[Path, Path]:
-    if not raw_path:
-        raise OwnerError("missing project_root")
-    path = Path(raw_path).expanduser()
-    if not path.is_absolute():
-        roots = project_workbench_allowed_roots()
-        if not roots:
-            raise OwnerError("project workbench allowed roots not configured", HTTPStatus.FORBIDDEN)
-        path = roots[0] / path
-    workbench_path = ensure_project_workbench_path(path)
-    project_root = workbench_path.parent.parent if workbench_path.parent.name == "00-system" else workbench_path.parent
-    if not project_root.is_dir():
-        raise OwnerError("project root not found", HTTPStatus.NOT_FOUND)
-    return project_root, workbench_path
-
-
-def project_workbench_text(project: dict[str, Any]) -> str:
-    return json.dumps(project, ensure_ascii=False, indent=2) + "\n"
-
-
-def write_project_workbench_file(path: Path, project: dict[str, Any]) -> Path:
-    tmp = stage_project_workbench_file(path, project)
-    os.replace(tmp, path)
-    return path
-
-
-def stage_project_workbench_file(path: Path, project: dict[str, Any]) -> Path:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    if path.exists() and not path.is_file():
-        raise OwnerError("project workbench path is not a file", HTTPStatus.BAD_REQUEST)
-    tmp = path.with_name(f".{path.name}.{secrets.token_hex(4)}.tmp")
-    tmp.write_text(project_workbench_text(project), encoding="utf-8")
-    return tmp
-
-
-def update_project_workbench_summary(path: Path, project: dict[str, Any]) -> dict[str, Any]:
-    try:
-        source = json.loads(path.read_text(encoding="utf-8"))
-        if not isinstance(source, dict):
-            source = {}
-    except (OSError, json.JSONDecodeError):
-        source = {}
-    updated = dict(source)
-    updated["id"] = compact_text(updated.get("id") or project.get("id"))
-    for key in ("name", "brief", "current_d"):
-        if key in project:
-            updated[key] = compact_text(project.get(key))
-    updated = clean_project_workbench(updated)
-    write_project_workbench_file(path, updated)
-    return updated
-
-
-def cleanup_staged_project_workbenches(staged: list[tuple[Path, Path]]) -> None:
-    for _path, tmp in staged:
-        try:
-            tmp.unlink()
-        except FileNotFoundError:
-            pass
-
-
-def project_definition_path(project_root: Path) -> Path:
-    return project_root / "00-system" / "conops.md"
-
-
-def project_definition_text(project_root: Path, project: dict[str, Any]) -> str:
-    name = compact_text(project.get("name")) or project_root.name
-    brief = compact_text(project.get("brief")) or "Not defined."
-    current_goal = compact_text(project.get("current_d")) or "Not set."
-    owner = owner_label()
-    return "\n".join([
-        f"# {name}",
-        "",
-        "## Purpose",
-        brief,
-        "",
-        "## Control",
-        f"- Owner: {owner}",
-        f"- Project root: {project_root}",
-        "- Current state file: `00-system/workbench.json`",
-        "",
-        "## Current Goal",
-        current_goal,
-        "",
-        "## Worker Contract",
-        "- Treat `00-system/workbench.json` as a generated current-state projection.",
-        "- Submit state changes through the workbench transition flow before closing a managed work session.",
-        "- Do not treat this file as the live task board; it is the stable project definition.",
-        "",
-    ]) + "\n"
-
-
-def ensure_project_definition_file(project_root: Path, project: dict[str, Any]) -> Path:
-    path = project_definition_path(project_root)
-    if not path.exists():
-        path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = path.with_name(f".{path.name}.tmp")
-        tmp.write_text(project_definition_text(project_root, project), encoding="utf-8")
-        os.replace(tmp, path)
-    return path
-
-
-def initial_project_definition(project: dict[str, Any]) -> dict[str, Any]:
-    return pd_state.clean_project_definition({
-        "current_stage_id": "stage-1",
-        "current_stage_title": "项目定义",
-        "stage_goal": compact_text(project.get("current_d") or project.get("brief")) or "完成项目定义。",
-        "stage_state": "stage_to_define",
-    })
-
-
-def project_definition_root_from_payload(payload: dict[str, Any]) -> Path:
-    raw_root = compact_text(payload.get("project_root") or payload.get("cwd"))
-    if raw_root:
-        return project_root_from_payload(payload)
-    project_root, _workbench_path = project_workbench_import_path(compact_text(payload.get("workbench_path") or payload.get("path")))
-    return project_root
-
-
-def project_definition_payload(payload: dict[str, Any]) -> dict[str, Any]:
-    path = project_definition_path(project_definition_root_from_payload(payload))
-    try:
-        text = path.read_text(encoding="utf-8")
-    except OSError as exc:
-        raise OwnerError("conops.md not found", HTTPStatus.NOT_FOUND) from exc
-    return {"ok": True, "definition": pd_state.parse_project_definition(text), "updatedAt": now_iso()}
-
-
-def project_root_from_workbench_file(path: Path) -> Path:
-    return path.parent.parent if path.parent.name == "00-system" else path.parent
-
-
-def apply_project_definition_downlink(path: Path, project: dict[str, Any], definition: dict[str, Any]) -> dict[str, Any]:
-    return sync_project_definition({**project, "project_root": str(project_root_from_workbench_file(path)), "definition": definition})["definition"]
-
-
-def project_downlink_truth(project: dict[str, Any], definition: dict[str, Any] | None = None) -> dict[str, Any]:
-    truth = clean_project_workbench(project)
-    if isinstance(definition, dict):
-        clean_definition = pd_state.project_definition_hash_payload(definition)
-        if clean_definition:
-            truth["definition"] = clean_definition
-    return truth
-
-
-def project_downlink_hash(project: dict[str, Any], definition: dict[str, Any] | None = None) -> str:
-    return project_workbench_hash(project_downlink_truth(project, definition))
-
-
-def sync_project_definition(payload: dict[str, Any]) -> dict[str, Any]:
-    if not project_workbench_enabled():
-        raise OwnerError("project workbench is disabled", HTTPStatus.FORBIDDEN)
-    definition = pd_state.clean_project_definition(payload.get("definition"))
-    if not definition:
-        raise OwnerError("missing project definition")
-    project_root = project_definition_root_from_payload(payload)
-    path = ensure_project_definition_file(project_root, clean_project_workbench(payload))
-    pd_state.write_project_definition(path, definition)
-    return {"ok": True, "definition": pd_state.parse_project_definition(path.read_text(encoding="utf-8")), "updatedAt": now_iso()}
-
-
-def project_workbench_hash(project: dict[str, Any]) -> str:
-    body = json.dumps(project, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
-    return hashlib.sha256(body).hexdigest()
-
-
-def project_root_from_payload(payload: dict[str, Any]) -> Path:
-    raw_root = compact_text(payload.get("project_root") or payload.get("cwd"))
-    if not raw_root:
-        raise OwnerError("missing project_root")
-    root = Path(raw_root).expanduser().resolve()
-    if not root.is_dir():
-        raise OwnerError("project root not found", HTTPStatus.NOT_FOUND)
-    allowed_roots = project_workbench_allowed_roots()
-    if not allowed_roots or not any(root == allowed or allowed in root.parents for allowed in allowed_roots):
-        raise OwnerError("project root is outside allowed roots", HTTPStatus.FORBIDDEN)
-    return root
-
-
-def project_git_status(payload: dict[str, Any]) -> dict[str, Any]:
-    root = project_root_from_payload(payload)
-    return {"ok": True, "gitStatus": git_status(str(root)), "updatedAt": now_iso()}
-
-
-def clean_workorder_id(value: Any) -> str:
-    cleaned = re.sub(r"[^A-Za-z0-9._-]+", "-", str(value or "").strip()).strip("-")
-    return cleaned[:80]
-
-
-def new_workorder_id() -> str:
-    stamp = _dt.datetime.now(_dt.timezone.utc).strftime("%Y%m%d-%H%M%S")
-    return f"wo-{stamp}-{secrets.token_hex(4)}"
-
-
-def project_git_exclude_info(project_root: Path) -> tuple[Path, str] | None:
-    exclude_result = run_cmd(["git", "-C", str(project_root), "rev-parse", "--git-path", "info/exclude"], timeout=2)
-    root_result = run_cmd(["git", "-C", str(project_root), "rev-parse", "--show-toplevel"], timeout=2)
-    if exclude_result.returncode != 0 or root_result.returncode != 0:
-        return None
-    raw_path = exclude_result.stdout.strip()
-    raw_root = root_result.stdout.strip()
-    if not raw_path:
-        return None
-    git_root = Path(raw_root).expanduser().resolve() if raw_root else project_root
-    path = Path(raw_path)
-    exclude_path = path if path.is_absolute() else project_root / path
-    try:
-        workorders_rel = (project_root / "00-system" / "workorders").resolve().relative_to(git_root)
-    except ValueError:
-        return None
-    marker = "/" + workorders_rel.as_posix().rstrip("/") + "/"
-    return exclude_path, marker
-
-
-def ensure_workorders_git_ignored(project_root: Path) -> bool:
-    info = project_git_exclude_info(project_root)
-    if info is None:
-        return False
-    path, marker = info
-    try:
-        current = path.read_text(encoding="utf-8") if path.exists() else ""
-        if marker in current.splitlines():
-            return True
-        path.parent.mkdir(parents=True, exist_ok=True)
-        suffix = "" if current.endswith("\n") or not current else "\n"
-        path.write_text(current + suffix + marker + "\n", encoding="utf-8")
-        return True
-    except OSError:
-        return False
-
-
-def workbench_file(project_root: Path, name: str) -> Path:
-    return project_root / "00-system" / name
-
-
-def read_project_workbench_file(project_root: Path) -> dict[str, Any]:
-    path = workbench_file(project_root, "workbench.json")
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
-        raise OwnerError("invalid or missing workbench.json", HTTPStatus.BAD_REQUEST) from exc
-    if not isinstance(payload, dict):
-        raise OwnerError("workbench must be a JSON object", HTTPStatus.BAD_REQUEST)
-    return clean_project_workbench(payload)
-
-
-def apply_workbench_transition(payload: dict[str, Any]) -> dict[str, Any]:
-    if not project_workbench_enabled():
-        raise OwnerError("project workbench is disabled", HTTPStatus.FORBIDDEN)
-    project_root = project_root_from_payload(payload)
-    project = read_project_workbench_file(project_root)
-    try:
-        project, events, history_rows, item_ids = wb_state.apply_transition(project, payload)
-        wb_state.write_project(workbench_file(project_root, "workbench.json"), project)
-        wb_state.append_jsonl(workbench_file(project_root, "workbench.events.jsonl"), events)
-        wb_state.append_jsonl(workbench_file(project_root, "workbench.history.jsonl"), history_rows)
-    except LookupError as exc:
-        raise OwnerError(str(exc), HTTPStatus.NOT_FOUND) from exc
-    except ValueError as exc:
-        status = HTTPStatus.CONFLICT if str(exc).startswith("invalid transition:") or str(exc) == "item already exists" else HTTPStatus.BAD_REQUEST
-        raise OwnerError(str(exc), status) from exc
-    except OSError as exc:
-        raise OwnerError("failed to write workbench transition", HTTPStatus.INTERNAL_SERVER_ERROR) from exc
-    return {
-        "ok": True,
-        "project": project,
-        "eventCount": len(events),
-        "historyRows": len(history_rows),
-        "itemIds": item_ids,
-        "workbenchHash": project_workbench_hash(project),
-        "updatedAt": now_iso(),
-    }
-
-
-def project_workbench_status(payload: dict[str, Any]) -> dict[str, Any]:
-    if not project_workbench_enabled():
-        raise OwnerError("project workbench is disabled", HTTPStatus.FORBIDDEN)
-    project_root = project_root_from_payload(payload)
-    project = read_project_workbench_file(project_root)
-    return {
-        "ok": True,
-        "project": project,
-        "workbenchHash": project_workbench_hash(project),
-        "updatedAt": now_iso(),
-    }
-
-
-def read_project_workorder_state(project_root: Path, workorder_id: str) -> tuple[bool, bool, dict[str, Any], list[str]]:
-    if not workorder_id:
-        raise OwnerError("missing workorder_id")
-    workorder_path = project_root / "00-system" / "workorders" / f"{workorder_id}.md"
-    if not workorder_path.is_file():
-        raise OwnerError("workorder not found", HTTPStatus.NOT_FOUND)
-    text = workorder_path.read_text(encoding="utf-8")
-    workbench_path = project_root / "00-system" / "workbench.json"
-    try:
-        project = clean_project_workbench(json.loads(workbench_path.read_text(encoding="utf-8")))
-        workbench_ok = True
-    except (OSError, json.JSONDecodeError):
-        project = {}
-        workbench_ok = False
-    item_ids = [item["id"] for item in project.get("items", []) if compact_text(item.get("workorder_id")) == workorder_id]
-    return "## Receipt" in text and "- Status: pending" not in text, workbench_ok, project, item_ids
-
-
-def project_workorder_status(payload: dict[str, Any]) -> dict[str, Any]:
-    if not project_workbench_enabled():
-        raise OwnerError("project workbench is disabled", HTTPStatus.FORBIDDEN)
-    project_root = project_root_from_payload(payload)
-    receipt_ready, workbench_ok, project, item_ids = read_project_workorder_state(project_root, clean_workorder_id(payload.get("workorder_id")))
-    return {
-        "ok": True,
-        "receiptReady": receipt_ready,
-        "workbenchOk": workbench_ok,
-        "workbenchHash": project_workbench_hash(project) if workbench_ok else "",
-        "itemIds": item_ids,
-        "updatedAt": now_iso(),
-    }
-
-
-def create_project_workorder(payload: dict[str, Any]) -> dict[str, Any]:
-    if not project_workbench_enabled():
-        raise OwnerError("project workbench is disabled", HTTPStatus.FORBIDDEN)
-    project_root = project_root_from_payload(payload)
-    workorder_id = clean_workorder_id(payload.get("workorder_id")) or new_workorder_id()
-    text = str(payload.get("content") or "")
-    if not text.strip():
-        raise OwnerError("missing workorder content")
-    workorders_root = project_root / "00-system" / "workorders"
-    path = workorders_root / f"{workorder_id}.md"
-    if path.exists():
-        raise OwnerError("workorder already exists", HTTPStatus.CONFLICT)
-    workorders_root.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(f".{path.name}.{secrets.token_hex(4)}.tmp")
-    try:
-        tmp.write_text(text, encoding="utf-8")
-        os.replace(tmp, path)
-    except OSError as exc:
-        try:
-            tmp.unlink()
-        except FileNotFoundError:
-            pass
-        raise OwnerError("failed to write workorder", HTTPStatus.INTERNAL_SERVER_ERROR) from exc
-    ignored = ensure_workorders_git_ignored(project_root)
-    digest = hashlib.sha256(path.read_bytes()).hexdigest()
-    return {
-        "ok": True,
-        "id": workorder_id,
-        "path": str(path),
-        "relative_path": str(path.relative_to(project_root)),
-        "sha256": digest,
-        "gitIgnored": ignored,
-        "updatedAt": now_iso(),
-    }
-
-
-def verify_history_jsonl(path: Path, workorder_id: str) -> tuple[int, list[str]]:
-    if not path.exists():
-        return 0, []
-    errors: list[str] = []
-    count = 0
-    required = {"ts", "project_id", "item_id", "type", "title", "final_status", "summary", "evidence", "actor"}
-    for line_no, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
-        if not line.strip():
-            continue
-        try:
-            record = json.loads(line)
-        except json.JSONDecodeError:
-            errors.append(f"history line {line_no} is invalid JSON")
-            continue
-        if isinstance(record, dict) and record.get("workorder_id") == workorder_id:
-            count += 1
-            missing = [key for key in required if not compact_text(record.get(key))]
-            if missing:
-                errors.append(f"history line {line_no} missing {','.join(missing)}")
-    return count, errors
-
-
-def verify_project_workorder(payload: dict[str, Any]) -> dict[str, Any]:
-    project_root = project_root_from_payload(payload)
-    workorder_id = clean_workorder_id(payload.get("workorder_id"))
-    receipt_ready, workbench_ok, workbench, item_ids = read_project_workorder_state(project_root, workorder_id)
-    review_result = compact_text(payload.get("result")).lower()
-    if review_result == "pass":
-        event_type = "controller_verify_pass"
-        final_status = "completed"
-        default_summary = "Workorder receipt verified by Faryo controller."
-    elif review_result == "fail":
-        event_type = "controller_verify_fail"
-        final_status = "needs_fix"
-        default_summary = "Workorder receipt needs fixes after Faryo controller review."
-    else:
-        raise OwnerError("invalid verify result", HTTPStatus.BAD_REQUEST)
-    transitioned = False
-    transition_error = ""
-    if receipt_ready and workbench_ok and item_ids:
-        try:
-            transition = apply_workbench_transition({
-                "project_root": str(project_root),
-                "event_type": event_type,
-                "item_ids": item_ids,
-                "workorder_id": workorder_id,
-                "actor": compact_text(payload.get("actor")) or "faryo-controller",
-                "source": "workorder-verify",
-                "summary": compact_text(payload.get("summary")) or default_summary,
-                "evidence": compact_text(payload.get("evidence")) or "Receipt present and workbench parsed.",
-                "final_status": final_status,
-            })
-            workbench = transition.get("project") if isinstance(transition.get("project"), dict) else read_project_workbench_file(project_root)
-            transitioned = True
-        except OwnerError as exc:
-            transition_error = str(exc)
-    history_count, history_errors = verify_history_jsonl(project_root / "00-system" / "workbench.history.jsonl", workorder_id)
-    expected_history_rows = len(item_ids) if item_ids else 1
-    closed = review_result == "pass" and receipt_ready and workbench_ok and history_count >= expected_history_rows and not history_errors and not transition_error
-    needs_fix = review_result == "fail" and receipt_ready and workbench_ok and transitioned and not transition_error
-    return {
-        "ok": True,
-        "closed": closed,
-        "needsFix": needs_fix,
-        "reviewResult": "fail" if event_type == "controller_verify_fail" else "pass",
-        "receiptReady": receipt_ready,
-        "workbenchOk": workbench_ok,
-        "workbenchHash": project_workbench_hash(workbench) if workbench_ok else "",
-        "project": workbench if workbench_ok else {},
-        "historyRows": history_count,
-        "historyErrors": history_errors,
-        "transitioned": transitioned,
-        "transitionError": transition_error,
-        "updatedAt": now_iso(),
-    }
-
-
-def import_project_workbench(payload: dict[str, Any]) -> dict[str, Any]:
-    if not project_workbench_enabled():
-        raise OwnerError("project workbench is disabled", HTTPStatus.FORBIDDEN)
-    project_root, path = project_workbench_import_path(compact_text(payload.get("project_root") or payload.get("path")))
-    if path.is_file():
-        try:
-            source = json.loads(path.read_text(encoding="utf-8"))
-        except json.JSONDecodeError as exc:
-            raise OwnerError("invalid workbench.json", HTTPStatus.BAD_REQUEST) from exc
-        if not isinstance(source, dict):
-            raise OwnerError("workbench must be a JSON object", HTTPStatus.BAD_REQUEST)
-        project = clean_project_workbench(source)
-    else:
-        project = clean_project_workbench({
-            "id": project_slug(project_root.name),
-            "name": project_root.name,
-            "brief": "",
-            "current_d": "",
-            "items": [],
-        })
-        write_project_workbench_file(path, project)
-    definition_path = ensure_project_definition_file(project_root, project)
-    definition = pd_state.parse_project_definition(definition_path.read_text(encoding="utf-8"))
-    if not definition:
-        pd_state.write_project_definition(definition_path, initial_project_definition(project))
-        definition = pd_state.parse_project_definition(definition_path.read_text(encoding="utf-8"))
-    row = dict(project)
-    row["path"] = str(path)
-    row["workbench_path"] = str(path)
-    row["definition"] = definition
-    return {"ok": True, "project": row, "updatedAt": now_iso()}
-
-
-def gateway_json_request(config: Config, gateway_url: str, path: str, payload: dict[str, Any], timeout: float = 20) -> dict[str, Any]:
-    base = gateway_url.rstrip("/")
-    if not base:
-        raise OwnerError("missing gateway_url")
-    body = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
-    request = urllib.request.Request(
-        base + path,
-        data=body,
-        method="POST",
-        headers={
-            "Content-Type": "application/json; charset=utf-8",
-            "X-Owner-Token": config.token,
-            "X-Faryo-Owner-Label": quote(owner_label().strip()[:32], safe="-._~"),
-        },
-    )
-    try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
-            response_body = response.read().decode("utf-8")
-    except urllib.error.HTTPError as exc:
-        detail = exc.read().decode("utf-8", errors="replace")
-        raise OwnerError(f"gateway HTTP {exc.code}: {detail}", HTTPStatus.BAD_GATEWAY) from exc
-    except urllib.error.URLError as exc:
-        raise OwnerError(f"gateway unreachable: {exc.reason}", HTTPStatus.BAD_GATEWAY) from exc
-    try:
-        result = json.loads(response_body)
-    except json.JSONDecodeError as exc:
-        raise OwnerError("gateway returned invalid JSON", HTTPStatus.BAD_GATEWAY) from exc
-    if not isinstance(result, dict) or not result.get("ok"):
-        raise OwnerError(str((result or {}).get("error") or "gateway request failed"), HTTPStatus.BAD_GATEWAY)
-    return result
-
-
-def apply_project_workbench_downlink(config: Config, payload: dict[str, Any]) -> dict[str, Any]:
-    if not project_workbench_enabled():
-        raise OwnerError("project workbench is disabled", HTTPStatus.FORBIDDEN)
-    gateway_url = compact_text(payload.get("gateway_url") or env_value("FARYO_PROJECT_WORKBENCH_GATEWAY_URL"))
-    package_id = compact_text(payload.get("package_id"))
-    if not package_id:
-        raise OwnerError("missing package_id")
-    claim = gateway_json_request(config, gateway_url, "/api/project-workbench/downlink/claim", {"package_id": package_id})
-    package = claim.get("package") if isinstance(claim.get("package"), dict) else {}
-    projects = package.get("projects") if isinstance(package.get("projects"), list) else []
-    if not projects:
-        raise OwnerError("downlink package has no projects")
-    scope = compact_text(package.get("scope")) or "project"
-    if scope not in {"project", "definition"}:
-        raise OwnerError("invalid downlink scope", HTTPStatus.BAD_REQUEST)
-    raw_projects = [project for project in projects if isinstance(project, dict)]
-    if scope == "definition" and any(not isinstance(project.get("definition"), dict) for project in raw_projects):
-        raise OwnerError("missing project definition", HTTPStatus.BAD_REQUEST)
-    targets = [(project_workbench_path(project), clean_project_workbench(project), project.get("definition") if isinstance(project.get("definition"), dict) else None) for project in raw_projects]
-    paths = [path for path, _project, _definition in targets]
-    if len({str(path) for path in paths}) != len(paths):
-        raise OwnerError("duplicate project workbench target", HTTPStatus.BAD_REQUEST)
-    expected_hashes = {project_slug(project.get("id") or project.get("name")): compact_text(project.get("hash")) for project in raw_projects}
-    staged: list[tuple[Path, Path]] = []
-    if scope == "project":
-        try:
-            staged = [(path, stage_project_workbench_file(path, project)) for path, project, _definition in targets]
-            for path, tmp in staged:
-                os.replace(tmp, path)
-        except OSError as exc:
-            cleanup_staged_project_workbenches(staged)
-            raise OwnerError("failed to write project workbench", HTTPStatus.INTERNAL_SERVER_ERROR) from exc
-    else:
-        for path, project, _definition in targets:
-            try:
-                update_project_workbench_summary(path, project)
-            except OSError as exc:
-                raise OwnerError("failed to write project workbench summary", HTTPStatus.INTERNAL_SERVER_ERROR) from exc
-    hashes = {}
-    for path, project, definition in targets:
-        if isinstance(definition, dict):
-            actual_definition = apply_project_definition_downlink(path, project, definition)
-        else:
-            actual_definition = None
-        if scope == "definition":
-            expected_definition = pd_state.project_definition_hash_payload(definition)
-            actual_definition = pd_state.project_definition_hash_payload(actual_definition)
-            hashes[project["id"]] = pd_state.project_definition_downlink_hash(project["id"], {key: actual_definition.get(key) for key in expected_definition})
-        else:
-            stored = json.loads(path.read_text(encoding="utf-8"))
-            actual = clean_project_workbench(stored if isinstance(stored, dict) else {})
-            hashes[project["id"]] = project_downlink_hash(actual, actual_definition)
-    mismatched = [project_id for project_id, digest in expected_hashes.items() if digest and hashes.get(project_id) != digest]
-    ok = not mismatched
-    ack = gateway_json_request(config, gateway_url, "/api/project-workbench/downlink/ack", {
-        "package_id": package_id,
-        "ok": ok,
-        "status": "applied" if ok else "failed",
-        "applied": len(targets) if ok else 0,
-        "hashes": hashes,
-        "message": ("hash mismatch: " + ", ".join(mismatched)) if mismatched else "",
-    })
-    if not ok:
-        raise OwnerError("downlink hash mismatch: " + ", ".join(mismatched), HTTPStatus.CONFLICT)
-    return {"ok": True, "status": "applied", "package_id": package_id, "applied": len(targets), "ack_ok": bool(ack.get("ok")), "updatedAt": now_iso()}
 
 
 class MultipartFile:
@@ -4288,7 +3717,7 @@ class Handler(SimpleHTTPRequestHandler):
             payload = self.read_json()
             if parsed.path == "/api/agent/new":
                 workspace_root = self.workspace_root()
-                raw_cwd = compact_text(payload.get("cwd") or payload.get("project_root"))
+                raw_cwd = compact_text(payload.get("cwd"))
                 if raw_cwd:
                     cwd, _roots = resolve_start_directory(raw_cwd, workspace_root)
                     cwd_token = str(payload.get("cwd_token") or payload.get("cwdToken") or "").strip()
@@ -4313,35 +3742,15 @@ class Handler(SimpleHTTPRequestHandler):
                 cleanup_managed_sessions(self.config, idle_seconds)
                 self.write_json({"ok": True, "updatedAt": now_iso()})
                 return
-            if parsed.path == "/api/project-workbench/downlink/apply":
-                self.write_json(apply_project_workbench_downlink(self.config, payload))
-                return
-            if parsed.path == "/api/project-workbench/definition":
-                self.write_json(project_definition_payload(payload))
-                return
-            if parsed.path == "/api/project-workbench/definition-sync":
-                self.write_json(sync_project_definition(payload))
-                return
-            if parsed.path == "/api/workbench/transition":
-                self.write_json(apply_workbench_transition(payload))
-                return
-            if parsed.path == "/api/workbench/status":
-                self.write_json(project_workbench_status(payload))
-                return
-            if parsed.path == "/api/project-workbench/git-status":
-                self.write_json(project_git_status(payload))
-                return
-            if parsed.path == "/api/workorder/create":
-                self.write_json(create_project_workorder(payload))
-                return
-            if parsed.path == "/api/workorder/status":
-                self.write_json(project_workorder_status(payload))
-                return
-            if parsed.path == "/api/workorder/verify":
-                self.write_json(verify_project_workorder(payload))
-                return
-            if parsed.path == "/api/project-workbench/import":
-                self.write_json(import_project_workbench(payload))
+            if parsed.path in {"/api/agent-session/archive", "/api/agent-session/unarchive"}:
+                archived = parsed.path.endswith("/archive")
+                result = change_codex_thread_archive_state(
+                    self.config,
+                    str(payload.get("agent_session_id") or payload.get("agentSessionId") or ""),
+                    archived,
+                    self.history_root(),
+                )
+                self.write_json({"ok": True, **result, "updatedAt": now_iso()})
                 return
             if parsed.path == "/api/session/close":
                 close_shell_session(self.config, str(payload.get("session") or ""))

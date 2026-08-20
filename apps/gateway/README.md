@@ -86,6 +86,15 @@ matches only normalized session titles, explicit Codex rename metadata, and the
 working-folder basename. Date and archive chips filter on Codex metadata; they
 do not read conversation messages or rollout files. Filters are reflected in
 the current URL for refresh/navigation but are not written to browser storage.
+Resumable cards can be archived and archived cards restored. Gateway applies
+login, route authorization and CSRF, then Owner invokes Codex App Server's
+official thread lifecycle RPC. Faryo does not move rollout files, edit Codex
+SQLite metadata, or expose thread hard deletion.
+
+`/` is the single maintained Gateway home. The earlier `/projects` Project
+Orchestration surface and its dedicated controller/downlink backend are retired;
+authenticated requests to that old route return `404`. The generic handoff
+package and Files-to-session flow remain available from the main workbench.
 
 The Settings menu separates `Sign out this device` from `Revoke signed-in
 devices`; revocation invalidates every inner Faryo cookie for that account but
