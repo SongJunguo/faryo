@@ -68,6 +68,12 @@ but the default upload destination should come from the Faryo data directory.
 - Product data root: default `~/.faryo/owner/data`.
 - Workspace Changes is a separate read-only module: Git root resolution is
   scoped, commands are fixed/bounded, and returned paths are relative.
+- Attachment storage is a separate bounded module: magic/MIME/suffix policy,
+  upload size, generated names and dated retention do not depend on the HTTP
+  handler.
+- Local-file and start-directory policy is a separate module: configured roots,
+  suffix allowlists, symlink resolution, directory limits and selection tokens
+  are tested without tmux or HTTP globals.
 - Capability and diagnostics payloads use an explicit allowlist and counts; they
   never expose private runtime configuration.
 - Upstream control headers: use Faryo header names.

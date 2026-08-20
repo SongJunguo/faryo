@@ -278,6 +278,12 @@ consumed as private runtime input and is never printed.
 - Does not expose arbitrary shell execution.
 - Does not provide a general file-write API; uploads are written only to the
   configured Faryo inbox.
+- `attachment_storage.py` owns magic/MIME/suffix detection, the 25 MB bound,
+  generated filenames and seven-day dated retention; the HTTP server only maps
+  its bounded errors into API responses.
+- `path_policy.py` owns local-file suffix lookup and start-directory root,
+  symlink, listing-limit and selection-token rules independently of the tmux
+  runtime.
 - Local file preview is token-protected and limited to supported file suffixes.
 - `send` targets the controlled tmux pane and is maintained for Codex; generic
   terminal interfaces retain the conservative tmux path.

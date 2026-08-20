@@ -48,6 +48,8 @@ if str(OWNER_MODULE_DIR) not in sys.path:
     sys.path.insert(0, str(OWNER_MODULE_DIR))
 import workspace_changes
 import runtime_diagnostics
+import attachment_storage
+import path_policy
 
 SHARED_DIR = Path(__file__).resolve().parents[2] / "shared"
 if str(SHARED_DIR) not in sys.path:
@@ -137,39 +139,8 @@ FILE_INBOX_ROOT = Path(os.environ.get("FARYO_OWNER_INBOX_DIR", str(FARYO_OWNER_D
 CACHE_ROOT = Path(os.environ.get("FARYO_OWNER_CACHE_DIR", str(FARYO_OWNER_DATA / "cache"))).expanduser()
 LOGS_ROOT = Path(os.environ.get("FARYO_OWNER_LOGS_DIR", str(FARYO_OWNER_DATA / "logs"))).expanduser()
 SEND_DELIVERY_ROOT = Path(os.environ.get("FARYO_OWNER_DELIVERY_DIR", str(FARYO_OWNER_DATA / "send-deliveries"))).expanduser()
-MAX_ATTACHMENT_UPLOAD_BYTES = 25 * 1024 * 1024
-UPLOAD_RETENTION_DAYS = 7
-IMAGE_MIME_SUFFIXES = {
-    "image/jpeg": ".jpg",
-    "image/png": ".png",
-    "image/webp": ".webp",
-    "image/gif": ".gif",
-    "image/heic": ".heic",
-    "image/heif": ".heif",
-}
-DOCUMENT_MIME_SUFFIXES = {
-    "application/pdf": ".pdf",
-    "application/msword": ".doc",
-    "application/vnd.openxmlformats-officedocument.wordprocessingml.document": ".docx",
-    "application/vnd.ms-powerpoint": ".ppt",
-    "application/vnd.openxmlformats-officedocument.presentationml.presentation": ".pptx",
-    "application/vnd.ms-excel": ".xls",
-    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": ".xlsx",
-    "application/vnd.oasis.opendocument.text": ".odt",
-    "application/vnd.oasis.opendocument.presentation": ".odp",
-    "application/vnd.oasis.opendocument.spreadsheet": ".ods",
-    "text/markdown": ".md",
-    "text/plain": ".txt",
-    "text/csv": ".csv",
-    "application/json": ".json",
-    "application/rtf": ".rtf",
-}
-ALLOWED_ATTACHMENT_SUFFIXES = {
-    ".jpg", ".jpeg", ".png", ".webp", ".gif", ".heic", ".heif",
-    ".pdf", ".doc", ".docx", ".ppt", ".pptx", ".xls", ".xlsx",
-    ".odt", ".odp", ".ods", ".md", ".txt", ".csv", ".json", ".rtf",
-}
-IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp", ".gif", ".heic", ".heif"}
+MAX_ATTACHMENT_UPLOAD_BYTES = attachment_storage.DEFAULT_MAX_UPLOAD_BYTES
+IMAGE_SUFFIXES = attachment_storage.IMAGE_SUFFIXES
 IMAGE_CONTENT_TYPES = {
     ".jpg": "image/jpeg",
     ".jpeg": "image/jpeg",
@@ -2901,96 +2872,27 @@ def status_payload(config: Config) -> dict[str, Any]:
     }
 
 
-def attachment_suffix(filename: str | None, content_type: str | None, data: bytes) -> str:
-    if data.startswith(b"\xff\xd8\xff"):
-        return ".jpg"
-    if data.startswith(b"\x89PNG\r\n\x1a\n"):
-        return ".png"
-    if data.startswith(b"GIF87a") or data.startswith(b"GIF89a"):
-        return ".gif"
-    if len(data) >= 12 and data[:4] == b"RIFF" and data[8:12] == b"WEBP":
-        return ".webp"
-    if len(data) >= 12 and data[4:8] == b"ftyp" and data[8:12] in {b"heic", b"heix", b"hevc", b"hevx", b"heif", b"mif1", b"msf1"}:
-        return ".heic"
-    mime = (content_type or "").split(";", 1)[0].strip().lower()
-    mime_suffix = IMAGE_MIME_SUFFIXES.get(mime) or DOCUMENT_MIME_SUFFIXES.get(mime)
-    if mime_suffix:
-        return mime_suffix
-    suffix = Path(filename or "").suffix.lower()
-    if suffix in ALLOWED_ATTACHMENT_SUFFIXES:
-        return ".jpg" if suffix == ".jpeg" else suffix
-    raise OwnerError("unsupported attachment type; use image, pdf, office, md, txt, csv, or json")
-
-
-def cleanup_old_uploads(root: Path) -> None:
-    cutoff = _dt.datetime.now().date() - _dt.timedelta(days=UPLOAD_RETENTION_DAYS - 1)
-    try:
-        children = list(root.iterdir())
-    except FileNotFoundError:
-        return
-    for child in children:
-        if not child.is_dir():
-            continue
-        try:
-            day = _dt.date.fromisoformat(child.name)
-        except ValueError:
-            continue
-        if day < cutoff:
-            try:
-                shutil.rmtree(child)
-            except OSError:
-                pass
-
-
 def save_uploaded_attachment(file_item: Any, root_override: str | None = None) -> tuple[Path, int, str]:
-    filename = Path(getattr(file_item, "filename", "") or "attachment").name
-    file_obj = getattr(file_item, "file", None)
-    if file_obj is None:
-        raise OwnerError("missing attachment file")
-    data = file_obj.read(MAX_ATTACHMENT_UPLOAD_BYTES + 1)
-    if not data:
-        raise OwnerError("empty attachment")
-    if len(data) > MAX_ATTACHMENT_UPLOAD_BYTES:
-        raise OwnerError("attachment too large; max 25 MB", HTTPStatus.REQUEST_ENTITY_TOO_LARGE)
-    suffix = attachment_suffix(filename, getattr(file_item, "type", None), data)
     root_value = root_override or env_value("FARYO_OWNER_INBOX_DIR", "FARYO_OWNER_FILE_INBOX", default=str(FILE_INBOX_ROOT))
-    root = Path(root_value).expanduser()
-    cleanup_old_uploads(root)
-    target_dir = root / _dt.datetime.now().strftime("%Y-%m-%d")
-    target_dir.mkdir(parents=True, exist_ok=True)
-    stamp = _dt.datetime.now().strftime("%Y%m%d-%H%M%S")
-    for _ in range(10):
-        path = target_dir / f"{stamp}-{secrets.token_hex(3)}{suffix}"
-        try:
-            with path.open("xb") as fh:
-                fh.write(data)
-            return path, len(data), "image" if suffix in IMAGE_SUFFIXES else "file"
-        except FileExistsError:
-            continue
-    raise OwnerError("failed to allocate attachment path", HTTPStatus.INTERNAL_SERVER_ERROR)
+    try:
+        return attachment_storage.save_uploaded_attachment(file_item, Path(root_value).expanduser())
+    except attachment_storage.AttachmentStorageError as exc:
+        raise OwnerError(str(exc), exc.status) from exc
 
 
 def clean_local_path(value: str | None) -> str:
-    text = (value or "").strip()
-    if (text.startswith("<") and text.endswith(">")) or (text[:1] in {"'", '"', "`"} and text[-1:] == text[:1]):
-        text = text[1:-1].strip()
-    if not text or "\x00" in text:
-        raise OwnerError("missing file path")
-    return text
+    try:
+        return path_policy.clean_local_path(value)
+    except path_policy.PathPolicyError as exc:
+        raise OwnerError(str(exc), exc.status) from exc
 
 
 def resolve_local_path(path_value: str | None, config: Config, suffixes: set[str], workspace_root: str | None = None) -> Path:
-    raw = Path(clean_local_path(path_value)).expanduser()
     bases = [get_pane_cwd(config), workspace_root, str(FILE_INBOX_ROOT)]
-    candidates = [raw] if raw.is_absolute() else [Path(base).expanduser() / raw for base in bases if base]
-    for candidate in candidates:
-        try:
-            path = candidate.resolve()
-        except OSError:
-            continue
-        if path.is_file() and path.suffix.lower() in suffixes:
-            return path
-    raise OwnerError("file not found", HTTPStatus.NOT_FOUND)
+    try:
+        return path_policy.resolve_local_file(path_value, bases, suffixes)
+    except path_policy.PathPolicyError as exc:
+        raise OwnerError(str(exc), exc.status) from exc
 
 
 def resolve_local_image_path(path_value: str | None, config: Config, workspace_root: str | None = None) -> Path:
@@ -2999,61 +2901,29 @@ def resolve_local_image_path(path_value: str | None, config: Config, workspace_r
 
 def start_directory_roots(workspace_root: str | None = None) -> list[Path]:
     values = [part for part in os.environ.get("FARYO_START_DIRECTORY_ROOTS", "").split(os.pathsep) if part.strip()]
-    if workspace_root:
-        values.append(workspace_root)
-    if not values:
-        values.append(str(Path.home()))
-    roots: list[Path] = []
-    for value in values:
-        try:
-            root = Path(os.path.expandvars(value)).expanduser().resolve()
-        except OSError:
-            continue
-        if root.is_dir() and root not in roots:
-            roots.append(root)
-    return roots
+    return path_policy.start_directory_roots(values, workspace_root)
 
 
 def resolve_start_directory(path_value: str | None, workspace_root: str | None = None) -> tuple[Path, list[Path]]:
     roots = start_directory_roots(workspace_root)
-    if not roots:
-        raise OwnerError("no start-directory roots are configured", HTTPStatus.FORBIDDEN)
-    raw = str(path_value or "").strip()
     try:
-        path = (Path(os.path.expandvars(raw)).expanduser() if raw else roots[0]).resolve()
-    except OSError as exc:
-        raise OwnerError("working directory is unavailable", HTTPStatus.NOT_FOUND) from exc
-    if not any(path == root or path.is_relative_to(root) for root in roots):
-        raise OwnerError("working directory is outside the configured roots", HTTPStatus.FORBIDDEN)
-    if not path.is_dir():
-        raise OwnerError("working directory is unavailable", HTTPStatus.NOT_FOUND)
+        path = path_policy.resolve_start_directory(path_value, roots)
+    except path_policy.PathPolicyError as exc:
+        raise OwnerError(str(exc), exc.status) from exc
     return path, roots
 
 
 def directory_selection_token(config: Config, path: Path) -> str:
-    return hmac.new(config.token.encode("utf-8"), f"cwd:{path}".encode("utf-8"), hashlib.sha256).hexdigest()
+    return path_policy.directory_selection_token(config.token, path)
 
 
 def directory_browser_payload(config: Config, path_value: str | None, workspace_root: str | None = None) -> dict[str, Any]:
     path, roots = resolve_start_directory(path_value, workspace_root)
-    parent = path.parent if path.parent != path and any(path.parent == root or path.parent.is_relative_to(root) for root in roots) else None
-    directories = []
     try:
-        children = sorted(path.iterdir(), key=lambda item: item.name.casefold())
-    except OSError as exc:
-        raise OwnerError("working directory cannot be listed", HTTPStatus.FORBIDDEN) from exc
-    for child in children:
-        if child.name.startswith("."):
-            continue
-        try:
-            resolved = child.resolve()
-        except OSError:
-            continue
-        if not resolved.is_dir() or not any(resolved == root or resolved.is_relative_to(root) for root in roots):
-            continue
-        directories.append({"name": child.name, "path": str(resolved), "displayPath": short_path(str(resolved))})
-        if len(directories) >= START_DIRECTORY_MAX_ENTRIES:
-            break
+        parent, child_paths, truncated = path_policy.list_start_directories(path, roots, START_DIRECTORY_MAX_ENTRIES)
+    except path_policy.PathPolicyError as exc:
+        raise OwnerError(str(exc), exc.status) from exc
+    directories = [{"name": child.name, "path": str(child), "displayPath": short_path(str(child))} for child in child_paths]
     return {
         "ok": True,
         "path": str(path),
@@ -3063,7 +2933,7 @@ def directory_browser_payload(config: Config, path_value: str | None, workspace_
         "parentDisplayPath": short_path(str(parent)) if parent else "",
         "directories": directories,
         "roots": [{"path": str(root), "displayPath": short_path(str(root)) or str(root)} for root in roots],
-        "truncated": len(directories) >= START_DIRECTORY_MAX_ENTRIES,
+        "truncated": truncated,
         "updatedAt": now_iso(),
     }
 

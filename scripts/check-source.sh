@@ -62,6 +62,8 @@ release_checks() {
   bash "$ROOT/scripts/runtime-env.test.sh"
   "$PYTHON_BIN" -m py_compile \
     "$ROOT/apps/owner/local-tmux-owner/server.py" \
+    "$ROOT/apps/owner/local-tmux-owner/attachment_storage.py" \
+    "$ROOT/apps/owner/local-tmux-owner/path_policy.py" \
     "$ROOT/apps/owner/local-tmux-owner/workspace_changes.py" \
     "$ROOT/apps/owner/local-tmux-owner/runtime_diagnostics.py" \
     "$ROOT/apps/owner/local-tmux-owner/tests/owner-archive-roundtrip.py" \
