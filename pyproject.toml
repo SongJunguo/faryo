@@ -1,3 +1,33 @@
+[build-system]
+requires = ["setuptools==83.0.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "faryo"
+version = "1.5.0.dev0"
+description = "Self-hosted Codex workbench for tmux-backed Ubuntu sessions"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+dependencies = [
+  "anyio==4.14.2",
+  "bcrypt==5.0.0",
+  "click==8.4.2",
+  "h11==0.16.0",
+  "idna==3.19",
+  "starlette==1.6.0",
+  "uvicorn==0.52.4",
+]
+
+[project.scripts]
+faryo = "faryo_cli.cli:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
 [tool.ruff]
 target-version = "py311"
 line-length = 160

@@ -15,4 +15,6 @@ apps/*/config/.token*
 **/00-system/workorders/
 .faryo/
 dist/
+build/
+*.egg-info/
 node_modules/

@@ -1,0 +1,156 @@
+from __future__ import annotations
+
+from contextlib import redirect_stdout
+from io import StringIO
+import json
+from pathlib import Path
+import sys
+import tempfile
+import unittest
+from unittest import mock
+
+
+ROOT = Path(__file__).resolve().parents[1]
+SRC = ROOT / "src"
+if str(SRC) not in sys.path:
+    sys.path.insert(0, str(SRC))
+
+from faryo_cli import cli, diagnostics
+
+
+class FaryoCliTest(unittest.TestCase):
+    def layout(self, root: Path, *, unsafe: bool = False) -> diagnostics.Layout:
+        faryo_home = root / ".faryo"
+        owner_env = faryo_home / "owner/config/faryo.env"
+        gateway_env = faryo_home / "gateway/config/faryo.env"
+        gateway_auth = faryo_home / "gateway/config/gateway-auth.json"
+        owner_env.parent.mkdir(parents=True)
+        gateway_env.parent.mkdir(parents=True)
+        owner_env.write_text(
+            "FARYO_OWNER_HOST=127.0.0.1\n"
+            "FARYO_OWNER_PORT=8765\n"
+            "FARYO_OWNER_TOKEN=private-owner-token\n"
+            f"FARYO_PYTHON={sys.executable}\n"
+            "FARYO_CODEX_BIN=/private/bin/codex\n",
+            encoding="utf-8",
+        )
+        gateway_env.write_text(
+            "GATEWAY_HOST=127.0.0.1\n"
+            "GATEWAY_PORT=8780\n"
+            "FARYO_GATEWAY_SESSION_HOURS=720\n"
+            f"FARYO_PYTHON={sys.executable}\n"
+            "FARYO_TXY_OWNER_TOKEN=private-owner-token\n",
+            encoding="utf-8",
+        )
+        gateway_auth.write_text('{"users":{"private@example.invalid":{}}}\n', encoding="utf-8")
+        for path in (owner_env, gateway_env, gateway_auth):
+            path.chmod(0o644 if unsafe else 0o600)
+        return diagnostics.Layout(root, faryo_home, owner_env, gateway_env, gateway_auth, ROOT)
+
+    def report(self, layout: diagnostics.Layout) -> dict:
+        def version(command, *_args, **_kwargs):
+            return {"tmux": "tmux 3.5", "codex": "codex-cli 0.test"}.get(command)
+
+        def state(name):
+            return {
+                "faryo-owner.service": "inactive",
+                "faryo-gateway.service": "active",
+                "faryo-owner-keepalive.timer": "active",
+            }.get(name, "inactive")
+
+        with (
+            mock.patch.object(diagnostics, "command_version", side_effect=version),
+            mock.patch.object(diagnostics, "resolve_codex", return_value="/fixture/codex"),
+            mock.patch.object(diagnostics, "argv_version", return_value="codex-cli 0.test"),
+            mock.patch.object(diagnostics, "systemd_user_available", return_value=True),
+            mock.patch.object(diagnostics, "service_state", side_effect=state),
+            mock.patch.object(diagnostics, "http_status", side_effect=lambda _host, port, _path: 200 if port in {8765, 8780} else None),
+            mock.patch.object(diagnostics, "tmux_session_exists", return_value=True),
+            mock.patch.object(diagnostics, "tmux_session_count", return_value=4),
+            mock.patch.object(diagnostics.shutil, "which", side_effect=lambda name: f"/usr/bin/{name}"),
+        ):
+            return diagnostics.build_report(layout)
+
+    def test_doctor_report_is_privacy_safe_and_marks_legacy_supervision(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            report = self.report(self.layout(Path(temp)))
+
+        encoded = json.dumps(report, ensure_ascii=False).lower()
+        self.assertTrue(report["ok"])
+        self.assertEqual(report["counts"]["error"], 0)
+        self.assertEqual(report["runtime"]["tmuxSessions"], 4)
+        self.assertTrue(diagnostics.compact_status(report)["legacyOwner"])
+        for forbidden in ("private-owner-token", "private@example.invalid", str(Path(temp)).lower(), "/private/bin/codex"):
+            self.assertNotIn(forbidden, encoded)
+
+    def test_unsafe_private_files_are_errors(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            report = self.report(self.layout(Path(temp), unsafe=True))
+
+        self.assertFalse(report["ok"])
+        failed = {item["id"] for item in report["checks"] if item["status"] == "error"}
+        self.assertTrue({"owner-config", "gateway-config", "gateway-auth"}.issubset(failed))
+
+    def test_cli_json_and_human_output_have_stable_exit_codes(self) -> None:
+        report = {
+            "schemaVersion": 1,
+            "ok": True,
+            "checks": [{"id": "python", "status": "ok", "detail": "Python test"}],
+            "counts": {"ok": 1, "warn": 0, "error": 0},
+            "services": {"owner": "active", "gateway": "active", "legacyKeepalive": "inactive"},
+            "runtime": {"environment": "venv", "tmuxSessions": 3},
+        }
+        with mock.patch.object(cli, "build_report", return_value=report):
+            output = StringIO()
+            with redirect_stdout(output):
+                code = cli.main(["doctor", "--json"])
+            self.assertEqual(code, 0)
+            self.assertEqual(json.loads(output.getvalue())["counts"]["ok"], 1)
+
+            output = StringIO()
+            with redirect_stdout(output):
+                code = cli.main(["status"])
+            self.assertEqual(code, 0)
+            self.assertIn("Owner:  active", output.getvalue())
+
+    def test_source_root_discovery_uses_application_markers(self) -> None:
+        self.assertEqual(diagnostics.discover_source_root({"FARYO_INSTALL_ROOT": str(ROOT)}), ROOT)
+        with tempfile.TemporaryDirectory() as temp:
+            self.assertIsNone(diagnostics.discover_source_root({"FARYO_INSTALL_ROOT": temp}))
+
+    def test_codex_resolution_supports_configured_and_nvm_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            home = Path(temp)
+            older = home / ".nvm/versions/node/v22.0.0/bin/codex"
+            latest = home / ".nvm/versions/node/v24.0.0/bin/codex"
+            for path in (older, latest):
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text("#!/bin/sh\n", encoding="utf-8")
+                path.chmod(0o700)
+
+            with mock.patch.object(diagnostics.shutil, "which", return_value=None):
+                self.assertEqual(diagnostics.resolve_codex("", home), str(latest))
+                self.assertEqual(diagnostics.resolve_codex(str(older), home), str(older))
+
+    def test_codex_javascript_launcher_uses_sibling_node(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / "versions/node/v24.0.0"
+            node = root / "bin/node"
+            launcher = root / "bin/codex"
+            script = root / "lib/node_modules/@openai/codex/bin/codex.js"
+            node.parent.mkdir(parents=True)
+            script.parent.mkdir(parents=True)
+            node.write_text("runtime", encoding="utf-8")
+            script.write_text("cli", encoding="utf-8")
+            node.chmod(0o700)
+            script.chmod(0o700)
+            launcher.symlink_to(Path("../lib/node_modules/@openai/codex/bin/codex.js"))
+
+            self.assertEqual(
+                diagnostics.codex_argv(str(launcher), "--version"),
+                [str(node), str(script), "--version"],
+            )
+
+
+if __name__ == "__main__":
+    unittest.main()

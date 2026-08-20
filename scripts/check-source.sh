@@ -63,7 +63,9 @@ printf 'runtime: %s · %s\n' \
 release_checks() {
   "$PYTHON_BIN" -m ruff check \
     "$ROOT/apps" \
-    "$ROOT/scripts"
+    "$ROOT/scripts" \
+    "$ROOT/src" \
+    "$ROOT/tests"
   (cd "$ROOT" && PATH="$(dirname "$NODE_BIN"):$PATH" npm run --silent check:lint)
   (cd "$ROOT" && PATH="$(dirname "$NODE_BIN"):$PATH" npm run --silent check:format)
   (cd "$ROOT" && PATH="$(dirname "$NODE_BIN"):$PATH" npm run --silent test:browser-harness)
@@ -110,6 +112,11 @@ release_checks() {
     "$ROOT/apps/gateway/server/mcp_service.py" \
     "$ROOT/apps/gateway/server/workbench_service.py" \
     "$ROOT/apps/gateway/scripts/generate-gateway-auth-config.py"
+  "$PYTHON_BIN" -m py_compile \
+    "$ROOT/src/faryo_cli/__init__.py" \
+    "$ROOT/src/faryo_cli/__main__.py" \
+    "$ROOT/src/faryo_cli/cli.py" \
+    "$ROOT/src/faryo_cli/diagnostics.py"
   for js_file in \
     "$ROOT/apps/owner/local-tmux-owner/static/compact-rules-codex.js" \
     "$ROOT/apps/owner/local-tmux-owner/static/event-stream.js" \
@@ -169,11 +176,14 @@ release_checks() {
   "$NODE_BIN" --test "$ROOT/apps/owner/local-tmux-owner/tests/terminal-delivery-receiver.test.mjs"
   "$PYTHON_BIN" -m unittest discover -s "$ROOT/apps/owner/local-tmux-owner/tests" -p 'test_*.py'
   "$PYTHON_BIN" -m unittest discover -s "$ROOT/apps/gateway/server/tests" -p 'test_*.py'
+  PYTHONPATH="$ROOT/src${PYTHONPATH:+:$PYTHONPATH}" \
+    "$PYTHON_BIN" -m unittest discover -s "$ROOT/tests" -p 'test_*.py'
   "$PYTHON_BIN" - "$ROOT" <<'PY'
 from pathlib import Path
 import json
 import re
 import sys
+import tomllib
 root = Path(sys.argv[1])
 
 def reject_duplicate_json_keys(pairs):
@@ -213,6 +223,15 @@ assert "apps/gateway/server/tests" in check_script, "canonical checks must inclu
 assert (root / "package-lock.json").is_file(), "development JavaScript dependencies must be locked"
 package = json.loads((root / "package.json").read_text(encoding="utf-8"))
 assert package.get("devDependencies", {}).get("preact") == "10.29.8", "Preact pilot must remain exact-pinned"
+pyproject = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
+project = pyproject.get("project") or {}
+assert project.get("name") == "faryo" and project.get("scripts", {}).get("faryo") == "faryo_cli.cli:main", "Faryo CLI package metadata is incomplete"
+assert pyproject.get("build-system", {}).get("requires") == ["setuptools==83.0.0"], "Faryo CLI build backend must remain exact-pinned"
+runtime_requirements = {
+    line.strip() for line in (root / "apps/gateway/requirements.txt").read_text(encoding="utf-8").splitlines()
+    if line.strip() and not line.lstrip().startswith("#")
+}
+assert set(project.get("dependencies") or []) == runtime_requirements, "CLI package runtime pins must match Gateway requirements"
 release_metadata = dict(
     line.split("=", 1)
     for line in (root / "apps/owner/RELEASE").read_text(encoding="utf-8").splitlines()
