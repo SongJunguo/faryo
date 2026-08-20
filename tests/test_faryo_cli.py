@@ -390,7 +390,7 @@ class FaryoCliTest(unittest.TestCase):
             self.assertEqual(result, "installed")
             self.assertTrue((xdg / "systemd/user/faryo-owner.service").is_file())
             self.assertTrue((xdg / "systemd/user/faryo-gateway.service").is_file())
-            self.assertIn((("faryo-owner.service", "start"), {}), actions)
+            self.assertIn((("faryo-owner.service", "restart"), {}), actions)
             self.assertIn((("faryo-gateway.service", "restart"), {}), actions)
             wait.assert_called_once_with(layout)
 

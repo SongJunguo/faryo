@@ -151,7 +151,7 @@ def install_services(
         if legacy:
             migration.migrate_owner(selected)
         else:
-            control_service("faryo-owner.service", "start")
+            control_service("faryo-owner.service", "restart")
         systemctl("enable", "faryo-owner.service")
         systemctl("enable", "faryo-gateway.service")
         control_service("faryo-gateway.service", "restart")
