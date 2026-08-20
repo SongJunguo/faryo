@@ -65,6 +65,8 @@ release_checks() {
     "$ROOT/apps/owner/local-tmux-owner/static/codex-commands.js" \
     "$ROOT/apps/owner/local-tmux-owner/static/copy-fidelity.js" \
     "$ROOT/apps/owner/local-tmux-owner/static/clipboard-images.js" \
+    "$ROOT/apps/owner/local-tmux-owner/static/immersive-mode.js" \
+    "$ROOT/apps/owner/local-tmux-owner/static/scroll-surface.js" \
     "$ROOT/apps/owner/local-tmux-owner/static/vendor/markdown-ast/markdown-ast.min.js" \
     "$ROOT/apps/owner/local-tmux-owner/static/live-scroll.js" \
     "$ROOT/apps/shared/static/appearance.js" \
@@ -76,6 +78,7 @@ release_checks() {
     "$NODE_BIN" --check "$js_file"
   done < <(find "$ROOT/apps/owner/local-tmux-owner/static/vendor/markdown-ast/highlight" -type f -name '*.js' -print | sort)
   "$NODE_BIN" --check "$ROOT/apps/owner/local-tmux-owner/tests/browser-katex-smoke.mjs"
+  "$NODE_BIN" --check "$ROOT/apps/owner/local-tmux-owner/tests/browser-immersive-smoke.mjs"
   "$NODE_BIN" --check "$ROOT/apps/gateway/server/tests/browser-workbench-smoke.mjs"
   "$NODE_BIN" "$ROOT/apps/owner/local-tmux-owner/tests/markdown-ast-bundle.test.js"
   "$NODE_BIN" "$ROOT/apps/owner/local-tmux-owner/tests/internal-annotations.test.js"
@@ -87,6 +90,8 @@ release_checks() {
   "$NODE_BIN" "$ROOT/apps/owner/local-tmux-owner/tests/codex-commands.test.js"
   "$NODE_BIN" "$ROOT/apps/owner/local-tmux-owner/tests/copy-fidelity.test.js"
   "$NODE_BIN" "$ROOT/apps/owner/local-tmux-owner/tests/clipboard-images.test.js"
+  "$NODE_BIN" "$ROOT/apps/owner/local-tmux-owner/tests/immersive-mode.test.js"
+  "$NODE_BIN" "$ROOT/apps/owner/local-tmux-owner/tests/scroll-surface.test.js"
   "$NODE_BIN" --test "$ROOT/apps/owner/local-tmux-owner/tests/terminal-delivery-receiver.test.mjs"
   "$PYTHON_BIN" -m unittest discover -s "$ROOT/apps/owner/local-tmux-owner/tests" -p 'test_*.py'
   "$PYTHON_BIN" -m unittest discover -s "$ROOT/apps/gateway/server/tests" -p 'test_*.py'
@@ -130,6 +135,10 @@ assert "question-navigator.js" in gateway, "gateway must allow question-navigato
 assert "codex-commands.js" in index and "codex-commands.js" in gateway, "Codex command inventory must be loaded and proxied"
 assert "copy-fidelity.js" in index and "copy-fidelity.js" in gateway, "copy fidelity must be loaded and proxied"
 assert "clipboard-images.js" in index and "clipboard-images.js" in gateway, "clipboard image paste must be loaded and proxied"
+assert "immersive-mode.js" in index and "immersive-mode.js" in gateway, "immersive display controller must be loaded and proxied"
+assert "scroll-surface.js" in index and "scroll-surface.js" in gateway, "mobile document scroll adapter must be loaded and proxied"
+assert 'rel="manifest" href="/manifest.json"' in index, "every maintained PWA page must reference the root manifest"
+assert 'id="immersiveExitBtn"' in index and 'id="detailsFullscreenBtn"' in index, "fullscreen must expose explicit enter and exit controls"
 assert "internal-annotations.js" in index, "index.html must load internal annotation formatting"
 assert "internal-annotations.js" in gateway, "gateway must proxy internal annotation formatting"
 assert "event-stream.js" in index, "index.html must load the authenticated event-stream parser"

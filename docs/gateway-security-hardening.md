@@ -60,6 +60,9 @@ Gateway implements the following inner controls:
   user-controlled first entry of `X-Forwarded-For`;
 - a nonce-based Content Security Policy, framing denial, no referrer leakage,
   restricted browser permissions, HSTS, and MIME sniffing protection;
+- a `fullscreen=(self)` Permissions Policy. Faryo enters full screen only after
+  an explicit user gesture, never persists that state, and keeps an in-page exit
+  plus the browser/OS exit mechanism;
 - server-side Owner-token injection, so public browser URLs do not contain Owner
   tokens;
 - authenticated, route-scoped, CSRF-protected Archive/Restore controls that
@@ -117,5 +120,8 @@ Gateway implements the following inner controls:
   revoke test invalidates inner cookies without changing tmux sessions.
 - Content Security Policy is present and the browser console shows no blocked
   first-party application assets.
+- Full screen cannot be entered without a direct user gesture; expanded and
+  collapsed session headers both offer an exit, and denied requests leave the
+  authenticated page usable.
 - Runtime config, password hashes, tunnel credentials, tokens, domains, session
   identifiers, and private conversations are absent from Git and logs.

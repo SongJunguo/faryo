@@ -90,6 +90,26 @@ folds/unfolds the header, the folder switches sessions, and the sliders open
 session details. Returning home uses same-origin `/` without carrying the Owner
 token or selected-session query.
 
+## Immersive Display
+
+Faryo uses a tested scroll-surface adapter rather than scroll-position hacks.
+Narrow pages opened through Gateway in a normal browser use the document root,
+so mobile Edge/Chromium receive real page scroll and can apply their own dynamic
+toolbar behaviour. Direct Owner, desktop and installed standalone PWA views keep
+the bounded `main` scroller.
+
+- Gateway's root manifest uses `display: standalone`, and every maintained page
+  references it. An installed Faryo launches without the normal URL bar.
+- The session header and Details expose `Enter full screen`. It calls the
+  Fullscreen API only from the user's tap and requests hidden navigation UI.
+- While the header is expanded, the same control becomes a labelled `Exit`.
+- Folding the header reveals a compact `Exit full screen` pill; browser Back,
+  system gestures and Esc remain valid exits.
+- `fullscreenchange` reconciles exits initiated outside Faryo. State is not
+  persisted, so reloads and newly opened sessions never enter automatically.
+- Unsupported or denied requests leave the page intact and point to the Home
+  install path.
+
 ## Compact Chat
 
 Compact Chat is the default reading mode. It renders finalized Codex rollout
@@ -236,6 +256,11 @@ The maintained matrix includes:
 - cross-session retry/delayed-response isolation;
 - protected files/images, CSP, and safe render fallback;
 - unchanged Codex tmux dimensions before and after browser/deployment tests.
+- user-activated full-screen enter/exit through header and Details, folded-header
+  exit, manifest/standalone identity, rejection fallback and no horizontal
+  overflow.
+- Gateway narrow-screen document height above the viewport, trusted root scroll,
+  inner-main scrollTop zero, fixed composer visibility and stable refresh anchor.
 
 Detailed evidence is maintained in
 [`plans/deepseek-inspired-ui-plan.md`](plans/deepseek-inspired-ui-plan.md) and

@@ -29,6 +29,8 @@
   const codexCommandApi = window.FaryoCodexCommands || {};
   const copyFidelityApi = window.FaryoCopyFidelity || {};
   const clipboardImageApi = window.FaryoClipboardImages || {};
+  const immersiveModeApi = window.FaryoImmersiveMode || {};
+  const scrollSurfaceApi = window.FaryoScrollSurface || {};
   document.documentElement.dataset.faryoClipboardPaste = (
     typeof clipboardImageApi.filesFromClipboard === 'function'
     && typeof clipboardImageApi.insertText === 'function'
@@ -64,6 +66,7 @@
     '⧉ copies last output',
     'Tap title to fold header',
     'Tap the Faryo logo for home',
+    'Tap expand for full screen',
     'Tap version to fold footer',
     'Tap folder to switch sessions',
     'Set font on home',
@@ -79,6 +82,14 @@
   let pendingAttachments = [];
   const routeMatch = location.pathname.match(/^\/(hp|pc|txy)(?:\/|$)/);
   const routeBase = routeMatch ? `/${routeMatch[1]}` : '';
+  const isStandalone = window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone;
+  const useDocumentScroller = typeof scrollSurfaceApi.shouldUseDocumentScroller === 'function'
+    && scrollSurfaceApi.shouldUseDocumentScroller({ routeBase, width: window.innerWidth, standalone: Boolean(isStandalone) });
+  const conversationScroller = useDocumentScroller && typeof scrollSurfaceApi.createDocumentScroller === 'function'
+    ? scrollSurfaceApi.createDocumentScroller(window)
+    : outputWrap;
+  document.documentElement.classList.toggle('document-scroll-mode', useDocumentScroller);
+  document.documentElement.dataset.faryoScrollSurface = useDocumentScroller ? 'document' : 'conversation';
   const params = new URLSearchParams(location.search);
   const OWNER_TOKEN_STORAGE_KEY = 'faryoOwnerToken:v1';
   const queryOwnerToken = params.get('token') || '';
@@ -106,6 +117,7 @@
   let initialLatestScrollPending = true, initialLatestScrollTimer = null;
   let submitInFlight = false, pendingSubmission = null;
   let activeSurfacePanel = null, panelReturnFocus = null;
+  let immersiveController = null;
   const restoringLivePanels = new WeakSet();
   let questionNavigatorController = null;
   let commandSuggestionIndex = 0, commandSuggestionSignature = '';
@@ -118,7 +130,7 @@
         current: $('questionNavCurrent'),
         total: $('questionNavTotal'),
         preview: questionNavPreview,
-        scroller: outputWrap,
+        scroller: conversationScroller,
         output,
         resolveTarget: resolveQuestionTarget,
       });
@@ -231,8 +243,28 @@
     return `web-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 14)}`;
   }
 
-  const isStandalone = window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone;
   document.documentElement.classList.toggle('standalone', Boolean(isStandalone));
+  document.documentElement.dataset.faryoDisplayMode = isStandalone ? 'standalone' : 'browser';
+  if (typeof immersiveModeApi.createController === 'function') {
+    immersiveController = immersiveModeApi.createController({
+      document,
+      target: document.documentElement,
+      root: document.documentElement,
+      toggleButtons: [$('immersiveBtn'), $('detailsFullscreenBtn')],
+      exitButton: $('immersiveExitBtn'),
+      onChange: (active) => {
+        if (active && activeSurfacePanel) closeSurfacePanels({ restoreFocus: false });
+        syncKeyboardState();
+      },
+      onError: (reason) => {
+        if (activeSurfacePanel) closeSurfacePanels({ restoreFocus: false });
+        setError(reason === 'unsupported'
+          ? 'Full screen is unavailable here. Install Faryo from Home for an app-style window.'
+          : 'The browser did not enter full screen. Try again from a direct tap, or install Faryo from Home.');
+      },
+    });
+  }
+  document.documentElement.dataset.faryoImmersive = immersiveController ? 'ready' : 'unavailable';
   restorePromptDraft();
   promptInput.addEventListener('input', () => {
     if (pendingSubmission?.browserText !== promptInput.value) {
@@ -383,7 +415,7 @@
   }
   updateSendVisibility();
 
-  function isNearBottom() { return outputWrap.scrollHeight - outputWrap.scrollTop - outputWrap.clientHeight < 80; }
+  function isNearBottom() { return conversationScroller.scrollHeight - conversationScroller.scrollTop - conversationScroller.clientHeight < 80; }
   function updateBottomButton() {
     if (pendingDeferredCapture && isNearBottom()) { applyDeferredCapture(true); return; }
     bottomBtn.classList.toggle('hidden', isNearBottom());
@@ -401,13 +433,13 @@
 
   function renderCaptureWhenSafe(capture, keepBottom) {
     noteOutputActivity(capture);
-    const previousScrollTop = outputWrap.scrollTop;
+    const previousScrollTop = conversationScroller.scrollTop;
     pendingDeferredCapture = null;
     renderOutput(capture);
     if (initialLatestScrollPending) applyInitialLatestScroll(capture?.captureSource !== 'codex-jsonl');
     else if (keepBottom) scrollBottom(true);
     else requestAnimationFrame(() => {
-      outputWrap.scrollTop = previousScrollTop;
+      conversationScroller.scrollTop = previousScrollTop;
       updateBottomButton();
     });
   }
@@ -415,7 +447,7 @@
   function scrollBottom(force = false) {
     if (force || isNearBottom()) {
       requestAnimationFrame(() => {
-        outputWrap.scrollTop = outputWrap.scrollHeight;
+        conversationScroller.scrollTop = conversationScroller.scrollHeight;
         updateBottomButton();
       });
     }
@@ -437,7 +469,7 @@
     if (!initialLatestScrollPending || Date.now() <= historyUserIntentUntil) return false;
     const apply = () => {
       if (!initialLatestScrollPending || Date.now() <= historyUserIntentUntil) return;
-      outputWrap.scrollTop = outputWrap.scrollHeight;
+      conversationScroller.scrollTop = conversationScroller.scrollHeight;
       updateBottomButton();
     };
     requestAnimationFrame(() => {
@@ -593,11 +625,11 @@
     liveSelectionFlushTimer = setTimeout(flushDeferredLiveTerminal, 80);
   });
 
-  outputWrap.addEventListener('scroll', () => { updateBottomButton(); maybeLoadOlderHistory(); }, { passive: true });
-  outputWrap.addEventListener('wheel', noteHistoryUserIntent, { passive: true });
-  outputWrap.addEventListener('touchstart', noteHistoryUserIntent, { passive: true });
-  outputWrap.addEventListener('touchmove', noteHistoryUserIntent, { passive: true });
-  outputWrap.addEventListener('pointerdown', noteHistoryUserIntent, { passive: true });
+  conversationScroller.addEventListener('scroll', () => { updateBottomButton(); maybeLoadOlderHistory(); }, { passive: true });
+  conversationScroller.addEventListener('wheel', noteHistoryUserIntent, { passive: true });
+  conversationScroller.addEventListener('touchstart', noteHistoryUserIntent, { passive: true });
+  conversationScroller.addEventListener('touchmove', noteHistoryUserIntent, { passive: true });
+  conversationScroller.addEventListener('pointerdown', noteHistoryUserIntent, { passive: true });
   bottomBtn.addEventListener('click', () => { if (!applyDeferredCapture(true)) scrollBottom(true); });
   output.addEventListener('toggle', (event) => {
     const panel = event.target.closest?.('.compact-live-terminal');
@@ -828,14 +860,14 @@
   }
 
   function historyAnchorSnapshot() {
-    const scrollerTop = outputWrap.getBoundingClientRect().top;
+    const scrollerTop = conversationScroller.getBoundingClientRect().top;
     const child = [...output.children].find((element) => element.getBoundingClientRect().bottom > scrollerTop + 1);
     return child ? {
       key: child.dataset.faryoBlockKey || '',
       top: child.getBoundingClientRect().top,
-      scrollTop: outputWrap.scrollTop,
-      scrollHeight: outputWrap.scrollHeight,
-    } : { key: '', top: 0, scrollTop: outputWrap.scrollTop, scrollHeight: outputWrap.scrollHeight };
+      scrollTop: conversationScroller.scrollTop,
+      scrollHeight: conversationScroller.scrollHeight,
+    } : { key: '', top: 0, scrollTop: conversationScroller.scrollTop, scrollHeight: conversationScroller.scrollHeight };
   }
 
   function restoreHistoryAnchor(snapshot) {
@@ -844,9 +876,9 @@
       const target = snapshot.key
         ? [...output.children].find((element) => element.dataset.faryoBlockKey === snapshot.key)
         : null;
-      outputWrap.scrollTop = target
-        ? outputWrap.scrollTop + target.getBoundingClientRect().top - snapshot.top
-        : snapshot.scrollTop + Math.max(0, outputWrap.scrollHeight - snapshot.scrollHeight);
+      conversationScroller.scrollTop = target
+        ? conversationScroller.scrollTop + target.getBoundingClientRect().top - snapshot.top
+        : snapshot.scrollTop + Math.max(0, conversationScroller.scrollHeight - snapshot.scrollHeight);
       updateBottomButton();
     };
     requestAnimationFrame(() => {
@@ -983,7 +1015,7 @@
   function maybeLoadOlderHistory() {
     if (Date.now() > historyUserIntentUntil || outputMode !== 'compact'
       || !conversationHistory.initialized || !conversationHistory.olderCursor
-      || outputWrap.scrollTop > 120) return;
+      || conversationScroller.scrollTop > 120) return;
     if (historyLoadPromise) {
       historyOlderLoadQueued = true;
       return;

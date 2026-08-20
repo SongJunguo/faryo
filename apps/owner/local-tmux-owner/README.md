@@ -113,6 +113,14 @@ page. It deliberately drops the current token and session query. The adjacent
 title still folds/unfolds the header; the folder and details controls retain
 their separate session-switching and status roles.
 
+The same header includes an explicit full-screen toggle, with a labelled `Exit`
+state while expanded and a floating `Exit full screen` control while the header
+is folded. Details exposes the same action with a standalone-PWA hint. Entry is
+always a direct user gesture; `fullscreenchange` handles browser/system exits,
+and unsupported or denied requests fall back to the Gateway install guidance.
+The page references Gateway's root manifest so an installed `standalone` PWA can
+open any in-scope session without the ordinary URL bar.
+
 Owner does not resize tmux or the Codex TUI. Browser sends retain an
 immutable target session and client message id across timeout recovery,
 confirmed submit delivery, idempotent retries, draft preservation on failure,

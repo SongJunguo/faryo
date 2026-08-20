@@ -65,6 +65,12 @@ from 1 through 168 when a different operator-selected lifetime is required.
 Changing it does not alter Cloudflare Access sessions; the two layers are
 configured independently.
 
+Gateway serves one root-scoped installable PWA manifest with `display:
+standalone`. The home page exposes the browser install prompt when available,
+and every maintained Owner session page references the same manifest. Launching
+the installed app removes the ordinary URL bar while keeping Faryo's own Home
+navigation and authentication boundaries.
+
 Running-session limits are independent from history display. Configure them per
 enabled route with `FARYO_TXY_MAX_RUNNING`, `FARYO_HP_MAX_RUNNING`, or
 `FARYO_PC_MAX_RUNNING` (valid range `1`–`32`). Defaults are 8 for TXY and 4 for

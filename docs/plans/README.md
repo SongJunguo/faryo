@@ -9,6 +9,9 @@
 
 ## Completed or maintenance mode
 
+- [`codebase-architecture-and-mobile-immersive-plan.md`](codebase-architecture-and-mobile-immersive-plan.md)：
+  审计代码/依赖/同类项目，实施 Edge 文档滚动、可退出 Fullscreen 与 PWA 补强，并形成
+  渐进重构路线。
 - [`session-history-archive-plan.md`](session-history-archive-plan.md)：通过 Codex App Server
   正式 RPC 为 Session History 增加可恢复 Archive/Unarchive，不暴露硬删除。
 - [`retire-project-orchestration-plan.md`](retire-project-orchestration-plan.md)：退役零配置、零数据

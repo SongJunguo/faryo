@@ -185,13 +185,28 @@ class GatewayCsrfContractTest(unittest.TestCase):
             self.assertEqual(resp.getheader("Referrer-Policy"), "no-referrer")
             self.assertEqual(
                 resp.getheader("Permissions-Policy"),
-                "camera=(), microphone=(), geolocation=()",
+                "camera=(), microphone=(), geolocation=(), fullscreen=(self)",
             )
             self.assertEqual(resp.getheader("Strict-Transport-Security"), "max-age=31536000")
             csp = resp.getheader("Content-Security-Policy") or ""
             self.assertIn("default-src 'self'", csp)
             self.assertIn("script-src-attr 'none'", csp)
             self.assertIn("object-src 'none'", csp)
+        finally:
+            conn.close()
+
+    def test_pwa_manifest_is_root_scoped_and_standalone(self) -> None:
+        conn = http.client.HTTPConnection(*self.base, timeout=5)
+        try:
+            conn.request("GET", "/manifest.json")
+            resp = conn.getresponse()
+            payload = json.loads(resp.read().decode("utf-8"))
+            self.assertEqual(resp.status, HTTPStatus.OK)
+            self.assertEqual(payload["id"], "/")
+            self.assertEqual(payload["scope"], "/")
+            self.assertEqual(payload["start_url"], "/")
+            self.assertEqual(payload["display"], "standalone")
+            self.assertIn("Codex sessions", payload["description"])
         finally:
             conn.close()
 

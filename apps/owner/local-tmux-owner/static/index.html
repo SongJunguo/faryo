@@ -7,9 +7,10 @@
   <title>Faryo Owner __FARYO_RELEASE_VERSION__</title>
   <meta name="theme-color" content="#F6F7F9" media="(prefers-color-scheme: light)" />
   <meta name="theme-color" content="#0F1115" media="(prefers-color-scheme: dark)" />
+  <link rel="manifest" href="/manifest.json" />
   <script src="appearance.js?v=faryo-appearance-3"></script>
   <link rel="stylesheet" href="appearance.css?v=faryo-appearance-2" />
-  <link rel="stylesheet" href="style.css?v=faryo-owner-workbench-13" />
+  <link rel="stylesheet" href="style.css?v=faryo-owner-workbench-15" />
   <link rel="stylesheet" href="vendor/katex/katex.min.css?v=0.18.4" />
 </head>
 <body>
@@ -26,6 +27,11 @@
           </strong>
         </div>
         <div class="topbar-actions">
+          <button id="immersiveBtn" class="topbar-icon" type="button" aria-label="Enter full screen" aria-pressed="false" title="Enter full screen">
+            <svg class="fullscreen-enter-glyph" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 4H4v5M15 4h5v5M20 15v5h-5M9 20H4v-5"/></svg>
+            <svg class="fullscreen-exit-glyph" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9h5V4M20 9h-5V4M15 20v-5h5M9 20v-5H4"/></svg>
+            <span class="fullscreen-top-label" aria-hidden="true">Exit</span>
+          </button>
           <button id="detailsBtn" class="topbar-icon" type="button" aria-label="Open session details" aria-expanded="false" aria-controls="detailsPanel">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h10M18 7h2M4 12h3M11 12h9M4 17h7M15 17h5"/><circle cx="16" cy="7" r="2"/><circle cx="9" cy="12" r="2"/><circle cx="13" cy="17" r="2"/></svg>
           </button>
@@ -64,6 +70,13 @@
           <button id="detailsRawBtn" type="button">Raw</button>
           <button id="detailsRefreshBtn" type="button">Refresh</button>
         </div>
+      </section>
+      <section class="details-section" aria-label="Display mode">
+        <div class="details-section-title">Display</div>
+        <button id="detailsFullscreenBtn" class="details-display-action" type="button" aria-pressed="false">
+          <span data-fullscreen-label>Enter full screen</span><span aria-hidden="true">↗</span>
+        </button>
+        <p class="details-display-note">For a persistent app window without an address bar, install Faryo from Home.</p>
       </section>
       <section class="details-section" aria-label="Session information">
         <div class="details-section-title">Runtime</div>
@@ -127,6 +140,7 @@
       </div>
     </footer>
   </div>
+  <button id="immersiveExitBtn" class="fullscreen-exit" type="button" aria-label="Exit full screen" aria-hidden="true" hidden>Exit full screen</button>
   <nav id="questionNavigator" class="question-navigator hidden" aria-label="Jump between questions" aria-hidden="true">
     <span class="question-nav-count" aria-hidden="true"><span id="questionNavCurrent">0</span>/<span id="questionNavTotal">0</span></span>
     <div id="questionNavMarkers" class="question-nav-markers"></div>
@@ -140,9 +154,11 @@
   <script src="codex-commands.js?v=faryo-codex-commands-1"></script>
   <script src="copy-fidelity.js?v=faryo-copy-fidelity-2"></script>
   <script src="clipboard-images.js?v=faryo-clipboard-images-1"></script>
+  <script src="immersive-mode.js?v=faryo-immersive-1"></script>
+  <script src="scroll-surface.js?v=faryo-scroll-surface-1"></script>
   <script type="module" src="vendor/markdown-ast/highlight/highlight.js?v=faryo-shiki-1"></script>
   <script src="compact-rules-codex.js?v=faryo-owner-plan-2"></script>
   <script src="live-scroll.js?v=faryo-owner-live-scroll-2"></script>
-  <script src="app.js?v=faryo-owner-workbench-22"></script>
+  <script src="app.js?v=faryo-owner-workbench-24"></script>
 </body>
 </html>

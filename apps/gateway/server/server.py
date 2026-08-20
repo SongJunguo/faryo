@@ -172,7 +172,7 @@ PWA_MANIFEST = {
     "id": "/",
     "name": "Faryo",
     "short_name": "Faryo",
-    "description": "Faryo handoff companion for available devices and sessions",
+    "description": "Self-hosted mobile and desktop workbench for Codex sessions",
     "start_url": "/",
     "scope": "/",
     "display": "standalone",
@@ -188,7 +188,7 @@ self.addEventListener('activate',(event)=>{event.waitUntil(caches.keys().then((k
 self.addEventListener('fetch',()=>{});
 """
 
-OWNER_STATIC_FILES = {"appearance.css", "appearance.js", "app.js", "style.css", "index.html", "event-stream.js", "internal-annotations.js", "local-file-view.js", "stable-blocks.js", "question-navigator.js", "live-scroll.js", "compact-rules-codex.js", "codex-commands.js", "copy-fidelity.js", "clipboard-images.js"}
+OWNER_STATIC_FILES = {"appearance.css", "appearance.js", "app.js", "style.css", "index.html", "event-stream.js", "internal-annotations.js", "local-file-view.js", "stable-blocks.js", "question-navigator.js", "live-scroll.js", "compact-rules-codex.js", "codex-commands.js", "copy-fidelity.js", "clipboard-images.js", "immersive-mode.js", "scroll-surface.js"}
 OWNER_STATIC_PREFIXES = ("icons/", "pet/", "vendor/katex/", "vendor/markdown-ast/")
 SHARED_STATIC_FILES = {
     "appearance.css": "text/css; charset=utf-8",
@@ -955,7 +955,7 @@ class GatewayHandler(BaseHTTPRequestHandler):
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("X-Frame-Options", "DENY")
         self.send_header("Referrer-Policy", "no-referrer")
-        self.send_header("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+        self.send_header("Permissions-Policy", "camera=(), microphone=(), geolocation=(), fullscreen=(self)")
         self.send_header("Strict-Transport-Security", "max-age=31536000")
         super().end_headers()
 

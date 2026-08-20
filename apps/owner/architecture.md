@@ -93,4 +93,5 @@ Expected:
 - Owner does not host Faryo Gateway.
 - Owner does not provide a public login page.
 - Owner does not commit tokens, password hashes, or runtime secrets.
-- Owner does not automatically start or resume arbitrary terminal TUIs.
+- Owner does not expose arbitrary launch commands; the maintained launcher is
+  the explicitly configured Codex runtime.

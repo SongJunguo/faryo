@@ -48,6 +48,11 @@ deploy/user-systemd/faryo-owner-keepalive.timer
 Use `/health` for liveness and `/api/status` for authenticated runtime checks.
 The status payload includes the source version for deployment acceptance.
 
+The session page participates in Gateway's root-scoped standalone PWA and also
+offers a user-activated Fullscreen API mode. Browser chrome is never hidden
+without an explicit tap; expanded and collapsed headers both retain a visible
+exit path. Fullscreen state is browser-only and does not touch tmux geometry.
+
 Inactive Codex history can be archived or restored through the authenticated
 Owner lifecycle endpoints. Owner delegates those changes to Codex App Server's
 `thread/archive` and `thread/unarchive`; it does not directly edit Codex state

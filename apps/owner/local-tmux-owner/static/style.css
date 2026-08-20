@@ -1138,6 +1138,37 @@ html[data-faryo-ui="workbench-v2"] .topbar-icon svg {
   stroke-linecap: round;
 }
 
+html[data-faryo-ui="workbench-v2"] #immersiveBtn .fullscreen-exit-glyph,
+html[data-faryo-ui="workbench-v2"] #immersiveBtn[data-fullscreen-active="true"] .fullscreen-enter-glyph {
+  display: none;
+}
+
+html[data-faryo-ui="workbench-v2"] #immersiveBtn[data-fullscreen-active="true"] .fullscreen-exit-glyph {
+  display: block;
+}
+
+html[data-faryo-ui="workbench-v2"] #immersiveBtn .fullscreen-top-label {
+  display: none;
+  font-size: calc(11px + var(--font-step));
+  line-height: 1;
+}
+
+html[data-faryo-ui="workbench-v2"] #immersiveBtn[data-fullscreen-active="true"] {
+  width: auto;
+  padding: 0 9px;
+  gap: 4px;
+  border-color: color-mix(in srgb, var(--accent) 42%, var(--owner-hairline));
+  color: var(--accent);
+}
+
+html[data-faryo-ui="workbench-v2"] #immersiveBtn[data-fullscreen-active="true"] .fullscreen-top-label {
+  display: inline;
+}
+
+html[data-faryo-ui="workbench-v2"] #immersiveBtn[data-fullscreen-supported="false"] {
+  opacity: .58;
+}
+
 html[data-faryo-ui="workbench-v2"] header.collapsed .topbar-actions {
   display: none;
 }
@@ -1314,6 +1345,127 @@ html[data-faryo-ui="workbench-v2"] .details-mode-rail button.mode-active {
   border-color: color-mix(in srgb, var(--accent) 34%, var(--line));
   background: color-mix(in srgb, var(--accent) 14%, var(--panel));
   color: var(--text);
+}
+
+html[data-faryo-ui="workbench-v2"] .details-display-action {
+  width: 100%;
+  min-height: 46px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 0 12px;
+  border: 1px solid color-mix(in srgb, var(--accent) 28%, var(--owner-hairline));
+  border-radius: 12px;
+  background: var(--panel);
+  color: var(--text);
+  text-align: left;
+}
+
+html[data-faryo-ui="workbench-v2"] .details-display-action[data-fullscreen-active="true"] {
+  border-color: color-mix(in srgb, var(--accent) 48%, var(--line));
+  background: color-mix(in srgb, var(--accent) 12%, var(--panel));
+}
+
+html[data-faryo-ui="workbench-v2"] .details-display-note {
+  margin: -1px 2px 0;
+  color: var(--muted);
+  font-size: calc(11px + var(--font-step));
+  line-height: 1.45;
+}
+
+.fullscreen-exit {
+  position: fixed;
+  top: calc(env(safe-area-inset-top) + 8px);
+  left: 50%;
+  z-index: 90;
+  min-height: 38px;
+  display: none;
+  padding: 0 13px;
+  border: 1px solid color-mix(in srgb, var(--accent) 44%, var(--line));
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--panel) 88%, transparent);
+  color: var(--text);
+  box-shadow: 0 8px 26px rgba(0, 0, 0, .24);
+  font-size: calc(12px + var(--font-step));
+  backdrop-filter: blur(18px) saturate(1.1);
+  transform: translateX(-50%);
+}
+
+.fullscreen-exit[hidden] { display: none; }
+
+html.fullscreen-active .app.header-collapsed + .fullscreen-exit:not([hidden]) {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+html.fullscreen-active,
+html.fullscreen-active body,
+html.fullscreen-active .app,
+html:fullscreen,
+html:fullscreen body,
+html:fullscreen .app,
+html:-webkit-full-screen,
+html:-webkit-full-screen body,
+html:-webkit-full-screen .app {
+  width: 100%;
+  height: 100%;
+  height: 100dvh;
+  background: var(--bg);
+}
+
+@media (max-width: 719px) {
+  html.document-scroll-mode {
+    height: auto;
+    min-height: 100%;
+    overflow-x: hidden;
+    overflow-y: auto;
+    overscroll-behavior-y: auto;
+  }
+
+  html.document-scroll-mode body {
+    height: auto;
+    min-height: 100vh;
+    min-height: 100dvh;
+    overflow: visible;
+  }
+
+  html.document-scroll-mode .app {
+    height: auto;
+    min-height: 100vh;
+    min-height: 100dvh;
+    display: block;
+    overflow: visible;
+  }
+
+  html.document-scroll-mode header:not(.collapsed) {
+    position: sticky;
+    top: 0;
+  }
+
+  html.document-scroll-mode header.collapsed {
+    position: fixed;
+  }
+
+  html.document-scroll-mode main {
+    min-height: 100vh;
+    min-height: 100dvh;
+    overflow: visible;
+  }
+
+  html.document-scroll-mode footer {
+    position: fixed;
+    left: 50%;
+    right: auto;
+    width: min(100%, 760px);
+    transform: translateX(-50%);
+  }
+
+  html.document-scroll-mode.panel-open,
+  html.document-scroll-mode.panel-open body {
+    overflow: hidden;
+  }
 }
 
 html[data-faryo-ui="workbench-v2"] .details-list {

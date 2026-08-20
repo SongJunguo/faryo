@@ -34,6 +34,9 @@ Gateway host: the machine reached by the public HTTPS edge.
   may route a hostname directly to `127.0.0.1:8780`.
 - Gateway provides form login, auth cookies, the unified workbench, account
   tools, and restricted path proxying.
+- Gateway owns the root-scoped `standalone` PWA manifest and service worker.
+  Owner session pages reference that same manifest so installed navigation stays
+  within one authenticated app identity.
 - Gateway private route config controls visible endpoints, workspace roots,
   and attachment inbox roots.
 - Gateway probes each route through its real `/health` endpoint. Offline
@@ -68,6 +71,8 @@ establish reverse tunnels to it.
 - Browser responses deny framing and unnecessary camera, microphone, and
   geolocation permissions, disable referrer leakage, and advertise HSTS on the
   public HTTPS path.
+- Fullscreen permission is limited to the same origin. Entering it remains an
+  explicit browser user gesture and is independent from the PWA display mode.
 - A tunnel by itself is routing, not identity policy. For an Internet-facing
   Gateway that can steer coding agents, protect the complete hostname with
   Cloudflare Access (or an equivalent identity-aware proxy), an exact identity

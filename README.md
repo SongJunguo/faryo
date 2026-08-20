@@ -27,6 +27,8 @@ the existing tmux TUI as the execution surface.
   live Codex/tmux session instead of creating a detached web chat.
 - **Long-conversation navigation:** structured history stays bounded, and a
   fast-scroll question rail jumps between prior user turns.
+- **Mobile immersive reading:** installable standalone PWA plus an explicit,
+  user-activated full-screen mode with clear exit controls.
 - **Reliable remote input:** delivery is confirmed, idempotent across retries and
   restarts, isolated by session, and preserves drafts on ambiguous failures.
 - **Self-hosted security boundary:** Owner and Gateway stay on loopback behind an
@@ -129,6 +131,13 @@ micromark -> mdast -> CommonMark/GFM/math nodes -> safe HTML -> KaTeX
 
 - Uses `/` as the single Gateway home. The older Project Orchestration surface
   has been retired; generic Files-to-session handoff remains available.
+- On narrow Gateway browser tabs, adapts the conversation to real document
+  scrolling so mobile Edge/Chromium can apply their native toolbar auto-hide.
+  Direct Owner, desktop and standalone PWA retain the bounded inner scroller.
+- Also offers two explicit no-address-bar paths: installed `standalone` PWA and
+  a tap-triggered Fullscreen API mode. Full screen can be left from the expanded
+  header, a collapsed-header exit pill, or the browser/OS exit gesture; it is
+  never entered automatically.
 - Uses the Faryo logo as a direct return to the Gateway home page while the
   adjacent session title keeps its independent header-collapse action.
 - Keeps a large composer geometry across focus, blur, and mobile keyboard state.
@@ -280,7 +289,7 @@ or an equivalent exact-identity layer.
 
 The `main` branch was revalidated on 2026-08-20 with privacy-safe fixtures:
 
-- source checks plus 82 Owner and 62 Gateway Python tests;
+- source checks plus 82 Owner and 63 Gateway Python tests;
 - an isolated real Codex App Server Current→Archived→Current round trip through
   Owner, with stable totals, unchanged rollout SHA-256, and the real Codex home
   untouched;
@@ -293,6 +302,12 @@ The `main` branch was revalidated on 2026-08-20 with privacy-safe fixtures:
   verifying the 180-line bound, stable DOM/scroll, selection-aware update pause,
   deferred flush, explicit copy, and unchanged tmux geometry;
 - a two-session retry/delayed-response isolation test;
+- user-activated full-screen enter/exit from both header and Details at 390x844
+  and 1440x900, including collapsed-header exit, PWA manifest identity, denied/
+  unsupported fallback, no horizontal overflow and unchanged tmux geometry;
+- a real 390x844 Gateway document-scroll check in Edge: trusted wheel input
+  changes `window.scrollY`, leaves the inner conversation at scrollTop zero and
+  keeps the fixed composer visible, enabling native browser-toolbar retraction;
 - 390x844 mobile Chrome and 1440x900 desktop Edge long-conversation tests;
 - fast-scroll question-rail reveal, auto-hide, keyboard navigation, stable live
   append, and unchanged conversation width;
@@ -388,6 +403,7 @@ tools/              Development-only Markdown bundle builder
 - [Gateway runbook](apps/gateway/runbook.md)
 - [Gateway security hardening](docs/gateway-security-hardening.md)
 - [Current UI interaction contract](docs/ui-interaction.md)
+- [Codebase architecture and similar-project benchmark](docs/codebase-architecture-and-product-benchmark.md)
 - [Implementation plans and validation evidence](docs/plans/README.md)
 - [Current UI plan and evidence](docs/plans/deepseek-inspired-ui-plan.md)
 - [Codex reliability plan and evidence](docs/plans/codex-reliability-hardening-plan.md)
