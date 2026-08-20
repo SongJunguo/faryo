@@ -4,6 +4,7 @@
   const attachmentControllerModulePromise = import("./owner/attachment-controller.mjs?v=faryo-owner-attachments-1");
   const historyControllerModulePromise = import("./owner/history-controller.mjs?v=faryo-owner-history-1");
   const captureControllerModulePromise = import("./owner/capture-controller.mjs?v=faryo-owner-capture-1");
+  const composerDeliveryModulePromise = import("./owner/composer-delivery.mjs?v=faryo-owner-composer-1");
   // Workspace review is an optional surface. Start loading it immediately,
   // but never let a transient asset failure block capture/history rendering.
   const changesPanelModulePromise = import("./owner/changes-panel.mjs?v=faryo-owner-changes-1");
@@ -12,11 +13,13 @@
     { createAttachmentController },
     { createHistoryController, isStructuredCapture },
     { createCaptureController },
+    { createComposerDelivery },
   ] = await Promise.all([
     apiClientModulePromise,
     attachmentControllerModulePromise,
     historyControllerModulePromise,
     captureControllerModulePromise,
+    composerDeliveryModulePromise,
   ]);
 
   const $ = (id) => document.getElementById(id);
@@ -130,11 +133,23 @@
   });
   const api = ownerApiClient.request;
   let selectedSession = params.get('session') || '';
+  const composerDelivery = createComposerDelivery({
+    storage: sessionStorage,
+    routeKey: routeBase || 'owner',
+    getSession: () => selectedSession,
+    crypto: window.crypto,
+    AbortController: window.AbortController,
+    setTimeout: window.setTimeout.bind(window),
+    clearTimeout: window.clearTimeout.bind(window),
+    timeoutMs: FETCH_TIMEOUT_MS,
+    sendAction: (payload, options) => postAction('/api/send', payload, options),
+    onChecking: () => setError('Checking whether the message was delivered…', { timeoutMs: 0 }),
+  });
   const HISTORY_PAGE_TURNS = 12;
   const HISTORY_REFRESH_MIN_MS = 2500;
   let historyController = null;
   let initialLatestScrollPending = true, initialLatestScrollTimer = null;
-  let submitInFlight = false, pendingSubmission = null;
+  let submitInFlight = false;
   let activeSurfacePanel = null, panelReturnFocus = null;
   let immersiveController = null;
   const restoringLivePanels = new WeakSet();
@@ -213,54 +228,28 @@
     else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
   }
 
-  function promptDraftKey(session = selectedSession) { return `faryoPromptDraft:${routeBase || 'owner'}:${session || 'default'}`; }
-  function pendingSubmissionKey(session = selectedSession) { return `${promptDraftKey(session)}:pending`; }
   function persistPromptDraft(session = selectedSession, value = promptInput.value) {
-    try {
-      if (value) sessionStorage.setItem(promptDraftKey(session), value);
-      else sessionStorage.removeItem(promptDraftKey(session));
-    } catch (_err) {}
+    composerDelivery.persistDraft(session, value);
   }
-  function persistPendingSubmission(submission = pendingSubmission, session = submission?.session || selectedSession) {
-    try {
-      if (submission) sessionStorage.setItem(pendingSubmissionKey(session), JSON.stringify(submission));
-      else sessionStorage.removeItem(pendingSubmissionKey(session));
-    } catch (_err) {}
+  function persistPendingSubmission(
+    submission = composerDelivery.pendingSubmission,
+    session = submission?.session || selectedSession,
+  ) {
+    composerDelivery.persistPending(submission, session);
   }
   function clearPendingSubmission(submission) {
-    if (!submission?.session) return;
-    persistPendingSubmission(null, submission.session);
+    composerDelivery.clearPending(submission);
   }
   function clearDeliveredPromptDraft(submission) {
-    try {
-      const key = promptDraftKey(submission.session);
-      if (sessionStorage.getItem(key) === submission.browserText) sessionStorage.removeItem(key);
-    } catch (_err) {}
+    composerDelivery.clearDeliveredDraft(submission);
   }
   function preserveFailedPromptDraft(submission) {
-    try {
-      const key = promptDraftKey(submission.session);
-      if (sessionStorage.getItem(key) === null) sessionStorage.setItem(key, submission.browserText);
-      if (sessionStorage.getItem(key) === submission.browserText) persistPendingSubmission(submission, submission.session);
-    } catch (_err) {}
+    composerDelivery.preserveFailedDraft(submission);
   }
   function restorePromptDraft() {
-    try {
-      promptInput.value = sessionStorage.getItem(promptDraftKey()) || '';
-      const restored = JSON.parse(sessionStorage.getItem(pendingSubmissionKey()) || 'null');
-      pendingSubmission = restored?.browserText === promptInput.value && (!restored.session || restored.session === selectedSession)
-        ? { ...restored, session: selectedSession }
-        : null;
-      if (pendingSubmission && restored.session !== selectedSession) persistPendingSubmission(pendingSubmission, selectedSession);
-      if (!pendingSubmission) sessionStorage.removeItem(pendingSubmissionKey());
-    } catch (_err) {
-      pendingSubmission = null;
-    }
+    promptInput.value = composerDelivery.restore(selectedSession).inputValue;
   }
-  function newClientMessageId() {
-    if (window.crypto?.randomUUID) return `web-${window.crypto.randomUUID()}`;
-    return `web-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 14)}`;
-  }
+
 
   document.documentElement.classList.toggle('standalone', Boolean(isStandalone));
   document.documentElement.dataset.faryoDisplayMode = isStandalone ? 'standalone' : 'browser';
@@ -286,11 +275,7 @@
   document.documentElement.dataset.faryoImmersive = immersiveController ? 'ready' : 'unavailable';
   restorePromptDraft();
   promptInput.addEventListener('input', () => {
-    if (pendingSubmission?.browserText !== promptInput.value) {
-      const staleSubmission = pendingSubmission;
-      pendingSubmission = null;
-      persistPendingSubmission(null, staleSubmission?.session || selectedSession);
-    }
+    composerDelivery.discardPendingIfChanged(promptInput.value, selectedSession);
     persistPromptDraft();
     autosize();
     updateSendVisibility();
@@ -1295,7 +1280,6 @@
     selectedSession = session;
     beginInitialLatestScroll();
     closeSurfacePanels({ restoreFocus: false });
-    pendingSubmission = null;
     restorePromptDraft();
     autosize();
     updateSendVisibility();
@@ -1961,36 +1945,10 @@
     }
   }
 
-  function isAmbiguousDeliveryError(error) {
-    return error instanceof TypeError || error?.name === 'AbortError' || [502, 504].includes(Number(error?.status || 0));
+  function sendWithDeliveryRecovery(payload) {
+    return composerDelivery.send(payload);
   }
 
-  async function sendDeliveryAttempt(payload) {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
-    try {
-      return await postAction('/api/send', payload, { signal: controller.signal });
-    } catch (error) {
-      if (error?.name !== 'AbortError') throw error;
-      const timeoutError = new Error('Send confirmation timed out');
-      timeoutError.name = 'AbortError';
-      timeoutError.status = 504;
-      throw timeoutError;
-    } finally {
-      clearTimeout(timeoutId);
-    }
-  }
-
-  async function sendWithDeliveryRecovery(payload) {
-    try {
-      return await sendDeliveryAttempt(payload);
-    } catch (error) {
-      if (!isAmbiguousDeliveryError(error)) throw error;
-      setError('Checking whether the message was delivered…', { timeoutMs: 0 });
-      await new Promise((resolve) => setTimeout(resolve, 180));
-      return sendDeliveryAttempt(payload);
-    }
-  }
 
   renderOutputModeButton();
   toggleClassState('header', 'collapsed', 'rdHeaderCollapsed'); toggleClassState('.app', 'header-collapsed', 'rdHeaderCollapsed'); syncStatusRefresh(false);
@@ -2078,17 +2036,12 @@
     const browserText = promptInput.value;
     const outboundText = [text, attachmentText].filter(Boolean).join('\n');
     const submissionSession = selectedSession;
-    if (!pendingSubmission || pendingSubmission.session !== submissionSession || pendingSubmission.browserText !== browserText || pendingSubmission.outboundText !== outboundText) {
-      pendingSubmission = {
-        id: newClientMessageId(),
-        session: submissionSession,
-        browserText,
-        outboundText,
-        attachmentPaths: readyAttachments.map((item) => item.path),
-      };
-      persistPendingSubmission(pendingSubmission, submissionSession);
-    }
-    const submission = { ...pendingSubmission, attachmentPaths: [...(pendingSubmission.attachmentPaths || [])] };
+    const submission = composerDelivery.prepareSubmission({
+      session: submissionSession,
+      browserText,
+      outboundText,
+      attachmentPaths: readyAttachments.map((item) => item.path),
+    });
     submitInFlight = true;
     try {
       closeDockMenu();
@@ -2097,7 +2050,6 @@
       clearDeliveredPromptDraft(submission);
       clearPendingSubmission(submission);
       attachmentController.clearSubmitted(submission.attachmentPaths);
-      if (pendingSubmission?.id === submission.id) pendingSubmission = null;
       if (selectedSession === submission.session) {
         if (promptInput.value === submission.browserText) promptInput.value = '';
         persistPromptDraft();

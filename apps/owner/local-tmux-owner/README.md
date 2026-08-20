@@ -302,6 +302,9 @@ consumed as private runtime input and is never printed.
 - `static/owner/capture-controller.mjs` owns bounded capture requests, late
   response cancellation, SSE fetch/parser lifecycle, reconnect backoff,
   polling fallback and unlocked Raw refresh. Rendering remains in `app.js`.
+- `static/owner/composer-delivery.mjs` owns session-scoped draft/pending storage,
+  stable client message IDs, success-only clearing, failed-draft preservation
+  and one same-ID recovery attempt for ambiguous delivery errors.
 - `tmux_runtime.py` owns UTF-8 subprocess defaults, fixed tmux invocation,
   process-tree parsing and bounded session/thread/message identifiers; product
   policy remains in the higher Owner services.

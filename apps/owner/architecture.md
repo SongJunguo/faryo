@@ -89,6 +89,9 @@ but the default upload destination should come from the Faryo data directory.
 - `static/owner/capture-controller.mjs` owns capture request cancellation,
   coalescing, authenticated SSE parsing, reconnect backoff, polling fallback and
   Raw refresh timers. Capture rendering and scroll decisions remain callbacks.
+- `static/owner/composer-delivery.mjs` owns route/session-scoped drafts, pending
+  message identity, success-only clearing, failed-draft restoration and one
+  same-ID retry for ambiguous network/502/504 outcomes. DOM/animation stay out.
 - Low-level command execution and tmux/process-tree/identifier primitives are
   isolated in `tmux_runtime.py`; higher services keep policy and translate
   failures rather than rebuilding subprocess defaults.
