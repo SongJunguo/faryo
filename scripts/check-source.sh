@@ -121,6 +121,7 @@ release_checks() {
     "$ROOT/apps/owner/local-tmux-owner/static/owner/changes-panel.mjs" \
     "$ROOT/apps/owner/local-tmux-owner/static/owner/api-client.mjs" \
     "$ROOT/apps/owner/local-tmux-owner/static/owner/attachment-controller.mjs" \
+    "$ROOT/apps/owner/local-tmux-owner/static/owner/history-controller.mjs" \
     "$ROOT/apps/owner/local-tmux-owner/static/vendor/markdown-ast/markdown-ast.min.js" \
     "$ROOT/apps/owner/local-tmux-owner/static/live-scroll.js" \
     "$ROOT/apps/shared/static/appearance.js" \
@@ -151,6 +152,7 @@ release_checks() {
   "$NODE_BIN" --test "$ROOT/apps/owner/local-tmux-owner/tests/changes-panel.test.mjs"
   "$NODE_BIN" --test "$ROOT/apps/owner/local-tmux-owner/tests/api-client.test.mjs"
   "$NODE_BIN" --test "$ROOT/apps/owner/local-tmux-owner/tests/attachment-controller.test.mjs"
+  "$NODE_BIN" --test "$ROOT/apps/owner/local-tmux-owner/tests/history-controller.test.mjs"
   "$NODE_BIN" --test "$ROOT/apps/owner/local-tmux-owner/tests/terminal-delivery-receiver.test.mjs"
   "$PYTHON_BIN" -m unittest discover -s "$ROOT/apps/owner/local-tmux-owner/tests" -p 'test_*.py'
   "$PYTHON_BIN" -m unittest discover -s "$ROOT/apps/gateway/server/tests" -p 'test_*.py'
@@ -304,9 +306,11 @@ app = (root / "apps/owner/local-tmux-owner/static/app.js").read_text(encoding="u
 changes_panel_source = (root / "apps/owner/local-tmux-owner/static/owner/changes-panel.mjs").read_text(encoding="utf-8")
 api_client_source = (root / "apps/owner/local-tmux-owner/static/owner/api-client.mjs").read_text(encoding="utf-8")
 attachment_controller_source = (root / "apps/owner/local-tmux-owner/static/owner/attachment-controller.mjs").read_text(encoding="utf-8")
+history_controller_source = (root / "apps/owner/local-tmux-owner/static/owner/history-controller.mjs").read_text(encoding="utf-8")
 assert 'import("./owner/changes-panel.mjs?v=faryo-owner-changes-1")' in app, "Owner Changes must use its native ES module"
 assert 'import("./owner/api-client.mjs?v=faryo-owner-api-1")' in app, "Owner API must use its native ES module"
 assert 'import("./owner/attachment-controller.mjs?v=faryo-owner-attachments-1")' in app, "Owner attachments must use their native ES module"
+assert 'import("./owner/history-controller.mjs?v=faryo-owner-history-1")' in app, "Owner history must use its native ES module"
 assert "/api/workspace-changes" in owner_server and "/api/workspace-changes" in changes_panel_source, "workspace changes must use the scoped read-only Owner API"
 assert "/api/capabilities" in owner_server and "/api/diagnostics" in owner_server and "loadOwnerCapabilities" in app, "Owner must expose versioned redacted diagnostics"
 assert '"pendingQueueManagement": False' in runtime_diagnostics_source and '"pendingQueue": "unsupported"' in runtime_diagnostics_source, "Faryo must not overclaim editable Codex queues"
@@ -332,6 +336,7 @@ assert "button.textContent = '⧉'" in app, "confirmed output copy button must r
 assert "copyFidelity?.handleCopy(event)" in app, "Compact Chat selections must use source-faithful copy"
 assert 'promptInput.addEventListener("paste"' in attachment_controller_source, "Owner composer must handle user-triggered image paste"
 assert "MAX_ATTACHMENTS = 35" in app and "uploadConcurrency: 4" in app, "Owner must bound 35-file attachment batches to four concurrent uploads"
+assert "olderLoadQueued" in history_controller_source and "function emptyConversationHistory(" not in app, "Owner paged history state must remain in its controller"
 assert "navigator.clipboard.read(" not in app + attachment_controller_source, "Owner must not read the clipboard outside a paste event"
 assert "lastCompactCapture" in app and "lastFullCapture" in app and "renderModeLoading" in app, "Chat and Raw must keep isolated capture caches"
 assert "renderOutput(lastCapture)" not in app, "compact callbacks must not replay a Raw capture"

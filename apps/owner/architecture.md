@@ -83,6 +83,9 @@ but the default upload destination should come from the Faryo data directory.
 - `static/owner/attachment-controller.mjs` owns the 35-file queue, four-way
   compression/upload pool, progress thumbnails, cancel/remove, clipboard paste
   and drag/drop. Its bounded horizontal strip never widens the page.
+- `static/owner/history-controller.mjs` owns revision-bound turn maps, question
+  indexes, latest/around/cursor loads, 409 reset, refresh debounce and near-top
+  older-page loading. DOM anchor capture and rendering remain injected actions.
 - Low-level command execution and tmux/process-tree/identifier primitives are
   isolated in `tmux_runtime.py`; higher services keep policy and translate
   failures rather than rebuilding subprocess defaults.

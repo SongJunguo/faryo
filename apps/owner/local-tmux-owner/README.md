@@ -295,6 +295,10 @@ consumed as private runtime input and is never printed.
   most four simultaneous compression/upload tasks, horizontal preview,
   progress/cancel, clipboard images and drag/drop. The server still enforces
   the independent 25 MB per-file limit.
+- `static/owner/history-controller.mjs` owns conversation revision state,
+  complete question indexes, paged turn merging, around/cursor fetches, 409
+  retry and debounced refresh. It receives scroll anchors and render callbacks
+  instead of owning Markdown DOM.
 - `tmux_runtime.py` owns UTF-8 subprocess defaults, fixed tmux invocation,
   process-tree parsing and bounded session/thread/message identifiers; product
   policy remains in the higher Owner services.
