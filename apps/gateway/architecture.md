@@ -29,6 +29,10 @@ use it so Owner tokens and workspace/inbox scopes cannot drift.
 by both stacks. Token/CORS remain adapter concerns, while protocol methods,
 batch/notification behavior and handoff creation have one implementation.
 
+`server/asgi_support.py` owns Starlette security middleware, signed-session
+lookup, HTML/JSON responses, bounded JSON input, proxy header filtering and
+body-free audit writes. Route modules should not recreate those helpers.
+
 ## 1. Entry Flow
 
 ```text

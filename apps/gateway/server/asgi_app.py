@@ -11,41 +11,22 @@ from typing import Any
 
 from anyio import sleep, to_thread
 from starlette.applications import Starlette
-from starlette.datastructures import MutableHeaders
 from starlette.requests import Request
-from starlette.responses import HTMLResponse, RedirectResponse, Response, StreamingResponse
+from starlette.responses import RedirectResponse, Response, StreamingResponse
 from starlette.routing import Route
 import bcrypt
 
 import gateway_security
 import owner_client
 import mcp_service
-
-
-class SecurityHeadersMiddleware:
-    def __init__(self, app: Any) -> None:
-        self.app = app
-
-    async def __call__(self, scope: dict[str, Any], receive: Any, send: Any) -> None:
-        if scope["type"] != "http":
-            await self.app(scope, receive, send)
-            return
-
-        async def send_with_security(message: dict[str, Any]) -> None:
-            if message["type"] == "http.response.start":
-                headers = MutableHeaders(scope=message)
-                nonce = str(scope.get("state", {}).get("csp_nonce") or "")
-                for name, value in gateway_security.browser_security_headers(nonce).items():
-                    headers[name] = value
-            await send(message)
-
-        await self.app(scope, receive, send_with_security)
+import asgi_support
 
 
 def create_app(legacy: Any, config: Any) -> Starlette:
     static_dir = Path(legacy.STATIC_DIR)
     shared_static_dir = Path(legacy.SHARED_STATIC_DIR)
     client = owner_client.OwnerClient(legacy.BACKENDS, config, encode_label=legacy.owner_label_header_value)
+    support = asgi_support.AsgiSupport(legacy, config)
     mcp = mcp_service.McpService(
         config,
         protocol_version=legacy.MCP_PROTOCOL_VERSION,
@@ -54,73 +35,14 @@ def create_app(legacy: Any, config: Any) -> Starlette:
         tool_schema=legacy.MCP_TOOL_SCHEMAS[legacy.MCP_TOOL_NAME],
     )
 
-    def codec() -> gateway_security.SessionCookieCodec:
-        return gateway_security.SessionCookieCodec(
-            config.cookie_secret,
-            name=legacy.COOKIE_NAME,
-            max_age=legacy.COOKIE_MAX_AGE,
-            same_site=legacy.COOKIE_SAME_SITE,
-        )
-
-    def username(request: Request) -> str | None:
-        return codec().username(request.headers.get("cookie", ""), config.users, config.auth_epoch)
-
-    def html_page(request: Request, value: str, status: int = HTTPStatus.OK) -> HTMLResponse:
-        nonce = secrets.token_urlsafe(18)
-        request.scope.setdefault("state", {})["csp_nonce"] = nonce
-        body = value.replace(legacy.CSP_NONCE_PLACEHOLDER, nonce)
-        return HTMLResponse(body, status_code=status, headers={"Cache-Control": "no-store"})
-
-    def json_response(value: dict[str, Any], status: int = HTTPStatus.OK) -> Response:
-        body = json.dumps(value, ensure_ascii=False).encode("utf-8")
-        return Response(body, status_code=status, headers={"Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store"})
-
-    def forwarded_request_headers(request: Request) -> dict[str, str]:
-        return {
-            key: value for key, value in request.headers.items()
-            if key.lower() not in legacy.HOP_BY_HOP_HEADERS and key.lower() not in owner_client.INTERNAL_HEADER_NAMES
-        }
-
-    def forwarded_response_headers(headers: list[tuple[str, str]]) -> dict[str, str]:
-        forwarded: dict[str, str] = {}
-        for key, value in headers:
-            lower = key.lower()
-            if lower in legacy.HOP_BY_HOP_HEADERS or lower in legacy.UPSTREAM_SECURITY_HEADERS or lower == "content-length":
-                continue
-            forwarded[key] = value
-        return forwarded
-
-    def append_audit(
-        *, username_value: str, route: str, action: str, target: str, request_id: str,
-        status: int, started: float, idempotent: bool = False,
-    ) -> None:
-        writer = getattr(config, "append_control_audit", None)
-        if not callable(writer):
-            return
-        writer(
-            username=username_value,
-            route=route,
-            action=action,
-            target=target,
-            request_id=request_id,
-            status=int(status),
-            duration_ms=round((time.monotonic() - started) * 1000),
-            idempotent=idempotent,
-        )
-
-    async def read_json_body(request: Request, max_bytes: int) -> dict[str, Any]:
-        body = await request.body()
-        if not body:
-            raise ValueError("empty JSON body")
-        if len(body) > max_bytes:
-            raise ValueError("request too large")
-        try:
-            payload = json.loads(body.decode("utf-8"))
-        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-            raise ValueError("invalid JSON body") from exc
-        if not isinstance(payload, dict):
-            raise ValueError("invalid JSON object")
-        return payload
+    codec = support.codec
+    username = support.username
+    html_page = support.html_page
+    json_response = support.json_response
+    forwarded_request_headers = support.forwarded_request_headers
+    forwarded_response_headers = support.forwarded_response_headers
+    append_audit = support.append_audit
+    read_json_body = support.read_json_body
 
     async def manifest(_request: Request) -> Response:
         return json_response(legacy.PWA_MANIFEST)
@@ -174,6 +96,52 @@ def create_app(legacy: Any, config: Any) -> Starlette:
             return json_response({"ok": False, "error": "unauthorized"}, HTTPStatus.UNAUTHORIZED)
         value = gateway_security.csrf_token(config.cookie_secret, current, config.auth_epoch(current))
         return json_response({"ok": True, "csrf": value})
+
+    async def security_activity(request: Request) -> Response:
+        current = username(request)
+        if not current:
+            return json_response({"ok": False, "error": "unauthorized"}, HTTPStatus.UNAUTHORIZED)
+        try:
+            limit = int(request.query_params.get("limit", "30"))
+        except ValueError:
+            limit = 30
+        entries = await to_thread.run_sync(lambda: config.control_activity(current, limit))
+        return json_response({"ok": True, "entries": entries})
+
+    async def bridge_packages_get(request: Request) -> Response:
+        current = username(request)
+        if not current:
+            return json_response({"ok": False, "error": "unauthorized"}, HTTPStatus.UNAUTHORIZED)
+        packages = await to_thread.run_sync(lambda: config.list_bridge_packages(current))
+        return json_response({"ok": True, "packages": packages})
+
+    async def password_page(request: Request) -> Response:
+        current = username(request)
+        if not current:
+            target = gateway_security.safe_target(request.url.path)
+            return RedirectResponse("/login?" + legacy.urlencode({"next": target}), status_code=HTTPStatus.SEE_OTHER)
+        csrf_value = gateway_security.csrf_token(config.cookie_secret, current, config.auth_epoch(current))
+        if request.method == "GET":
+            return html_page(request, legacy.password_html(csrf_value, icp=config.icp_record))
+        body = await request.body()
+        form = legacy.parse_qs(body[:8192].decode("utf-8", errors="replace"))
+        current_password = form.get("current_password", [""])[0]
+        new_password = form.get("new_password", [""])[0]
+        confirmation = form.get("confirm_password", [""])[0]
+        if not secrets.compare_digest(form.get("csrf", [""])[0], csrf_value):
+            return html_page(request, legacy.password_html(csrf_value, "Reload and try again", config.icp_record))
+        valid = await to_thread.run_sync(lambda: bcrypt.checkpw(current_password.encode("utf-8"), config.password_hash(current)))
+        if not valid:
+            return html_page(request, legacy.password_html(csrf_value, "Current password is incorrect", config.icp_record))
+        if len(new_password) < 16:
+            return html_page(request, legacy.password_html(csrf_value, "New password must be at least 16 characters", config.icp_record))
+        if new_password != confirmation:
+            return html_page(request, legacy.password_html(csrf_value, "New password confirmation does not match", config.icp_record))
+        await to_thread.run_sync(lambda: config.set_password(current, new_password))
+        response = RedirectResponse("/?password=changed", status_code=HTTPStatus.SEE_OTHER)
+        response.raw_headers.append((b"set-cookie", codec().issue(current, config.auth_epoch(current)).encode("latin-1")))
+        response.raw_headers.append((b"set-cookie", codec().expire(legacy.LEGACY_COOKIE_NAME).encode("latin-1")))
+        return response
 
     async def home(request: Request) -> Response:
         current = username(request)
@@ -760,6 +728,9 @@ def create_app(legacy: Any, config: Any) -> Starlette:
         Route("/login", login, methods=["GET", "POST"]),
         Route("/logout", logout, methods=["GET"]),
         Route("/api/csrf", csrf, methods=["GET"]),
+        Route("/api/security-activity", security_activity, methods=["GET"]),
+        Route("/api/bridge-packages", bridge_packages_get, methods=["GET"]),
+        Route("/password", password_page, methods=["GET", "POST"]),
         Route("/{route}/api/{tail:path}", owner_get, methods=["GET"]),
         Route("/{route}/api/{tail:path}", owner_control, methods=["POST"]),
         Route("/api/session-history/archive", session_history_lifecycle, methods=["POST"]),
@@ -778,5 +749,5 @@ def create_app(legacy: Any, config: Any) -> Starlette:
         Route("/{filename}", static_asset, methods=["GET"]),
     ]
     app = Starlette(routes=routes)
-    app.add_middleware(SecurityHeadersMiddleware)
+    app.add_middleware(asgi_support.SecurityHeadersMiddleware)
     return app

@@ -89,6 +89,7 @@ release_checks() {
     "$ROOT/apps/gateway/server/server.py" \
     "$ROOT/apps/gateway/server/gateway_security.py" \
     "$ROOT/apps/gateway/server/asgi_app.py" \
+    "$ROOT/apps/gateway/server/asgi_support.py" \
     "$ROOT/apps/gateway/server/owner_client.py" \
     "$ROOT/apps/gateway/server/mcp_service.py" \
     "$ROOT/apps/gateway/scripts/generate-gateway-auth-config.py"

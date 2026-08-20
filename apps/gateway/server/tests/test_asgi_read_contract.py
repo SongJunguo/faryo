@@ -56,6 +56,16 @@ class ContractConfig:
     def password_hash(self, username: str) -> bytes:
         return self.password_digest
 
+    def set_password(self, username: str, password: str) -> None:
+        self.password_digest = bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt())
+        self.users[username]["auth_epoch"] += 1
+
+    def control_activity(self, username: str, limit: int = 30) -> list[dict[str, Any]]:
+        return [{"time": "2026-01-01T00:00:00Z", "route": "lab", "action": "send", "target": "t_fixture", "result": "success"}][:limit]
+
+    def list_bridge_packages(self, username: str, status: str | None = None) -> list[dict[str, Any]]:
+        return list(self.packages.values())
+
     def user_routes(self, username: str) -> list[str]:
         return list(self.users[username]["routes"])
 
@@ -295,6 +305,48 @@ class AsgiReadContractTest(unittest.TestCase):
         asgi_failure = self.request(self.asgi_base, "/login", method="POST", body=invalid, extra_headers=headers)
         self.assertEqual(asgi_failure[0], legacy_failure[0])
         self.assertEqual(self.normalized_body("/login", asgi_failure[2]), self.normalized_body("/login", legacy_failure[2]))
+
+    def test_password_page_validation_and_success_contracts_match(self) -> None:
+        self.config.users["tester"]["auth_epoch"] = 7
+        self.config.password_digest = bcrypt.hashpw(self.config.password.encode("utf-8"), bcrypt.gensalt())
+        self.assert_contract("/password", authenticated=True)
+        csrf = gateway_security.csrf_token(self.config.cookie_secret, "tester", 7)
+        headers = {"Content-Type": "application/x-www-form-urlencoded"}
+        invalid = legacy.urlencode({
+            "csrf": csrf,
+            "current_password": "wrong",
+            "new_password": "replacement-password",
+            "confirm_password": "replacement-password",
+        }).encode("utf-8")
+        legacy_invalid = self.request(self.legacy_base, "/password", authenticated=True, method="POST", body=invalid, extra_headers=headers)
+        asgi_invalid = self.request(self.asgi_base, "/password", authenticated=True, method="POST", body=invalid, extra_headers=headers)
+        self.assertEqual(self.normalized_body("/password", asgi_invalid[2]), self.normalized_body("/password", legacy_invalid[2]))
+
+        valid = legacy.urlencode({
+            "csrf": csrf,
+            "current_password": self.config.password,
+            "new_password": "replacement-password",
+            "confirm_password": "replacement-password",
+        }).encode("utf-8")
+        original_digest = bcrypt.hashpw(self.config.password.encode("utf-8"), bcrypt.gensalt())
+        self.config.password_digest = original_digest
+        self.config.users["tester"]["auth_epoch"] = 7
+        legacy_success = self.request(self.legacy_base, "/password", authenticated=True, method="POST", body=valid, extra_headers=headers)
+        self.config.password_digest = original_digest
+        self.config.users["tester"]["auth_epoch"] = 7
+        asgi_success = self.request(self.asgi_base, "/password", authenticated=True, method="POST", body=valid, extra_headers=headers)
+        self.assertEqual(asgi_success[0], legacy_success[0])
+        self.assertEqual(self.selected_headers(asgi_success[1]), self.selected_headers(legacy_success[1]))
+        self.config.password_digest = bcrypt.hashpw(self.config.password.encode("utf-8"), bcrypt.gensalt())
+        self.config.users["tester"]["auth_epoch"] = 7
+
+    def test_security_activity_and_bridge_package_reads_match(self) -> None:
+        self.config.packages["1-deadbeef"] = {"id": "1-deadbeef", "owner": "tester", "title": "fixture", "status": "pending", "assets": []}
+        for path in ("/api/security-activity?limit=1", "/api/bridge-packages"):
+            legacy_result = self.request(self.legacy_base, path, authenticated=True)
+            asgi_result = self.request(self.asgi_base, path, authenticated=True)
+            self.assertEqual(asgi_result[0], legacy_result[0])
+            self.assertEqual(json.loads(asgi_result[2]), json.loads(legacy_result[2]))
 
     def test_csrf_contract_matches_with_and_without_authentication(self) -> None:
         self.assert_contract("/api/csrf")
