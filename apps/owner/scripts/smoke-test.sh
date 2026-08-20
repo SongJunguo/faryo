@@ -23,11 +23,11 @@ tmux kill-session -t "$SMOKE_DIRECT" 2>/dev/null || true
 tmux new-session -d -s "$SMOKE_DIRECT" "printf 'faryo smoke ready\n'; sleep 60"
 
 echo "== health =="
-curl_quiet "$(health_url)" | python3 -m json.tool
+curl_quiet "$(health_url)" | "$FARYO_PYTHON" -m json.tool
 
 echo
 echo "== status =="
-curl_quiet -H "X-Owner-Token: $FARYO_OWNER_TOKEN" "$(api_url "status?session=$SMOKE_DIRECT")" | python3 -m json.tool
+curl_quiet -H "X-Owner-Token: $FARYO_OWNER_TOKEN" "$(api_url "status?session=$SMOKE_DIRECT")" | "$FARYO_PYTHON" -m json.tool
 
 echo
 echo "== events =="
@@ -61,7 +61,7 @@ test "$(curl --noproxy '*' -sS -o /dev/null -w '%{http_code}' "http://$FARYO_OWN
 echo
 echo "== capture =="
 curl_quiet -H "X-Owner-Token: $FARYO_OWNER_TOKEN" "$(api_url "capture?session=$SMOKE_DIRECT&lines=$WEB_CAPTURE_LINES")" > "$TMP"
-python3 - <<'PY' "$TMP"
+"$FARYO_PYTHON" - <<'PY' "$TMP"
 import json, sys
 p=json.load(open(sys.argv[1], encoding='utf-8'))
 print({'ok':p.get('ok'), 'phase':p.get('phase'), 'lines':len(p.get('text','').splitlines())})
@@ -71,7 +71,7 @@ PY
 echo
 echo "== agent sessions =="
 curl_quiet -H "X-Owner-Token: $FARYO_OWNER_TOKEN" "$(api_url "agent-sessions?limit=3")" > "$TMP.sessions"
-python3 - <<'PY' "$TMP.sessions"
+"$FARYO_PYTHON" - <<'PY' "$TMP.sessions"
 import json, sys
 payload=json.load(open(sys.argv[1], encoding='utf-8'))
 print({'ok': payload.get('ok'), 'activeCount': payload.get('activeCount'), 'sessions': len(payload.get('sessions', []))})

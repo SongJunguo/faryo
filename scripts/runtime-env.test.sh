@@ -45,6 +45,29 @@ resolved=$(env -u FARYO_NODE_BIN HOME="$fixture/empty-home" PATH=/usr/bin:/bin \
   'source "$1"; faryo_resolve_node' bash "$ROOT/scripts/runtime-env.sh")
 [[ "$resolved" == "$node_stub" ]]
 
+owner_home="$fixture/owner-home"
+owner_env="$owner_home/owner/config/faryo.env"
+mkdir -p "$(dirname "$owner_env")"
+printf '%s\n' \
+  'FARYO_OWNER_HOST=127.0.0.1' \
+  'FARYO_OWNER_PORT=8765' \
+  'FARYO_OWNER_TOKEN=generic-token' \
+  "FARYO_PYTHON=$python_stub" > "$owner_env"
+resolved=$(env HOME="$fixture" FARYO_HOME="$owner_home" FARYO_OWNER_ENV="$owner_env" PATH=/usr/bin:/bin bash -c \
+  'source "$1"; load_env; printf "%s\n" "$FARYO_PYTHON"' bash "$ROOT/apps/owner/scripts/_lib.sh")
+[[ "$resolved" == "$python_stub" ]]
+
+gateway_home="$fixture/gateway-home"
+gateway_env="$gateway_home/gateway/config/faryo.env"
+mkdir -p "$(dirname "$gateway_env")"
+printf '%s\n' \
+  'FARYO_GATEWAY_ROUTES=txy' \
+  'FARYO_TXY_OWNER_TOKEN=generic-token' \
+  "FARYO_PYTHON=$python_stub" > "$gateway_env"
+resolved=$(env HOME="$fixture" FARYO_HOME="$gateway_home" FARYO_GATEWAY_ENV="$gateway_env" PATH=/usr/bin:/bin bash -c \
+  'source "$1"; load_env; printf "%s\n" "$FARYO_PYTHON"' bash "$ROOT/apps/gateway/scripts/_lib.sh")
+[[ "$resolved" == "$python_stub" ]]
+
 if FARYO_PYTHON="$fixture/missing-python" faryo_resolve_python >/dev/null 2>&1; then
   echo "invalid explicit Python unexpectedly resolved" >&2
   exit 1

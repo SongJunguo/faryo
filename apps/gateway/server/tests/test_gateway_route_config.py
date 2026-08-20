@@ -604,7 +604,7 @@ class GatewayRouteConfigTest(unittest.TestCase):
             auth.write_text(original_auth, encoding="utf-8")
             gateway_env.write_text(
                 "FARYO_DEFAULT_WORKSPACE=/preserved/workspace\n"
-                "FARYO_GATEWAY_SESSION_HOURS=24\n",
+                "FARYO_GATEWAY_SESSION_HOURS=720\n",
                 encoding="utf-8",
             )
             process_env = {
@@ -631,8 +631,47 @@ class GatewayRouteConfigTest(unittest.TestCase):
             self.assertEqual(auth.stat().st_mode & 0o777, 0o600)
             self.assertEqual(gateway_env.stat().st_mode & 0o777, 0o600)
             self.assertIn("FARYO_TXY_MAX_RUNNING=8\n", gateway_env.read_text(encoding="utf-8"))
-            self.assertIn("FARYO_GATEWAY_SESSION_HOURS=24\n", gateway_env.read_text(encoding="utf-8"))
+            self.assertIn("FARYO_GATEWAY_SESSION_HOURS=720\n", gateway_env.read_text(encoding="utf-8"))
             self.assertIn("FARYO_DEFAULT_WORKSPACE=/preserved/workspace\n", gateway_env.read_text(encoding="utf-8"))
+
+    def test_local_initializer_uses_current_30_day_default(self) -> None:
+        script = REPO_ROOT / "apps" / "gateway" / "scripts" / "init-local-gateway.sh"
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            faryo_home = root / ".faryo"
+            owner_env = faryo_home / "owner" / "config" / "faryo.env"
+            gateway_env = faryo_home / "gateway" / "config" / "faryo.env"
+            auth = faryo_home / "gateway" / "config" / "gateway-auth.json"
+            owner_env.parent.mkdir(parents=True)
+            owner_env.write_text(
+                "FARYO_OWNER_TOKEN=generic-owner-token\n"
+                "FARYO_OWNER_HOST=127.0.0.1\n"
+                "FARYO_OWNER_PORT=8765\n",
+                encoding="utf-8",
+            )
+            process_env = {
+                "HOME": str(root),
+                "PATH": os.environ.get("PATH", ""),
+                "FARYO_HOME": str(faryo_home),
+                "FARYO_OWNER_ENV": str(owner_env),
+                "FARYO_GATEWAY_ENV": str(gateway_env),
+                "GATEWAY_AUTH_CONFIG": str(auth),
+                "FARYO_PYTHON": sys.executable,
+            }
+
+            result = subprocess.run(
+                ["bash", str(script)],
+                env=process_env,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("FARYO_GATEWAY_SESSION_HOURS=720\n", gateway_env.read_text(encoding="utf-8"))
+            self.assertEqual(gateway_env.stat().st_mode & 0o777, 0o600)
+            self.assertEqual(auth.stat().st_mode & 0o777, 0o600)
+            self.assertEqual((auth.parent / "initial-password").stat().st_mode & 0o777, 0o600)
 
 
 if __name__ == "__main__":

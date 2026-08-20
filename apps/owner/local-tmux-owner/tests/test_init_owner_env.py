@@ -50,6 +50,7 @@ class InitOwnerEnvTest(unittest.TestCase):
                 if line and "=" in line
             )
             self.assertEqual(values["FARYO_OWNER_TOKEN"], "generic-owner-token")
+            self.assertEqual(values["FARYO_PYTHON"], str(Path(sys.executable).resolve()))
             self.assertEqual(values["FARYO_START_DIRECTORY_ROOTS"], "/workspace/a:/workspace/b")
             self.assertFalse(any(key.startswith("FARYO_PROJECT_WORKBENCH_") for key in values))
             self.assertEqual(env_file.stat().st_mode & 0o777, 0o600)

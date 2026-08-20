@@ -3,12 +3,15 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FARYO_GATEWAY_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+FARYO_REPO_ROOT="$(cd "$FARYO_GATEWAY_ROOT/../.." && pwd)"
+# shellcheck source=../../../scripts/runtime-env.sh
+source "$FARYO_REPO_ROOT/scripts/runtime-env.sh"
 FARYO_HOME="${FARYO_HOME:-$HOME/.faryo}"
 OWNER_ENV="${FARYO_OWNER_ENV:-$FARYO_HOME/owner/config/faryo.env}"
 GATEWAY_ENV="${FARYO_GATEWAY_ENV:-$FARYO_HOME/gateway/config/faryo.env}"
 GATEWAY_AUTH_CONFIG="${GATEWAY_AUTH_CONFIG:-$FARYO_HOME/gateway/config/gateway-auth.json}"
 FARYO_GATEWAY_ROUTE="${FARYO_GATEWAY_ROUTE:-txy}"
-FARYO_PYTHON="${FARYO_PYTHON:-python3}"
+FARYO_PYTHON="$(faryo_resolve_python)"
 FARYO_GATEWAY_WORKSPACE_ROOT="${FARYO_GATEWAY_WORKSPACE_ROOT:-}"
 FARYO_GATEWAY_RESET_AUTH="${FARYO_GATEWAY_RESET_AUTH:-0}"
 
@@ -91,13 +94,13 @@ workspace = (
 inbox = owner.get("FARYO_OWNER_INBOX_DIR") or str(Path.home() / ".faryo" / "owner" / "data" / "inbox")
 route_upper = route.upper()
 max_running_defaults = {"txy": "8", "hp": "4", "pc": "4"}
-session_hours = existing.get("FARYO_GATEWAY_SESSION_HOURS") or "12"
+session_hours = existing.get("FARYO_GATEWAY_SESSION_HOURS") or "720"
 try:
     parsed_session_hours = int(session_hours)
 except ValueError as exc:
-    raise ValueError("FARYO_GATEWAY_SESSION_HOURS must be an integer from 1 to 168") from exc
-if not 1 <= parsed_session_hours <= 168:
-    raise ValueError("FARYO_GATEWAY_SESSION_HOURS must be an integer from 1 to 168")
+    raise ValueError("FARYO_GATEWAY_SESSION_HOURS must be an integer from 1 to 720") from exc
+if not 1 <= parsed_session_hours <= 720:
+    raise ValueError("FARYO_GATEWAY_SESSION_HOURS must be an integer from 1 to 720")
 values = {
     "FARYO_GATEWAY_USER": existing.get("FARYO_GATEWAY_USER") or "faryo",
     "FARYO_GATEWAY_SESSION_HOURS": str(parsed_session_hours),

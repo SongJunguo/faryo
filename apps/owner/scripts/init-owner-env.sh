@@ -16,6 +16,9 @@ USAGE
 [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]] && { usage; exit 0; }
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
+# shellcheck source=../../../scripts/runtime-env.sh
+source "$REPO_ROOT/scripts/runtime-env.sh"
 FARYO_HOME="${FARYO_HOME:-$HOME/.faryo}"
 ENV_FILE="${FARYO_OWNER_ENV:-${FARYO_ENV_FILE:-$FARYO_HOME/owner/config/faryo.env}}"
 
@@ -27,7 +30,7 @@ export FARYO_OWNER_PORT="${FARYO_OWNER_PORT:-8765}"
 export FARYO_OWNER_LABEL="${FARYO_OWNER_LABEL:-}"
 export FARYO_OWNER_DIRECT_SESSION="${FARYO_OWNER_DIRECT_SESSION:-__faryo_no_default__}"
 export FARYO_OWNER_TMUX_SESSION="${FARYO_OWNER_TMUX_SESSION:-local-tmux-owner}"
-export FARYO_PYTHON="${FARYO_PYTHON:-python3}"
+export FARYO_PYTHON="$(faryo_resolve_python)"
 export FARYO_CODEX_BIN="${FARYO_CODEX_BIN:-}"
 export FARYO_AGENT_SHELL="${FARYO_AGENT_SHELL:-}"
 export FARYO_START_DIRECTORY_ROOTS="${FARYO_START_DIRECTORY_ROOTS:-}"

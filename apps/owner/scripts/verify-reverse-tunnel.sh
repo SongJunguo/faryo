@@ -45,7 +45,7 @@ remote_cmd="$(printf "curl -fsS --noproxy '*' --connect-timeout 2 --max-time 5 -
 
 for _ in $(seq 1 "$ATTEMPTS"); do
   if ssh "${SSH_OPTS[@]}" "${TUNNEL_USER}@${TUNNEL_HOST}" "$remote_cmd" \
-    | python3 -c 'import json, sys; raise SystemExit(0 if json.load(sys.stdin).get("ok") is True else 1)'
+    | "$FARYO_PYTHON" -c 'import json, sys; raise SystemExit(0 if json.load(sys.stdin).get("ok") is True else 1)'
   then
     printf 'reverse tunnel ok: 127.0.0.1:%s%s\n' "$REMOTE_PORT" "$REMOTE_PATH"
     exit 0

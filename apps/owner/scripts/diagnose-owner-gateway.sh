@@ -2,6 +2,9 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
+# shellcheck source=../../../scripts/runtime-env.sh
+source "$REPO_ROOT/scripts/runtime-env.sh"
 FARYO_HOME="${FARYO_HOME:-$HOME/.faryo}"
 ENV_FILE="${FARYO_OWNER_ENV:-${FARYO_ENV_FILE:-$FARYO_HOME/owner/config/faryo.env}}"
 GATEWAY_ENV_FILE="${FARYO_GATEWAY_ENV:-$FARYO_HOME/gateway/config/faryo.env}"
@@ -24,10 +27,13 @@ load_owner_env() {
   : "${FARYO_OWNER_PORT:=8765}"
   : "${FARYO_OWNER_DIRECT_SESSION:=__faryo_no_default__}"
   : "${TUNNEL_SERVICE:=faryo-gateway-tunnel.service}"
+  : "${FARYO_PYTHON:=python3}"
+  FARYO_PYTHON="$(faryo_resolve_python)"
+  export FARYO_PYTHON
 }
 
 json_field() {
-  python3 - "$1" "$2" <<'PY'
+  "$FARYO_PYTHON" - "$1" "$2" <<'PY'
 import json
 import sys
 payload = json.loads(sys.argv[1])
@@ -112,7 +118,7 @@ check_gateway_config() {
     return 0
   fi
   status "gateway env" "$GATEWAY_ENV_FILE"
-  python3 - "$GATEWAY_ENV_FILE" "$GATEWAY_AUTH_FILE" "${OWNER_LABEL_SEEN:-${FARYO_OWNER_LABEL:-}}" <<'PY'
+  "$FARYO_PYTHON" - "$GATEWAY_ENV_FILE" "$GATEWAY_AUTH_FILE" "${OWNER_LABEL_SEEN:-${FARYO_OWNER_LABEL:-}}" <<'PY'
 import json
 import sys
 from pathlib import Path

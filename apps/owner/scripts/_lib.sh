@@ -2,6 +2,9 @@
 set -euo pipefail
 
 FARYO_OWNER_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+FARYO_REPO_ROOT="$(cd "$FARYO_OWNER_ROOT/../.." && pwd)"
+# shellcheck source=../../../scripts/runtime-env.sh
+source "$FARYO_REPO_ROOT/scripts/runtime-env.sh"
 FARYO_HOME="${FARYO_HOME:-$HOME/.faryo}"
 ENV_FILE="${FARYO_OWNER_ENV:-${FARYO_ENV_FILE:-$FARYO_HOME/owner/config/faryo.env}}"
 
@@ -19,6 +22,8 @@ load_env() {
   : "${FARYO_OWNER_DIRECT_SESSION:=__faryo_no_default__}"
   : "${FARYO_OWNER_TMUX_SESSION:=local-tmux-owner}"
   : "${FARYO_PYTHON:=python3}"
+  FARYO_PYTHON="$(faryo_resolve_python)"
+  export FARYO_PYTHON
   : "${FARYO_AGENT_SHELL:=}"
   : "${FARYO_START_DIRECTORY_ROOTS:=}"
   : "${FARYO_OWNER_LABEL:=}"

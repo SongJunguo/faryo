@@ -249,6 +249,17 @@ for name in (
     assert "faryo_resolve_node" in (test_script_root / name).read_text(encoding="utf-8"), f"{name} bypasses shared Node discovery"
 command_inventory_source = (test_script_root / "codex-command-inventory.sh").read_text(encoding="utf-8")
 assert "faryo_resolve_codex" in command_inventory_source and "faryo_resolve_node" in command_inventory_source, "Codex inventory must use shared runtime discovery"
+for script_path in (
+    root / "apps/owner/scripts/smoke-test.sh",
+    root / "apps/owner/scripts/verify-reverse-tunnel.sh",
+    root / "apps/owner/scripts/diagnose-owner-gateway.sh",
+):
+    source = script_path.read_text(encoding="utf-8")
+    assert 'python3 -' not in source and '"$FARYO_PYTHON"' in source, f"{script_path.name} bypasses configured Python"
+owner_init_source = (root / "apps/owner/scripts/init-owner-env.sh").read_text(encoding="utf-8")
+gateway_init_source = (root / "apps/gateway/scripts/init-local-gateway.sh").read_text(encoding="utf-8")
+assert "faryo_resolve_python" in owner_init_source and "faryo_resolve_python" in gateway_init_source, "initializers must use shared Python discovery"
+assert 'or "720"' in gateway_init_source and "1 <= parsed_session_hours <= 720" in gateway_init_source, "Gateway initializer must keep the 30-day session contract"
 assert 'id="historySearchInput"' in gateway and 'data-history-period="7d"' in gateway, "Gateway must expose metadata history search"
 assert "agent_history_text_matches" in owner_server and "codex_conversation_history_page" not in owner_server[owner_server.index("def codex_history_page("):owner_server.index("def codex_history_items(")], "session search must not scan conversation history"
 assert "owner_http.safe_log_path(self.path)" in owner_server and "def safe_log_path" in owner_http_source, "Owner logs must omit private query strings"

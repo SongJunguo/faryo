@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+FARYO_REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
+# shellcheck source=../../../scripts/runtime-env.sh
+source "$FARYO_REPO_ROOT/scripts/runtime-env.sh"
+
 usage() {
   echo "usage: add-cloudflare-ingress.sh <hostname> [http://127.0.0.1:port]" >&2
 }
@@ -8,7 +13,7 @@ usage() {
 FARYO_PUBLIC_HOSTNAME="${1:-}"
 FARYO_INGRESS_SERVICE="${2:-http://127.0.0.1:8780}"
 CLOUDFLARED_CONFIG="${CLOUDFLARED_CONFIG:-$HOME/.cloudflared/config.yml}"
-FARYO_PYTHON="${FARYO_PYTHON:-python3}"
+FARYO_PYTHON="$(faryo_resolve_python)"
 
 if [[ -z "$FARYO_PUBLIC_HOSTNAME" ]]; then
   usage
