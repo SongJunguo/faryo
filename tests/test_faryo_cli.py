@@ -3,6 +3,7 @@ from __future__ import annotations
 from contextlib import redirect_stdout
 from io import StringIO
 import json
+import os
 from pathlib import Path
 import sys
 import tempfile
@@ -15,7 +16,7 @@ SRC = ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
-from faryo_cli import cli, diagnostics, operations
+from faryo_cli import cli, diagnostics, installer, migration, operations, runtime
 
 
 class FaryoCliTest(unittest.TestCase):
@@ -207,6 +208,179 @@ class FaryoCliTest(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertEqual(output.getvalue(), "")
         self.assertIn("bounded failure", error.getvalue())
+
+    def test_direct_owner_spec_keeps_token_out_of_argv(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            layout = self.layout(Path(temp))
+            spec = runtime.owner_process(layout)
+
+        self.assertIn("private-owner-token", spec.environment.values())
+        self.assertNotIn("private-owner-token", " ".join(spec.argv))
+        self.assertEqual(spec.argv[-4:], ["--host", "127.0.0.1", "--port", "8765"])
+        self.assertEqual(spec.environment["FARYO_PYTHON"], sys.executable)
+
+    def test_direct_gateway_spec_uses_private_files_without_token_argv(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            layout = self.layout(Path(temp))
+            spec = runtime.gateway_process(layout)
+
+        self.assertIn("--auth-config", spec.argv)
+        self.assertIn("--owner-env", spec.argv)
+        self.assertNotIn("private-owner-token", " ".join(spec.argv))
+        self.assertEqual(spec.environment["FARYO_GATEWAY_SESSION_HOURS"], "720")
+
+    def test_direct_runtime_rejects_non_loopback_owner(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            layout = self.layout(Path(temp))
+            body = layout.owner_env.read_text(encoding="utf-8").replace("127.0.0.1", "0.0.0.0")
+            layout.owner_env.write_text(body, encoding="utf-8")
+            layout.owner_env.chmod(0o600)
+            with self.assertRaisesRegex(operations.OperationError, "must remain loopback"):
+                runtime.owner_process(layout)
+
+    def test_internal_owner_command_executes_only_validated_spec(self) -> None:
+        spec = runtime.ProcessSpec([sys.executable, "server.py"], ROOT, {})
+        with (
+            mock.patch.object(cli, "owner_process", return_value=spec),
+            mock.patch.object(cli, "exec_process") as execute,
+        ):
+            code = cli.main(["internal", "run-owner"])
+        self.assertEqual(code, 0)
+        execute.assert_called_once_with(spec)
+
+    def test_service_units_use_unified_cli_and_no_legacy_owner_wrapper(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            layout = self.layout(Path(temp))
+            owner = installer.rendered_unit("owner", layout, sys.executable)
+            gateway = installer.rendered_unit("gateway", layout, sys.executable)
+
+        self.assertIn("-m faryo_cli internal run-owner", owner)
+        self.assertIn("-m faryo_cli internal run-gateway", gateway)
+        self.assertNotIn("start-web-owner.sh", owner)
+        self.assertNotIn("run-gateway.sh", gateway)
+        self.assertNotIn("@FARYO_", owner + gateway)
+
+    def test_atomic_unit_install_backs_up_existing_unit(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            layout = self.layout(root)
+            xdg = root / "config"
+            unit_dir = xdg / "systemd/user"
+            unit_dir.mkdir(parents=True)
+            old = unit_dir / "faryo-owner.service"
+            old.write_text("old unit\n", encoding="utf-8")
+            with (
+                mock.patch.dict(os.environ, {"XDG_CONFIG_HOME": str(xdg)}, clear=False),
+                mock.patch.object(installer, "systemctl") as systemctl,
+            ):
+                installed = installer.install_user_units(layout, components=("owner",), python=sys.executable)
+
+            backup = root / ".local/share/faryo/state/unit-backups/faryo-owner.service.previous"
+            self.assertEqual(installed, ["faryo-owner.service"])
+            self.assertEqual(backup.read_text(encoding="utf-8"), "old unit\n")
+            self.assertEqual(backup.stat().st_mode & 0o777, 0o600)
+            self.assertEqual(old.stat().st_mode & 0o777, 0o644)
+            systemctl.assert_called_once_with("daemon-reload")
+
+    def test_unit_path_rejects_control_characters(self) -> None:
+        with self.assertRaisesRegex(operations.OperationError, "control characters"):
+            installer.unit_escape("bad\npath")
+        self.assertEqual(installer.unit_path_escape("/path/with space"), "/path/with\\x20space")
+
+    def test_owner_migration_stops_only_legacy_supervision(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            layout = self.layout(Path(temp))
+            calls = []
+            with (
+                mock.patch.object(migration, "unit_exists", return_value=True),
+                mock.patch.object(migration, "legacy_owner_exists", return_value=True),
+                mock.patch.object(migration, "service_state", return_value="inactive"),
+                mock.patch.object(migration, "tmux_geometry", side_effect=[{"faryo1": (145, 44)}, {"faryo1": (145, 44)}]),
+                mock.patch.object(migration, "stop_legacy_owner") as stop_legacy,
+                mock.patch.object(migration, "wait_owner") as wait_owner,
+                mock.patch.object(migration, "systemctl", side_effect=lambda *args, **kwargs: calls.append((args, kwargs))),
+            ):
+                result = migration.migrate_owner(layout)
+
+        self.assertEqual(result, "migrated")
+        stop_legacy.assert_called_once_with()
+        wait_owner.assert_called_once_with(layout)
+        self.assertIn((("enable", "faryo-owner.service"), {}), calls)
+        self.assertIn((("start", "faryo-owner.service"), {}), calls)
+        self.assertIn((("disable", "faryo-owner-keepalive.timer"), {"check": False}), calls)
+
+    def test_owner_migration_restores_legacy_on_health_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            layout = self.layout(Path(temp))
+            with (
+                mock.patch.object(migration, "unit_exists", return_value=True),
+                mock.patch.object(migration, "legacy_owner_exists", return_value=True),
+                mock.patch.object(migration, "service_state", return_value="inactive"),
+                mock.patch.object(migration, "tmux_geometry", return_value={"faryo1": (145, 44)}),
+                mock.patch.object(migration, "stop_legacy_owner"),
+                mock.patch.object(migration, "wait_owner", side_effect=operations.OperationError("not healthy")),
+                mock.patch.object(migration, "restore_legacy") as restore,
+                mock.patch.object(migration, "systemctl"),
+            ):
+                with self.assertRaisesRegex(operations.OperationError, "not healthy"):
+                    migration.migrate_owner(layout)
+
+        restore.assert_called_once_with(layout)
+
+    def test_owner_migration_rejects_existing_geometry_change(self) -> None:
+        with self.assertRaisesRegex(operations.OperationError, "geometry changed"):
+            migration.verify_geometry({"faryo1": (145, 44)}, {"faryo1": (500, 44)})
+
+    def test_install_requires_explicit_legacy_migration(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            layout = self.layout(Path(temp))
+            with mock.patch.object(migration, "legacy_owner_exists", return_value=True):
+                with self.assertRaisesRegex(operations.OperationError, "requires --migrate-owner"):
+                    installer.install_services(layout, python=sys.executable)
+
+    def test_install_starts_direct_services_after_atomic_units(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            layout = self.layout(root)
+            xdg = root / "config"
+            actions = []
+            with (
+                mock.patch.dict(os.environ, {"XDG_CONFIG_HOME": str(xdg)}, clear=False),
+                mock.patch.object(migration, "legacy_owner_exists", return_value=False),
+                mock.patch.object(installer, "systemctl", side_effect=lambda *args, **kwargs: actions.append((args, kwargs))),
+                mock.patch.object(operations, "control_service", side_effect=lambda name, action: actions.append(((name, action), {}))),
+                mock.patch.object(operations, "wait_for_health") as wait,
+            ):
+                result = installer.install_services(layout, python=sys.executable)
+
+            self.assertEqual(result, "installed")
+            self.assertTrue((xdg / "systemd/user/faryo-owner.service").is_file())
+            self.assertTrue((xdg / "systemd/user/faryo-gateway.service").is_file())
+            self.assertIn((("faryo-owner.service", "start"), {}), actions)
+            self.assertIn((("faryo-gateway.service", "restart"), {}), actions)
+            wait.assert_called_once_with(layout)
+
+    def test_install_restores_previous_units_when_health_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            layout = self.layout(root)
+            xdg = root / "config"
+            unit_dir = xdg / "systemd/user"
+            unit_dir.mkdir(parents=True)
+            gateway = unit_dir / "faryo-gateway.service"
+            gateway.write_text("old gateway unit\n", encoding="utf-8")
+            with (
+                mock.patch.dict(os.environ, {"XDG_CONFIG_HOME": str(xdg)}, clear=False),
+                mock.patch.object(migration, "legacy_owner_exists", return_value=False),
+                mock.patch.object(installer, "systemctl"),
+                mock.patch.object(operations, "control_service"),
+                mock.patch.object(operations, "wait_for_health", side_effect=operations.OperationError("not healthy")),
+            ):
+                with self.assertRaisesRegex(operations.OperationError, "not healthy"):
+                    installer.install_services(layout, python=sys.executable)
+
+            self.assertEqual(gateway.read_text(encoding="utf-8"), "old gateway unit\n")
+            self.assertFalse((unit_dir / "faryo-owner.service").exists())
 
 
 if __name__ == "__main__":

@@ -2,6 +2,9 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=_lib.sh
+source "$SCRIPT_DIR/_lib.sh"
+load_env
 FARYO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 FARYO_HOME="${FARYO_HOME:-$HOME/.faryo}"
 UNIT_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
@@ -19,8 +22,10 @@ install -d -m 0755 "$UNIT_DIR"
 tmp="$(mktemp "${TMPDIR:-/tmp}/faryo-gateway-unit.XXXXXX")"
 trap 'unlink "$tmp" 2>/dev/null || true' EXIT
 sed \
+  -e "s|@FARYO_ROOT_PATH@|$FARYO_ROOT|g" \
   -e "s|@FARYO_ROOT@|$FARYO_ROOT|g" \
   -e "s|@FARYO_HOME@|$FARYO_HOME|g" \
+  -e "s|@FARYO_PYTHON@|$FARYO_PYTHON|g" \
   "$TEMPLATE" > "$tmp"
 install -m 0644 "$tmp" "$UNIT_FILE"
 

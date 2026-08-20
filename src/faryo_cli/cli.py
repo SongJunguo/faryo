@@ -9,7 +9,9 @@ from typing import Any, Sequence
 
 from faryo_cli import __version__
 from faryo_cli.diagnostics import build_report, compact_status
+from faryo_cli.installer import install_services
 from faryo_cli.operations import OperationError, journal, open_gateway, service_operation
+from faryo_cli.runtime import exec_process, gateway_process, owner_process
 
 
 def parser() -> argparse.ArgumentParser:
@@ -33,6 +35,14 @@ def parser() -> argparse.ArgumentParser:
     logs = commands.add_parser("logs", help="Show bounded systemd journal output")
     logs.add_argument("component", choices=("owner", "gateway"))
     logs.add_argument("--lines", type=int, default=120)
+    install = commands.add_parser("install", help="Install user services from the current verified application")
+    install.add_argument("--dry-run", action="store_true", help="Validate without writing service units")
+    install.add_argument("--no-start", action="store_true", help="Install units without changing running services")
+    install.add_argument("--migrate-owner", action="store_true", help="Replace legacy Owner tmux supervision after rollback checks")
+    internal = commands.add_parser("internal", help=argparse.SUPPRESS)
+    internal_commands = internal.add_subparsers(dest="internal_command", required=True)
+    internal_commands.add_parser("run-owner")
+    internal_commands.add_parser("run-gateway")
     return root
 
 
@@ -58,6 +68,27 @@ def print_status(status: dict[str, Any]) -> None:
 
 def main(argv: Sequence[str] | None = None) -> int:
     arguments = parser().parse_args(argv)
+    if arguments.command == "internal":
+        try:
+            spec = owner_process() if arguments.internal_command == "run-owner" else gateway_process()
+            exec_process(spec)
+        except OperationError as exc:
+            print(f"Faryo service failed: {exc}", file=sys.stderr)
+            return 1
+        return 0
+    if arguments.command == "install":
+        try:
+            result = install_services(
+                python=sys.executable,
+                dry_run=arguments.dry_run,
+                no_start=arguments.no_start,
+                migrate_owner=arguments.migrate_owner,
+            )
+        except OperationError as exc:
+            print(f"Faryo install failed: {exc}", file=sys.stderr)
+            return 1
+        print(f"Faryo install: {result}")
+        return 0
     if arguments.command in {"start", "stop", "restart"}:
         try:
             result = service_operation(arguments.command)

@@ -1,5 +1,5 @@
 [Unit]
-Description=Faryo Gateway
+Description=Faryo Owner
 After=network-online.target
 Wants=network-online.target
 StartLimitIntervalSec=60
@@ -11,11 +11,10 @@ WorkingDirectory=@FARYO_ROOT_PATH@
 Environment="FARYO_HOME=@FARYO_HOME@"
 Environment="FARYO_INSTALL_ROOT=@FARYO_ROOT@"
 Environment="PYTHONPATH=@FARYO_ROOT@/src"
-ExecStartPre="@FARYO_ROOT@/apps/gateway/scripts/cleanup-gateway-port.sh"
-ExecStart="@FARYO_PYTHON@" -m faryo_cli internal run-gateway
+ExecStart="@FARYO_PYTHON@" -m faryo_cli internal run-owner
 Restart=on-failure
-RestartSec=5
-TimeoutStopSec=10
+RestartSec=3
+TimeoutStopSec=8
 KillMode=mixed
 UMask=0077
 
