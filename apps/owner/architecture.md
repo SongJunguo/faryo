@@ -80,6 +80,9 @@ but the default upload destination should come from the Faryo data directory.
 - Low-level command execution and tmux/process-tree/identifier primitives are
   isolated in `tmux_runtime.py`; higher services keep policy and translate
   failures rather than rebuilding subprocess defaults.
+- Reliable-send durable checkpoints are isolated in `delivery_store.py`; it
+  enforces ID bounds, privacy-minimal records, atomic fsync, 0700/0600 modes,
+  TTL cleanup and corrupt/symlink rejection without owning submit decisions.
 - Capability and diagnostics payloads use an explicit allowlist and counts; they
   never expose private runtime configuration.
 - Upstream control headers: use Faryo header names.

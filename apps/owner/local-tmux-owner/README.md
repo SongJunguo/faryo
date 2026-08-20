@@ -290,6 +290,9 @@ consumed as private runtime input and is never printed.
 - `tmux_runtime.py` owns UTF-8 subprocess defaults, fixed tmux invocation,
   process-tree parsing and bounded session/thread/message identifiers; product
   policy remains in the higher Owner services.
+- `delivery_store.py` owns body-free accepted/pasted checkpoints, atomic fsync,
+  private permissions, TTL cleanup and corrupt/symlink rejection. The exact
+  paste/Tab/Enter confirmation state machine remains separate.
 - Local file preview is token-protected and limited to supported file suffixes.
 - `send` targets the controlled tmux pane and is maintained for Codex; generic
   terminal interfaces retain the conservative tmux path.

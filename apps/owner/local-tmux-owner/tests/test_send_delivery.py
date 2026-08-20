@@ -15,6 +15,7 @@ if str(APP_DIR) not in sys.path:
     sys.path.insert(0, str(APP_DIR))
 
 import server
+import delivery_store
 
 
 class SendDeliveryTest(unittest.TestCase):
@@ -25,8 +26,13 @@ class SendDeliveryTest(unittest.TestCase):
         server._send_message_locks.clear()
         self.delivery_temp = tempfile.TemporaryDirectory()
         self.original_delivery_root = server.SEND_DELIVERY_ROOT
+        self.original_delivery_store = server._delivery_store
         server.SEND_DELIVERY_ROOT = Path(self.delivery_temp.name) / "send-deliveries"
-        server._send_delivery_cleanup_at = 0.0
+        server._delivery_store = delivery_store.DeliveryStore(
+            server.SEND_DELIVERY_ROOT,
+            ttl_seconds=server.SEND_DELIVERY_TTL_SECONDS,
+            cleanup_interval_seconds=server.SEND_DELIVERY_CLEANUP_INTERVAL_SECONDS,
+        )
         self.completed = mock.Mock(returncode=0, stdout="", stderr="")
 
     def tearDown(self):
@@ -34,7 +40,7 @@ class SendDeliveryTest(unittest.TestCase):
         server._send_session_locks.clear()
         server._send_message_locks.clear()
         server.SEND_DELIVERY_ROOT = self.original_delivery_root
-        server._send_delivery_cleanup_at = 0.0
+        server._delivery_store = self.original_delivery_store
         self.delivery_temp.cleanup()
 
     def send_patches(self, *, composer_states=None, submission_states=None, composer_contains_states=None, submission_key="Enter"):

@@ -51,6 +51,7 @@ import runtime_diagnostics
 import attachment_storage
 import path_policy
 import tmux_runtime
+import delivery_store
 
 SHARED_DIR = Path(__file__).resolve().parents[2] / "shared"
 if str(SHARED_DIR) not in sys.path:
@@ -276,7 +277,11 @@ _send_delivery_lock = threading.RLock()
 _send_session_locks: dict[str, dict[str, Any]] = {}
 _send_message_locks: dict[str, dict[str, Any]] = {}
 _send_deliveries: dict[str, dict[str, Any]] = {}
-_send_delivery_cleanup_at = 0.0
+_delivery_store = delivery_store.DeliveryStore(
+    SEND_DELIVERY_ROOT,
+    ttl_seconds=SEND_DELIVERY_TTL_SECONDS,
+    cleanup_interval_seconds=SEND_DELIVERY_CLEANUP_INTERVAL_SECONDS,
+)
 
 
 @contextmanager
@@ -2887,162 +2892,19 @@ class MultipartFile:
 
 
 def send_delivery_record_path(delivery_id: str) -> Path | None:
-    clean_id = clean_client_message_id(delivery_id)
-    return SEND_DELIVERY_ROOT / f"{clean_id}.json" if clean_id else None
+    return _delivery_store.record_path(delivery_id)
 
 
 def cleanup_persisted_send_deliveries(now_epoch: float | None = None, *, force: bool = False) -> None:
-    global _send_delivery_cleanup_at
-    monotonic_now = time.monotonic()
-    if not force and monotonic_now - _send_delivery_cleanup_at < SEND_DELIVERY_CLEANUP_INTERVAL_SECONDS:
-        return
-    _send_delivery_cleanup_at = monotonic_now
-    cutoff = (now_epoch if now_epoch is not None else time.time()) - SEND_DELIVERY_TTL_SECONDS
-    try:
-        paths = list(SEND_DELIVERY_ROOT.iterdir())
-    except OSError:
-        return
-    for path in paths:
-        if path.suffix != ".json" or clean_client_message_id(path.stem) != path.stem:
-            continue
-        try:
-            stat = path.lstat()
-            if path.is_symlink() or stat.st_mtime < cutoff:
-                path.unlink()
-        except OSError:
-            continue
+    _delivery_store.cleanup(now_epoch, force=force)
 
 
 def persist_send_delivery(delivery_id: str, state: dict[str, Any]) -> bool:
-    path = send_delivery_record_path(delivery_id)
-    status = str(state.get("status") or "")
-    receipt = state.get("receipt")
-    if path is None or status not in {"pasted", "accepted"}:
-        return False
-    if status == "accepted" and not isinstance(receipt, dict):
-        return False
-    record = {
-        "version": 2,
-        "deliveryId": delivery_id,
-        "session": str(state.get("session") or ""),
-        "digest": str(state.get("digest") or ""),
-        "status": status,
-        "updatedEpoch": float(state.get("updatedEpoch") or time.time()),
-    }
-    if status == "accepted":
-        record["receipt"] = receipt
-    else:
-        record["pasteReady"] = bool(state.get("pasteReady"))
-        try:
-            record["queuedBaseline"] = max(0, int(state.get("queuedBaseline") or 0))
-        except (TypeError, ValueError):
-            record["queuedBaseline"] = 0
-        for key in ("rolloutDevice", "rolloutInode", "rolloutOffset"):
-            try:
-                value = int(state.get(key))
-            except (TypeError, ValueError):
-                continue
-            if value >= 0:
-                record[key] = value
-    tmp_path: str | None = None
-    try:
-        SEND_DELIVERY_ROOT.mkdir(parents=True, exist_ok=True, mode=0o700)
-        os.chmod(SEND_DELIVERY_ROOT, 0o700)
-        fd, tmp_path = tempfile.mkstemp(prefix=".delivery-", suffix=".tmp", dir=SEND_DELIVERY_ROOT)
-        os.fchmod(fd, 0o600)
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
-            json.dump(record, fh, ensure_ascii=False, separators=(",", ":"))
-            fh.write("\n")
-            fh.flush()
-            os.fsync(fh.fileno())
-        os.replace(tmp_path, path)
-        tmp_path = None
-        try:
-            directory_fd = os.open(SEND_DELIVERY_ROOT, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
-        except OSError:
-            directory_fd = None
-        if directory_fd is not None:
-            try:
-                os.fsync(directory_fd)
-            finally:
-                os.close(directory_fd)
-        return True
-    except OSError:
-        return False
-    finally:
-        if tmp_path:
-            try:
-                os.unlink(tmp_path)
-            except OSError:
-                pass
+    return _delivery_store.persist(delivery_id, state)
 
 
 def load_persisted_send_delivery(delivery_id: str, now_epoch: float | None = None) -> dict[str, Any] | None:
-    path = send_delivery_record_path(delivery_id)
-    if path is None:
-        return None
-    try:
-        stat = path.lstat()
-        if path.is_symlink() or stat.st_size > 16 * 1024:
-            return None
-        record = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return None
-    if not isinstance(record, dict):
-        return None
-    updated_epoch = record.get("updatedEpoch")
-    try:
-        updated_epoch = float(updated_epoch)
-    except (TypeError, ValueError):
-        return None
-    if (now_epoch if now_epoch is not None else time.time()) - updated_epoch > SEND_DELIVERY_TTL_SECONDS:
-        try:
-            path.unlink()
-        except OSError:
-            pass
-        return None
-    version = record.get("version")
-    status = str(record.get("status") or "")
-    receipt = record.get("receipt")
-    digest = str(record.get("digest") or "")
-    if (
-        version not in {1, 2}
-        or record.get("deliveryId") != delivery_id
-        or status not in {"pasted", "accepted"}
-        or not re.fullmatch(r"[0-9a-f]{64}", digest)
-    ):
-        return None
-    if status == "accepted" and (
-        not isinstance(receipt, dict)
-        or receipt.get("deliveryId") != delivery_id
-        or receipt.get("delivery") != "accepted"
-    ):
-        return None
-    if status == "pasted" and version != 2:
-        return None
-    state: dict[str, Any] = {
-        "session": str(record.get("session") or ""),
-        "digest": digest,
-        "status": status,
-        "updatedAt": time.monotonic(),
-        "updatedEpoch": updated_epoch,
-    }
-    if status == "accepted":
-        state["receipt"] = receipt
-    else:
-        state["pasteReady"] = bool(record.get("pasteReady"))
-        try:
-            state["queuedBaseline"] = max(0, int(record.get("queuedBaseline") or 0))
-        except (TypeError, ValueError):
-            state["queuedBaseline"] = 0
-        for key in ("rolloutDevice", "rolloutInode", "rolloutOffset"):
-            try:
-                value = int(record.get(key))
-            except (TypeError, ValueError):
-                continue
-            if value >= 0:
-                state[key] = value
-    return state
+    return _delivery_store.load(delivery_id, now_epoch)
 
 
 def remember_accepted_send_delivery(delivery_id: str, state: dict[str, Any]) -> None:
