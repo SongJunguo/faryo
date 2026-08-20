@@ -20,30 +20,26 @@ Runtime configuration defaults to:
 ~/.faryo/owner/data/
 ```
 
-## Local Run
+## Local Service
 
 ```bash
-./scripts/init-owner-env.sh
-./scripts/start-web-owner.sh
+faryo status
+faryo restart
+faryo logs owner
 ```
 
-Re-running the initializer preserves the Owner token and explicit start roots.
-From v1.2.1 it also removes retired Project Orchestration keys, migrating the
-old allowed-root value only when no `FARYO_START_DIRECTORY_ROOTS` value exists.
+The unified installer creates and manages direct `faryo-owner.service` and
+preserves the Owner token and explicit start roots. The old
+`local-tmux-owner` service tmux plus keepalive timer is a rollback-only v1.4
+compatibility path, not the maintained production supervisor.
 
-Set `FARYO_PYTHON` in the private Owner env file to pin the service to a
-dedicated virtual environment instead of whichever `python3` is first on PATH.
+Each installed version pins `FARYO_PYTHON` to its private standard venv. Ordinary
+users do not need to select Conda or edit the Python path.
 
 Owner does not resize tmux windows by default, so terminal UIs wrap at the
 dimensions selected by real tmux clients. The server's positive
 `--pane-width` option is an explicit compatibility opt-in for terminal-only
 capture; it is never applied to a running Codex TUI.
-
-The user-level timer template lives at:
-
-```text
-deploy/user-systemd/faryo-owner-keepalive.timer
-```
 
 Use `/health` for liveness and `/api/status` for authenticated runtime checks.
 The status payload includes the source version for deployment acceptance.
@@ -70,5 +66,6 @@ Installing Owner only proves local runtime health. Gateway visibility also needs
 route config, a matching Owner token, any required reverse tunnel loopback port,
 and the workspace/file-inbox roots used by that route.
 
-After configuration, run the read-only `scripts/diagnose-owner-gateway.sh`
-endpoint check. See `runbook.md` for the layered acceptance flow.
+After configuration, run `faryo doctor`; the legacy endpoint diagnostic remains
+available for advanced reverse-tunnel troubleshooting. See `runbook.md` for the
+layered acceptance flow.

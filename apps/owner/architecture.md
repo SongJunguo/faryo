@@ -13,7 +13,7 @@ public brand surface.
 Faryo Gateway
   -> route port or SSH reverse tunnel
   -> local execution endpoint 127.0.0.1:8765
-  -> local-tmux-owner web server
+  -> faryo-owner.service
   -> tmux target session
   -> terminal TUI
 ```
@@ -23,13 +23,18 @@ Gateway or used only for local smoke/status checks.
 
 ## 2. Local Runtime
 
-- `local-tmux-owner`: local execution backend, bound to `127.0.0.1`.
+- `local-tmux-owner`: historical source-directory name for the local execution
+  backend, bound to `127.0.0.1`; it no longer implies a service tmux session.
+- `faryo-owner.service`: direct systemd user supervision for the Owner Python
+  process; it does not run in a service tmux.
 - An optional SSH reverse tunnel from a local endpoint to the Gateway host, run
   as a user service on that endpoint. When enabled, verify from the Gateway side
   with the owner token and expected endpoint identity.
-- `faryo-owner-keepalive.timer`: user-level keepalive timer.
 - `tmux:<target>`: the controlled target session.
-- `tmux:local-tmux-owner`: the Owner service session.
+
+The former `faryo-owner-keepalive.timer` and `tmux:local-tmux-owner` supervision
+are retained only as a one-release migration fallback. They are absent from the
+maintained runtime after successful installation.
 
 ## 3. Required Dependencies
 
@@ -122,7 +127,8 @@ but the default upload destination should come from the Faryo data directory.
 ## 6. Verification
 
 ```bash
-./scripts/status.sh
+faryo doctor
+faryo status
 ./scripts/smoke-test.sh
 ./scripts/verify-reverse-tunnel.sh
 ss -ltnp | grep ':22 ' || true

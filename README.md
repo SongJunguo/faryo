@@ -245,82 +245,85 @@ Owner transcript and Markdown/TeX pipeline remain framework-free. Development
 uses locked Playwright/Ruff tooling, and every production runtime dependency or
 lazy bundled UI asset remains local and independently documented.
 
-## Source Deployment
+## Installation
 
 ### Requirements
 
-- Ubuntu/Linux
-- Python 3.10 or newer; Python 3.10 and 3.13 are the maintained CI environments
-- Node.js 20 or newer for source validation; Node.js 24 is validated
-- `tmux`, `curl`, and `git`
-- Codex CLI
-- `bcrypt` for Gateway
+- Ubuntu/Linux with a systemd user manager
+- Python 3.10 or newer with the standard `venv` module
+- `tmux`, `curl`, and Codex CLI
 - current Chrome or Microsoft Edge
 - a public HTTPS edge only when remote access is required
 
-This fork deliberately maintains one production path: Codex on Ubuntu/Linux.
-The inherited Claude runtime, macOS launchd installer, and unvalidated binary
-package builders have been retired. Historical release notes remain available
-for audit, but they do not define current platform support.
+Faryo does not modify Conda base or install Python packages into the operating
+system interpreter. The installer uses Ubuntu's compatible `python3` only to
+create an isolated, version-specific private venv below
+`~/.local/share/faryo/`. Node, npm, Git, Ruff, and Playwright are development
+requirements, not production runtime requirements.
 
-Create an isolated environment rather than modifying Conda base:
+For a tagged release, download the reviewed installer and its checksum from the
+same GitHub Release, verify it, then run it from the directory that should be the
+initial allowed workspace:
+
+```bash
+sha256sum --check install-faryo.sh.sha256
+bash install-faryo.sh --version v1.5.0 --workspace "$PWD"
+```
+
+The installer verifies a versioned source archive and SHA-256 manifest, creates
+the private venv, initializes missing mode-`600` configuration, and installs two
+loopback-only user services. Existing config, tokens, attachments, Codex history,
+and tmux sessions are preserved.
+
+Developers can install a clean checkout through the same application path:
 
 ```bash
 git clone https://github.com/SongJunguo/faryo.git
 cd faryo
-
-conda create -n faryo python=3.13
-conda activate faryo
-python -m pip install -r apps/gateway/requirements.txt
+PYTHONPATH=src /usr/bin/python3 -m faryo_cli install --workspace "$PWD"
 ```
 
-The runtime only needs the Gateway requirements above. To develop Faryo or run
-the same canonical checks as CI, also install the locked development tools:
+Everyday operation uses one command:
 
 ```bash
-python -m pip install -r requirements-dev.txt
-npm ci --ignore-scripts
+faryo doctor
+faryo status
+faryo start
+faryo open
+faryo logs owner
+faryo logs gateway
+faryo restart
 ```
 
-Initialize private Owner configuration:
+Updates are checksum-verified and health-gated. Each version keeps an independent
+venv; failed switches restore the previous application and service units:
 
 ```bash
-FARYO_PYTHON="$CONDA_PREFIX/bin/python" \
-  ./apps/owner/scripts/init-owner-env.sh
+faryo update
+faryo rollback
 ```
 
-Then initialize a single local Gateway route and start both services:
+`faryo stop` stops only the two Web services, not Codex or tmux. `faryo
+uninstall` removes services and versioned program files but preserves
+`~/.faryo`; irreversible private-data removal requires both `--purge-data` and
+`--yes`.
 
-```bash
-FARYO_PYTHON="$CONDA_PREFIX/bin/python" \
-FARYO_GATEWAY_ROUTE=txy \
-  ./apps/gateway/scripts/init-local-gateway.sh
+Fresh installation stores the initial local login password at
+`~/.faryo/gateway/config/initial-password`. Change it from the password page and
+remove the stale plaintext file after confirming the new login. See
+[Local installation and lifecycle](docs/local-installation.md) for the complete
+layout, troubleshooting, update, rollback, and uninstall contract.
 
-./apps/owner/scripts/start-web-owner.sh
-./apps/gateway/scripts/install-user-service.sh
-```
-
-The initializer writes private runtime state below `~/.faryo/`. Review the
-generated mode-`600` files, change the initial Gateway password, and never commit
-tokens, password hashes, Cookie secrets, tunnel credentials, or real domains.
-
-Verify the loopback services:
-
-```bash
-curl --noproxy '*' -fsS http://127.0.0.1:8765/health
-curl --noproxy '*' -fsS http://127.0.0.1:8780/login >/dev/null
-```
-
-For remote access, follow the [Gateway runbook](apps/gateway/runbook.md) and
-[security hardening guide](docs/gateway-security-hardening.md). A Cloudflare
-Tunnel is transport only; protect the complete hostname with Cloudflare Access
-or an equivalent exact-identity layer.
+Remote access is intentionally separate. Follow the [Gateway runbook](apps/gateway/runbook.md)
+and [security hardening guide](docs/gateway-security-hardening.md). A tunnel is
+transport only; protect the complete hostname with an exact-identity access
+layer while keeping Faryo's inner login enabled.
 
 ## Current Validation
 
 The `main` branch was revalidated on 2026-08-20 with privacy-safe fixtures:
 
-- source checks plus 89 Owner and 65 Gateway Python tests;
+- source checks plus 130 Owner, 112 Gateway, and 46 unified-CLI Python tests;
 - Ruff fatal/Pyflakes checks, a Playwright system-browser fixture, deterministic
   diff-review rebuild comparison and zero npm audit findings;
 - a workspace Git security matrix covering scope/symlink escape, disabled
@@ -400,8 +403,8 @@ FARYO_NODE_BIN=/path/to/node \
 This single command validates source syntax, browser bundles, all maintained
 Owner and Gateway tests, required runtime assets, and the absence of retired
 compatibility paths. Pull requests and pushes to `main` run the same source-only
-check; tagged releases publish GitHub source archives and release notes, not
-unmaintained binary packages.
+check; tagged releases publish a checksummed source archive, reviewed bootstrap
+script, and release notes, not unmaintained binary packages.
 
 ## Security Boundary
 

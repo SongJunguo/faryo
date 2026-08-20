@@ -30,10 +30,12 @@ Runtime configuration defaults to:
 ~/.faryo/gateway/state/gateway-cookie-secret
 ```
 
-## Local Run
+## Local Service
 
 ```bash
-./scripts/run-gateway.sh
+faryo status
+faryo restart
+faryo logs gateway
 ```
 
 The user-level service template lives at:
@@ -42,22 +44,18 @@ The user-level service template lives at:
 deploy/user-systemd/faryo-gateway.service
 ```
 
-For a private, single-route installation from the repository root:
+For a private, single-route installation from a clean repository root:
 
 ```bash
-FARYO_PYTHON=/absolute/path/to/python \
-FARYO_GATEWAY_ROUTE=txy \
-./apps/gateway/scripts/init-local-gateway.sh
-
-./apps/gateway/scripts/install-user-service.sh
-curl --noproxy '*' -fsS http://127.0.0.1:8780/login >/dev/null
+PYTHONPATH=src /usr/bin/python3 -m faryo_cli install --workspace "$PWD"
+faryo doctor
 ```
 
-The selected Python must provide `bcrypt`. The initializer reads the existing
-private Owner token, writes mode-`600` Gateway files below `~/.faryo`, and only
+The installer creates an exact-pinned private venv, reads or creates the private
+Owner token, writes missing mode-`600` Gateway files below `~/.faryo`, and only
 requires a token for the enabled route. Re-running it preserves an existing
-login config. Set `FARYO_GATEWAY_RESET_AUTH=1` only when intentionally rotating
-the Gateway login.
+login config. Low-level scripts remain for development and credential repair,
+but are not the ordinary deployment interface.
 
 The inner Faryo login defaults to a 30-day absolute session. Set
 `FARYO_GATEWAY_SESSION_HOURS` in the private Gateway environment to an integer

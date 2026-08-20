@@ -37,41 +37,28 @@ routes come from the current user config. Owner tokens are injected only by
 Gateway. Route status comes from each route's real `/health`; do not fake a
 route as online by bridging another port.
 
-## Prepare Python
+## Install the local services
+
+Use the verified release installer described in
+[Local installation and lifecycle](../../docs/local-installation.md), or run the
+same installer from a clean checkout:
 
 ```bash
 cd /path/to/faryo
-conda env list
-conda create -n faryo python=3.13 -y
-conda run -n faryo python -m pip install -r apps/gateway/requirements.txt
-FARYO_PYTHON="$(conda run -n faryo python -c 'import sys; print(sys.executable)')"
-"$FARYO_PYTHON" -c 'import bcrypt; print(bcrypt.__version__)'
+PYTHONPATH=src /usr/bin/python3 -m faryo_cli install --workspace "$PWD"
+faryo doctor
 ```
 
-Python 3.10 and 3.13 are supported by the current Gateway dependency set;
-Python 3.10 installs the pinned `tomli` backport. Reuse an existing suitable
-environment instead of recreating it.
+Faryo accepts Python 3.10 and newer, creates its own version-specific standard
+venv, and does not require Conda. The unified installer creates a single `txy`
+route, direct `faryo-owner.service` and `faryo-gateway.service`, and missing
+mode-`600` private configuration. It preserves every existing config value.
 
-## Initialize One Local Route
+Real runtime config lives under `~/.faryo/` and is never committed to Git.
+Owner and Gateway remain separate loopback services; only Codex itself stays in
+tmux.
 
-Owner must already have a private mode-`600` environment file containing
-`FARYO_OWNER_TOKEN` and must listen on loopback. Then run from the repository
-root:
-
-```bash
-FARYO_PYTHON="$FARYO_PYTHON" \
-FARYO_GATEWAY_ROUTE=txy \
-./apps/gateway/scripts/init-local-gateway.sh
-
-./apps/gateway/scripts/install-user-service.sh
-systemctl --user is-active faryo-gateway.service
-curl --noproxy '*' -fsS http://127.0.0.1:8780/login >/dev/null
-```
-
-Real runtime config lives under `~/.faryo/gateway/` and is never committed to
-Git. Config field names use Faryo naming.
-
-The initializer creates only the selected route. Disabled HP or PC routes do
+The fresh initializer creates only the selected route. Disabled HP or PC routes do
 not need placeholder tokens. It also keeps an existing `gateway-auth.json`, so
 routine reconfiguration cannot silently restore an old login password. To
 perform an intentional credential reset, set `FARYO_GATEWAY_RESET_AUTH=1` and
@@ -195,19 +182,18 @@ cache may retain the pre-creation negative answer until its TTL expires.
 
 ## Service Operation
 
-Canonical user systemd unit:
-
-```text
-faryo-gateway.service
-```
-
-Useful commands:
+Use the unified commands for normal operation:
 
 ```bash
-systemctl --user status faryo-gateway.service
-journalctl --user -u faryo-gateway.service --since today
-systemctl --user restart faryo-gateway.service
+faryo status
+faryo restart
+faryo logs owner
+faryo logs gateway
 ```
+
+The underlying user units are `faryo-owner.service` and
+`faryo-gateway.service`. `faryo stop` affects only these Web services and never
+stops or resizes Codex tmux sessions.
 
 Logs must not contain login passwords, Owner tokens, query-string tokens, or
 private conversation text. A normal restart with an open session page should

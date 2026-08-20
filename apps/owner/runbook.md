@@ -22,30 +22,27 @@ these directories exist:
 ~/.faryo/owner/data/logs
 ```
 
-## Start Owner
+## Service lifecycle
 
 ```bash
-./scripts/start-web-owner.sh
+faryo status
+faryo start
+faryo restart
+faryo logs owner
+faryo stop
 ```
 
-## Stop Owner
-
-```bash
-./scripts/stop-web-owner.sh
-```
-
-## Status
-
-```bash
-./scripts/status.sh
-```
+These commands manage direct `faryo-owner.service` together with Gateway.
+Stopping the Web services does not stop or resize any Codex tmux session. The
+older `start-web-owner.sh`/keepalive path exists only for bounded migration from
+v1.4 and is not the normal deployment interface.
 
 ## Deployment Acceptance
 
-Use the read-only diagnostic after configuring or updating the source checkout:
+Use the unified read-only diagnostic after installing or updating:
 
 ```bash
-./scripts/diagnose-owner-gateway.sh
+faryo doctor
 ```
 
 Read the result as layers, not one generic online/offline state:
@@ -63,10 +60,11 @@ For tunneled endpoints, run `scripts/verify-reverse-tunnel.sh` when the
 diagnostic shows the tunnel config is present but the Gateway still reports the
 route offline.
 
-## Local Smoke Test
+## Advanced source diagnostics
 
 ```bash
 ./scripts/smoke-test.sh
+./scripts/diagnose-owner-gateway.sh
 ```
 
 ## Reverse Tunnel Verification
