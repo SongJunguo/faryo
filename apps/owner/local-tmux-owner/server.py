@@ -43,6 +43,12 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Callable, NamedTuple
 
+OWNER_MODULE_DIR = Path(__file__).resolve().parent
+if str(OWNER_MODULE_DIR) not in sys.path:
+    sys.path.insert(0, str(OWNER_MODULE_DIR))
+import workspace_changes
+import runtime_diagnostics
+
 SHARED_DIR = Path(__file__).resolve().parents[2] / "shared"
 if str(SHARED_DIR) not in sys.path:
     sys.path.insert(0, str(SHARED_DIR))
@@ -55,7 +61,7 @@ except ImportError:  # pragma: no cover - runtime fallback for minimal environme
     RichConsole = None
     RichText = None
 
-APP_DIR = Path(__file__).resolve().parent
+APP_DIR = OWNER_MODULE_DIR
 STATIC_DIR = APP_DIR / "static"
 SHARED_STATIC_DIR = SHARED_DIR / "static"
 RELEASE_FILE = APP_DIR.parent / "RELEASE"
@@ -2831,16 +2837,11 @@ def status_payload(config: Config) -> dict[str, Any]:
     tmux_alive = has_session(config)
     profile = agent_profile_in_pane(config) if tmux_alive else None
     capture_profile = profile or RUNTIME_PROFILE
-    text = ""
     model = None
     reasoning_effort = None
     fast_status = None
     meta_cwd = None
     if tmux_alive:
-        try:
-            text = capture_text(config, 80, capture_profile)
-        except OwnerError:
-            text = ""
         try:
             raw_text = clean_capture(
                 tmux(config, ["capture-pane", "-p", "-J", "-t", tmux_target(config), "-S", "-80"], timeout=3).stdout,
@@ -3495,6 +3496,56 @@ class Handler(SimpleHTTPRequestHandler):
                 if header_label:
                     payload["ownerLabel"] = header_label
                 self.write_json(payload)
+                return
+            if parsed.path in {"/api/capabilities", "/api/diagnostics"}:
+                self.require_token(parsed)
+                try:
+                    app_server_configured = bool(codex_app_server_argv("app-server"))
+                except Exception:
+                    app_server_configured = False
+                capabilities = runtime_diagnostics.capability_payload(
+                    release_version(),
+                    app_server_configured,
+                    AGENT_STATE_DB.is_file(),
+                )
+                if parsed.path == "/api/capabilities":
+                    self.write_json({"ok": True, **capabilities, "updatedAt": now_iso()})
+                    return
+                sessions = tmux_sessions(self.config)
+                managed_count = sum(managed_session(self.config, name) for name in sessions)
+                recognized_count = sum(agent_profile_in_pane(Config(name, self.config.token, self.config.pane_width)) is not None for name in sessions)
+                try:
+                    receipt_count = sum(1 for item in SEND_DELIVERY_ROOT.iterdir() if item.is_file() and item.suffix == ".json")
+                except OSError:
+                    receipt_count = 0
+                with _codex_thread_cache_lock:
+                    cache_count = len(_codex_thread_cache)
+                diagnostics = runtime_diagnostics.diagnostics_payload(
+                    capabilities,
+                    tmux_sessions=len(sessions),
+                    managed_sessions=managed_count,
+                    recognized_agents=recognized_count,
+                    delivery_receipts=receipt_count,
+                    thread_cache_entries=cache_count,
+                )
+                self.write_json({"ok": True, **diagnostics, "updatedAt": now_iso()})
+                return
+            if parsed.path == "/api/workspace-changes":
+                self.require_token(parsed)
+                target = self.target_from_query(parsed)
+                cwd = get_pane_cwd(target)
+                if not cwd:
+                    raise OwnerError("workspace unavailable", HTTPStatus.NOT_FOUND)
+                try:
+                    changes = workspace_changes.collect_workspace_changes(cwd, self.workspace_root())
+                except workspace_changes.WorkspaceChangesError as exc:
+                    status = {
+                        "workspace-out-of-scope": HTTPStatus.FORBIDDEN,
+                        "workspace-unavailable": HTTPStatus.NOT_FOUND,
+                        "not-a-git-worktree": HTTPStatus.NOT_FOUND,
+                    }.get(exc.code, HTTPStatus.BAD_GATEWAY)
+                    raise OwnerError("workspace changes unavailable", status) from exc
+                self.write_json({"ok": True, **changes, "updatedAt": now_iso()})
                 return
             if parsed.path == "/api/agent-sessions":
                 self.require_token(parsed)

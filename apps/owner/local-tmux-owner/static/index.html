@@ -78,6 +78,13 @@
         </button>
         <p class="details-display-note">For a persistent app window without an address bar, install Faryo from Home.</p>
       </section>
+      <section class="details-section" aria-label="Workspace review">
+        <div class="details-section-title">Workspace</div>
+        <button id="detailsChangesBtn" class="details-display-action" type="button">
+          <span>Review changes</span><span id="detailsChangesCount" aria-hidden="true">›</span>
+        </button>
+        <p class="details-display-note">Read-only status and diff for this session's scoped Git worktree.</p>
+      </section>
       <section class="details-section" aria-label="Session information">
         <div class="details-section-title">Runtime</div>
         <dl class="details-list">
@@ -90,8 +97,32 @@
           <div><dt>Source</dt><dd id="detailsSource">unknown</dd></div>
           <div><dt>Connection</dt><dd id="detailsConnection">connecting</dd></div>
         </dl>
+        <button id="detailsDiagnosticsBtn" class="details-display-action" type="button">
+          <span>Download diagnostics</span><span aria-hidden="true">↓</span>
+        </button>
       </section>
       <p class="details-note">Chat uses structured history when available. Raw keeps the terminal evidence. Opening this panel never changes tmux dimensions.</p>
+    </aside>
+    <aside id="changesPanel" class="changes-panel surface-panel surface-panel-right hidden" role="dialog" aria-modal="true" aria-labelledby="changesPanelTitle">
+      <div class="surface-panel-heading">
+        <div>
+          <span class="surface-panel-eyebrow">Workspace</span>
+          <strong id="changesPanelTitle">Changes</strong>
+        </div>
+        <button class="panel-close" type="button" data-close-panel aria-label="Close workspace changes">×</button>
+      </div>
+      <section class="changes-summary" aria-live="polite">
+        <strong id="changesRepository">Loading…</strong>
+        <span id="changesSummary">Read-only Git status</span>
+      </section>
+      <div class="changes-toolbar" aria-label="Diff view">
+        <button id="changesLineBtn" type="button" class="mode-active">Line</button>
+        <button id="changesSplitBtn" type="button">Split</button>
+        <button id="changesRefreshBtn" type="button">Refresh</button>
+      </div>
+      <div id="changesFiles" class="changes-files"></div>
+      <div id="changesDiff" class="changes-diff"><div class="changes-empty">Loading workspace changes…</div></div>
+      <p class="changes-readonly">Read-only. Faryo cannot stage, discard, commit, checkout, or apply changes from this view.</p>
     </aside>
 
     <main id="outputWrap">

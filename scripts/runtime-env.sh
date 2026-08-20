@@ -88,6 +88,52 @@ faryo_latest_nvm_node() {
   return 1
 }
 
+faryo_latest_nvm_codex() {
+  local root candidate
+  for root in "${NVM_DIR:-}" "${HOME:-}/.nvm"; do
+    [[ -d "$root/versions/node" ]] || continue
+    candidate=$(find "$root/versions/node" -mindepth 3 -maxdepth 3 \
+      \( -type f -o -type l \) -path '*/bin/codex' -perm -u+x -print 2>/dev/null \
+      | sort -V | tail -n 1)
+    if [[ -n "$candidate" ]]; then
+      readlink -f -- "$candidate"
+      return 0
+    fi
+  done
+  return 1
+}
+
+faryo_resolve_codex() {
+  local candidate
+  if [[ -n "${FARYO_CODEX_BIN:-}" ]]; then
+    candidate=$(faryo_command_path "$FARYO_CODEX_BIN") || {
+      echo "FARYO_CODEX_BIN is not executable: $FARYO_CODEX_BIN" >&2
+      return 1
+    }
+    printf '%s\n' "$candidate"
+    return 0
+  fi
+  if candidate=$(command -v codex 2>/dev/null) && [[ -x "$candidate" ]]; then
+    readlink -f -- "$candidate"
+    return 0
+  fi
+  for candidate in \
+    "${HOME:-}/.local/share/npm-global/bin/codex" \
+    "${HOME:-}/.local/bin/codex" \
+    /usr/local/bin/codex
+  do
+    [[ -x "$candidate" ]] || continue
+    readlink -f -- "$candidate"
+    return 0
+  done
+  if candidate=$(faryo_latest_nvm_codex); then
+    printf '%s\n' "$candidate"
+    return 0
+  fi
+  echo "Codex CLI was not found. Set FARYO_CODEX_BIN or expose it on PATH." >&2
+  return 1
+}
+
 faryo_resolve_node() {
   local candidate
   if [[ -n "${FARYO_NODE_BIN:-}" ]]; then

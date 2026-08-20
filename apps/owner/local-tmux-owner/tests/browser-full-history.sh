@@ -2,8 +2,11 @@
 set -euo pipefail
 
 repo_root="$(git rev-parse --show-toplevel)"
+# shellcheck source=../../../../scripts/runtime-env.sh
+source "$repo_root/scripts/runtime-env.sh"
 browser_smoke="$repo_root/apps/owner/local-tmux-owner/tests/browser-katex-smoke.mjs"
-python_bin="${FARYO_HISTORY_PYTHON:-python3}"
+python_bin="${FARYO_HISTORY_PYTHON:-$(faryo_resolve_python)}"
+node_bin="${FARYO_HISTORY_NODE:-$(faryo_resolve_node)}"
 suffix="$$"
 session="faryo-full-history-$suffix"
 port="${FARYO_HISTORY_PORT:-$((25000 + (suffix % 1000)))}"
@@ -142,7 +145,7 @@ env \
   'FARYO_SMOKE_EXPECT_HISTORY_TURNS=40' \
   "FARYO_SMOKE_VIEWPORT_WIDTH=${FARYO_HISTORY_VIEWPORT_WIDTH:-390}" \
   "FARYO_SMOKE_VIEWPORT_HEIGHT=${FARYO_HISTORY_VIEWPORT_HEIGHT:-844}" \
-  node "$browser_smoke"
+  "$node_bin" "$browser_smoke"
 
 final_size="$(tmux display-message -p -t "$session" '#{window_width}x#{window_height}')"
 [[ "$initial_size" == "$final_size" ]]

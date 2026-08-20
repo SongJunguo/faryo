@@ -68,6 +68,11 @@ Gateway implements the following inner controls:
 - authenticated, route-scoped, CSRF-protected Archive/Restore controls that
   delegate to Codex App Server thread lifecycle RPC; Faryo never directly
   rewrites Codex SQLite/rollout state and exposes no hard-delete endpoint;
+- workspace-scoped read-only Git changes with fixed argv, timeout/output limits,
+  external diff/textconv disabled, relative paths only, and no remote Git writes;
+- versioned diagnostics restricted to feature/protocol flags and counts;
+- in-memory Attention and operator-enabled page-open notifications whose body is
+  generic and contains no message, title, path or raw target identifier;
 - a best-effort control audit at private Gateway state: mode `600`, seven-day or
   5000-row retention, per-user/route read scope, HMAC-pseudonymous targets, and
   no prompt, answer, title, cwd, raw session ID, token, Cookie, CSRF value, or IP
@@ -125,3 +130,7 @@ Gateway implements the following inner controls:
   authenticated page usable.
 - Runtime config, password hashes, tunnel credentials, tokens, domains, session
   identifiers, and private conversations are absent from Git and logs.
+- Changes rejects out-of-scope and symlink-escaped Git roots; adversarial diff
+  content cannot create scripts or event handlers in the browser.
+- Downloaded diagnostics pass the field/value denylist and notification
+  permission denial leaves the workbench usable.

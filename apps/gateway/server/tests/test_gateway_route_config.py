@@ -13,10 +13,12 @@ import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
+from urllib.parse import unquote
 
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
 SERVER_PATH = REPO_ROOT / "apps" / "gateway" / "server" / "server.py"
+WORKBENCH_JS = (SERVER_PATH.parent / "static" / "workbench.js").read_text(encoding="utf-8")
 
 spec = importlib.util.spec_from_file_location("faryo_gateway_route_server", SERVER_PATH)
 gateway = importlib.util.module_from_spec(spec)
@@ -59,7 +61,7 @@ class GatewayRouteConfigTest(unittest.TestCase):
     def test_unicode_owner_label_is_http_header_safe(self) -> None:
         encoded = gateway.owner_label_header_value("Ubuntu 工作站")
 
-        self.assertEqual(gateway.unquote(encoded), "Ubuntu 工作站")
+        self.assertEqual(unquote(encoded), "Ubuntu 工作站")
         self.assertTrue(encoded.isascii())
         self.assertNotIn(" ", encoded)
 
@@ -191,15 +193,16 @@ class GatewayRouteConfigTest(unittest.TestCase):
         self.assertIn('id="historyPageInput"', page)
         self.assertIn('id="historyPageTotal"', page)
         self.assertIn('id="historyNext"', page)
-        self.assertIn('/api/workbench?${historyRequestQuery()}', page)
+        self.assertIn('/api/workbench?${historyRequestQuery()}', WORKBENCH_JS)
         self.assertIn('id="historySearchInput"', page)
         self.assertIn('data-history-period="7d"', page)
         self.assertIn('data-history-archive="archived"', page)
-        self.assertIn("/api/session-history/${archived?'archive':'unarchive'}", page)
-        self.assertIn('class="mini-btn archive-session"', page)
-        self.assertIn('class="mini-btn restore-session"', page)
-        self.assertNotIn('/api/session-history/delete', page)
-        self.assertIn("active&&managed?", page)
+        self.assertIn("/api/session-history/", WORKBENCH_JS)
+        self.assertIn('archived ? "archive" : "unarchive"', WORKBENCH_JS)
+        self.assertIn('class="mini-btn archive-session"', WORKBENCH_JS)
+        self.assertIn('class="mini-btn restore-session"', WORKBENCH_JS)
+        self.assertNotIn('/api/session-history/delete', WORKBENCH_JS)
+        self.assertIn("active && managed ?", WORKBENCH_JS)
 
     def test_history_filters_are_bounded_encoded_and_forwarded(self) -> None:
         filters = gateway.history_filters_from_query({
@@ -238,9 +241,18 @@ class GatewayRouteConfigTest(unittest.TestCase):
         self.assertEqual(exited["state"], "exited")
         self.assertFalse(exited["agentRunning"])
         self.assertEqual(resumable["state"], "resumable")
-        page = gateway.portal_html("tester", ["txy"])
         for label in ("Starting", "Running", "Waiting", "Exited", "Desktop"):
-            self.assertIn(f"{label.lower()}:'{label}'", page)
+            self.assertIn(f'{label.lower()}: "{label}"', WORKBENCH_JS)
+
+    def test_portal_json_bootstrap_escapes_script_breakout(self) -> None:
+        gateway.BACKENDS.clear()
+        gateway.BACKENDS["txy"] = ("127.0.0.1", 8765, "</script><img src=x>")
+
+        page = gateway.portal_html("tester", ["txy"])
+
+        bootstrap = page.split('id="faryoRouteLabels"', 1)[1].split("</script>", 1)[0]
+        self.assertNotIn("<img", bootstrap)
+        self.assertIn("\\u003c/script\\u003e", bootstrap)
 
     def test_gateway_config_requires_token_for_enabled_route_only(self) -> None:
         with tempfile.TemporaryDirectory() as temp:

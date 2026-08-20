@@ -2,7 +2,9 @@
 set -euo pipefail
 
 repo_root="$(git rev-parse --show-toplevel)"
-python_bin="${FARYO_START_PYTHON:-python3}"
+# shellcheck source=../../../../scripts/runtime-env.sh
+source "$repo_root/scripts/runtime-env.sh"
+python_bin="${FARYO_START_PYTHON:-$(faryo_resolve_python)}"
 suffix="$$"
 port="${FARYO_START_PORT:-$((26000 + (suffix % 1000)))}"
 token="anonymous-start-$suffix"

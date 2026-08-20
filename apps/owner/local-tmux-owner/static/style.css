@@ -1512,6 +1512,126 @@ html[data-faryo-ui="workbench-v2"] .details-note {
   line-height: 1.5;
 }
 
+html[data-faryo-ui="workbench-v2"] .changes-panel {
+  width: min(1040px, calc(100vw - 24px));
+}
+
+html[data-faryo-ui="workbench-v2"] .changes-summary {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 11px 12px;
+  border: 1px solid var(--owner-hairline);
+  border-radius: 13px;
+  background: color-mix(in srgb, var(--panel2) 54%, transparent);
+}
+
+html[data-faryo-ui="workbench-v2"] .changes-summary strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+html[data-faryo-ui="workbench-v2"] .changes-summary span,
+html[data-faryo-ui="workbench-v2"] .changes-readonly {
+  color: var(--muted);
+  font-size: calc(11px + var(--font-step));
+}
+
+html[data-faryo-ui="workbench-v2"] .changes-toolbar {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+  padding: 4px;
+  border-radius: 13px;
+  background: var(--panel2);
+}
+
+html[data-faryo-ui="workbench-v2"] .changes-toolbar button {
+  min-height: 38px;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--muted);
+}
+
+html[data-faryo-ui="workbench-v2"] .changes-toolbar button.mode-active {
+  background: var(--accent);
+  color: var(--on-accent);
+}
+
+html[data-faryo-ui="workbench-v2"] .changes-files {
+  max-height: 150px;
+  display: grid;
+  gap: 4px;
+  overflow: auto;
+}
+
+html[data-faryo-ui="workbench-v2"] .changes-file {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr);
+  gap: 8px;
+  padding: 7px 9px;
+  border: 1px solid var(--owner-hairline);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--panel2) 42%, transparent);
+  font: calc(11px + var(--font-step))/1.35 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+html[data-faryo-ui="workbench-v2"] .changes-file code {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+html[data-faryo-ui="workbench-v2"] .changes-file-status {
+  color: var(--accent);
+  font-weight: 800;
+}
+
+html[data-faryo-ui="workbench-v2"] .changes-diff {
+  min-height: 180px;
+  overflow: auto;
+  border: 1px solid var(--owner-hairline);
+  border-radius: 13px;
+  background: var(--panel);
+  color: var(--text);
+  font-size: 12px;
+}
+
+html[data-faryo-ui="workbench-v2"] .changes-diff .d2h-wrapper,
+html[data-faryo-ui="workbench-v2"] .changes-diff .d2h-file-list-wrapper {
+  margin: 0;
+}
+
+html[data-faryo-ui="workbench-v2"] .changes-empty {
+  padding: 24px 14px;
+  color: var(--muted);
+  text-align: center;
+}
+
+html[data-faryo-ui="workbench-v2"] .changes-readonly {
+  margin: 0 3px;
+  line-height: 1.45;
+}
+
+@media (max-width: 719px) {
+  html[data-faryo-ui="workbench-v2"] .changes-panel {
+    width: 100vw;
+  }
+
+  html[data-faryo-ui="workbench-v2"] .changes-summary {
+    display: grid;
+    gap: 3px;
+  }
+
+  html[data-faryo-ui="workbench-v2"] .changes-files {
+    max-height: 118px;
+  }
+}
+
 @keyframes panel-fade-in {
   from { opacity: 0; }
   to { opacity: 1; }

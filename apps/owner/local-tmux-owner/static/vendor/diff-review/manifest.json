@@ -1,0 +1,33 @@
+{
+  "schemaVersion": 1,
+  "packages": {
+    "diff2html": "3.4.56",
+    "dompurify": "3.4.14"
+  },
+  "assets": {
+    "diff-review.min.js": {
+      "bytes": 74445,
+      "sha256": "50cf1457cd8c207c9617527ef16df23f0d972e22f7019e14aecb6384e2d24ef7"
+    },
+    "diff2html.min.css": {
+      "bytes": 17331,
+      "sha256": "d3ecc0e9b2b1e5c8466c19de29bed052fd0863475d25829ecc858446efded372"
+    },
+    "LICENSE.diff2html": {
+      "bytes": 1091,
+      "sha256": "6de794566a8feb4233594420299cec2dbfba51ae57201763541a5e7d627cb245"
+    },
+    "LICENSE.dompurify": {
+      "bytes": 11358,
+      "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+    },
+    "LICENSE.diff": {
+      "bytes": 1546,
+      "sha256": "eda81a415869e67809f6a9f3fd6056062cb83a462118e07eec5e92b2e0c40ce9"
+    },
+    "LICENSE.hogan": {
+      "bytes": 10173,
+      "sha256": "0cec06e0e55fbc3dc5cee4fca9b607f66cb8f4e4dbcf3b3c013594dd156732e9"
+    }
+  }
+}

@@ -5,7 +5,8 @@
 
 ## Active
 
-当前没有未完成的实施计划。
+- [`v1.3-maintainability-and-product-capabilities-plan.md`](v1.3-maintainability-and-product-capabilities-plan.md)：
+  正在完成最终发布、远程 CI 与 source-only release 验收。
 
 ## Completed or maintenance mode
 

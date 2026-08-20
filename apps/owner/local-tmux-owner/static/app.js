@@ -16,6 +16,7 @@
   const dockMenu = $('dockMenu');
   const sessionMenu = $('sessionMenu');
   const detailsPanel = $('detailsPanel');
+  const changesPanel = $('changesPanel');
   const panelBackdrop = $('panelBackdrop');
   const commandSuggest = $('commandSuggest');
   const promptShell = document.querySelector('.prompt-shell');
@@ -118,6 +119,8 @@
   let submitInFlight = false, pendingSubmission = null;
   let activeSurfacePanel = null, panelReturnFocus = null;
   let immersiveController = null;
+  let workspaceChangesPayload = null, changesSideBySide = false, diffReviewAssetsPromise = null;
+  let ownerCapabilities = null;
   const restoringLivePanels = new WeakSet();
   let questionNavigatorController = null;
   let commandSuggestionIndex = 0, commandSuggestionSignature = '';
@@ -153,7 +156,7 @@
 
   function closeSurfacePanels({ restoreFocus = true } = {}) {
     const returnFocus = panelReturnFocus;
-    for (const panel of [sessionMenu, detailsPanel]) panel?.classList.add('hidden');
+    for (const panel of [sessionMenu, detailsPanel, changesPanel]) panel?.classList.add('hidden');
     panelBackdrop?.classList.add('hidden');
     panelBackdrop?.setAttribute('aria-hidden', 'true');
     document.documentElement.classList.remove('panel-open');
@@ -801,6 +804,36 @@
       const err = new Error(data.error || `${res.status} ${res.statusText}`); err.status = res.status; err.payload = data; throw err;
     }
     return data;
+  }
+
+  async function loadOwnerCapabilities() {
+    const payload = await api('/api/capabilities');
+    ownerCapabilities = payload;
+    document.documentElement.dataset.faryoCapabilitySchema = String(payload.schemaVersion || 'unknown');
+    $('detailsChangesBtn').hidden = payload.features?.workspaceChanges === false;
+    $('detailsDiagnosticsBtn').hidden = payload.features?.diagnostics === false;
+    return payload;
+  }
+
+  async function downloadDiagnostics() {
+    const button = $('detailsDiagnosticsBtn');
+    button.disabled = true;
+    try {
+      const payload = await api('/api/diagnostics');
+      const blob = new Blob([`${JSON.stringify(payload, null, 2)}\n`], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = 'faryo-diagnostics.json';
+      link.click();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+      button.querySelector('span').textContent = 'Diagnostics downloaded';
+      setTimeout(() => { if (button.isConnected) button.querySelector('span').textContent = 'Download diagnostics'; }, 1200);
+    } catch (error) {
+      setError(userErrorMessage(error));
+    } finally {
+      button.disabled = false;
+    }
   }
 
   function apiPath(path) {
@@ -2393,6 +2426,116 @@
     try { await uploadAttachments(event.dataTransfer && event.dataTransfer.files); } catch (err) { setError(userErrorMessage(err)); }
   }, true);
 
+  function diffReviewAsset(path) {
+    return `${routeBase}/vendor/diff-review/${path}`;
+  }
+
+  function loadDiffReviewAssets() {
+    if (window.FaryoDiffReview?.render) return Promise.resolve(window.FaryoDiffReview);
+    if (diffReviewAssetsPromise) return diffReviewAssetsPromise;
+    diffReviewAssetsPromise = new Promise((resolve, reject) => {
+      let pending = 2;
+      const done = () => {
+        pending -= 1;
+        if (pending > 0) return;
+        if (window.FaryoDiffReview?.render) resolve(window.FaryoDiffReview);
+        else reject(new Error('Diff review assets did not initialize'));
+      };
+      let stylesheet = document.getElementById('faryoDiffReviewCss');
+      if (!stylesheet) {
+        stylesheet = document.createElement('link');
+        stylesheet.id = 'faryoDiffReviewCss';
+        stylesheet.rel = 'stylesheet';
+        stylesheet.href = diffReviewAsset('diff2html.min.css?v=3.4.56');
+        stylesheet.addEventListener('load', done, { once: true });
+        stylesheet.addEventListener('error', () => reject(new Error('Diff review stylesheet failed to load')), { once: true });
+        document.head.appendChild(stylesheet);
+      } else done();
+      let script = document.getElementById('faryoDiffReviewScript');
+      if (!script) {
+        script = document.createElement('script');
+        script.id = 'faryoDiffReviewScript';
+        script.src = diffReviewAsset('diff-review.min.js?v=3.4.56-3.4.14');
+        script.addEventListener('load', done, { once: true });
+        script.addEventListener('error', () => reject(new Error('Diff review script failed to load')), { once: true });
+        document.head.appendChild(script);
+      } else done();
+    }).catch((error) => {
+      diffReviewAssetsPromise = null;
+      throw error;
+    });
+    return diffReviewAssetsPromise;
+  }
+
+  function renderChangesFiles(files) {
+    const container = $('changesFiles');
+    container.replaceChildren();
+    for (const item of files || []) {
+      const row = document.createElement('div');
+      row.className = 'changes-file';
+      const status = document.createElement('span');
+      status.className = 'changes-file-status';
+      status.textContent = String(item.status || '').trim() || '·';
+      const path = document.createElement('code');
+      path.textContent = String(item.path || 'unknown');
+      path.title = path.textContent;
+      row.append(status, path);
+      container.appendChild(row);
+    }
+    if (!container.children.length) {
+      const empty = document.createElement('div');
+      empty.className = 'changes-empty';
+      empty.textContent = 'No changed files';
+      container.appendChild(empty);
+    }
+  }
+
+  async function renderWorkspaceChanges() {
+    const payload = workspaceChangesPayload;
+    if (!payload) return;
+    const summary = payload.summary || {};
+    $('changesRepository').textContent = `${payload.repository?.name || 'Repository'} · ${payload.repository?.branch || 'detached'}`;
+    $('changesSummary').textContent = `${Number(summary.files || 0)} files · ${Number(summary.staged || 0)} staged · ${Number(summary.unstaged || 0)} unstaged · ${Number(summary.untracked || 0)} untracked${summary.diffTruncated ? ' · diff truncated' : ''}`;
+    $('detailsChangesCount').textContent = Number(summary.files || 0) ? String(summary.files) : 'Clean';
+    $('changesLineBtn').classList.toggle('mode-active', !changesSideBySide);
+    $('changesSplitBtn').classList.toggle('mode-active', changesSideBySide);
+    renderChangesFiles(payload.files);
+    const target = $('changesDiff');
+    if (!String(payload.diff || '').trim()) {
+      target.replaceChildren();
+      const empty = document.createElement('div');
+      empty.className = 'changes-empty';
+      empty.textContent = summary.untracked ? 'Untracked files are listed above; Git has no text diff for them yet.' : 'No uncommitted text changes';
+      target.appendChild(empty);
+      return;
+    }
+    const renderer = await loadDiffReviewAssets();
+    target.innerHTML = renderer.render(payload.diff, { sideBySide: changesSideBySide });
+  }
+
+  async function loadWorkspaceChanges() {
+    const session = selectedSession;
+    for (const id of ['detailsChangesBtn', 'changesRefreshBtn', 'changesLineBtn', 'changesSplitBtn']) $(id).disabled = true;
+    $('changesDiff').innerHTML = '<div class="changes-empty">Loading workspace changes…</div>';
+    try {
+      const payload = await api(`/api/workspace-changes?session=${encodeURIComponent(session)}`);
+      if (selectedSession !== session) return;
+      workspaceChangesPayload = payload;
+      await renderWorkspaceChanges();
+    } catch (error) {
+      workspaceChangesPayload = null;
+      $('changesRepository').textContent = 'Changes unavailable';
+      $('changesSummary').textContent = 'Read-only workspace review could not be loaded';
+      $('changesDiff').replaceChildren();
+      const empty = document.createElement('div');
+      empty.className = 'changes-empty';
+      empty.textContent = userErrorMessage(error);
+      $('changesDiff').appendChild(empty);
+    } finally {
+      for (const id of ['detailsChangesBtn', 'changesRefreshBtn', 'changesLineBtn', 'changesSplitBtn']) $(id).disabled = false;
+    }
+  }
+
   renderOutputModeButton();
   toggleClassState('header', 'collapsed', 'rdHeaderCollapsed'); toggleClassState('.app', 'header-collapsed', 'rdHeaderCollapsed'); syncStatusRefresh(false);
   $('sessionTitle').addEventListener('click', (event) => { if (event.target.closest('#homeBtn')) return; const on = !document.querySelector('header').classList.contains('collapsed'); toggleClassState('header', 'collapsed', 'rdHeaderCollapsed', on); toggleClassState('.app', 'header-collapsed', 'rdHeaderCollapsed', on); syncStatusRefresh(!on); });
@@ -2412,6 +2555,21 @@
   });
   $('detailsBtn').addEventListener('click', (event) => { event.stopPropagation(); openSurfacePanel(detailsPanel, $('detailsBtn')); });
   detailsPanel.addEventListener('click', (event) => { if (event.target.closest('[data-close-panel]')) closeSurfacePanels(); });
+  changesPanel.addEventListener('click', (event) => { if (event.target.closest('[data-close-panel]')) closeSurfacePanels(); });
+  $('detailsChangesBtn').addEventListener('click', () => {
+    openSurfacePanel(changesPanel, $('detailsBtn'));
+    loadWorkspaceChanges();
+  });
+  $('detailsDiagnosticsBtn').addEventListener('click', downloadDiagnostics);
+  $('changesRefreshBtn').addEventListener('click', () => loadWorkspaceChanges());
+  $('changesLineBtn').addEventListener('click', () => {
+    changesSideBySide = false;
+    renderWorkspaceChanges().catch((error) => setError(userErrorMessage(error)));
+  });
+  $('changesSplitBtn').addEventListener('click', () => {
+    changesSideBySide = true;
+    renderWorkspaceChanges().catch((error) => setError(userErrorMessage(error)));
+  });
   panelBackdrop.addEventListener('click', () => closeSurfacePanels());
   $('dockPlusBtn').addEventListener('click', (event) => {
     event.stopPropagation();
@@ -2569,6 +2727,7 @@
   // is collapsed. Periodic status polling remains gated by header visibility;
   // lightweight capture/SSE metadata keeps `/rename` live after this point.
   refreshStatus().catch((err) => setError(userErrorMessage(err)));
+  loadOwnerCapabilities().catch(handleBackgroundError);
   refreshCapture(currentCaptureLines()).catch((err) => setError(userErrorMessage(err)));
   startEventStream();
   document.documentElement.dataset.faryoAppReady = '1';

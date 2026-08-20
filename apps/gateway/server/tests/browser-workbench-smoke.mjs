@@ -1,7 +1,6 @@
-import { spawn } from 'node:child_process';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
-import os from 'node:os';
-import path from 'node:path';
+import { readFile, writeFile } from 'node:fs/promises';
+
+import { withBrowser } from '../../../../tools/browser-harness/playwright.mjs';
 
 const targetUrl = process.env.FARYO_SMOKE_URL;
 const loginUser = process.env.FARYO_SMOKE_LOGIN_USER || '';
@@ -23,78 +22,15 @@ const chromeBin = process.env.CHROME_BIN || '/usr/bin/google-chrome';
 if (!targetUrl) throw new Error('FARYO_SMOKE_URL is required');
 
 const delay = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
-const profile = await mkdtemp(path.join(os.tmpdir(), 'faryo-workbench-chrome-'));
-let chrome;
-let socket;
-
-try {
-  chrome = spawn(chromeBin, [
-    '--headless=new',
-    '--no-sandbox',
-    '--disable-gpu',
-    '--disable-dev-shm-usage',
-    '--disable-background-networking',
-    '--disable-default-apps',
-    '--disable-sync',
-    '--no-first-run',
-    '--no-proxy-server',
-    `--window-size=${viewportWidth},${viewportHeight}`,
-    `--host-resolver-rules=${hostResolverRules}`,
-    `--user-data-dir=${profile}`,
-    '--remote-debugging-port=0',
-    'about:blank',
-  ], { stdio: ['ignore', 'ignore', 'pipe'] });
-
-  chrome.stderr.setEncoding('utf8');
-  const browserWebSocketUrl = await new Promise((resolve, reject) => {
-    let buffered = '';
-    const timer = setTimeout(() => reject(new Error('Chrome DevTools startup timed out')), 15000);
-    chrome.stderr.on('data', (chunk) => {
-      buffered += chunk;
-      const match = buffered.match(/DevTools listening on (ws:\/\/[^\s]+)/);
-      if (!match) return;
-      clearTimeout(timer);
-      resolve(match[1]);
-    });
-    chrome.once('exit', (code) => {
-      clearTimeout(timer);
-      reject(new Error(`Chrome exited before DevTools was ready (code ${code})`));
-    });
-  });
-
-  const debuggingPort = new URL(browserWebSocketUrl).port;
-  const targetResponse = await fetch(`http://127.0.0.1:${debuggingPort}/json/new?about%3Ablank`, { method: 'PUT' });
-  if (!targetResponse.ok) throw new Error(`Could not create Chrome target: HTTP ${targetResponse.status}`);
-  const target = await targetResponse.json();
-
-  socket = new WebSocket(target.webSocketDebuggerUrl);
-  await new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error('Chrome target connection timed out')), 10000);
-    socket.addEventListener('open', () => {
-      clearTimeout(timer);
-      resolve();
-    }, { once: true });
-    socket.addEventListener('error', () => {
-      clearTimeout(timer);
-      reject(new Error('Chrome target connection failed'));
-    }, { once: true });
-  });
-
-  let nextId = 0;
-  const pending = new Map();
-  socket.addEventListener('message', (event) => {
-    const message = JSON.parse(String(event.data));
-    if (!message.id || !pending.has(message.id)) return;
-    const callbacks = pending.get(message.id);
-    pending.delete(message.id);
-    if (message.error) callbacks.reject(new Error(message.error.message));
-    else callbacks.resolve(message.result);
-  });
-  const send = (method, params = {}) => new Promise((resolve, reject) => {
-    const id = ++nextId;
-    pending.set(id, { resolve, reject });
-    socket.send(JSON.stringify({ id, method, params }));
-  });
+await withBrowser({
+  executablePath: chromeBin,
+  viewport: { width: viewportWidth, height: viewportHeight },
+  mobile: viewportWidth < 720,
+  hostResolverRules,
+  extraHTTPHeaders: authCookie ? { Cookie: authCookie } : {},
+}, async ({ context, page }) => {
+  const cdp = await context.newCDPSession(page);
+  const send = (method, params = {}) => cdp.send(method, params);
   const evaluate = async (expression) => {
     const result = await send('Runtime.evaluate', { expression, returnByValue: true, awaitPromise: true });
     if (result.exceptionDetails) {
@@ -103,24 +39,11 @@ try {
     return result.result?.value;
   };
 
-  await send('Page.enable');
-  await send('Runtime.enable');
-  await send('Network.enable');
   if (authCookie) {
     const separator = authCookie.indexOf('=');
     if (separator <= 0) throw new Error('FARYO_SMOKE_AUTH_COOKIE must be name=value');
-    // A __Host- cookie cannot be installed for the loopback HTTP smoke URL.
-    // CDP request headers preserve the production cookie contract while
-    // keeping this local-only credential out of page JavaScript.
-    await send('Network.setExtraHTTPHeaders', { headers: { Cookie: authCookie } });
   }
-  await send('Emulation.setDeviceMetricsOverride', {
-    width: viewportWidth,
-    height: viewportHeight,
-    deviceScaleFactor: 1,
-    mobile: viewportWidth < 720,
-  });
-  await send('Page.navigate', { url: targetUrl });
+  await page.goto(targetUrl, { waitUntil: 'domcontentloaded' });
 
   if (loginUser && loginPassword) {
     let loginReady = false;
@@ -199,7 +122,7 @@ try {
         pageHorizontalOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth + 1,
         historyToolsReady: Boolean(document.getElementById('historySearchInput') && document.querySelector('[data-history-period="7d"]') && document.querySelector('[data-history-archive="archived"]')),
         lifecycleStatesValid: lifecycleStates.every((value) => ['starting','running','waiting','exited','desktop','resumable','archived'].includes(value)),
-        securityControlsReady: Boolean(document.getElementById('securityActivity') && document.getElementById('revokeSessions')),
+        securityControlsReady: Boolean(document.getElementById('securityActivity') && document.getElementById('revokeSessions') && document.getElementById('attentionCenter') && document.getElementById('notificationControl')),
       };
     })()`);
     if (first?.ready) break;
@@ -254,6 +177,34 @@ try {
     throw new Error(`Security activity panel failed: ${JSON.stringify(activityPanel)}`);
   }
   await evaluate("[...document.querySelectorAll('#modalActions button')].find((item)=>item.textContent==='Cancel')?.click()");
+
+  const attentionTransition = await evaluate(`(async()=>{
+    const response=await fetch('/api/workbench?page=1',{cache:'no-store'}),data=await response.json(),route=data.entries?.[0]?.id||'txy',routeLabel=data.entries?.[0]?.label||'Workstation',before=Number(document.getElementById('attentionCount')?.textContent||0),original=window.Notification;
+    class FakeNotification{static permission='granted';constructor(title,options){window.__faryoAttentionNotice={title,body:String(options?.body||''),tag:String(options?.tag||''),data:options?.data};}close(){}}
+    Object.defineProperty(window,'Notification',{configurable:true,value:FakeNotification});localStorage.setItem('faryoAttentionNotificationsV1','1');
+    const fixture={id:'anonymous-attention-thread',tmuxSession:'anonymous-attention',route,routeLabel,title:'Private fixture title',cwd:'/private/fixture',state:'running',managed:true,source:'codex-cli',updatedTs:1};
+    renderWorkbench({...data,activeSessions:[...(data.activeSessions||[]),fixture]});
+    renderWorkbench({...data,activeSessions:[...(data.activeSessions||[]),{...fixture,state:'waiting'}]});
+    const result={before,after:Number(document.getElementById('attentionCount')?.textContent||0),summary:document.getElementById('attentionSummary')?.textContent||'',notice:window.__faryoAttentionNotice||null,active:document.getElementById('attentionCount')?.dataset.active||''};
+    window.__faryoOriginalNotification=original;return result;
+  })()`);
+  if (attentionTransition.after !== attentionTransition.before + 1 || attentionTransition.active !== 'true'
+    || !attentionTransition.summary.includes('need attention') || attentionTransition.notice?.title !== 'Faryo needs attention'
+    || attentionTransition.notice?.body !== 'A session completed or needs input.' || attentionTransition.notice?.data !== undefined
+    || /anonymous|private|thread|path/i.test(`${attentionTransition.notice?.body||''} ${attentionTransition.notice?.tag||''}`)) {
+    throw new Error(`Attention transition failed: ${JSON.stringify(attentionTransition)}`);
+  }
+  await evaluate("document.getElementById('attentionCenter').click()");
+  let attentionSheet = {};
+  for (let attempt = 0; attempt < 80; attempt += 1) {
+    await delay(50);
+    attentionSheet = await evaluate(`(() => ({open:document.getElementById('modal')?.classList.contains('open')||false,title:document.getElementById('modalTitle')?.textContent||'',text:document.getElementById('modal')?.textContent||''}))()`);
+    if (attentionSheet.open) break;
+  }
+  if (!attentionSheet.open || attentionSheet.title !== 'Attention' || /Private fixture title|anonymous-attention|\/private\/fixture/.test(attentionSheet.text)) {
+    throw new Error('Attention center exposed private session metadata');
+  }
+  await evaluate(`(async()=>{[...document.querySelectorAll('#modalActions button')].find(item=>item.textContent==='Cancel')?.click();localStorage.removeItem('faryoAttentionNotificationsV1');if(window.__faryoOriginalNotification)Object.defineProperty(window,'Notification',{configurable:true,value:window.__faryoOriginalNotification});await refreshWorkbench();})()`);
 
   const historyQuery = first.firstHistoryTitle.slice(0, Math.min(10, first.firstHistoryTitle.length));
   await evaluate(`(() => {const input=document.getElementById('historySearchInput');input.value=${JSON.stringify(historyQuery)};input.dispatchEvent(new Event('input',{bubbles:true}));})()`);
@@ -535,12 +486,4 @@ try {
 
   console.log(`faryo-browser-workbench-smoke=PASS viewport=${first.viewport.width}x${first.viewport.height} active=${first.activeCount} managed=${first.managedCount} desktop=${first.desktopCount}`);
   console.log(`faryo-browser-workbench-history=PASS page1=${first.historyCount} page2=${second.historyCount} page3=${third.historyCount} direct-jump=yes scrollable=yes`);
-} finally {
-  if (socket?.readyState === WebSocket.OPEN) socket.close();
-  if (chrome && chrome.exitCode === null) {
-    const exited = new Promise((resolve) => chrome.once('exit', resolve));
-    chrome.kill('SIGTERM');
-    await Promise.race([exited, delay(3000)]);
-  }
-  await rm(profile, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
-}
+});

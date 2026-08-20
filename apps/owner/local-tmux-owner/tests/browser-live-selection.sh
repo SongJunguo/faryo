@@ -2,9 +2,11 @@
 set -euo pipefail
 
 repo_root="$(git rev-parse --show-toplevel)"
+# shellcheck source=../../../../scripts/runtime-env.sh
+source "$repo_root/scripts/runtime-env.sh"
 browser_smoke="$repo_root/apps/owner/local-tmux-owner/tests/browser-katex-smoke.mjs"
-python_bin="${FARYO_LIVE_PYTHON:-python3}"
-node_bin="${FARYO_LIVE_NODE:-node}"
+python_bin="${FARYO_LIVE_PYTHON:-$(faryo_resolve_python)}"
+node_bin="${FARYO_LIVE_NODE:-$(faryo_resolve_node)}"
 suffix="$$"
 session="faryo-live-selection-$suffix"
 port="${FARYO_LIVE_PORT:-$((27000 + (suffix % 1000)))}"

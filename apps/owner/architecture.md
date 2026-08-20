@@ -66,6 +66,10 @@ but the default upload destination should come from the Faryo data directory.
 - tmux history limit: default 500 lines.
 - Token: private runtime config, never committed to Git.
 - Product data root: default `~/.faryo/owner/data`.
+- Workspace Changes is a separate read-only module: Git root resolution is
+  scoped, commands are fixed/bounded, and returned paths are relative.
+- Capability and diagnostics payloads use an explicit allowlist and counts; they
+  never expose private runtime configuration.
 - Upstream control headers: use Faryo header names.
 
 ## 6. Verification

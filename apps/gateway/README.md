@@ -102,6 +102,13 @@ Orchestration surface and its dedicated controller/downlink backend are retired;
 authenticated requests to that old route return `404`. The generic handoff
 package and Files-to-session flow remain available from the main workbench.
 
+The workbench portal loads versioned `workbench.css` and `workbench.js` assets;
+Python renders only the authenticated HTML shell and a nonce-protected JSON map
+of allowed route labels. The page keeps an in-memory Attention center for
+Waiting/Exited sessions. Optional browser notifications require a direct user
+permission gesture, work only while the page/PWA is open in v1.3, and use a
+generic body without message, title, path or raw identifier data.
+
 The Settings menu separates `Sign out this device` from `Revoke signed-in
 devices`; revocation invalidates every inner Faryo cookie for that account but
 does not stop Codex or close tmux. `Security activity` shows recent body-free

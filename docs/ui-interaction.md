@@ -110,6 +110,37 @@ the bounded `main` scroller.
 - Unsupported or denied requests leave the page intact and point to the Home
   install path.
 
+## Workspace Changes and Diagnostics
+
+Session Details opens a separate read-only Changes panel. The Owner resolves the
+selected tmux cwd to a Git root within the configured workspace boundary and
+returns relative file status plus a bounded unified diff. The browser lazy-loads
+local diff2html and DOMPurify assets only when the panel opens.
+
+- phone defaults to line-by-line; desktop can use line or split view;
+- wide split diffs scroll inside the panel and never widen the conversation;
+- filenames enter the DOM through `textContent`; rendered diff HTML is sanitized;
+- large output is explicitly truncated; untracked files are listed without
+  pretending Git has diff content for them;
+- no stage, discard, commit, checkout, apply or arbitrary revision/path action
+  exists.
+
+Details can download a versioned diagnostics JSON containing feature flags,
+protocol boundaries and count-only runtime metadata. It contains no token,
+Cookie, hostname, username, session id, cwd, path, title, prompt or answer.
+
+## Attention
+
+Gateway derives attention from existing lifecycle transitions rather than
+conversation text. Waiting and Exited sessions appear with generic labels and
+route/time metadata. Dismissal is in-memory and resets when the page reloads or
+the lifecycle changes.
+
+Browser notifications are opt-in, page-open only in v1.3, and always use the
+generic body `A session completed or needs input.` A notification closure may
+navigate to the exact session, but raw target data is not placed in its body or
+metadata. Background Web Push/VAPID is deliberately outside this release.
+
 ## Compact Chat
 
 Compact Chat is the default reading mode. It renders finalized Codex rollout

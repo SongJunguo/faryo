@@ -4,8 +4,8 @@ Faryo values small, readable changes.
 
 ## Principles
 
-- Keep runtime dependencies light.
-- Prefer standard library code and existing shell tools.
+- Keep runtime dependencies deliberate. A focused mature library is preferred
+  when it removes real complexity; pin, license, test and bundle it locally.
 - Keep Owner local and loopback-first.
 - Keep Gateway responsible for public auth, routing, and policy.
 - Do not commit runtime config, tokens, password hashes, binary artifacts, or
@@ -13,9 +13,11 @@ Faryo values small, readable changes.
 
 ## Checks
 
-Run the source validation check before opening a change:
+Install the locked development tools, then run the source validation check:
 
 ```bash
+python -m pip install -r requirements-dev.txt
+npm ci --ignore-scripts
 scripts/check-source.sh
 ```
 

@@ -4,8 +4,11 @@ set -euo pipefail
 # Read-only PTY inventory: open the slash popup, scroll it, and compare command
 # names. No slash command is submitted and no existing tmux client is resized.
 repo_root=$(git rev-parse --show-toplevel)
+# shellcheck source=../../../../scripts/runtime-env.sh
+source "$repo_root/scripts/runtime-env.sh"
 module="$repo_root/apps/owner/local-tmux-owner/static/codex-commands.js"
-codex_bin=${FARYO_CODEX_BIN:-$(command -v codex)}
+codex_bin=$(faryo_resolve_codex)
+node_bin=$(faryo_resolve_node)
 probe_session="faryo-command-inventory-$$"
 geometry_pattern='^(codex[0-9]*|local-tmux-owner|faryo[0-9]+)\|'
 before_geometry=$(tmux list-windows -a -F '#{session_name}|#{window_width}x#{window_height}' | rg "$geometry_pattern" | sort || true)
@@ -17,7 +20,8 @@ cleanup() {
 }
 trap cleanup EXIT
 
-tmux new-session -d -x 160 -y 50 -s "$probe_session" -c "$repo_root" "$codex_bin"
+tmux new-session -d -x 160 -y 50 -s "$probe_session" -c "$repo_root" \
+  "exec env PATH=\"$(dirname "$node_bin"):$PATH\" \"$codex_bin\""
 sleep "${FARYO_CODEX_INVENTORY_WAIT_SECONDS:-15}"
 tmux send-keys -t "$probe_session":0.0 -l '/'
 sleep 1
@@ -41,13 +45,13 @@ if [[ "$before_geometry" != "$after_geometry" ]]; then
 fi
 
 observed=$(printf '%s\n' "$observed" | sed '/^$/d' | sort -u)
-expected=$(node -e 'const api=require(process.argv[1]); process.stdout.write(api.inventory.map((item)=>item.command).sort().join("\n"));' "$module")
+expected=$("$node_bin" -e 'const api=require(process.argv[1]); process.stdout.write(api.inventory.map((item)=>item.command).sort().join("\n"));' "$module")
 if [[ "$observed" != "$expected" ]]; then
   printf '%s\n' 'Codex slash-command inventory drift detected:' >&2
   comm -3 <(printf '%s\n' "$expected") <(printf '%s\n' "$observed") >&2
   exit 1
 fi
 
-version=$($codex_bin --version)
+version=$(PATH="$(dirname "$node_bin"):$PATH" "$codex_bin" --version)
 count=$(printf '%s\n' "$observed" | wc -l)
 printf 'Codex command inventory passed: %s, %s commands, existing tmux geometry unchanged\n' "$version" "$count"

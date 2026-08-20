@@ -141,6 +141,11 @@ micromark -> mdast -> CommonMark/GFM/math nodes -> safe HTML -> KaTeX
 - Uses the Faryo logo as a direct return to the Gateway home page while the
   adjacent session title keeps its independent header-collapse action.
 - Keeps a large composer geometry across focus, blur, and mobile keyboard state.
+- Opens a workspace-scoped, strictly read-only Changes panel with lazy local
+  diff2html + DOMPurify rendering, mobile line view and desktop split view. It
+  exposes no stage, discard, commit, checkout or apply action.
+- Publishes versioned capability metadata and downloadable redacted diagnostics
+  containing feature flags and counts, never paths, titles, prompts or tokens.
 - Accepts a user-triggered clipboard image paste directly in the composer,
   preserves accompanying plain text, and reuses the existing compressed upload,
   thumbnail, removal, attachment-limit, and idempotent-send path without asking
@@ -205,6 +210,9 @@ micromark -> mdast -> CommonMark/GFM/math nodes -> safe HTML -> KaTeX
   audit using HMAC-pseudonymous targets. Security activity is scoped to the
   signed-in user/routes; prompts, answers, titles, paths, raw IDs and credentials
   are never audit fields.
+- Maintains an in-memory Attention center for Waiting/Exited transitions and an
+  operator-enabled page-open Notification path with generic body text. No
+  notification contains a session title, path, prompt, answer or raw identifier.
 
 ## Architecture
 
@@ -221,6 +229,11 @@ Gateway owns public login, route authorization, session/history navigation, and
 proxying. Owner owns the local structured capture, tmux controls, attachments,
 and Codex-specific delivery state machine. The browser is a thin authenticated
 control surface; the durable work remains in tmux and Codex's own history.
+
+Gateway portal CSS and JavaScript are separate versioned static assets; dynamic
+route labels enter through a nonce-protected JSON bootstrap. Development uses
+locked Playwright/Ruff tooling, while production runtime dependencies and lazy
+bundled UI assets remain local and independently documented.
 
 ## Source Deployment
 
@@ -249,6 +262,14 @@ cd faryo
 conda create -n faryo python=3.13
 conda activate faryo
 python -m pip install -r apps/gateway/requirements.txt
+```
+
+The runtime only needs the Gateway requirements above. To develop Faryo or run
+the same canonical checks as CI, also install the locked development tools:
+
+```bash
+python -m pip install -r requirements-dev.txt
+npm ci --ignore-scripts
 ```
 
 Initialize private Owner configuration:
@@ -289,7 +310,14 @@ or an equivalent exact-identity layer.
 
 The `main` branch was revalidated on 2026-08-20 with privacy-safe fixtures:
 
-- source checks plus 82 Owner and 63 Gateway Python tests;
+- source checks plus 89 Owner and 65 Gateway Python tests;
+- Ruff fatal/Pyflakes checks, a Playwright system-browser fixture, deterministic
+  diff-review rebuild comparison and zero npm audit findings;
+- a workspace Git security matrix covering scope/symlink escape, disabled
+  external diff/textconv, adversarial filenames and bounded output;
+- 390x844/1440x900 read-only Changes checks with lazy/sanitized line/split diff,
+  redacted diagnostics download and unchanged tmux geometry;
+- body-free Attention transition, notification, dismissal and privacy checks;
 - an isolated real Codex App Server Current→Archived→Current round trip through
   Owner, with stable totals, unchanged rollout SHA-256, and the real Codex home
   untouched;
@@ -393,7 +421,7 @@ apps/shared/        Shared state and browser appearance helpers
 docs/               Security, deployment, and implementation plans
 deploy/             Runtime unit templates
 scripts/            Source checks and maintenance scripts
-tools/              Development-only Markdown bundle builder
+tools/              Browser harness and reproducible frontend bundle builders
 ```
 
 ## Documentation
@@ -404,6 +432,7 @@ tools/              Development-only Markdown bundle builder
 - [Gateway security hardening](docs/gateway-security-hardening.md)
 - [Current UI interaction contract](docs/ui-interaction.md)
 - [Codebase architecture and similar-project benchmark](docs/codebase-architecture-and-product-benchmark.md)
+- [Dependency ledger](docs/dependencies.md)
 - [Implementation plans and validation evidence](docs/plans/README.md)
 - [Current UI plan and evidence](docs/plans/deepseek-inspired-ui-plan.md)
 - [Codex reliability plan and evidence](docs/plans/codex-reliability-hardening-plan.md)

@@ -1,0 +1,22 @@
+{
+  "name": "faryo-development",
+  "private": true,
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build:diff-review": "node tools/diff-review/build.mjs",
+    "check:diff-review": "node tools/diff-review/build.mjs --check",
+    "check:format": "prettier --check apps/gateway/server/static/workbench.js apps/gateway/server/static/workbench.css",
+    "format:gateway": "prettier --write apps/gateway/server/static/workbench.js apps/gateway/server/static/workbench.css",
+    "test:browser-harness": "node --test tools/browser-harness/*.test.mjs",
+    "test:diff-review": "node --test tools/diff-review/*.test.mjs"
+  },
+  "devDependencies": {
+    "diff2html": "3.4.56",
+    "dompurify": "3.4.14",
+    "esbuild": "0.28.2",
+    "playwright-core": "1.62.1",
+    "prettier": "3.9.6"
+  }
+}

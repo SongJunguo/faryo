@@ -217,3 +217,24 @@ The first step follows this roadmap rather than starting a framework migration:
 - no new production dependency, CDN or duplicate backend was required;
 - the remaining Owner/Gateway monolith split stays a deliberate next-phase task,
   not an unbounded change hidden inside the mobile feature.
+
+## v1.3.0 dependency outcome
+
+- Playwright Core and Ruff are locked development-only dependencies. The first
+  two Playwright migrations plus the shared fixture reduce browser test source
+  by a net 124 lines; Ruff immediately removed two stale imports and one unused
+  tmux capture from every Owner status request.
+- Gateway moved roughly 59 KB of CSS/JavaScript source out of `server.py` into
+  independently checked assets. Dynamic route labels use nonce JSON rather than
+  generated JavaScript.
+- Floating UI was rejected for this phase: the already tested anchor-placement
+  function is 656 bytes, so the dependency would currently add more production
+  code than it removes.
+- diff2html and DOMPurify are bundled locally into a lazy 74 KB JavaScript + 17
+  KB CSS read-only Changes surface, with deterministic hashes and transitive
+  licences. Browser XSS and mobile/desktop layout tests gate the bundle.
+- Preact/Lit remain deferred because externalization removed the immediate
+  Python/asset coupling without requiring a component rewrite.
+- The current official Codex App Server schema documents `turn/steer` but no
+  queued-follow-up list/edit/reorder/cancel method. Faryo therefore exposes the
+  protocol boundary instead of parsing TUI text into a false editable queue.

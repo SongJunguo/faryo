@@ -2,6 +2,8 @@
 set -euo pipefail
 
 repo_root="$(git rev-parse --show-toplevel)"
+# shellcheck source=../../../../scripts/runtime-env.sh
+source "$repo_root/scripts/runtime-env.sh"
 browser_smoke="$repo_root/apps/owner/local-tmux-owner/tests/browser-katex-smoke.mjs"
 session="faryo-protected-resources-$$"
 temp_root=''
@@ -34,7 +36,8 @@ if [[ -z "$initial_size" ]]; then
 fi
 
 temp_root="$(mktemp -d -t faryo-protected-resources.XXXXXX)"
-python_bin="${FARYO_RESOURCE_PYTHON:-python3}"
+python_bin="${FARYO_RESOURCE_PYTHON:-$(faryo_resolve_python)}"
+node_bin="${FARYO_RESOURCE_NODE:-$(faryo_resolve_node)}"
 port="${FARYO_RESOURCE_PORT:-$((20000 + ($$ % 10000)))}"
 token="anonymous-resource-$session"
 owner_log="$temp_root/owner.log"
@@ -101,7 +104,7 @@ env \
   "FARYO_SMOKE_THEME=${FARYO_RESOURCE_UI_THEME:-}" \
   "FARYO_SMOKE_VIEWPORT_WIDTH=${FARYO_RESOURCE_VIEWPORT_WIDTH:-390}" \
   "FARYO_SMOKE_VIEWPORT_HEIGHT=${FARYO_RESOURCE_VIEWPORT_HEIGHT:-844}" \
-  node "$browser_smoke"
+  "$node_bin" "$browser_smoke"
 
 env \
   "FARYO_SMOKE_URL=http://127.0.0.1:$port/?token=$token&session=$session" \
@@ -112,7 +115,7 @@ env \
   'FARYO_SMOKE_MIN_MEMORY_REFERENCES=1' \
   "FARYO_SMOKE_VIEWPORT_WIDTH=${FARYO_RESOURCE_VIEWPORT_WIDTH:-390}" \
   "FARYO_SMOKE_VIEWPORT_HEIGHT=${FARYO_RESOURCE_VIEWPORT_HEIGHT:-844}" \
-  node "$browser_smoke"
+  "$node_bin" "$browser_smoke"
 
 final_size="$(pane_size)"
 if [[ "$initial_size" != "$final_size" ]]; then

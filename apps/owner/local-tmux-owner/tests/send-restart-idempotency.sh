@@ -2,10 +2,13 @@
 set -euo pipefail
 
 repo_root="$(git rev-parse --show-toplevel)"
+# shellcheck source=../../../../scripts/runtime-env.sh
+source "$repo_root/scripts/runtime-env.sh"
 receiver="$repo_root/apps/owner/local-tmux-owner/tests/terminal-delivery-receiver.mjs"
 session="faryo-send-restart-$$"
 temp_root="$(mktemp -d -t faryo-send-restart.XXXXXX)"
-python_bin="${FARYO_RESTART_PYTHON:-python3}"
+python_bin="${FARYO_RESTART_PYTHON:-$(faryo_resolve_python)}"
+node_bin="${FARYO_RESTART_NODE:-$(faryo_resolve_node)}"
 port="${FARYO_RESTART_PORT:-$((22000 + ($$ % 10000)))}"
 token="anonymous-restart-$session"
 owner_pid=''
@@ -23,7 +26,7 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-tmux new-session -d -s "$session" -c "$repo_root" "exec node $receiver"
+tmux new-session -d -s "$session" -c "$repo_root" "exec \"$node_bin\" \"$receiver\""
 for _ in $(seq 1 50); do
   tmux capture-pane -p -t "$session" 2>/dev/null | rg -q 'FARYO_DELIVERY_READY' && break
   sleep 0.1

@@ -31,6 +31,11 @@ export FARYO_PYTHON="$PYTHON_BIN" FARYO_NODE_BIN="$NODE_BIN" PYTHONDONTWRITEBYTE
   echo "Install apps/gateway/requirements.txt in the selected environment." >&2
   exit 1
 }
+"$PYTHON_BIN" -c 'import ruff' >/dev/null 2>&1 || {
+  echo "Ruff is missing from: $PYTHON_BIN" >&2
+  echo "Install requirements-dev.txt in the selected environment." >&2
+  exit 1
+}
 "$NODE_BIN" -e 'process.exit(Number(process.versions.node.split(".")[0]) >= 20 ? 0 : 1)' || {
   echo "Faryo source checks require Node.js 20 or newer: $NODE_BIN" >&2
   exit 1
@@ -39,10 +44,14 @@ printf 'runtime: %s · %s\n' \
   "$("$PYTHON_BIN" -c 'import platform; print("Python " + platform.python_version())')" \
   "$("$NODE_BIN" --version)"
 
-WORK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/faryo-check.XXXXXX")"
-trap 'rm -rf "$WORK_DIR"' EXIT
-
 release_checks() {
+  "$PYTHON_BIN" -m ruff check \
+    "$ROOT/apps" \
+    "$ROOT/scripts"
+  (cd "$ROOT" && PATH="$(dirname "$NODE_BIN"):$PATH" npm run --silent check:format)
+  (cd "$ROOT" && PATH="$(dirname "$NODE_BIN"):$PATH" npm run --silent test:browser-harness)
+  (cd "$ROOT" && PATH="$(dirname "$NODE_BIN"):$PATH" npm run --silent check:diff-review)
+  (cd "$ROOT" && PATH="$(dirname "$NODE_BIN"):$PATH" npm run --silent test:diff-review)
   bash -n \
     "$ROOT/scripts/check-source.sh" \
     "$ROOT"/scripts/*.sh \
@@ -52,6 +61,8 @@ release_checks() {
   bash "$ROOT/scripts/runtime-env.test.sh"
   "$PYTHON_BIN" -m py_compile \
     "$ROOT/apps/owner/local-tmux-owner/server.py" \
+    "$ROOT/apps/owner/local-tmux-owner/workspace_changes.py" \
+    "$ROOT/apps/owner/local-tmux-owner/runtime_diagnostics.py" \
     "$ROOT/apps/owner/local-tmux-owner/tests/owner-archive-roundtrip.py" \
     "$ROOT/apps/gateway/server/server.py" \
     "$ROOT/apps/gateway/scripts/generate-gateway-auth-config.py"
@@ -70,7 +81,8 @@ release_checks() {
     "$ROOT/apps/owner/local-tmux-owner/static/vendor/markdown-ast/markdown-ast.min.js" \
     "$ROOT/apps/owner/local-tmux-owner/static/live-scroll.js" \
     "$ROOT/apps/shared/static/appearance.js" \
-    "$ROOT/apps/owner/local-tmux-owner/static/app.js"
+    "$ROOT/apps/owner/local-tmux-owner/static/app.js" \
+    "$ROOT/apps/gateway/server/static/workbench.js"
   do
     "$NODE_BIN" --check "$js_file"
   done
@@ -79,6 +91,7 @@ release_checks() {
   done < <(find "$ROOT/apps/owner/local-tmux-owner/static/vendor/markdown-ast/highlight" -type f -name '*.js' -print | sort)
   "$NODE_BIN" --check "$ROOT/apps/owner/local-tmux-owner/tests/browser-katex-smoke.mjs"
   "$NODE_BIN" --check "$ROOT/apps/owner/local-tmux-owner/tests/browser-immersive-smoke.mjs"
+  "$NODE_BIN" --check "$ROOT/apps/owner/local-tmux-owner/tests/browser-workspace-changes-smoke.mjs"
   "$NODE_BIN" --check "$ROOT/apps/gateway/server/tests/browser-workbench-smoke.mjs"
   "$NODE_BIN" "$ROOT/apps/owner/local-tmux-owner/tests/markdown-ast-bundle.test.js"
   "$NODE_BIN" "$ROOT/apps/owner/local-tmux-owner/tests/internal-annotations.test.js"
@@ -103,7 +116,11 @@ import sys
 root = Path(sys.argv[1])
 index = (root / "apps/owner/local-tmux-owner/static/index.html").read_text(encoding="utf-8")
 owner_server = (root / "apps/owner/local-tmux-owner/server.py").read_text(encoding="utf-8")
+workspace_changes_source = (root / "apps/owner/local-tmux-owner/workspace_changes.py").read_text(encoding="utf-8")
+runtime_diagnostics_source = (root / "apps/owner/local-tmux-owner/runtime_diagnostics.py").read_text(encoding="utf-8")
 gateway = (root / "apps/gateway/server/server.py").read_text(encoding="utf-8")
+gateway_workbench = (root / "apps/gateway/server/static/workbench.js").read_text(encoding="utf-8")
+gateway_ui = gateway + "\n" + gateway_workbench
 ci_workflow = (root / ".github/workflows/ci.yml").read_text(encoding="utf-8")
 release_workflow = (root / ".github/workflows/release.yml").read_text(encoding="utf-8")
 check_script = (root / "scripts/check-source.sh").read_text(encoding="utf-8")
@@ -112,16 +129,49 @@ assert "scripts/check-source.sh" in ci_workflow and "scripts/check-source.sh" in
 assert "package-client.sh" not in release_workflow, "retired package workflow must not return"
 assert "faryo_${version}_all.deb" not in release_workflow and "macos.tar.gz" not in release_workflow, "release must remain source-only"
 assert "apps/gateway/server/tests" in check_script, "canonical checks must include Gateway tests"
+assert (root / "package-lock.json").is_file(), "development JavaScript dependencies must be locked"
+assert (root / "requirements-dev.txt").is_file(), "development Python dependencies must be pinned"
 assert "faryo_resolve_python" in check_script and "faryo_resolve_node" in check_script, "canonical checks must resolve runtimes"
+python_runtime_tests = (
+    "start-codex-runtime.sh",
+    "browser-workspace-changes.sh",
+    "browser-session-send-isolation.sh",
+    "browser-live-selection.sh",
+    "browser-full-history.sh",
+    "browser-protected-resources.sh",
+    "browser-delivery-matrix.sh",
+    "send-restart-idempotency.sh",
+)
+test_script_root = root / "apps/owner/local-tmux-owner/tests"
+for name in python_runtime_tests:
+    source = (test_script_root / name).read_text(encoding="utf-8")
+    assert "scripts/runtime-env.sh" in source and "faryo_resolve_python" in source, f"{name} bypasses shared Python discovery"
+for name in (
+    "browser-workspace-changes.sh",
+    "browser-session-send-isolation.sh",
+    "browser-live-selection.sh",
+    "browser-full-history.sh",
+    "browser-protected-resources.sh",
+    "browser-delivery-matrix.sh",
+    "send-restart-idempotency.sh",
+):
+    assert "faryo_resolve_node" in (test_script_root / name).read_text(encoding="utf-8"), f"{name} bypasses shared Node discovery"
+command_inventory_source = (test_script_root / "codex-command-inventory.sh").read_text(encoding="utf-8")
+assert "faryo_resolve_codex" in command_inventory_source and "faryo_resolve_node" in command_inventory_source, "Codex inventory must use shared runtime discovery"
 assert 'id="historySearchInput"' in gateway and 'data-history-period="7d"' in gateway, "Gateway must expose metadata history search"
 assert "agent_history_text_matches" in owner_server and "codex_conversation_history_page" not in owner_server[owner_server.index("def codex_history_page("):owner_server.index("def codex_history_items(")], "session search must not scan conversation history"
 assert "safe_path = urlparse(self.path).path" in owner_server, "Owner logs must omit private query strings"
 assert "append_control_audit" in gateway and 'id="securityActivity"' in gateway, "Gateway must expose body-free control auditing"
 assert "/api/session-history/archive" in gateway and "/api/session-history/unarchive" in gateway, "Gateway must expose reversible history lifecycle controls"
-assert "/api/session-history/delete" not in gateway and '"thread/delete"' not in owner_server, "Faryo must not expose hard thread deletion"
+assert "/api/session-history/delete" not in gateway_ui and '"thread/delete"' not in owner_server, "Faryo must not expose hard thread deletion"
 assert 'class="brand" href="/" aria-label="Faryo home"' in gateway, "Gateway brand must remain on the session home"
 for retired_marker in ("/projects", "/api/project-workbench", "/api/faryo/start", "/api/faryo/dispatch", "/api/workorder"):
-    assert retired_marker not in gateway and retired_marker not in owner_server, f"retired project orchestration route returned: {retired_marker}"
+    assert retired_marker not in gateway_ui and retired_marker not in owner_server, f"retired project orchestration route returned: {retired_marker}"
+assert "PORTAL_CSS" not in gateway and "PORTAL_JS_TEMPLATE" not in gateway, "Gateway portal assets must stay external"
+assert 'href="/workbench.css?v=faryo-gateway-2"' in gateway and 'src="/workbench.js?v=faryo-gateway-2"' in gateway, "Gateway must load versioned external workbench assets"
+assert 'id="faryoRouteLabels" type="application/json"' in gateway, "Gateway route labels must use the nonce-protected JSON bootstrap"
+assert 'id="attentionCenter"' in gateway and 'id="notificationControl"' in gateway, "Gateway must expose body-free attention controls"
+assert "processAttention" in gateway_workbench and "A session completed or needs input." in gateway_workbench, "Gateway attention must use generic notification text"
 assert '"starting", "running", "waiting", "exited", "desktop", "resumable"' in gateway, "Gateway must expose explicit session lifecycle states"
 assert "compact-rules-codex.js" in index, "index.html must load compact-rules-codex.js"
 assert "compact-rules-codex.js" in gateway, "gateway must allow compact-rules-codex.js"
@@ -139,6 +189,7 @@ assert "immersive-mode.js" in index and "immersive-mode.js" in gateway, "immersi
 assert "scroll-surface.js" in index and "scroll-surface.js" in gateway, "mobile document scroll adapter must be loaded and proxied"
 assert 'rel="manifest" href="/manifest.json"' in index, "every maintained PWA page must reference the root manifest"
 assert 'id="immersiveExitBtn"' in index and 'id="detailsFullscreenBtn"' in index, "fullscreen must expose explicit enter and exit controls"
+assert 'id="changesPanel"' in index and 'id="detailsChangesBtn"' in index, "Owner must expose read-only workspace changes"
 assert "internal-annotations.js" in index, "index.html must load internal annotation formatting"
 assert "internal-annotations.js" in gateway, "gateway must proxy internal annotation formatting"
 assert "event-stream.js" in index, "index.html must load the authenticated event-stream parser"
@@ -159,6 +210,13 @@ for relative in (
 ):
     assert (root / "apps/owner/local-tmux-owner/static/vendor/katex" / relative).is_file(), f"missing vendored KaTeX asset: {relative}"
 assert "cdn.jsdelivr.net" not in index, "Markdown and math must not require an external CDN"
+assert '"vendor/diff-review/"' in gateway, "Gateway must proxy local diff-review assets"
+diff_review_root = root / "apps/owner/local-tmux-owner/static/vendor/diff-review"
+diff_review_manifest = json.loads((diff_review_root / "manifest.json").read_text(encoding="utf-8"))
+assert diff_review_manifest.get("schemaVersion") == 1, "unsupported diff-review manifest"
+assert diff_review_manifest.get("packages") == {"diff2html": "3.4.56", "dompurify": "3.4.14"}, "diff-review versions drifted"
+for relative in diff_review_manifest.get("assets", {}):
+    assert (diff_review_root / relative).is_file(), f"missing diff-review asset: {relative}"
 assert "vendor/markdown-it/" not in index, "legacy markdown-it must not remain in the production page"
 assert "math-render.js" not in index, "legacy math DOM post-processing must not remain in the production page"
 for relative in ("markdown-ast.min.js", "THIRD_PARTY_NOTICES.md", "THIRD_PARTY_LICENSES.txt", "highlight/highlight.js", "highlight/manifest.json"):
@@ -177,6 +235,10 @@ for grammar in ("python", "latex", "lean", "matlab", "markdown", "yaml", "html",
     assert any(Path(relative).name.startswith(grammar + "-") for relative in manifest_paths), f"missing lazy Shiki grammar: {grammar}"
 assert (root / "tools/markdown-engine/package-lock.json").is_file(), "AST Markdown build must have a lockfile"
 app = (root / "apps/owner/local-tmux-owner/static/app.js").read_text(encoding="utf-8")
+assert "/api/workspace-changes" in owner_server and "/api/workspace-changes" in app, "workspace changes must use the scoped read-only Owner API"
+assert "/api/capabilities" in owner_server and "/api/diagnostics" in owner_server and "loadOwnerCapabilities" in app, "Owner must expose versioned redacted diagnostics"
+assert '"pendingQueueManagement": False' in runtime_diagnostics_source and '"pendingQueue": "unsupported"' in runtime_diagnostics_source, "Faryo must not overclaim editable Codex queues"
+assert "shell=True" not in workspace_changes_source and "--no-ext-diff" in workspace_changes_source and "--no-textconv" in workspace_changes_source, "workspace diff must remain fixed and read-only"
 stable_blocks_source = (root / "apps/owner/local-tmux-owner/static/stable-blocks.js").read_text(encoding="utf-8")
 assert "stableBlocks.reconcile(output, models, createNode)" in app, "Compact Chat must reconcile stable DOM blocks"
 assert "headers['X-Owner-Token'] = ownerToken" in app, "Owner API calls must include the token header"
@@ -206,8 +268,8 @@ assert "compactOutputSources" not in app and "dataset.sourceIndex" not in app, "
 appearance = (root / "apps/shared/static/appearance.css").read_text(encoding="utf-8")
 assert "--bg: #0F1115" in appearance and "--accent: #7188FF" in appearance, "shared dark palette must match Owner"
 assert "--bg: #F6F7F9" in appearance and "--accent: #5369E7" in appearance, "shared light palette must match Owner"
-assert "Files to session" in gateway and "Send to…" in gateway, "Gateway must expose explicit file-to-session controls"
-assert "No handoff package" not in gateway, "Gateway must not expose unexplained handoff copy"
+assert "Files to session" in gateway and "Send to…" in gateway_workbench, "Gateway must expose explicit file-to-session controls"
+assert "No handoff package" not in gateway_ui, "Gateway must not expose unexplained handoff copy"
 for retired in (
     "apps/owner/local-tmux-owner/static/compact-rules-claude.js",
     "apps/owner/scripts/claude-session-stamp.sh",
@@ -235,18 +297,6 @@ for retired in (
 ):
     assert not (root / retired).exists(), f"retired source returned: {retired}"
 PY
-  local portal_check="$WORK_DIR/faryo-portal-check.js"
-  "$PYTHON_BIN" - "$ROOT" "$portal_check" <<'PY'
-from pathlib import Path
-import sys
-root = Path(sys.argv[1])
-out = Path(sys.argv[2])
-source = (root / "apps/gateway/server/server.py").read_text(encoding="utf-8")
-start = source.index('PORTAL_JS_TEMPLATE = """') + len('PORTAL_JS_TEMPLATE = """')
-end = source.index('"""', start)
-out.write_text(source[start:end].replace("__LABELS_JS__", "{}"), encoding="utf-8")
-PY
-  "$NODE_BIN" --check "$portal_check"
 }
 
 release_checks

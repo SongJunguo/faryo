@@ -58,6 +58,12 @@ Owner lifecycle endpoints. Owner delegates those changes to Codex App Server's
 `thread/archive` and `thread/unarchive`; it does not directly edit Codex state
 or expose hard deletion.
 
+Owner also exposes versioned capability metadata, redacted count-only
+diagnostics, and a bounded read-only Git changes endpoint for the selected
+session. The Git root must remain inside the Gateway workspace scope; fixed
+commands disable external diff, textconv, pager and color. No endpoint can
+stage, discard, commit, checkout or apply changes.
+
 ## Joining Gateway
 
 Installing Owner only proves local runtime health. Gateway visibility also needs

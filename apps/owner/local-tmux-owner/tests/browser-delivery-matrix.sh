@@ -7,6 +7,8 @@ if [[ -n "${FARYO_DELIVERY_URL_TEMPLATE:-}" && "$FARYO_DELIVERY_URL_TEMPLATE" !=
 fi
 
 repo_root="$(git rev-parse --show-toplevel)"
+# shellcheck source=../../../../scripts/runtime-env.sh
+source "$repo_root/scripts/runtime-env.sh"
 receiver='apps/owner/local-tmux-owner/tests/terminal-delivery-receiver.mjs'
 browser_smoke="$repo_root/apps/owner/local-tmux-owner/tests/browser-katex-smoke.mjs"
 matrix="$repo_root/apps/owner/local-tmux-owner/tests/browser-delivery-matrix.json"
@@ -15,6 +17,7 @@ approval_session="${session}-approval"
 temp_root=''
 owner_pid=''
 attachment_smoke=0
+node_bin="${FARYO_DELIVERY_NODE:-$(faryo_resolve_node)}"
 
 cleanup() {
   if [[ -n "$owner_pid" ]]; then
@@ -30,7 +33,7 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-tmux new-session -d -s "$session" -c "$repo_root" "exec node $receiver"
+tmux new-session -d -s "$session" -c "$repo_root" "exec \"$node_bin\" \"$repo_root/$receiver\""
 ready=0
 for _ in $(seq 1 50); do
   if tmux capture-pane -p -t "$session" 2>/dev/null | rg -q 'FARYO_DELIVERY_READY'; then
@@ -49,7 +52,7 @@ url_template="${FARYO_DELIVERY_URL_TEMPLATE:-}"
 
 if [[ -z "$url_template" ]]; then
   temp_root="$(mktemp -d -t faryo-delivery-matrix.XXXXXX)"
-  python_bin="${FARYO_DELIVERY_PYTHON:-python3}"
+  python_bin="${FARYO_DELIVERY_PYTHON:-$(faryo_resolve_python)}"
   port="${FARYO_DELIVERY_PORT:-$((18000 + ($$ % 10000)))}"
   token="anonymous-delivery-$session"
   owner_log="$temp_root/owner.log"
@@ -105,7 +108,7 @@ smoke_env+=(
   "FARYO_SMOKE_AMBIGUOUS_SEND_INDEX=$((recovery_start_index + 2))"
 )
 
-env "${smoke_env[@]}" node "$browser_smoke"
+  env "${smoke_env[@]}" "$node_bin" "$browser_smoke"
 
 missing_url="${url_template//\{session\}/${session}-missing}"
 env \
@@ -116,7 +119,7 @@ env \
   'FARYO_SMOKE_PRIVACY_SAFE=1' \
   "FARYO_SMOKE_VIEWPORT_WIDTH=${FARYO_SMOKE_VIEWPORT_WIDTH:-390}" \
   "FARYO_SMOKE_VIEWPORT_HEIGHT=${FARYO_SMOKE_VIEWPORT_HEIGHT:-844}" \
-  node "$browser_smoke"
+  "$node_bin" "$browser_smoke"
 
 tmux new-session -d -s "$approval_session" "printf 'Press enter to confirm or esc to go back\n'; sleep 60"
 approval_size="$(tmux display-message -p -t "$approval_session" '#{window_width}x#{window_height}')"
@@ -129,7 +132,7 @@ env \
   'FARYO_SMOKE_EXPECT_KEY_NAV=visible' \
   "FARYO_SMOKE_VIEWPORT_WIDTH=${FARYO_SMOKE_VIEWPORT_WIDTH:-390}" \
   "FARYO_SMOKE_VIEWPORT_HEIGHT=${FARYO_SMOKE_VIEWPORT_HEIGHT:-844}" \
-  node "$browser_smoke"
+  "$node_bin" "$browser_smoke"
 if [[ "$approval_size" != "$(tmux display-message -p -t "$approval_session" '#{window_width}x#{window_height}')" ]]; then
   echo 'Owner changed the approval test tmux dimensions' >&2
   exit 1

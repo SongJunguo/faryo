@@ -2,13 +2,16 @@
 set -euo pipefail
 
 repo_root="$(git rev-parse --show-toplevel)"
+# shellcheck source=../../../../scripts/runtime-env.sh
+source "$repo_root/scripts/runtime-env.sh"
 receiver="$repo_root/apps/owner/local-tmux-owner/tests/terminal-delivery-receiver.mjs"
 browser_smoke="$repo_root/apps/owner/local-tmux-owner/tests/browser-katex-smoke.mjs"
 suffix="$$"
 session_a="faryo-send-isolation-a-$suffix"
 session_b="faryo-send-isolation-b-$suffix"
 temp_root="$(mktemp -d -t faryo-send-isolation.XXXXXX)"
-python_bin="${FARYO_DELIVERY_PYTHON:-python3}"
+python_bin="${FARYO_DELIVERY_PYTHON:-$(faryo_resolve_python)}"
+node_bin="${FARYO_DELIVERY_NODE:-$(faryo_resolve_node)}"
 owner_port="${FARYO_ISOLATION_OWNER_PORT:-$((23000 + (suffix % 1000)))}"
 proxy_port="${FARYO_ISOLATION_PROXY_PORT:-$((24000 + (suffix % 1000)))}"
 token="anonymous-isolation-$suffix"
@@ -34,7 +37,7 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 for session in "$session_a" "$session_b"; do
-  tmux new-session -d -s "$session" -c "$repo_root" "exec node $receiver"
+  tmux new-session -d -s "$session" -c "$repo_root" "exec \"$node_bin\" \"$receiver\""
 done
 for _ in $(seq 1 50); do
   ready_a=0
@@ -64,7 +67,7 @@ curl -fsS --max-time 1 "http://127.0.0.1:$owner_port/health" >/dev/null
 
 # The production page uses /txy/. This tiny loopback-only proxy preserves that
 # route shape while forwarding the isolated test to its ephemeral Owner.
-node -e '
+"$node_bin" -e '
 const http = require("http");
 const ownerPort = Number(process.argv[1]);
 const proxyPort = Number(process.argv[2]);
@@ -100,7 +103,7 @@ env \
   'FARYO_SMOKE_CHECK_OWNER_LAYOUT=1' \
   'FARYO_SMOKE_VIEWPORT_WIDTH=390' \
   'FARYO_SMOKE_VIEWPORT_HEIGHT=844' \
-  node "$browser_smoke"
+  "$node_bin" "$browser_smoke"
 
 acks_a="$(tmux capture-pane -p -S - -t "$session_a" | awk '/^FARYO_DELIVERY_ACK_/ { count += 1 } END { print count + 0 }')"
 acks_b="$(tmux capture-pane -p -S - -t "$session_b" | awk '/^FARYO_DELIVERY_ACK_/ { count += 1 } END { print count + 0 }')"

@@ -298,6 +298,9 @@ unavailable.
 - `GET /api/status`
 - `GET /api/capture?lines=240`
 - `GET /api/events?lines=320` (SSE structured capture plus transient live tail)
+- `GET /api/capabilities` (versioned feature/protocol flags)
+- `GET /api/diagnostics` (redacted feature/protocol flags and counts)
+- `GET /api/workspace-changes?session=...` (bounded, workspace-scoped read-only Git status/diff)
 - `GET /api/agent-sessions` (active and paginated Current/Archived metadata)
 - `POST /api/agent-session/archive` (inactive Codex thread only)
 - `POST /api/agent-session/unarchive`
@@ -307,3 +310,9 @@ unavailable.
 Archive and unarchive use Codex App Server thread lifecycle RPC, verify the
 resulting metadata state, reject active threads, and honor the Gateway-provided
 workspace scope. There is intentionally no thread-delete endpoint.
+
+Workspace changes use fixed Git argv with external diff, textconv, fsmonitor,
+hooks, pager and color disabled. Paths are relative and output is bounded. The
+browser lazily loads the locally bundled diff2html + DOMPurify renderer; neither
+the API nor UI can write Git state. Capability metadata explicitly reports that
+editable pending-queue management is unsupported for the TUI-owned Codex turn.
