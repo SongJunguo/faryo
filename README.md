@@ -27,6 +27,10 @@ This repository is an actively maintained, Codex-focused fork of
 tracked as `upstream`; this fork is maintained at
 [SongJunguo/faryo](https://github.com/SongJunguo/faryo).
 
+Faryo is an independent community project. It is not affiliated with, endorsed
+by, or sponsored by OpenAI; “Codex” is used only to describe compatibility with
+Codex CLI. Faryo uses its own name and logo and includes no OpenAI brand assets.
+
 ## Why Faryo
 
 Most lightweight tmux web bridges can only reproduce terminal text. This fork

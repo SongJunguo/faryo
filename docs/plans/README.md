@@ -5,7 +5,9 @@
 
 ## Active
 
-当前没有未完成的版本实施计划。
+- [`github-standalone-renaming-and-discoverability-plan.md`](github-standalone-renaming-and-discoverability-plan.md)：
+  永久脱离 fork network，将 GitHub 仓库和本地目录统一为 `faryo-codex-web-ui`，恢复 Release/设置，
+  并强化 README、topics、description、兼容链接和默认 GitHub 搜索曝光。
 
 ## Completed or maintenance mode
 
