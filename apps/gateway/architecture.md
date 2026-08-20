@@ -52,6 +52,12 @@ body-free audit writes. Route modules should not recreate those helpers.
 Inbox aggregation service. Legacy and ASGI workbench endpoints use the same
 OwnerClient-backed model rather than maintaining parallel session semantics.
 
+`server/control_audit.py` owns the body-free HMAC target digest, mode-600 JSONL
+append/read, retention and corrupt-tail recovery. `server/bridge_packages.py`
+owns package persistence, bounded attachment files, owner visibility and
+status-dependent cleanup. `GatewayConfig` delegates to both stores and no
+longer carries their locks or mutable counters itself.
+
 ## 1. Entry Flow
 
 ```text

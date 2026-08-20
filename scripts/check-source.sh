@@ -97,6 +97,8 @@ release_checks() {
     "$ROOT/apps/gateway/server/asgi_owner_proxy.py" \
     "$ROOT/apps/gateway/server/asgi_read.py" \
     "$ROOT/apps/gateway/server/asgi_support.py" \
+    "$ROOT/apps/gateway/server/bridge_packages.py" \
+    "$ROOT/apps/gateway/server/control_audit.py" \
     "$ROOT/apps/gateway/server/run_asgi.py" \
     "$ROOT/apps/gateway/server/owner_client.py" \
     "$ROOT/apps/gateway/server/mcp_service.py" \

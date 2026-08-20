@@ -13,11 +13,9 @@ import json
 import os
 import re
 import secrets
-import shutil
 import shlex
 import socket
 import sys
-import threading
 import time
 import urllib.request
 from http import HTTPStatus
@@ -35,6 +33,8 @@ import gateway_security
 import owner_client
 import mcp_service
 import workbench_service
+import control_audit
+import bridge_packages
 
 SHARED_DIR = Path(__file__).resolve().parents[2] / "shared"
 SHARED_STATIC_DIR = SHARED_DIR / "static"
@@ -121,9 +121,9 @@ HISTORY_PERIODS = {"all", "today", "7d", "30d"}
 HISTORY_ARCHIVE_FILTERS = {"active", "archived", "all"}
 SESSION_STATES = {"starting", "running", "waiting", "exited", "desktop", "resumable", "archived"}
 SESSION_STATE_PRIORITY = {"running": 6, "starting": 5, "waiting": 4, "desktop": 3, "exited": 2, "resumable": 1, "archived": 0}
-CONTROL_AUDIT_MAX_ROWS = 5000
-CONTROL_AUDIT_RETENTION_SECONDS = 7 * 24 * 60 * 60
-CONTROL_AUDIT_PRUNE_INTERVAL_SECONDS = 60 * 60
+CONTROL_AUDIT_MAX_ROWS = control_audit.CONTROL_AUDIT_MAX_ROWS
+CONTROL_AUDIT_RETENTION_SECONDS = control_audit.CONTROL_AUDIT_RETENTION_SECONDS
+CONTROL_AUDIT_PRUNE_INTERVAL_SECONDS = control_audit.CONTROL_AUDIT_PRUNE_INTERVAL_SECONDS
 PROXY_CONTROL_ACTIONS = {
     "/api/send": "send",
     "/api/interrupt": "interrupt",
@@ -144,10 +144,10 @@ STATIC_DIR = Path(__file__).resolve().parent / "static"
 GATEWAY_STATIC_FILES = {"workbench.css": "text/css; charset=utf-8", "workbench.js": "text/javascript; charset=utf-8"}
 BRIDGE_PACKAGE_MAX_BYTES = 120 * 1024 * 1024
 BRIDGE_ASSET_MAX_BYTES = 20 * 1024 * 1024
-BRIDGE_ASSET_LIMIT = 4
-BRIDGE_PENDING_RETENTION_SECONDS = 30 * 24 * 60 * 60
-BRIDGE_DELIVERED_RETENTION_SECONDS = 7 * 24 * 60 * 60
-BRIDGE_CLEANUP_INTERVAL_SECONDS = 60 * 60
+BRIDGE_ASSET_LIMIT = bridge_packages.BRIDGE_ASSET_LIMIT
+BRIDGE_PENDING_RETENTION_SECONDS = bridge_packages.BRIDGE_PENDING_RETENTION_SECONDS
+BRIDGE_DELIVERED_RETENTION_SECONDS = bridge_packages.BRIDGE_DELIVERED_RETENTION_SECONDS
+BRIDGE_CLEANUP_INTERVAL_SECONDS = bridge_packages.BRIDGE_CLEANUP_INTERVAL_SECONDS
 BRIDGE_MIME_EXT = {
     "image/png": ".png",
     "image/jpeg": ".jpg",
@@ -554,12 +554,20 @@ class GatewayConfig:
         self.icp_record = env.get("FARYO_ICP_RECORD", "").strip()
         self.bridge_root = secret_file.parent / "bridge-packages"
         self.control_audit_path = secret_file.parent / "control-audit.jsonl"
-        self.bridge_root.mkdir(parents=True, exist_ok=True)
-        self._bridge_cleanup_lock = threading.Lock()
-        self._bridge_cleanup_at = 0.0
-        self._control_audit_lock = threading.Lock()
-        self._control_audit_count: int | None = None
-        self._control_audit_prune_at = 0.0
+        self._bridge_store = bridge_packages.BridgePackageStore(
+            self.bridge_root,
+            self.mcp_user,
+            clean_package_id=clean_package_id,
+            normalize_asset=normalize_bridge_asset_payload,
+            asset_bytes=bridge_asset_bytes_from_payload,
+            mime_extensions=BRIDGE_MIME_EXT,
+            now_ts=now_ts,
+        )
+        self._control_audit_store = control_audit.ControlAuditStore(
+            self.cookie_secret,
+            self.control_audit_path,
+            self.user_routes,
+        )
 
     def load_owner_tokens(self, env: dict[str, str]) -> dict[str, str]:
         tokens: dict[str, str] = {}
@@ -661,100 +669,25 @@ class GatewayConfig:
         self.save_users()
 
     def control_target_digest(self, value: str) -> str:
-        clean = str(value or "").strip()
-        if not clean:
-            return ""
-        digest = hmac.new(self.cookie_secret, clean.encode("utf-8"), hashlib.sha256).hexdigest()
-        return "t_" + digest[:16]
+        return self._control_audit_store.target_digest(value)
 
     def _prune_control_audit_locked(self, now: float) -> None:
-        rows: list[dict[str, Any]] = []
-        cutoff = now - CONTROL_AUDIT_RETENTION_SECONDS
-        try:
-            with self.control_audit_path.open(encoding="utf-8", errors="replace") as stream:
-                for line in stream:
-                    try:
-                        row = json.loads(line)
-                        epoch = float(row.get("epoch") or 0) if isinstance(row, dict) else 0
-                    except (json.JSONDecodeError, TypeError, ValueError):
-                        continue
-                    if epoch >= cutoff:
-                        rows.append(row)
-        except FileNotFoundError:
-            rows = []
-        rows = rows[-CONTROL_AUDIT_MAX_ROWS:]
-        self.control_audit_path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = self.control_audit_path.with_name(f".{self.control_audit_path.name}.{os.getpid()}.tmp")
-        tmp.write_text("".join(json.dumps(row, ensure_ascii=False, separators=(",", ":")) + "\n" for row in rows), encoding="utf-8")
-        os.chmod(tmp, 0o600)
-        os.replace(tmp, self.control_audit_path)
-        self._control_audit_count = len(rows)
-        self._control_audit_prune_at = now + CONTROL_AUDIT_PRUNE_INTERVAL_SECONDS
+        self._control_audit_store._prune_locked(now)
 
     def append_control_audit(self, *, username: str, route: str, action: str, target: str, request_id: str, status: int, duration_ms: int, idempotent: bool = False) -> None:
-        """Best-effort, body-free audit trail. Audit failure never blocks control."""
-        try:
-            now = time.time()
-            row = {
-                "time": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now)),
-                "epoch": int(now),
-                "requestId": str(request_id or "")[:32],
-                "user": str(username or "")[:128],
-                "route": str(route or "")[:24],
-                "action": str(action or "")[:32],
-                "target": self.control_target_digest(target),
-                "result": control_result_for_status(int(status)),
-                "http": int(status),
-                "durationMs": max(0, min(int(duration_ms), 3_600_000)),
-                "idempotent": bool(idempotent),
-            }
-            encoded = json.dumps(row, ensure_ascii=False, separators=(",", ":")) + "\n"
-            with self._control_audit_lock:
-                self.control_audit_path.parent.mkdir(parents=True, exist_ok=True)
-                if self._control_audit_count is None:
-                    try:
-                        with self.control_audit_path.open(encoding="utf-8", errors="replace") as stream:
-                            self._control_audit_count = sum(1 for _line in stream)
-                    except FileNotFoundError:
-                        self._control_audit_count = 0
-                descriptor = os.open(self.control_audit_path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
-                try:
-                    os.chmod(self.control_audit_path, 0o600)
-                    os.write(descriptor, encoded.encode("utf-8"))
-                finally:
-                    os.close(descriptor)
-                self._control_audit_count += 1
-                if self._control_audit_count > CONTROL_AUDIT_MAX_ROWS or now >= self._control_audit_prune_at:
-                    self._prune_control_audit_locked(now)
-        except Exception:
-            return
+        self._control_audit_store.append(
+            username=username,
+            route=route,
+            action=action,
+            target=target,
+            request_id=request_id,
+            status=status,
+            duration_ms=duration_ms,
+            idempotent=idempotent,
+        )
 
     def control_activity(self, username: str, limit: int = 30) -> list[dict[str, Any]]:
-        allowed_routes = set(self.user_routes(username))
-        maximum = max(1, min(int(limit), 100))
-        rows: list[dict[str, Any]] = []
-        with self._control_audit_lock:
-            if not self.control_audit_path.exists():
-                return []
-            now = time.time()
-            if now >= self._control_audit_prune_at:
-                self._prune_control_audit_locked(now)
-            try:
-                with self.control_audit_path.open(encoding="utf-8", errors="replace") as stream:
-                    lines = stream.readlines()
-            except FileNotFoundError:
-                return []
-        for line in reversed(lines):
-            try:
-                row = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if not isinstance(row, dict) or row.get("user") != username or row.get("route") not in allowed_routes | {""}:
-                continue
-            rows.append({key: row.get(key) for key in ("time", "requestId", "route", "action", "target", "result", "http", "durationMs", "idempotent")})
-            if len(rows) >= maximum:
-                break
-        return rows
+        return self._control_audit_store.activity(username, limit)
 
     def set_password(self, username: str, password: str) -> None:
         if username not in self.users:
@@ -776,106 +709,34 @@ class GatewayConfig:
 
 
     def bridge_asset_sources(self, payload: dict[str, Any]) -> list[Any]:
-        assets: list[Any] = []
-        for key in ("attachments", "files", "assets", "images"):
-            values = payload.get(key)
-            if isinstance(values, list):
-                assets.extend(values)
-        for key in ("attachment", "file", "asset", "image"):
-            if payload.get(key):
-                assets.insert(0, payload.get(key))
-        return assets[:BRIDGE_ASSET_LIMIT]
+        return self._bridge_store.asset_sources(payload)
 
     def attachment_only_prompt(self, title: str) -> str:
-        return f"# Faryo Handoff Package\nTitle: {title}\n\nReview the attached files and continue from the current session context. Use the attachment paths below as the canonical source files."
+        return self._bridge_store.attachment_only_prompt(title)
 
     def save_bridge_assets(self, package_id: str, package_dir: Path, asset_sources: list[Any], start_index: int = 1) -> list[dict[str, Any]]:
-        assets = []
-        for index, item in enumerate(asset_sources, start=start_index):
-            asset = normalize_bridge_asset_payload(item)
-            if not asset: raise ValueError("invalid attachment payload")
-            mime_type, data = bridge_asset_bytes_from_payload(asset); file_name = f"asset-{index}{BRIDGE_MIME_EXT[mime_type]}"; path = package_dir / file_name; path.write_bytes(data)
-            assets.append({"file_name": asset["file_name"], "mime_type": mime_type, "size": len(data), "path": str(path), "url": f"/bridge/packages/{package_id}/{file_name}"})
-        return assets
+        return self._bridge_store.save_assets(package_id, package_dir, asset_sources, start_index)
 
     def user_can_access_package(self, username: str, package: dict[str, Any]) -> bool:
-        owner = str(package.get("owner") or "")
-        return owner == username or (not owner and username == self.mcp_user)
+        return self._bridge_store.user_can_access(username, package)
 
     def save_bridge_package(self, payload: dict[str, Any], username: str) -> dict[str, Any]:
-        self.cleanup_bridge_packages()
-        title = str(payload.get("title") or payload.get("topic") or "Untitled handoff").strip()[:120] or "Untitled handoff"; prompt = str(payload.get("prompt") or payload.get("instruction") or payload.get("handoff_prompt") or "").strip(); assets = self.bridge_asset_sources(payload)
-        if not prompt and not assets: raise ValueError("package prompt or attachment is required")
-        package_id = f"{now_ts()}-{secrets.token_hex(4)}"; package_dir = self.bridge_root / package_id; package_dir.mkdir(parents=True, exist_ok=False)
-        try:
-            package = {"id": package_id, "owner": username, "title": title, "source": str(payload.get("source") or "Faryo Gateway"), "intent": str(payload.get("intent") or ""), "context": str(payload.get("context") or payload.get("summary") or ""), "prompt": prompt or self.attachment_only_prompt(title), "assets": self.save_bridge_assets(package_id, package_dir, assets), "status": "pending", "created_at": now_ts(), "updated_at": now_ts()}
-            (package_dir / "package.json").write_text(json.dumps(package, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"); return package
-        except Exception:
-            shutil.rmtree(package_dir, ignore_errors=True); raise
+        return self._bridge_store.save(payload, username)
 
     def append_bridge_package_assets(self, package_id: str, asset_sources: list[Any], username: str) -> dict[str, Any]:
-        package_id = clean_package_id(package_id) or ""; package = self.bridge_package(package_id, username)
-        if not package_id: raise ValueError("invalid package id")
-        if not asset_sources: raise ValueError("attachment is required")
-        if not package: raise ValueError("package not found")
-        if package.get("status") != "pending": raise ValueError("package is already delivered")
-        assets = package.get("assets") if isinstance(package.get("assets"), list) else []
-        package["assets"] = assets + self.save_bridge_assets(package_id, self.bridge_root / package_id, asset_sources[:BRIDGE_ASSET_LIMIT], len(assets) + 1)
-        package["prompt"] = str(package.get("prompt") or "").strip() or self.attachment_only_prompt(str(package.get("title") or "Handoff package")); self.update_bridge_package(package); return package
+        return self._bridge_store.append_assets(package_id, asset_sources, username)
 
     def list_bridge_packages(self, username: str, status: str | None = None) -> list[dict[str, Any]]:
-        self.cleanup_bridge_packages()
-        packages = [p for p in (self.bridge_package(path.parent.name, username) for path in self.bridge_root.glob("*/package.json")) if p and (not status or p.get("status") == status)]
-        return sorted(packages, key=lambda item: int(item.get("updated_at") or item.get("created_at") or 0), reverse=True)
+        return self._bridge_store.list(username, status)
 
     def cleanup_bridge_packages(self, current_time: int | None = None, force: bool = False) -> int:
-        now = int(current_time if current_time is not None else now_ts())
-        monotonic_now = time.monotonic()
-        with self._bridge_cleanup_lock:
-            if not force and monotonic_now < self._bridge_cleanup_at:
-                return 0
-            self._bridge_cleanup_at = monotonic_now + BRIDGE_CLEANUP_INTERVAL_SECONDS
-            root = self.bridge_root.resolve()
-            removed = 0
-            try:
-                candidates = list(self.bridge_root.iterdir())
-            except OSError:
-                return 0
-            for package_dir in candidates:
-                if package_dir.is_symlink() or clean_package_id(package_dir.name) != package_dir.name:
-                    continue
-                try:
-                    target = package_dir.resolve(strict=True)
-                    if target.parent != root or not target.is_dir():
-                        continue
-                    package_file = target / "package.json"
-                    package = json.loads(package_file.read_text(encoding="utf-8"))
-                    if not isinstance(package, dict):
-                        continue
-                    updated = int(package.get("updated_at") or package.get("created_at") or package_file.stat().st_mtime)
-                except (OSError, ValueError, TypeError, json.JSONDecodeError):
-                    continue
-                retention = BRIDGE_PENDING_RETENTION_SECONDS if package.get("status") == "pending" else BRIDGE_DELIVERED_RETENTION_SECONDS
-                if updated <= 0 or now - updated <= retention:
-                    continue
-                shutil.rmtree(target)
-                removed += 1
-            return removed
+        return self._bridge_store.cleanup(current_time, force)
 
     def bridge_package(self, package_id: str, username: str | None = None) -> dict[str, Any] | None:
-        path = self.bridge_root / (clean_package_id(package_id) or "") / "package.json"
-        try: package = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError): return None
-        if not isinstance(package, dict):
-            return None
-        if username and not self.user_can_access_package(username, package):
-            return None
-        return package
+        return self._bridge_store.get(package_id, username)
 
     def update_bridge_package(self, package: dict[str, Any]) -> None:
-        package_id = clean_package_id(str(package.get("id") or ""))
-        if not package_id: raise ValueError("invalid package id")
-        package["updated_at"] = now_ts(); (self.bridge_root / package_id / "package.json").write_text(json.dumps(package, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        self._bridge_store.update(package)
 
 
 class WorkbenchRuntime:

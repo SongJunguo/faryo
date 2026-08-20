@@ -20,6 +20,8 @@ gateway = importlib.util.module_from_spec(spec)
 assert spec and spec.loader
 spec.loader.exec_module(gateway)
 
+import control_audit
+
 
 class ControlAuditTest(unittest.TestCase):
     def setUp(self) -> None:
@@ -85,7 +87,7 @@ class ControlAuditTest(unittest.TestCase):
         self.assertNotIn("user", entries[0])
 
     def test_audit_retention_keeps_the_newest_bounded_rows(self) -> None:
-        with mock.patch.object(gateway, "CONTROL_AUDIT_MAX_ROWS", 3):
+        with mock.patch.object(control_audit, "CONTROL_AUDIT_MAX_ROWS", 3):
             for index in range(6):
                 self.append(request_id=f"request-{index}")
 
@@ -93,7 +95,7 @@ class ControlAuditTest(unittest.TestCase):
         self.assertEqual([row["requestId"] for row in rows], ["request-3", "request-4", "request-5"])
 
     def test_audit_io_failure_never_blocks_control(self) -> None:
-        with mock.patch.object(gateway.os, "open", side_effect=OSError("read-only fixture")):
+        with mock.patch.object(control_audit.os, "open", side_effect=OSError("read-only fixture")):
             self.append()
 
         self.assertFalse(self.config.control_audit_path.exists())
