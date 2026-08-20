@@ -6,4 +6,4 @@ extend-exclude = [
 ]
 
 [tool.ruff.lint]
-select = ["E9", "F"]
+select = ["E9", "F", "B"]

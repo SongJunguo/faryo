@@ -139,7 +139,7 @@
   function compactBlocks(text) { return splitTurns((text || 'No output yet').split('\n')).flatMap(classifyTurn); }
 
   function processSummaryCard(text) {
-    let lines = 0, images = 0, web = 0, commandCount = 0, toolCallCount = 0, backgroundWaits = 0, diffPreviewLines = 0, approval = false, error = false, active = '', toolReady = '', model = '', directory = '', files = 0, insertions = 0, deletions = 0, pendingToolCall = false;
+    let images = 0, web = 0, commandCount = 0, toolCallCount = 0, backgroundWaits = 0, diffPreviewLines = 0, approval = false, error = false, active = '', toolReady = '', model = '', directory = '', files = 0, insertions = 0, deletions = 0, pendingToolCall = false;
     const contexts = new Set(), commands = new Set(), toolCalls = new Set();
     const fileLabel = (value) => leadingText((value.match(/[\w.-]+(?:\.[A-Za-z0-9]{1,8})?(?=$|[:),])/g) || [value]).pop(), 26);
     const toolLabel = (value) => {
@@ -154,7 +154,6 @@
     for (const raw of text.split('\n')) {
       const value = raw.trim().replace(/^[-*•⚠✔]\s*/, '').replace(/^[│|└├↳]\s*/, '').trim();
       if (!value) continue;
-      lines += 1;
       if (pendingToolCall) { toolCalls.add(toolLabel(value)); pendingToolCall = false; active = ''; continue; }
       const called = value.match(/^Called(?:\s+(.+))?$/i);
       if (called) { toolCallCount += 1; active = '🛠 Calling tool...'; if (called[1]) { toolCalls.add(toolLabel(called[1])); active = ''; } else pendingToolCall = true; continue; }

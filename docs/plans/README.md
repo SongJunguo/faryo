@@ -5,7 +5,9 @@
 
 ## Active
 
-当前没有未完成的实施计划。
+- [`v1.4-backend-modernization-and-modularization-plan.md`](v1.4-backend-modernization-and-modularization-plan.md)：
+  保留 Python/Conda 和既有安全/可靠性边界，拆分 Owner/Gateway/前端职责，将 Gateway HTTP
+  层迁移到 Starlette/Uvicorn，并以量化门槛决定 Gateway Preact 试点是否采用。
 
 ## Completed or maintenance mode
 

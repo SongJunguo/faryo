@@ -349,7 +349,7 @@ class GatewayCsrfContractTest(unittest.TestCase):
         expected = ("send", "interrupt", "enter", "up", "down", "close")
         self.config.audit_calls.clear()
 
-        for (tail, body), action in zip(cases, expected):
+        for (tail, body), action in zip(cases, expected, strict=True):
             status, _data = self.request(
                 "POST",
                 f"/{self.route}/api/{tail}",

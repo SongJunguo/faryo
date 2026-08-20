@@ -63,6 +63,23 @@ check. Production never loads these assets from a CDN.
 - Removal path: remove the formatter script/pin/check; runtime behavior and
   static-asset loading do not depend on the formatter
 
+### ESLint 10.8.1
+
+- Upstream: [eslint/eslint](https://github.com/eslint/eslint)
+- License: MIT
+- Lock: root `package-lock.json`
+- Classification: development/lint only
+- Installed dependency tree: 69 packages under ignored `node_modules`
+- Shipped runtime bytes: 0; browser and server processes do not import ESLint
+- Initial rules: duplicate bindings/keys, assignment hazards, unreachable and
+  unsafe-finally control flow, valid `typeof`, and unused first-party bindings;
+  vendored and generated assets are excluded
+- Initial measurable result: the high-confidence control-flow dry run found no
+  defects, while `no-unused-vars` removed four stale Owner browser bindings
+- Enforcement: `npm run check:lint` is part of `scripts/check-source.sh`
+- Removal path: remove the exact pin, flat config and canonical check; no runtime
+  state migration is required
+
 ## Locally bundled runtime libraries
 
 ### diff2html 3.4.56 + DOMPurify 3.4.14

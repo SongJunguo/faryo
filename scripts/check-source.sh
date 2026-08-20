@@ -48,6 +48,7 @@ release_checks() {
   "$PYTHON_BIN" -m ruff check \
     "$ROOT/apps" \
     "$ROOT/scripts"
+  (cd "$ROOT" && PATH="$(dirname "$NODE_BIN"):$PATH" npm run --silent check:lint)
   (cd "$ROOT" && PATH="$(dirname "$NODE_BIN"):$PATH" npm run --silent check:format)
   (cd "$ROOT" && PATH="$(dirname "$NODE_BIN"):$PATH" npm run --silent test:browser-harness)
   (cd "$ROOT" && PATH="$(dirname "$NODE_BIN"):$PATH" npm run --silent check:diff-review)
@@ -114,6 +115,19 @@ import json
 import re
 import sys
 root = Path(sys.argv[1])
+
+def reject_duplicate_json_keys(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise AssertionError(f"duplicate JSON key: {key}")
+        result[key] = value
+    return result
+
+json.loads(
+    (root / "package.json").read_text(encoding="utf-8"),
+    object_pairs_hook=reject_duplicate_json_keys,
+)
 index = (root / "apps/owner/local-tmux-owner/static/index.html").read_text(encoding="utf-8")
 owner_server = (root / "apps/owner/local-tmux-owner/server.py").read_text(encoding="utf-8")
 workspace_changes_source = (root / "apps/owner/local-tmux-owner/workspace_changes.py").read_text(encoding="utf-8")

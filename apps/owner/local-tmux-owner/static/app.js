@@ -76,7 +76,7 @@
   let statusRefreshInFlight = false, activeStatusRefreshController = null, statusRefreshRunId = 0, statusRefreshTimer = null;
   let eventStreamController = null, eventStreamRunId = 0, eventRetryTimer = null, captureFallbackTimer = null, eventRetryDelayMs = 1800, liveState = 'fallback';
   let petSending = false, petSendTimer = null, petStopping = false, petStopTimer = null, agentRunning = false, lastPetPhase = '';
-  let outputActivity = 0, outputActivityTimer = null, lastCaptureSignature = '', lastCapture = null, lastCompactCapture = null, lastFullCapture = null;
+  let outputActivity = 0, outputActivityTimer = null, lastCaptureSignature = '', lastCompactCapture = null, lastFullCapture = null;
   let outputMode = 'compact', fullLocked = false, fullRefreshTimer = null, preserveErrorUntil = 0, seenInitialPageShow = false, needsConfirmUI = false, errorTimer = null, currentPromptTip = '';
   let markdownRenderRevision = 0, highlighterRenderFrame = 0;
   const markdownHtmlCache = new Map();
@@ -120,7 +120,6 @@
   let activeSurfacePanel = null, panelReturnFocus = null;
   let immersiveController = null;
   let workspaceChangesPayload = null, changesSideBySide = false, diffReviewAssetsPromise = null;
-  let ownerCapabilities = null;
   const restoringLivePanels = new WeakSet();
   let questionNavigatorController = null;
   let commandSuggestionIndex = 0, commandSuggestionSignature = '';
@@ -808,7 +807,6 @@
 
   async function loadOwnerCapabilities() {
     const payload = await api('/api/capabilities');
-    ownerCapabilities = payload;
     document.documentElement.dataset.faryoCapabilitySchema = String(payload.schemaVersion || 'unknown');
     $('detailsChangesBtn').hidden = payload.features?.workspaceChanges === false;
     $('detailsDiagnosticsBtn').hidden = payload.features?.diagnostics === false;
@@ -1526,7 +1524,7 @@
     clearMarkdownRenderCache();
     closeEventStream();
     lastCaptureSignature = '';
-    lastCapture = lastCompactCapture = lastFullCapture = null;
+    lastCompactCapture = lastFullCapture = null;
     refreshStatus({ silent: true }).catch(handleBackgroundError);
     refreshCapture(currentCaptureLines(), { silent: true }).catch(handleBackgroundError);
     if (outputMode === 'compact') startEventStream();
@@ -1792,7 +1790,7 @@
         rendered.push(`<div class="markdown-body">${renderMarkdownSegment(markdownLines.join('\n'), mode)}</div>`);
         markdownLines = [];
       };
-      originalLines.forEach((line, index) => {
+      originalLines.forEach((line) => {
         const fenceMatch = line.trimStart().match(/^(`{3,}|~{3,})/);
         const insideFence = Boolean(fenceChar);
         const special = !insideFence && !fenceMatch && (renderImageLine(line) || renderFileLine(line));
@@ -1954,7 +1952,6 @@
 
   function renderOutput(capture) {
     const liveStateSnapshot = liveTerminalState();
-    lastCapture = capture;
     if (outputMode === 'compact') lastCompactCapture = capture;
     else lastFullCapture = capture;
     scheduleConversationHistoryRefresh(capture);

@@ -2497,7 +2497,7 @@ def color_user_input_lines(html_fragment: str, plain_text: str, profile: AgentPr
         return html_fragment
     in_user_input = False
     out: list[str] = []
-    for html_line, plain_line in zip(html_lines, text_lines):
+    for html_line, plain_line in zip(html_lines, text_lines, strict=True):
         if profile.user_prompt_re.match(plain_line):
             in_user_input = True
         elif not plain_line.strip():
@@ -2512,7 +2512,7 @@ def strip_agent_meta_html_lines(html_fragment: str, plain_text: str, profile: Ag
     text_lines = plain_text.split("\n")
     if len(html_lines) != len(text_lines):
         return html_fragment
-    return "\n".join(html_line for html_line, plain_line in zip(html_lines, text_lines) if not agent_meta_line(plain_line, profile))
+    return "\n".join(html_line for html_line, plain_line in zip(html_lines, text_lines, strict=True) if not agent_meta_line(plain_line, profile))
 
 
 def capture_text(config: Config, lines: int = CAPTURE_DEFAULT_LINES, profile: AgentProfile = CODEX_PROFILE) -> str:
