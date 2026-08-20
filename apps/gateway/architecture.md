@@ -68,6 +68,12 @@ route limits, user scopes, cookie-secret loading and store composition. The
 production runner constructs it directly; `server.py` is now a small runtime
 policy/template facade with no HTTP server.
 
+A backend-language rewrite is not part of v1.4. The separately documented
+[future Go Gateway v2 boundary](../../docs/go-gateway-v2-boundary.md) freezes
+which contracts could move and which Owner/Codex responsibilities must remain
+outside Gateway; no dormant Go implementation or second production stack is
+kept in this tree.
+
 ## 1. Entry Flow
 
 ```text

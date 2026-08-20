@@ -211,6 +211,14 @@ assert "apps/gateway/server/tests" in check_script, "canonical checks must inclu
 assert (root / "package-lock.json").is_file(), "development JavaScript dependencies must be locked"
 package = json.loads((root / "package.json").read_text(encoding="utf-8"))
 assert package.get("devDependencies", {}).get("preact") == "10.29.8", "Preact pilot must remain exact-pinned"
+release_metadata = dict(
+    line.split("=", 1)
+    for line in (root / "apps/owner/RELEASE").read_text(encoding="utf-8").splitlines()
+    if "=" in line
+)
+release_version = release_metadata.get("version", "")
+assert re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+", release_version), "Owner release version must be semantic"
+assert (root / "docs/releases" / f"{release_version}.md").is_file(), "current source version needs release notes"
 assert (root / "requirements-dev.txt").is_file(), "development Python dependencies must be pinned"
 assert "faryo_resolve_python" in check_script and "faryo_resolve_node" in check_script, "canonical checks must resolve runtimes"
 python_runtime_tests = (

@@ -72,10 +72,12 @@ vanilla implementation of the same lists.
 - exact bundle/notice reproducibility: pass;
 - ESLint, including JSX source, and Prettier: pass;
 - session-model unit tests: pass;
-- Gateway Python/ASGI suite: 107 tests pass;
+- Gateway Python/ASGI suite: 111 tests pass after the deployment shutdown
+  regression was added;
 - isolated real Gateway at `127.0.0.1:8781`: pass;
 - Chrome 1440x900 workbench/history/directory/security interactions: pass;
 - mobile Chromium 390x844 equivalent matrix: pass;
+- deployed loopback Gateway repeats both viewport matrices: pass;
 - three distinct 10-item history pages and direct jump: pass;
 - keyed node/focus/transient-state retention: pass;
 - dynamic card text injection fixture: pass;
