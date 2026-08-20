@@ -5,12 +5,13 @@
 
 ## Active
 
-- [`github-standalone-renaming-and-discoverability-plan.md`](github-standalone-renaming-and-discoverability-plan.md)：
-  永久脱离 fork network，将 GitHub 仓库和本地目录统一为 `faryo-codex-web-ui`，恢复 Release/设置，
-  并强化 README、topics、description、兼容链接和默认 GitHub 搜索曝光。
+当前没有未完成的版本实施计划。
 
 ## Completed or maintenance mode
 
+- [`github-standalone-renaming-and-discoverability-plan.md`](github-standalone-renaming-and-discoverability-plan.md)：
+  已永久脱离 fork network，把独立 GitHub 仓库和本地目录统一为 `faryo-codex-web-ui`，保留上游归属
+  与旧 v1.5.0 更新兼容，并发布完成搜索/目录回归修复的 v1.5.1。
 - [`v1.5-unified-cli-and-service-installation-plan.md`](v1.5-unified-cli-and-service-installation-plan.md)：
   用统一 `faryo` CLI、Python 3.10+ 私有标准 venv、直接 Owner/Gateway systemd user services、
   checksum update、rollback 和 data-preserving uninstall 隐藏部署复杂度；已发布 v1.5.0。

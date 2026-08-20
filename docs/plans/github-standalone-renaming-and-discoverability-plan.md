@@ -3,7 +3,7 @@
 更新时间：2026-08-20
 目标仓库：`SongJunguo/faryo-codex-web-ui`
 目标本地目录：`faryo-codex-web-ui`
-状态：进行中
+状态：完成并部署
 
 ## 1. 决策
 
@@ -152,7 +152,7 @@ GitHub 转换、代码引用与远端恢复完成后，把 checkout 从 `faryo` 
 - repository API：`fork=false`、slug 正确、default branch=`main`；
 - origin 指向新 SSH URL，upstream 仍指向原作者；
 - local main、origin/main SHA 一致；
-- 所有 tags 仍可达，v1.5.0 Release 和四个资产可下载并通过 SHA-256；
+- 所有 tags 仍可达，v1.5.1 Release 和四个资产可下载并通过 SHA-256；
 - settings/topics/description/security switches 符合备份；
 - main CI Python 3.10/3.13 成功。
 
@@ -193,4 +193,28 @@ GitHub 转换、代码引用与远端恢复完成后，把 checkout 从 `faryo` 
   bundles 全绿；
 - 私有恢复包已完成：verified all-refs bundle、repository/releases/Actions/settings JSON、v1.5.0
   四个资产与总 SHA-256 清单；
-- 当前仍为 fork，尚未执行永久 Leave fork network、仓库重命名或本地目录重命名。
+- 官方 Leave fork network 已执行；repository ID 保持不变，API 为 `fork=false`、`parent=null`、
+  `source=null`。GitHub 实际保留了原 1 个 star、7 个 Releases、Actions history、topics、description、
+  issues/projects/discussions 开关和 security scanning，比官方最坏情况警告更完整；
+- 独立仓库已重命名为 `SongJunguo/faryo-codex-web-ui`，default branch 为 `main`。origin 使用新 SSH
+  URL；原作者公开 URL 当前返回 404，本地仍保存 `upstream/main=625d8ce`、原 URL fetch 记录和
+  `no_push` push URL，并在 README 提供本项目内可访问的 preserved baseline 链接；
+- 旧仓库 URL 返回 GitHub redirect，旧/new repository、Release asset 与 API 路径均为 HTTP 200；
+  未修改的 v1.5.0 updater 使用旧 repository 常量，已真实下载并安装新独立仓库的 v1.5.1；
+- 本地 checkout 已改名为 `faryo-codex-web-ui`，旧目录不存在。重命名前后 faryo2 均为 145×44，
+  并自动把 process cwd 解析到新目录；其他三个 tmux panes 的 cwd 与 geometry 不变。Owner/Gateway
+  始终从版本化安装目录运行；
+- 目录改名暴露并修复了一个真实产品回归：首个 Recent cwd 失效时，工作台现在依次尝试其余 Recent，
+  最后才回退 root。真实首项 `faryo` 已不存在、第二项有效的 390×844 fixture 通过目录父级、搜索、
+  Start controls 与三页历史验收；
+- 无 `fork:true` 的 GitHub 搜索已生效：精确 slug 第 1/1，`codex+tmux+katex` topics 第 1/1，
+  `codex+katex` 第 4/7，精确 `Codex CLI Web UI` 第 5/9，`faryo in:name` 第 14/16。宽泛词排名仍受
+  stars/外链/使用量影响，不以关键词堆砌伪造曝光；
+- 独立仓库 main Source CI `32379722500` 成功；v1.5.1 Release workflow `32379869459` 在 1 分 5 秒
+  内完成 canonical gate 与四资产发布。源码 archive、archive SHA-256、bootstrap 和 bootstrap
+  SHA-256 下载后均通过 strict checksum；
+- 正式 v1.5.1 release-archive 已部署到 Python 3.10.12 private venv；doctor 20 ok、两个 services
+  active/NRestarts=0，Cloudflare cookie-free verifier 保持 `access=PASS`，所有 tmux geometry 不变；
+  本地候选备份已移入回收站，v1.5.0 作为 previous version 保留；
+- 计划第 10 节全部条件已满足，进入维护状态。外部搜索引擎刷新存在延迟，后续只需观察索引和用户采用，
+  不属于本次迁移阻塞项。
