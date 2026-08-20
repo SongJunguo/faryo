@@ -8,12 +8,10 @@ status, capture, send text, interrupt, approve, and navigation keys.
 from __future__ import annotations
 
 import argparse
-from contextlib import contextmanager
 import datetime as _dt
 from email import policy
 from email.parser import BytesParser
 import gzip
-import hashlib
 import hmac
 import html as _html
 import io
@@ -30,10 +28,8 @@ import socket
 import sqlite3
 import subprocess
 import sys
-import tempfile
 import threading
 import time
-import uuid
 try:
     import tomllib
 except ModuleNotFoundError:  # Python < 3.11
@@ -52,6 +48,7 @@ import attachment_storage
 import path_policy
 import tmux_runtime
 import delivery_store
+import delivery_service
 import codex_history
 
 SHARED_DIR = Path(__file__).resolve().parents[2] / "shared"
@@ -270,43 +267,11 @@ _codex_history_path_locks: dict[str, threading.Lock] = {}
 _codex_session_index_cache: dict[str, str] = {}
 _codex_session_index_signature: tuple[int, int, int, int] | None = None
 _codex_session_index_lock = threading.Lock()
-# Sending is serialized per tmux session because a pane has only one composer.
-# Exact message-id locks keep reuse deterministic across sessions.  Both lock
-# registries are reference-counted so unrelated sends cannot collide and idle
-# entries do not accumulate for the lifetime of the Owner.
-_send_delivery_lock = threading.RLock()
-_send_session_locks: dict[str, dict[str, Any]] = {}
-_send_message_locks: dict[str, dict[str, Any]] = {}
-_send_deliveries: dict[str, dict[str, Any]] = {}
 _delivery_store = delivery_store.DeliveryStore(
     SEND_DELIVERY_ROOT,
     ttl_seconds=SEND_DELIVERY_TTL_SECONDS,
     cleanup_interval_seconds=SEND_DELIVERY_CLEANUP_INTERVAL_SECONDS,
 )
-
-
-@contextmanager
-def scoped_send_delivery_lock(registry: dict[str, dict[str, Any]], key: str):
-    with _send_delivery_lock:
-        entry = registry.setdefault(key, {"lock": threading.RLock(), "references": 0})
-        entry["references"] = int(entry["references"]) + 1
-        lock = entry["lock"]
-    try:
-        with lock:
-            yield
-    finally:
-        with _send_delivery_lock:
-            entry["references"] = int(entry["references"]) - 1
-            if entry["references"] == 0 and registry.get(key) is entry:
-                registry.pop(key, None)
-
-
-def send_session_delivery_lock(session: str):
-    return scoped_send_delivery_lock(_send_session_locks, session)
-
-
-def send_message_delivery_lock(delivery_id: str):
-    return scoped_send_delivery_lock(_send_message_locks, delivery_id)
 
 
 def short_path(path: str | None) -> str | None:
@@ -2740,208 +2705,188 @@ class MultipartFile:
         self.file = io.BytesIO(data)
 
 
+class DeliveryRuntime:
+    @property
+    def delivery_store(self) -> delivery_store.DeliveryStore:
+        return _delivery_store
+
+    @property
+    def delivery_ttl_seconds(self) -> float:
+        return SEND_DELIVERY_TTL_SECONDS
+
+    @property
+    def max_send_chars(self) -> int:
+        return MAX_SEND_CHARS
+
+    @property
+    def agent_launch_commands(self) -> set[str]:
+        return AGENT_LAUNCH_COMMANDS
+
+    @property
+    def paste_settle_seconds(self) -> float:
+        return PASTE_SETTLE_SECONDS
+
+    @property
+    def send_key_max_attempts(self) -> int:
+        return SEND_KEY_MAX_ATTEMPTS
+
+    @property
+    def send_accept_retry_delay(self) -> float:
+        return SEND_ACCEPT_RETRY_DELAY
+
+    @staticmethod
+    def owner_error(message: str, status: HTTPStatus = HTTPStatus.BAD_REQUEST) -> OwnerError:
+        return OwnerError(message, status)
+
+    @staticmethod
+    def clean_client_message_id(value: str | None) -> str | None:
+        return clean_client_message_id(value)
+
+    @staticmethod
+    def shell_prep_matches(value: str) -> bool:
+        return bool(SHELL_PREP_RE.fullmatch(value))
+
+    @staticmethod
+    def has_session(config: Config) -> bool:
+        return has_session(config)
+
+    @staticmethod
+    def agent_in_pane(config: Config) -> bool:
+        return agent_in_pane(config)
+
+    @staticmethod
+    def tmux(config: Config, args: list[str], timeout: float = 10) -> subprocess.CompletedProcess[str]:
+        return tmux(config, args, timeout=timeout)
+
+    @staticmethod
+    def tmux_target(config: Config) -> str:
+        return tmux_target(config)
+
+    @staticmethod
+    def agent_profile_in_pane(config: Config) -> AgentProfile | None:
+        return agent_profile_in_pane(config)
+
+    @staticmethod
+    def is_codex_profile(profile: AgentProfile | None) -> bool:
+        return profile is CODEX_PROFILE
+
+    @staticmethod
+    def codex_composer_has_draft(config: Config) -> bool:
+        return codex_composer_has_draft(config)
+
+    @staticmethod
+    def codex_rollout_submission_probe(config: Config) -> tuple[Path, int] | None:
+        return codex_rollout_submission_probe(config)
+
+    @staticmethod
+    def codex_rollout_probe_from_state(config: Config, state: dict[str, Any]) -> tuple[Path, int] | None:
+        return codex_rollout_probe_from_state(config, state)
+
+    @staticmethod
+    def codex_rollout_probe_state(probe: tuple[Path, int] | None) -> dict[str, int]:
+        return codex_rollout_probe_state(probe)
+
+    @staticmethod
+    def codex_queued_followup_count(capture: str, text: str) -> int:
+        return codex_queued_followup_count(capture, text)
+
+    @staticmethod
+    def tmux_current_capture(config: Config) -> str:
+        return tmux_current_capture(config)
+
+    @staticmethod
+    def tmux_capture_compact(config: Config) -> str:
+        return tmux_capture_compact(config)
+
+    @staticmethod
+    def tmux_cursor_position(config: Config) -> tuple[int, int] | None:
+        return tmux_cursor_position(config)
+
+    @staticmethod
+    def wait_for_paste_tail(
+        config: Config,
+        text: str,
+        baseline: str,
+        baseline_cursor: tuple[int, int] | None,
+    ) -> bool:
+        return wait_for_paste_tail(config, text, baseline, baseline_cursor)
+
+    @staticmethod
+    def sleep(seconds: float) -> None:
+        time.sleep(seconds)
+
+    @staticmethod
+    def codex_composer_contains_text(config: Config, text: str) -> bool:
+        return codex_composer_contains_text(config, text)
+
+    @staticmethod
+    def wait_for_codex_submission(config: Config, text: str, **kwargs: Any) -> str | None:
+        return wait_for_codex_submission(config, text, **kwargs)
+
+    @staticmethod
+    def codex_submission_key(config: Config) -> str:
+        return codex_submission_key(config)
+
+
+_delivery_service = delivery_service.DeliveryService(DeliveryRuntime())
+_send_delivery_lock = _delivery_service.lock
+_send_session_locks = _delivery_service.session_locks
+_send_message_locks = _delivery_service.message_locks
+_send_deliveries = _delivery_service.deliveries
+
+
+def scoped_send_delivery_lock(registry: dict[str, dict[str, Any]], key: str):
+    return _delivery_service.scoped_lock(registry, key)
+
+
+def send_session_delivery_lock(session: str):
+    return _delivery_service.session_lock(session)
+
+
+def send_message_delivery_lock(delivery_id: str):
+    return _delivery_service.message_lock(delivery_id)
+
+
 def send_delivery_record_path(delivery_id: str) -> Path | None:
-    return _delivery_store.record_path(delivery_id)
+    return _delivery_service.record_path(delivery_id)
 
 
 def cleanup_persisted_send_deliveries(now_epoch: float | None = None, *, force: bool = False) -> None:
-    _delivery_store.cleanup(now_epoch, force=force)
+    _delivery_service.cleanup_persisted(now_epoch, force=force)
 
 
 def persist_send_delivery(delivery_id: str, state: dict[str, Any]) -> bool:
-    return _delivery_store.persist(delivery_id, state)
+    return _delivery_service.persist(delivery_id, state)
 
 
 def load_persisted_send_delivery(delivery_id: str, now_epoch: float | None = None) -> dict[str, Any] | None:
-    return _delivery_store.load(delivery_id, now_epoch)
+    return _delivery_service.load(delivery_id, now_epoch)
 
 
 def remember_accepted_send_delivery(delivery_id: str, state: dict[str, Any]) -> None:
-    state["updatedAt"] = time.monotonic()
-    state["updatedEpoch"] = time.time()
-    _send_deliveries[delivery_id] = state
-    persist_send_delivery(delivery_id, state)
+    _delivery_service.remember_accepted(delivery_id, state)
 
 
 def remember_pasted_send_delivery(delivery_id: str, state: dict[str, Any]) -> None:
-    state["updatedAt"] = time.monotonic()
-    state["updatedEpoch"] = time.time()
-    _send_deliveries[delivery_id] = state
-    persist_send_delivery(delivery_id, state)
+    _delivery_service.remember_pasted(delivery_id, state)
 
 
 def prune_send_deliveries(now: float | None = None) -> None:
-    with _send_delivery_lock:
-        cutoff = (now if now is not None else time.monotonic()) - SEND_DELIVERY_TTL_SECONDS
-        for delivery_id in [key for key, value in _send_deliveries.items() if float(value.get("updatedAt") or 0) < cutoff]:
-            _send_deliveries.pop(delivery_id, None)
-        cleanup_persisted_send_deliveries()
+    _delivery_service.prune(now)
 
 
 def send_delivery_receipt(delivery_id: str, config: Config, state: str, enter_attempts: int, *, duplicate: bool = False) -> dict[str, Any]:
-    return {
-        "deliveryId": delivery_id,
-        "delivery": "accepted",
-        "deliveryState": state,
-        "session": config.session,
-        "enterAttempts": enter_attempts,
-        "duplicate": duplicate,
-    }
+    return _delivery_service.receipt(
+        delivery_id,
+        config,
+        state,
+        enter_attempts,
+        duplicate=duplicate,
+    )
 
 
 def send_text(config: Config, text: str, client_message_id: str | None = None) -> dict[str, Any]:
-    if not has_session(config):
-        raise OwnerError(f"tmux session not found: {config.session}", HTTPStatus.NOT_FOUND)
-    if not text.strip():
-        raise OwnerError("empty text")
-    if len(text) > MAX_SEND_CHARS:
-        raise OwnerError(f"text too long: {len(text)} > {MAX_SEND_CHARS}", HTTPStatus.REQUEST_ENTITY_TOO_LARGE)
-    if client_message_id and not clean_client_message_id(client_message_id):
-        raise OwnerError("invalid client message id")
-    delivery_id = clean_client_message_id(client_message_id) or uuid.uuid4().hex
-    digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
-    line = text.strip()
-    words = line.split()
-    launch_command = Path(words[0]).name.lower() if words else ""
-    shell_prep = bool(words and (launch_command in AGENT_LAUNCH_COMMANDS or SHELL_PREP_RE.fullmatch(line)))
-    with send_session_delivery_lock(config.session), send_message_delivery_lock(delivery_id):
-        now = time.monotonic()
-        prune_send_deliveries(now)
-        existing = _send_deliveries.get(delivery_id) or load_persisted_send_delivery(delivery_id)
-        if existing and delivery_id not in _send_deliveries:
-            _send_deliveries[delivery_id] = existing
-        if existing and (existing.get("session") != config.session or existing.get("digest") != digest):
-            raise OwnerError("client message id was already used for different content", HTTPStatus.CONFLICT)
-        if existing and existing.get("status") == "accepted":
-            receipt = dict(existing["receipt"])
-            receipt["duplicate"] = True
-            existing["updatedAt"] = now
-            existing["updatedEpoch"] = time.time()
-            persist_send_delivery(delivery_id, existing)
-            return receipt
-
-        if shell_prep and not agent_in_pane(config):
-            for keys in (["-l", line], ["Enter"]):
-                res = tmux(config, ["send-keys", "-t", tmux_target(config), *keys], timeout=3)
-                if res.returncode != 0:
-                    raise OwnerError(res.stderr.strip() or "tmux send shell prep failed", HTTPStatus.INTERNAL_SERVER_ERROR)
-            receipt = send_delivery_receipt(delivery_id, config, "shell", 1)
-            remember_accepted_send_delivery(delivery_id, {"session": config.session, "digest": digest, "status": "accepted", "receipt": receipt})
-            return receipt
-
-        profile = agent_profile_in_pane(config)
-        continuing_paste = bool(existing and existing.get("status") == "pasted")
-        if profile is CODEX_PROFILE and not continuing_paste and codex_composer_has_draft(config):
-            raise OwnerError("Codex TUI already has an unsent draft; the browser draft was kept", HTTPStatus.CONFLICT)
-        fresh_rollout_probe = codex_rollout_submission_probe(config) if profile is CODEX_PROFILE else None
-        rollout_probe = (
-            codex_rollout_probe_from_state(config, existing)
-            if profile is CODEX_PROFILE and continuing_paste and existing
-            else fresh_rollout_probe
-        )
-        if profile is CODEX_PROFILE and rollout_probe is None:
-            rollout_probe = fresh_rollout_probe
-        queued_baseline = max(0, int(existing.get("queuedBaseline") or 0)) if continuing_paste and existing else 0
-
-        if not continuing_paste:
-            buffer_name = f"local-tmux-owner-{secrets.token_hex(4)}"
-            tmp_path: str | None = None
-            try:
-                baseline = tmux_capture_compact(config)
-                baseline_cursor = tmux_cursor_position(config)
-                queued_baseline = codex_queued_followup_count(tmux_current_capture(config), text) if profile is CODEX_PROFILE else 0
-                with tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False, prefix="local-tmux-owner-", suffix=".txt") as tmp:
-                    tmp.write(text)
-                    tmp_path = tmp.name
-                res = tmux(config, ["load-buffer", "-b", buffer_name, tmp_path], timeout=3)
-                if res.returncode != 0:
-                    raise OwnerError(res.stderr.strip() or "tmux load-buffer failed", HTTPStatus.INTERNAL_SERVER_ERROR)
-                paste_args = ["paste-buffer", "-d", "-r", "-b", buffer_name, "-t", tmux_target(config)]
-                paste_args.insert(2, "-p")
-                res = tmux(config, paste_args, timeout=3)
-                if res.returncode != 0:
-                    raise OwnerError(res.stderr.strip() or "tmux paste-buffer failed", HTTPStatus.INTERNAL_SERVER_ERROR)
-                paste_ready = wait_for_paste_tail(config, text, baseline, baseline_cursor)
-                if not paste_ready:
-                    raise OwnerError("text paste could not be confirmed; the browser draft was kept", HTTPStatus.GATEWAY_TIMEOUT)
-                pasted_state = {
-                    "session": config.session,
-                    "digest": digest,
-                    "status": "pasted",
-                    "pasteReady": True,
-                    "queuedBaseline": queued_baseline,
-                    **codex_rollout_probe_state(rollout_probe),
-                }
-                remember_pasted_send_delivery(delivery_id, pasted_state)
-            finally:
-                if tmp_path:
-                    try:
-                        os.unlink(tmp_path)
-                    except FileNotFoundError:
-                        pass
-                tmux(config, ["delete-buffer", "-b", buffer_name], timeout=1)
-            time.sleep(PASTE_SETTLE_SECONDS)
-        elif profile is CODEX_PROFILE and not codex_composer_contains_text(config, text):
-            recovered_state = wait_for_codex_submission(
-                config,
-                text,
-                timeout=0.35,
-                rollout_probe=rollout_probe,
-                queued_baseline=queued_baseline,
-                allow_composer_disappearance=False,
-            )
-            if not recovered_state:
-                existing["updatedAt"] = time.monotonic()
-                existing["updatedEpoch"] = time.time()
-                persist_send_delivery(delivery_id, existing)
-                raise OwnerError(
-                    "previous delivery is still ambiguous; no rollout or new queue evidence was found and nothing was sent again",
-                    HTTPStatus.GATEWAY_TIMEOUT,
-                )
-            receipt = send_delivery_receipt(delivery_id, config, recovered_state, 0)
-            existing.update({"status": "accepted", "receipt": receipt})
-            remember_accepted_send_delivery(delivery_id, existing)
-            return receipt
-
-        enter_attempts = 0
-        accepted_state: str | None = None
-        key_attempts = SEND_KEY_MAX_ATTEMPTS if profile is CODEX_PROFILE else 1
-        for _attempt in range(key_attempts):
-            enter_attempts += 1
-            key = codex_submission_key(config) if profile is CODEX_PROFILE else "C-m"
-            res = tmux(config, ["send-keys", "-t", tmux_target(config), key], timeout=3)
-            if res.returncode != 0:
-                raise OwnerError(res.stderr.strip() or f"tmux send {key} failed", HTTPStatus.INTERNAL_SERVER_ERROR)
-            if profile is CODEX_PROFILE:
-                accepted_state = wait_for_codex_submission(
-                    config,
-                    text,
-                    rollout_probe=rollout_probe,
-                    queued_baseline=queued_baseline,
-                    allow_composer_disappearance=key != "Tab",
-                )
-                if accepted_state:
-                    break
-                time.sleep(SEND_ACCEPT_RETRY_DELAY)
-            else:
-                accepted_state = "sent"
-                break
-
-        if not accepted_state:
-            state = _send_deliveries[delivery_id]
-            state["updatedAt"] = time.monotonic()
-            state["updatedEpoch"] = time.time()
-            persist_send_delivery(delivery_id, state)
-            raise OwnerError("Codex did not accept the submit key; the browser and TUI drafts were kept for retry", HTTPStatus.GATEWAY_TIMEOUT)
-
-        receipt = send_delivery_receipt(delivery_id, config, accepted_state, enter_attempts)
-        remember_accepted_send_delivery(delivery_id, {
-            "session": config.session,
-            "digest": digest,
-            "status": "accepted",
-            "receipt": receipt,
-        })
-        return receipt
+    return _delivery_service.send(config, text, client_message_id)
 
 
 def send_key(config: Config, key: str) -> None:

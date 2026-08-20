@@ -82,6 +82,7 @@ release_checks() {
     "$ROOT/apps/owner/local-tmux-owner/path_policy.py" \
     "$ROOT/apps/owner/local-tmux-owner/tmux_runtime.py" \
     "$ROOT/apps/owner/local-tmux-owner/delivery_store.py" \
+    "$ROOT/apps/owner/local-tmux-owner/delivery_service.py" \
     "$ROOT/apps/owner/local-tmux-owner/codex_history.py" \
     "$ROOT/apps/owner/local-tmux-owner/workspace_changes.py" \
     "$ROOT/apps/owner/local-tmux-owner/runtime_diagnostics.py" \

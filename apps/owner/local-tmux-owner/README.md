@@ -291,8 +291,11 @@ consumed as private runtime input and is never printed.
   process-tree parsing and bounded session/thread/message identifiers; product
   policy remains in the higher Owner services.
 - `delivery_store.py` owns body-free accepted/pasted checkpoints, atomic fsync,
-  private permissions, TTL cleanup and corrupt/symlink rejection. The exact
-  paste/Tab/Enter confirmation state machine remains separate.
+  private permissions, TTL cleanup and corrupt/symlink rejection.
+- `delivery_service.py` owns reference-counted per-session/per-message locks,
+  in-memory delivery state, paste confirmation, Tab/Enter submission, durable
+  retry and ambiguous 504 recovery. It receives all tmux/Codex operations
+  through an explicit runtime adapter and stores no message body.
 - `codex_history.py` owns rollout/App Server message extraction, intact recent
   turn budgets, question previews and revision-bound cursor syntax without
   reading tmux, HTTP, SQLite or private paths.

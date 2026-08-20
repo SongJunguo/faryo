@@ -1,4 +1,5 @@
 import json
+import hashlib
 import stat
 import sys
 import tempfile
@@ -57,6 +58,13 @@ class SendDeliveryTest(unittest.TestCase):
             mock.patch.object(server, "tmux", return_value=self.completed),
             mock.patch.object(server.time, "sleep"),
         )
+
+    def test_delivery_runtime_preserves_keyword_only_tmux_timeout(self):
+        with mock.patch.object(server, "tmux", return_value=self.completed) as tmux:
+            result = server.DeliveryRuntime.tmux(self.config, ["display-message"], timeout=3)
+
+        self.assertIs(result, self.completed)
+        tmux.assert_called_once_with(self.config, ["display-message"], timeout=3)
 
     def test_wait_for_paste_tail_accepts_observed_cursor_change(self):
         with (
@@ -227,7 +235,7 @@ class SendDeliveryTest(unittest.TestCase):
         text = "lost draft"
         server._send_deliveries[delivery_id] = {
             "session": self.config.session,
-            "digest": server.hashlib.sha256(text.encode("utf-8")).hexdigest(),
+            "digest": hashlib.sha256(text.encode("utf-8")).hexdigest(),
             "status": "pasted",
             "pasteReady": True,
             "queuedBaseline": 0,

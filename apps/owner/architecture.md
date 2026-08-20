@@ -82,7 +82,10 @@ but the default upload destination should come from the Faryo data directory.
   failures rather than rebuilding subprocess defaults.
 - Reliable-send durable checkpoints are isolated in `delivery_store.py`; it
   enforces ID bounds, privacy-minimal records, atomic fsync, 0700/0600 modes,
-  TTL cleanup and corrupt/symlink rejection without owning submit decisions.
+  TTL cleanup and corrupt/symlink rejection. `delivery_service.py` owns the
+  reference-counted session/message locks, in-memory checkpoints, paste,
+  Tab/Enter confirmation, retry and ambiguity policy through an explicit
+  runtime adapter; HTTP only translates its bounded result or error.
 - Pure Codex message extraction, complete-turn budgeting, previews and
   revision-bound cursors are isolated in `codex_history.py`; incremental file
   indexing and caches remain higher services until their state boundary is
