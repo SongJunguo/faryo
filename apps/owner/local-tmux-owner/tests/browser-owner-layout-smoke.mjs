@@ -52,8 +52,8 @@ await withBrowser(
     await page.addStyleTag({ content: styles });
     await page.evaluate(() => {
       const keyboard = new EventTarget();
-      keyboard.overlaysContent = false;
-      keyboard.boundingRect = { height: 0 };
+      keyboard.overlaysContent = true;
+      keyboard.boundingRect = { height: 240 };
       Object.defineProperty(navigator, "virtualKeyboard", {
         configurable: true,
         value: keyboard,
@@ -67,10 +67,9 @@ await withBrowser(
       const controller =
         window.FaryoKeyboardLayout.createKeyboardLayout(window);
       const initial = controller.getSnapshot();
-      keyboard.boundingRect = { height: 240 };
-      keyboard.dispatchEvent(new Event("geometrychange"));
+      window.dispatchEvent(new Event("resize"));
       await new Promise((resolve) => requestAnimationFrame(resolve));
-      const opened = controller.getSnapshot();
+      const resized = controller.getSnapshot();
       const active = {
         overlay: keyboard.overlaysContent,
         viewport: document
@@ -85,10 +84,10 @@ await withBrowser(
       controller.destroy();
       return {
         initial,
-        opened,
+        resized,
         active,
-        restoredOverlay: keyboard.overlaysContent,
-        restoredViewport: document
+        finalOverlay: keyboard.overlaysContent,
+        finalViewport: document
           .querySelector('meta[name="viewport"]')
           ?.getAttribute("content"),
         cleaned:
@@ -98,25 +97,25 @@ await withBrowser(
       };
     });
     if (
-      keyboardController.initial.mode !== "virtual-keyboard" ||
+      keyboardController.initial.mode !== "viewport-resize" ||
       keyboardController.initial.visible ||
-      keyboardController.opened.insetHeight !== 240 ||
-      !keyboardController.opened.visible ||
-      !keyboardController.active.overlay ||
+      keyboardController.initial.insetHeight !== 0 ||
+      !keyboardController.resized.changed ||
+      keyboardController.active.overlay ||
       !keyboardController.active.viewport?.includes(
-        "interactive-widget=overlays-content",
+        "interactive-widget=resizes-content",
       ) ||
-      keyboardController.active.mode !== "virtual-keyboard" ||
-      keyboardController.active.open !== "1" ||
-      !keyboardController.active.classActive ||
-      keyboardController.restoredOverlay ||
-      !keyboardController.restoredViewport?.includes(
+      keyboardController.active.mode !== "viewport-resize" ||
+      keyboardController.active.open !== "0" ||
+      keyboardController.active.classActive ||
+      keyboardController.finalOverlay ||
+      !keyboardController.finalViewport?.includes(
         "interactive-widget=resizes-content",
       ) ||
       !keyboardController.cleaned
     ) {
       throw new Error(
-        `VirtualKeyboard controller browser integration failed: ${JSON.stringify(keyboardController)}`,
+        `Viewport-resize keyboard controller failed: ${JSON.stringify(keyboardController)}`,
       );
     }
 
@@ -165,12 +164,8 @@ await withBrowser(
       }
     }
 
-    const appShell = async (keyboardInset) =>
-      page.evaluate((inset) => {
-        document.documentElement.style.setProperty(
-          "--faryo-keyboard-inset",
-          `${inset}px`,
-        );
+    const appShell = async () =>
+      page.evaluate(() => {
         const app = document.querySelector(".app").getBoundingClientRect();
         const main = document.querySelector("main");
         const footer = document.querySelector("footer").getBoundingClientRect();
@@ -185,14 +180,16 @@ await withBrowser(
           footerPosition: getComputedStyle(document.querySelector("footer"))
             .position,
           footerBottom: footer.bottom,
+          innerHeight,
           documentOverflow:
             (document.scrollingElement || document.documentElement)
               .scrollHeight >
             innerHeight + 1,
         };
-      }, keyboardInset);
-    const keyboardClosed = await appShell(0);
-    const keyboardOpen = await appShell(240);
+      });
+    const keyboardClosed = await appShell();
+    await page.setViewportSize({ width: 320, height: 480 });
+    const keyboardOpen = await appShell();
     if (
       keyboardClosed.mainOverflow !== "auto" ||
       keyboardClosed.mainOverflowAnchor !== "none" ||
@@ -202,7 +199,9 @@ await withBrowser(
       keyboardClosed.mainPaddingBottom > 40 ||
       Math.abs(keyboardClosed.mainHeight - keyboardOpen.mainHeight - 240) > 1 ||
       Math.abs(keyboardClosed.footerBottom - keyboardOpen.footerBottom - 240) >
-        1
+        1 ||
+      Math.abs(keyboardClosed.footerBottom - keyboardClosed.innerHeight) > 1 ||
+      Math.abs(keyboardOpen.footerBottom - keyboardOpen.innerHeight) > 1
     ) {
       throw new Error(
         `Keyboard app shell violated its grid contract: ${JSON.stringify({ keyboardClosed, keyboardOpen })}`,
@@ -212,5 +211,5 @@ await withBrowser(
 );
 
 console.log(
-  "faryo-owner-layout=PASS collapsed-label=safe keyboard-app-shell=grid virtual-keyboard=browser",
+  "faryo-owner-layout=PASS collapsed-label=safe keyboard-app-shell=viewport-resize",
 );

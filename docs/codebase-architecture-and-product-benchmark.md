@@ -170,11 +170,14 @@ the same Gateway protocol rather than create a second agent backend.
 
 Faryo v1.8 uses one `100dvh` app shell and one bounded `main` conversation
 scrollport in direct Owner, Gateway, desktop and installed PWA views. The
-composer is a normal grid row rather than a fixed overlay. On supporting
-Chromium/Edge builds, a feature-detected VirtualKeyboard API overlay exposes
-`env(keyboard-inset-height)` as a fourth grid row. Other browsers use
-`interactive-widget=resizes-content`; neither path computes a keyboard height
-from `innerHeight`, VisualViewport offsets or device thresholds.
+composer is a normal grid row rather than a fixed overlay. The viewport uses
+`interactive-widget=resizes-content`; if the VirtualKeyboard API exists, Faryo
+explicitly leaves `overlaysContent=false`. The browser therefore resizes the
+three-row app shell, and Faryo computes no keyboard height from API insets,
+`innerHeight`, VisualViewport offsets or device thresholds. This final decision
+comes from an Android Edge 151 wireless-CDP A/B in which the overlay inset left
+a blank reserve while native viewport resize placed the same footer exactly at
+the usable viewport bottom.
 
 History anchors, question navigation, live-follow and deferred rich blocks all
 consume the same concrete scroll element. Browser address-bar retraction remains

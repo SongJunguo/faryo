@@ -226,6 +226,7 @@ json.loads(
 )
 index = (root / "apps/owner/local-tmux-owner/static/index.html").read_text(encoding="utf-8")
 keyboard_layout_source = (root / "apps/owner/local-tmux-owner/static/keyboard-layout.js").read_text(encoding="utf-8")
+owner_style = (root / "apps/owner/local-tmux-owner/static/style.css").read_text(encoding="utf-8")
 owner_server = (root / "apps/owner/local-tmux-owner/server.py").read_text(encoding="utf-8")
 workspace_changes_source = (root / "apps/owner/local-tmux-owner/workspace_changes.py").read_text(encoding="utf-8")
 runtime_diagnostics_source = (root / "apps/owner/local-tmux-owner/runtime_diagnostics.py").read_text(encoding="utf-8")
@@ -356,8 +357,9 @@ assert "codex-commands.js" in index and "codex-commands.js" in gateway, "Codex c
 assert "copy-fidelity.js" in index and "copy-fidelity.js" in gateway, "copy fidelity must be loaded and proxied"
 assert "clipboard-images.js" in index and "clipboard-images.js" in gateway, "clipboard image paste must be loaded and proxied"
 assert "immersive-mode.js" in index and "immersive-mode.js" in gateway, "immersive display controller must be loaded and proxied"
-assert "keyboard-layout.js?v=faryo-keyboard-layout-2" in index and "keyboard-layout.js" in gateway, "current keyboard layout controller must be loaded and proxied"
-assert "withInteractiveWidget" in keyboard_layout_source and "overlays-content" in keyboard_layout_source, "VirtualKeyboard overlay must align the viewport declaration"
+assert "keyboard-layout.js?v=faryo-keyboard-layout-3" in index and "keyboard-layout.js" in gateway, "current keyboard layout controller must be loaded and proxied"
+assert "withInteractiveWidget" in keyboard_layout_source and "keyboard.overlaysContent = false" in keyboard_layout_source and "'resizes-content'" in keyboard_layout_source, "keyboard layout must enforce native viewport resizing"
+assert "overlaysContent = true" not in keyboard_layout_source and "keyboard-inset-height" not in owner_style, "retired VirtualKeyboard overlay reserve must not return"
 assert "scroll-surface.js" not in index and "scroll-surface.js" not in gateway, "retired document scroll adapter must not return"
 assert 'rel="manifest" href="/manifest.json"' in index, "every maintained PWA page must reference the root manifest"
 assert 'id="immersiveExitBtn"' in index and 'id="detailsFullscreenBtn"' in index, "fullscreen must expose explicit enter and exit controls"

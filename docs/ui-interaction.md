@@ -158,9 +158,10 @@ token or selected-session query.
 Faryo uses one bounded conversation scrollport in every Owner/Gateway/PWA mode.
 The app shell is a `100dvh` grid whose composer is a normal layout row, so
 history anchors, question navigation, live follow and input geometry share one
-coordinate system. Supported Chromium/Edge builds expose the software-keyboard
-inset through the VirtualKeyboard API and CSS; other browsers fall back to
-`interactive-widget=resizes-content`. Neither path guesses keyboard pixels.
+coordinate system. The viewport declares `interactive-widget=resizes-content`,
+and Faryo explicitly disables VirtualKeyboard overlay when that API exists, so
+the browser shrinks the app shell around the software keyboard. Faryo never
+guesses keyboard pixels or adds a second keyboard-inset row.
 
 - Gateway's root manifest uses `display: standalone`, and every maintained page
   references it. An installed Faryo launches without the normal URL bar.
@@ -322,9 +323,8 @@ remains interrupt.
 - single reading column;
 - 10–12 px normal side padding;
 - stable large composer above the bottom safe area;
-- composer remains a normal app-shell row; a browser-provided keyboard inset or
-  resized layout viewport shortens the conversation row without translating the
-  input by hand;
+- composer remains a normal app-shell row; the resized layout viewport shortens
+  the conversation row without translating the input by hand;
 - question rail overlays the extreme edge only while active;
 - tables, code, and display math use internal horizontal scrolling;
 - session/details panels cover the page instead of shrinking the conversation.
@@ -371,9 +371,9 @@ The maintained matrix includes:
 - user-activated full-screen enter/exit through header and Details, folded-header
   exit, manifest/standalone identity, rejection fallback and no horizontal
   overflow.
-- one non-document conversation scrollport, normal-flow composer, VirtualKeyboard
-  inset/viewport-resize paths, trusted touch scroll, stable refresh anchor and
-  user-activated Fullscreen/PWA behaviour.
+- one non-document conversation scrollport, normal-flow composer, native
+  viewport resize with overlay disabled, trusted touch scroll, stable refresh
+  anchor and user-activated Fullscreen/PWA behaviour.
 
 Detailed evidence is maintained in
 [`plans/v1.6-structured-interactions-and-owner-ui-plan.md`](plans/v1.6-structured-interactions-and-owner-ui-plan.md),

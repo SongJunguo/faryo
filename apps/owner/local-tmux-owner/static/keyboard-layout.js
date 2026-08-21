@@ -12,14 +12,11 @@
     return keyboard && 'overlaysContent' in keyboard ? keyboard : null;
   }
 
-  function keyboardSnapshot(mode, keyboard) {
-    const insetHeight = mode === 'virtual-keyboard'
-      ? Math.max(0, Number(keyboard?.boundingRect?.height) || 0)
-      : 0;
+  function keyboardSnapshot() {
     return {
-      mode,
-      visible: insetHeight > 0,
-      insetHeight,
+      mode: 'viewport-resize',
+      visible: false,
+      insetHeight: 0,
     };
   }
 
@@ -39,54 +36,31 @@
     const viewportMeta = options.viewportMeta
       || view.document.querySelector?.('meta[name="viewport"]')
       || null;
-    let mode = 'viewport-resize';
-    let restoreOverlay = null;
-    let restoreViewportContent = null;
-    const restoreViewport = () => {
-      if (restoreViewportContent === null || !viewportMeta) return;
-      viewportMeta.setAttribute('content', restoreViewportContent);
-      restoreViewportContent = null;
-    };
+    if (viewportMeta) {
+      viewportMeta.setAttribute(
+        'content',
+        withInteractiveWidget(viewportMeta.getAttribute('content'), 'resizes-content'),
+      );
+    }
     if (keyboard) {
       try {
-        const previous = Boolean(keyboard.overlaysContent);
-        if (viewportMeta) {
-          restoreViewportContent = viewportMeta.getAttribute('content') || '';
-          viewportMeta.setAttribute(
-            'content',
-            withInteractiveWidget(restoreViewportContent, 'overlays-content'),
-          );
-        }
-        keyboard.overlaysContent = true;
-        if (keyboard.overlaysContent === true) {
-          mode = 'virtual-keyboard';
-          restoreOverlay = previous;
-        } else {
-          restoreViewport();
-        }
-      } catch (_error) {
-        mode = 'viewport-resize';
-        try { restoreViewport(); } catch (_restoreError) {}
-      }
+        keyboard.overlaysContent = false;
+      } catch (_error) {}
     }
 
     let destroyed = false;
     let frame = 0;
-    let current = { ...keyboardSnapshot(mode, keyboard), changed: true };
+    let current = { ...keyboardSnapshot(), changed: true };
     const publish = (forceChanged = false) => {
       frame = 0;
       if (destroyed) return current;
-      const next = keyboardSnapshot(mode, keyboard);
-      const changed = forceChanged
-        || next.mode !== current.mode
-        || next.visible !== current.visible
-        || next.insetHeight !== current.insetHeight;
+      const next = keyboardSnapshot();
+      const changed = forceChanged;
       current = { ...next, changed };
       if (rootElement?.dataset) {
         rootElement.dataset.faryoKeyboardLayout = next.mode;
-        rootElement.dataset.faryoKeyboardOpen = next.visible ? '1' : '0';
+        rootElement.dataset.faryoKeyboardOpen = '0';
       }
-      rootElement?.classList?.toggle('virtual-keyboard-layout', next.mode === 'virtual-keyboard');
       options.onChange?.(current);
       return current;
     };
@@ -96,9 +70,7 @@
       const request = view.requestAnimationFrame || ((callback) => view.setTimeout(callback, 0));
       frame = request.call(view, publishScheduled);
     };
-    const eventTargets = mode === 'virtual-keyboard'
-      ? [[keyboard, 'geometrychange'], [view, 'resize']]
-      : [[view.visualViewport, 'resize'], [view, 'resize']];
+    const eventTargets = [[view.visualViewport, 'resize'], [view, 'resize']];
     for (const [target, name] of eventTargets) target?.addEventListener?.(name, schedule, { passive: true });
     publish();
 
@@ -110,13 +82,6 @@
         destroyed = true;
         if (frame) (view.cancelAnimationFrame || view.clearTimeout)?.call(view, frame);
         for (const [target, name] of eventTargets) target?.removeEventListener?.(name, schedule);
-        if (restoreOverlay !== null) {
-          try {
-            keyboard.overlaysContent = restoreOverlay;
-          } catch (_error) {}
-        }
-        try { restoreViewport(); } catch (_error) {}
-        rootElement?.classList?.remove('virtual-keyboard-layout');
         if (rootElement?.dataset) {
           delete rootElement.dataset.faryoKeyboardLayout;
           delete rootElement.dataset.faryoKeyboardOpen;

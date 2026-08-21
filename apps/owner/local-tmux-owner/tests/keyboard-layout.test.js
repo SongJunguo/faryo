@@ -22,7 +22,7 @@ assert.equal(
   'width=device-width, interactive-widget=resizes-content',
 );
 
-function fakeView({ virtualKeyboard = null } = {}) {
+function fakeView({ virtualKeyboard = null, viewport = 'resizes-content' } = {}) {
   const listeners = new Map();
   const classes = new Set();
   const frames = new Map();
@@ -35,7 +35,7 @@ function fakeView({ virtualKeyboard = null } = {}) {
       contains(name) { return classes.has(name); },
     },
   };
-  let viewportContent = 'width=device-width, initial-scale=1, interactive-widget=resizes-content';
+  let viewportContent = `width=device-width, initial-scale=1, interactive-widget=${viewport}`;
   const viewportMeta = {
     getAttribute(name) { return name === 'content' ? viewportContent : null; },
     setAttribute(name, value) { if (name === 'content') viewportContent = String(value); },
@@ -77,36 +77,37 @@ function fakeView({ virtualKeyboard = null } = {}) {
   };
 }
 
-const keyboard = { overlaysContent: false, boundingRect: { height: 0 } };
-const supported = fakeView({ virtualKeyboard: keyboard });
+const keyboard = { overlaysContent: true, boundingRect: { height: 318 } };
+const supported = fakeView({ virtualKeyboard: keyboard, viewport: 'overlays-content' });
 const observed = [];
 const controller = keyboardLayout.createKeyboardLayout(supported.view, {
   onChange: (snapshot) => observed.push(snapshot),
 });
-assert.equal(keyboard.overlaysContent, true);
-assert.match(supported.viewportMeta.getAttribute('content'), /interactive-widget=overlays-content/);
-assert.equal(controller.getSnapshot().mode, 'virtual-keyboard');
-assert.equal(supported.root.dataset.faryoKeyboardLayout, 'virtual-keyboard');
+assert.equal(keyboard.overlaysContent, false);
+assert.match(supported.viewportMeta.getAttribute('content'), /interactive-widget=resizes-content/);
+assert.deepEqual(controller.getSnapshot(), {
+  mode: 'viewport-resize',
+  visible: false,
+  insetHeight: 0,
+  changed: false,
+});
+assert.equal(supported.root.dataset.faryoKeyboardLayout, 'viewport-resize');
 assert.equal(supported.root.dataset.faryoKeyboardOpen, '0');
-assert.equal(supported.root.classList.contains('virtual-keyboard-layout'), true);
-assert.equal(supported.listeners.has('keyboard:geometrychange'), true);
-assert.equal(supported.listeners.has('viewport:resize'), false);
-
-keyboard.boundingRect.height = 318;
-supported.listeners.get('keyboard:geometrychange')();
+assert.equal(supported.listeners.has('keyboard:geometrychange'), false);
+assert.equal(supported.listeners.has('viewport:resize'), true);
+assert.equal(supported.listeners.has('window:resize'), true);
+supported.listeners.get('viewport:resize')();
 supported.flush();
 assert.deepEqual(controller.getSnapshot(), {
-  mode: 'virtual-keyboard',
-  visible: true,
-  insetHeight: 318,
+  mode: 'viewport-resize',
+  visible: false,
+  insetHeight: 0,
   changed: true,
 });
-assert.equal(supported.root.dataset.faryoKeyboardOpen, '1');
 controller.destroy();
 assert.equal(keyboard.overlaysContent, false);
 assert.match(supported.viewportMeta.getAttribute('content'), /interactive-widget=resizes-content/);
 assert.equal(supported.listeners.size, 0);
-assert.equal(supported.root.classList.contains('virtual-keyboard-layout'), false);
 assert.equal('faryoKeyboardLayout' in supported.root.dataset, false);
 assert.ok(observed.length >= 2);
 

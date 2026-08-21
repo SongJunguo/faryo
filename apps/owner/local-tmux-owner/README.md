@@ -169,7 +169,7 @@ then verifies online, BFCache `pageshow`, and ordinary-reload recovery:
 
 ```bash
 FARYO_SMOKE_URL='http://127.0.0.1:8765/?token=<token>&session=<session>' \
-FARYO_SMOKE_EXPECT_RELEASE=v1.8.1 \
+FARYO_SMOKE_EXPECT_RELEASE=v1.8.2 \
 FARYO_SMOKE_EXPECT_CAPTURE_REVISION=faryo-owner-capture-3 \
   node apps/owner/local-tmux-owner/tests/browser-live-resilience.mjs
 ```
@@ -178,6 +178,22 @@ The same check accepts `FARYO_SMOKE_LOGIN_USER` and
 `FARYO_SMOKE_LOGIN_PASSWORD_FILE` when its URL is an authenticated Gateway
 route, so the production SSE proxy path can be exercised without exposing a
 credential in process output.
+
+For an exact Android Edge keyboard check, pair a private test phone through the
+official wireless ADB flow, forward its `chrome_devtools_remote` socket to a
+loopback CDP port, and reverse the local Owner port. Then run:
+
+```bash
+FARYO_ANDROID_CDP_URL=http://127.0.0.1:9223 \
+FARYO_SMOKE_URL='http://127.0.0.1:8765/?token=<token>&session=<session>' \
+  node tools/browser-harness/android-edge-keyboard.mjs --tap
+```
+
+The tool drives the real browser input surface and prints only the Faryo release,
+viewport/inset values and known Faryo element bounds. It does not print the URL,
+token, session title or conversation body. Use `--blur` to close focus and
+`--resize-contract` only as an isolated A/B override for an older candidate.
+Disconnect ADB and revoke the workstation after the private-device test.
 
 Direct Owner local files and images are fetched with `X-Owner-Token` and opened
 through temporary Blob URLs; the credential is not copied into resource DOM
