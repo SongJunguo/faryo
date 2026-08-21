@@ -5,11 +5,13 @@
 
 ## Active
 
-- [`session-context-window-plan.md`](session-context-window-plan.md)：为新建和恢复 Codex 会话
-  增加会话级上下文窗口预设与自定义 `K` 输入，并保持全局配置、目录安全和快速恢复默认
-  路径不变。
+当前没有未完成的版本计划。
 
 ## Completed or maintenance mode
+
+- [`session-context-window-plan.md`](session-context-window-plan.md)：为新建和恢复 Codex 会话
+  增加会话级上下文窗口预设与自定义 `K` 输入，同时清理持久 tmux 继承的旧安装环境；已完成
+  source、真实 Codex、移动 Gateway、部署和 v1.6.7 发布门禁。
 
 - [`live-stream-resilience-plan.md`](live-stream-resilience-plan.md)：为移动浏览器、网络切换和
   半开代理连接增加 SSE 心跳超时、去重安全捕获与前台自动恢复；已完成真实 Owner/Gateway

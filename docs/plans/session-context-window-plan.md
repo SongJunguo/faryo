@@ -1,6 +1,6 @@
 # Session Context Window Plan
 
-状态：实施中
+状态：已完成、部署并通过 v1.6.7 发布门禁
 
 ## 目标
 
@@ -51,4 +51,16 @@ Codex 误用旧版 `PYTHONPATH`，并让不属于 agent 的服务内部变量跨
 
 ## 证据
 
-待实现和验证后补充。
+- OpenAI 官方配置参考确认 `model_context_window` 和
+  `model_auto_compact_token_limit` 均为受支持数值项；当前 Codex CLI 还以
+  `--strict-config` 接受本版本生成的两项一次性覆盖。
+- 完整 source gate 通过 Owner 199、Gateway 117、CLI 57 项测试，以及 Ruff、ESLint、
+  Prettier、TypeScript、依赖版本和可重复本地 bundle 检查。
+- 390x844 真实 Chrome/Gateway 回归通过：显示 Default/272K/1M/Custom，输入 272K 后跨目录
+  导航仍保留，并在显式恢复请求中只提交整数 `context_window_k`；10 条一页的三页历史回归
+  同时通过。
+- 隔离真实 managed Codex 启动达到 Waiting；tmux 标记为 272，进程参数包含 272000 和
+  244800，启动进程树中的 Faryo/Gateway 私有变量与退役安装路径命中均为 0。
+- 本机部署通过 22 项 doctor；Owner/Gateway 重启及 Token 轮换不改变既有 tmux 几何。
+  三个空闲 Codex pane 原位恢复后 thread/cwd/尺寸保持，清洁环境检查通过；退役版本已从
+  managed versions 移出，v1.6.6 保留为健康回滚版本。
