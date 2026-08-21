@@ -309,7 +309,9 @@ for script_path in (
 owner_init_source = (root / "apps/owner/scripts/init-owner-env.sh").read_text(encoding="utf-8")
 gateway_init_source = (root / "apps/gateway/scripts/init-local-gateway.sh").read_text(encoding="utf-8")
 owner_unit_source = (root / "deploy/user-systemd/faryo-owner.service").read_text(encoding="utf-8")
+gateway_unit_source = (root / "deploy/user-systemd/faryo-gateway.service").read_text(encoding="utf-8")
 assert "KillMode=process" in owner_unit_source and "KillMode=mixed" not in owner_unit_source, "Owner restart must preserve tmux/Codex cgroup children"
+assert "PYTHONPATH=" not in owner_unit_source + gateway_unit_source and "sanitized_agent_environment" in owner_server, "Faryo service internals must not leak into managed tmux/Codex environments"
 assert "faryo_resolve_python" in owner_init_source and "faryo_resolve_python" in gateway_init_source, "initializers must use shared Python discovery"
 assert 'or "720"' in gateway_init_source and "1 <= parsed_session_hours <= 720" in gateway_init_source, "Gateway initializer must keep the 30-day session contract"
 assert 'id="historySearchInput"' in gateway and 'data-history-period="7d"' in gateway, "Gateway must expose metadata history search"

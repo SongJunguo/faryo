@@ -134,7 +134,7 @@ control metadata from the private mode-600 audit. Targets are HMAC aliases;
 message text, titles, paths, raw session IDs, tokens and client IP history are
 not recorded.
 
-`Start Codex` opens a dedicated working-directory picker. The picker defaults to
+`Start Codex` opens a dedicated launch-options picker. The picker defaults to
 the latest eligible cwd, deduplicates shortcuts within Recent while keeping the
 complete canonical child list in Folders. A real child remains in Folders even
 when the same canonical path is also a configured Root/Location/Recent entry;
@@ -144,7 +144,12 @@ uses `..` as the first Folders row for parent navigation, collapses long
 breadcrumbs, filters the current page without recursive search, and keeps
 `Start Codex here` fixed outside the scrolling list. Directory choices
 still come from Owner, carry its HMAC selection token, and are revalidated by
-Owner before tmux starts.
+Owner before tmux starts. The same sheet offers Default, 272K, 1M and a bounded
+custom K-token context window. Default sends no override. Custom values are
+validated independently by Gateway and Owner, then become one-off Codex
+`model_context_window` and 90% auto-compaction overrides. History-card body
+clicks remain the zero-dialog default resume path; `Options` exposes the same
+folder/context controls for an explicit resume.
 
 See [runbook.md](runbook.md) for Cloudflare Tunnel, first login, verification,
 and rollback instructions. Internet-facing deployments that can steer agents

@@ -684,6 +684,82 @@ main {
 .directory-hidden-toggle:disabled {
   opacity: 0.55;
 }
+.context-window-picker {
+  min-width: 0;
+  margin: 0;
+  padding: 8px 9px 7px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--panel2) 72%, transparent);
+}
+.context-window-picker legend {
+  padding: 0 4px;
+  color: var(--muted);
+  font: 850 10px/1.2 var(--app-font);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.context-window-controls {
+  display: grid;
+  grid-template-columns: repeat(3, auto) minmax(88px, 1fr);
+  gap: 6px;
+}
+.context-window-controls button,
+.context-window-custom {
+  min-height: 34px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  color: var(--muted);
+  font: 750 11px/1.1 var(--app-font);
+}
+.context-window-controls button {
+  padding: 0 9px;
+}
+.context-window-controls button[aria-pressed="true"],
+.context-window-custom.active,
+.context-window-controls button:hover,
+.context-window-controls button:focus-visible,
+.context-window-custom:focus-within {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--line));
+  background: color-mix(in srgb, var(--accent) 10%, var(--panel));
+  color: var(--accent);
+  outline: none;
+}
+.context-window-custom {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  padding: 0 8px;
+}
+.context-window-custom input {
+  width: 100%;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  text-align: right;
+}
+.context-window-custom input::placeholder {
+  color: var(--muted);
+  opacity: 0.8;
+}
+.context-window-custom span:last-child {
+  margin-left: 3px;
+}
+.context-window-picker > small {
+  display: block;
+  margin-top: 5px;
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.3;
+}
+.context-window-picker > .context-window-error {
+  color: var(--danger);
+}
 .directory-breadcrumb {
   display: flex;
   align-items: center;

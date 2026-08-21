@@ -70,6 +70,23 @@ class CodexAppServerClientTest(unittest.TestCase):
         self.assertTrue(process.stdin.closed)
         self.assertEqual(process.returncode, 0)
 
+    def test_start_uses_the_sanitized_codex_environment(self) -> None:
+        process = Process()
+        popen = mock.Mock(return_value=process)
+        client = codex_app_server.CodexAppServerClient(
+            argv=lambda *args: ["codex", *args],
+            client_version=lambda: "1.6.7",
+            environment=lambda argv: {"PATH": "/safe/bin", "ARGV0": argv[0]},
+            popen=popen,
+        )
+        with mock.patch.object(client, "read", return_value={"id": 1, "result": {}}):
+            self.assertIs(client.start_locked(0.1), process)
+
+        self.assertEqual(
+            popen.call_args.kwargs["env"],
+            {"PATH": "/safe/bin", "ARGV0": "codex"},
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

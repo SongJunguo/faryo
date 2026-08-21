@@ -46,10 +46,10 @@ Review and verify the script before executing it:
 ```bash
 sha256sum --check install-faryo.sh.sha256
 less install-faryo.sh
-bash install-faryo.sh --version v1.6.6 --workspace /path/to/workspace
+bash install-faryo.sh --version v1.6.7 --workspace /path/to/workspace
 ```
 
-The script then downloads `faryo-v1.6.6.tar.gz` and its checksum, accepts only a
+The script then downloads `faryo-v1.6.7.tar.gz` and its checksum, accepts only a
 bounded single-root regular-file archive, and invokes the same `faryo install`
 path used by source developers. It does not execute sudo, install apt packages,
 create a tunnel, or change Cloudflare settings.
@@ -63,7 +63,7 @@ When upgrading a pre-v1.5 deployment that still has the dedicated
 supervisor migration:
 
 ```bash
-bash install-faryo.sh --version v1.6.6 --workspace /path/to/workspace --migrate-owner
+bash install-faryo.sh --version v1.6.7 --workspace /path/to/workspace --migrate-owner
 ```
 
 The migration records and compares every existing agent tmux geometry. It stops
@@ -131,6 +131,10 @@ atomically change `current`, rewrite both units, restart them, and pass a health
 gate. This avoids a half-written symlink or package update changing a running
 service unexpectedly.
 
+The private venv contains the installed Faryo package, so service units do not
+export a source `PYTHONPATH`. Owner also removes service-only Faryo/Gateway
+values before starting or resuming a managed Codex process.
+
 Program versions are replaceable. `~/.faryo` is not: it contains tokens, login
 state, attachment data, delivery metadata, and other private runtime state.
 
@@ -154,7 +158,7 @@ tokens, session names, prompts, and conversation content.
 
 ```bash
 faryo update                    # latest stable release
-faryo update --version v1.6.6   # exact release
+faryo update --version v1.6.7   # exact release
 faryo rollback                  # previous healthy installed version
 ```
 
@@ -167,9 +171,9 @@ previous services. It never rolls back private conversation or attachment data.
 For a reviewed offline asset:
 
 ```bash
-faryo update --version v1.6.6 \
-  --archive ./faryo-v1.6.6.tar.gz \
-  --checksum ./faryo-v1.6.6.tar.gz.sha256
+faryo update --version v1.6.7 \
+  --archive ./faryo-v1.6.7.tar.gz \
+  --checksum ./faryo-v1.6.7.tar.gz.sha256
 ```
 
 ## Uninstall

@@ -46,6 +46,9 @@ def routes(legacy: Any, config: Any, client: owner_client.OwnerClient, support: 
                 source = str(payload.get("source") or "")
                 requested_cwd = str(payload.get("cwd") or "").strip()
                 cwd_token = str(payload.get("cwd_token") or payload.get("cwdToken") or "").strip()
+                context_window_k = legacy.clean_context_window_k(
+                    payload.get("context_window_k", payload.get("contextWindowK"))
+                )
                 if route not in legacy.BACKENDS or not target or not source:
                     raise ValueError("route, agent_session_id and source are required")
                 if not config.allowed_route(current, route):
@@ -64,6 +67,8 @@ def routes(legacy: Any, config: Any, client: owner_client.OwnerClient, support: 
                         "source": source,
                         "max_running": config.max_running(route),
                     }
+                    if context_window_k:
+                        owner_payload["context_window_k"] = context_window_k
                     if requested_cwd:
                         owner_payload.update({"cwd": requested_cwd, "cwd_token": cwd_token})
                     result = await to_thread.run_sync(
@@ -147,6 +152,9 @@ def routes(legacy: Any, config: Any, client: owner_client.OwnerClient, support: 
                 cwd_token = str(payload.get("cwd_token") or payload.get("cwdToken") or "").strip()
                 raw_launch_id = str(payload.get("client_launch_id") or payload.get("clientLaunchId") or "").strip()
                 launch_id = legacy.clean_client_launch_id(raw_launch_id)
+                context_window_k = legacy.clean_context_window_k(
+                    payload.get("context_window_k", payload.get("contextWindowK"))
+                )
                 target = launch_id or ""
                 if route not in legacy.BACKENDS or not command:
                     raise ValueError("route and command are required")
@@ -163,6 +171,7 @@ def routes(legacy: Any, config: Any, client: owner_client.OwnerClient, support: 
                         "command": command,
                         "max_running": config.max_running(route),
                         **({"client_launch_id": launch_id} if launch_id else {}),
+                        **({"context_window_k": context_window_k} if context_window_k else {}),
                     }
                     history_result = await to_thread.run_sync(
                         lambda: client.json_request(

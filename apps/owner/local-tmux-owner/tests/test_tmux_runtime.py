@@ -4,6 +4,7 @@ from pathlib import Path
 import subprocess
 import sys
 import unittest
+from unittest import mock
 
 
 OWNER_ROOT = Path(__file__).resolve().parents[1]
@@ -25,6 +26,18 @@ class TmuxRuntimeTest(unittest.TestCase):
     def test_command_timeout_is_not_silently_swallowed(self) -> None:
         with self.assertRaises(subprocess.TimeoutExpired):
             tmux_runtime.run_command([sys.executable, "-c", "import time; time.sleep(1)"], timeout=0.01)
+
+    def test_tmux_runner_can_start_or_connect_with_a_sanitized_environment(self) -> None:
+        with mock.patch.object(tmux_runtime, "run_command") as run:
+            tmux_runtime.run_tmux(
+                ["list-sessions"],
+                environment={"HOME": "/home/example", "PATH": "/usr/bin"},
+            )
+
+        self.assertEqual(
+            run.call_args.kwargs["environment"],
+            {"HOME": "/home/example", "PATH": "/usr/bin"},
+        )
 
     def test_process_table_parser_and_descendants_are_deterministic(self) -> None:
         table = tmux_runtime.parse_process_table("10 1 shell\n11 10 codex app-server\n12 10 node\n13 11 helper\ninvalid\n")

@@ -5,7 +5,9 @@
 
 ## Active
 
-当前没有未完成的版本计划。
+- [`session-context-window-plan.md`](session-context-window-plan.md)：为新建和恢复 Codex 会话
+  增加会话级上下文窗口预设与自定义 `K` 输入，并保持全局配置、目录安全和快速恢复默认
+  路径不变。
 
 ## Completed or maintenance mode
 

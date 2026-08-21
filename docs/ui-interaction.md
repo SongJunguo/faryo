@@ -37,11 +37,12 @@ The authenticated Gateway home page keeps two session regions separate:
   search title/folder metadata with date and archive filter chips. Search never
   scans conversation content and never hides Active Sessions.
 
-Resumable Codex cards offer `Choose folder` and `Archive`; archived cards offer
+Resumable Codex cards offer `Options` and `Archive`; archived cards offer
 `Restore`. Clicking the card body remains the fast path and lets Codex use its
-recorded cwd. `Choose folder` opens the same authenticated directory browser as
-Start Codex and sends its signed selection with the first resume request, so it
-does not create a speculative session in the old cwd. Archive uses a clear
+recorded cwd and default context. `Options` opens the same authenticated launch
+sheet as Start Codex and sends its signed directory plus an optional bounded
+context window with the first resume request, so it does not create a
+speculative session in the old cwd. Archive uses a clear
 confirmation because it moves the thread out of Current results, while Restore
 is immediate. These actions preserve the current search, filter, and page
 query. Active, desktop, running, waiting, starting, exited, and archived cards
@@ -71,12 +72,17 @@ version; it never strands the browser in an updater screen. If the binary
 changes, Owner restarts its shared App Server and refreshes the private command
 catalog before normal capture continues.
 Managed sessions use the first free `faryoN` name. The start flow asks for the
-workstation, then opens a directory-only browser at the most recent cwd. It
+workstation, then opens a launch-options browser at the most recent cwd. It
 shows the current path, parent, configured roots, recent locations and every
 returned child folder without a count cap or cross-section removal. Hidden
 dot-directories remain controlled only by the remembered Hidden toggle; an
 optional search filters only while the user has entered text. The selected
 canonical path is signed and revalidated by Owner.
+The same sheet offers Default, 272K, 1M, and custom whole-number K-token context
+choices. Default sends no override. A custom value is validated by Gateway and
+Owner, then sets only that process's Codex context and 90% auto-compaction
+threshold; it never rewrites the user's global Codex config. Directory
+navigation keeps the in-progress context choice.
 
 Gateway route labels come from runtime configuration. Public browser requests
 never receive raw Owner tokens; Gateway injects them while proxying.

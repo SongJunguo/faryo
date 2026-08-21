@@ -221,6 +221,22 @@ class FaryoCliTest(unittest.TestCase):
                 [str(node), str(script), "--version"],
             )
 
+    def test_agent_environment_removes_faryo_internals_and_keeps_user_python_paths(self) -> None:
+        root = "/opt/faryo/versions/v1.5.3/app"
+        environment = codex_runtime.sanitized_agent_environment({
+            "HOME": "/home/example",
+            "PATH": "/usr/bin",
+            "FARYO_INSTALL_ROOT": root,
+            "FARYO_PYTHON": "/opt/faryo/versions/v1.5.3/.venv/bin/python",
+            "FARYO_OWNER_TOKEN": "private",
+            "GATEWAY_AUTH_CONFIG": "/private/auth.json",
+            "PYTHONPATH": f"{root}/src:/workspace/python",
+        })
+
+        self.assertEqual(environment["HOME"], "/home/example")
+        self.assertEqual(environment["PYTHONPATH"], "/workspace/python")
+        self.assertFalse(any(name.startswith(("FARYO_", "GATEWAY_")) for name in environment))
+
     def test_legacy_start_is_idempotent_and_keeps_gateway_managed(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             layout = self.layout(Path(temp))
@@ -343,6 +359,7 @@ class FaryoCliTest(unittest.TestCase):
         self.assertIn("-m faryo_cli internal run-gateway", gateway)
         self.assertNotIn("start-web-owner.sh", owner)
         self.assertNotIn("run-gateway.sh", gateway)
+        self.assertNotIn("PYTHONPATH=", owner + gateway)
         self.assertNotIn("@FARYO_", owner + gateway)
 
     def test_service_unit_preserves_private_venv_python_symlink(self) -> None:

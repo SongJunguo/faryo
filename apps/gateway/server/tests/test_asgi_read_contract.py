@@ -629,7 +629,12 @@ class AsgiReadContractTest(unittest.TestCase):
         self.assertEqual(json.loads(asgi_result[2])["error"], "explicit revoke confirmation is required")
 
     def test_agent_resume_and_audit_contract_match(self) -> None:
-        body = json.dumps({"route": "lab", "agent_session_id": "thread-fixture", "source": "codex-cli"}).encode("utf-8")
+        body = json.dumps({
+            "route": "lab",
+            "agent_session_id": "thread-fixture",
+            "source": "codex-cli",
+            "context_window_k": 1000,
+        }).encode("utf-8")
         csrf = gateway_security.csrf_token(self.config.cookie_secret, "tester", self.config.auth_epoch("tester"))
         headers = {legacy.CSRF_HEADER: csrf, "Content-Type": "application/json"}
         self.config.audit_calls.clear()
@@ -640,6 +645,8 @@ class AsgiReadContractTest(unittest.TestCase):
         self.assertEqual(json.loads(asgi_result[2])["session"], "faryo3")
         self.assertEqual(self.config.audit_calls[0]["action"], "resume")
         self.assertEqual(self.config.audit_calls[0]["target"], "thread-fixture")
+        owner_payload = json.loads(OwnerContractFixture.requests[-1]["body"])
+        self.assertEqual(owner_payload["context_window_k"], 1000)
 
     def test_agent_resume_returns_directory_preflight_then_accepts_signed_choice(self) -> None:
         csrf = gateway_security.csrf_token(self.config.cookie_secret, "tester", self.config.auth_epoch("tester"))
@@ -688,7 +695,12 @@ class AsgiReadContractTest(unittest.TestCase):
         self.assertEqual(json.loads(response[2])["error"], "working directory selection is invalid or expired")
 
     def test_agent_new_and_audit_contract_match(self) -> None:
-        body = json.dumps({"route": "lab", "command": "codex", "client_launch_id": "launch-fixture"}).encode("utf-8")
+        body = json.dumps({
+            "route": "lab",
+            "command": "codex",
+            "client_launch_id": "launch-fixture",
+            "context_window_k": 272,
+        }).encode("utf-8")
         csrf = gateway_security.csrf_token(self.config.cookie_secret, "tester", self.config.auth_epoch("tester"))
         headers = {legacy.CSRF_HEADER: csrf, "Content-Type": "application/json"}
         self.config.audit_calls.clear()
@@ -699,6 +711,25 @@ class AsgiReadContractTest(unittest.TestCase):
         self.assertEqual(json.loads(asgi_result[2])["session"], "faryo4")
         self.assertEqual(self.config.audit_calls[0]["action"], "start")
         self.assertEqual(self.config.audit_calls[0]["target"], "faryo4")
+        owner_payload = json.loads(OwnerContractFixture.requests[-1]["body"])
+        self.assertEqual(owner_payload["context_window_k"], 272)
+
+    def test_agent_launch_rejects_invalid_context_window_before_owner(self) -> None:
+        body = json.dumps({
+            "route": "lab",
+            "command": "codex",
+            "client_launch_id": "launch-fixture",
+            "context_window_k": 1051,
+        }).encode("utf-8")
+        csrf = gateway_security.csrf_token(self.config.cookie_secret, "tester", self.config.auth_epoch("tester"))
+        headers = {legacy.CSRF_HEADER: csrf, "Content-Type": "application/json"}
+        before = len(OwnerContractFixture.requests)
+        response = self.request(
+            self.asgi_base, "/api/agent/new", authenticated=True, method="POST", body=body, extra_headers=headers,
+        )
+        self.assertEqual(response[0], HTTPStatus.BAD_REQUEST)
+        self.assertIn("context window", json.loads(response[2])["error"])
+        self.assertEqual(len(OwnerContractFixture.requests), before)
 
     def test_agent_new_rejects_invalid_cwd_token_equally(self) -> None:
         body = json.dumps({

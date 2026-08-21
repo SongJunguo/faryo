@@ -32,6 +32,36 @@ class AgentSessionTest(unittest.TestCase):
         self.assertEqual(server.clean_agent_launch_command("codex"), "codex")
         self.assertIsNone(server.clean_agent_launch_command("claude"))
 
+    def test_owner_scrubs_stale_private_tmux_environment_without_touching_user_values(self):
+        root = "/opt/faryo/versions/v1.5.3/app"
+        shown = server.subprocess.CompletedProcess(
+            ["tmux"],
+            0,
+            (
+                f"FARYO_INSTALL_ROOT={root}\n"
+                "FARYO_OWNER_TOKEN=private\n"
+                f"PYTHONPATH={root}/src:/workspace/python\n"
+                "KEEP_ME=yes\n"
+            ),
+            "",
+        )
+        updated = server.subprocess.CompletedProcess(["tmux"], 0, "", "")
+        with mock.patch.object(server, "tmux", side_effect=[shown, updated, updated, updated]) as tmux:
+            changed = server.scrub_tmux_global_environment(self.config)
+
+        self.assertEqual(
+            set(changed),
+            {"FARYO_INSTALL_ROOT", "FARYO_OWNER_TOKEN", "PYTHONPATH"},
+        )
+        commands = [call.args[1] for call in tmux.call_args_list[1:]]
+        self.assertIn(["set-environment", "-gu", "FARYO_INSTALL_ROOT"], commands)
+        self.assertIn(["set-environment", "-gu", "FARYO_OWNER_TOKEN"], commands)
+        self.assertIn(
+            ["set-environment", "-g", "PYTHONPATH", "/workspace/python"],
+            commands,
+        )
+        self.assertFalse(any("KEEP_ME" in command for command in commands))
+
     def test_unmanaged_codex_tmux_is_discovered_as_active(self):
         with (
             mock.patch.object(server, "tmux_sessions", return_value=["desktop"]),
@@ -187,7 +217,15 @@ class AgentSessionTest(unittest.TestCase):
             mock.patch.object(server, "ensure_pane_width") as ensure_width,
             mock.patch.object(server.time, "sleep"),
         ):
-            name = server.start_agent_runtime(self.config, Path("/workspace"), "codex", [], max_running=8, launch_id="web-launch-123")
+            name = server.start_agent_runtime(
+                self.config,
+                Path("/workspace"),
+                "codex",
+                [],
+                max_running=8,
+                launch_id="web-launch-123",
+                context_window_k=272,
+            )
 
         launch = next(call.args[1] for call in tmux.call_args_list if call.args[1][0] == "new-session")
         self.assertTrue(name.startswith("faryo") and name[5:].isdigit())
@@ -198,9 +236,14 @@ class AgentSessionTest(unittest.TestCase):
         codex_argv.assert_called_once_with(
             "-c",
             "check_for_update_on_startup=false",
+            "-c",
+            "model_context_window=272000",
+            "-c",
+            "model_auto_compact_token_limit=244800",
         )
         session_option.assert_any_call(self.config, name, "@faryo_managed", "1")
         session_option.assert_any_call(self.config, name, "@faryo_launch_id", "web-launch-123")
+        session_option.assert_any_call(self.config, name, "@faryo_context_window_k", "272")
         session_option.assert_any_call(self.config, name, "@faryo_git_root", "/workspace")
         session_option.assert_any_call(self.config, name, "@faryo_codex_update", "pending")
         self.assertTrue(any(call.args[2] == "@faryo_starting_at" and call.args[3] for call in session_option.call_args_list))
@@ -237,6 +280,22 @@ class AgentSessionTest(unittest.TestCase):
         self.assertFalse(enabled)
         self.assertEqual(argv, ["/runtime/codex"])
         codex_argv.assert_called_once_with("resume", "thread-a")
+
+    def test_context_window_validation_and_cli_overrides_are_bounded(self):
+        self.assertEqual(server.bounded_context_window_k({}), 0)
+        self.assertEqual(server.bounded_context_window_k({"context_window_k": 1000}), 1000)
+        self.assertEqual(
+            server.codex_context_window_args(1000),
+            [
+                "-c",
+                "model_context_window=1000000",
+                "-c",
+                "model_auto_compact_token_limit=900000",
+            ],
+        )
+        for invalid in (True, 31, 1051, "272.5", "1m"):
+            with self.subTest(invalid=invalid), self.assertRaises(server.OwnerError):
+                server.bounded_context_window_k({"context_window_k": invalid})
 
     def test_new_agent_ready_window_must_remain_stable(self):
         completed = server.subprocess.CompletedProcess(["tmux"], 0, "", "")
@@ -483,12 +542,14 @@ class AgentSessionTest(unittest.TestCase):
                     self.config,
                     "thread-a",
                     cwd_override=selected,
+                    context_window_k=1000,
                 )
 
         self.assertEqual("faryo7", session)
         args = start.call_args.args
         self.assertEqual(selected, args[1])
         self.assertEqual(["resume", "-C", str(selected), "thread-a"], args[3])
+        self.assertEqual(start.call_args.kwargs["context_window_k"], 1000)
 
     def test_workspace_history_scope_hides_unmapped_desktop_agent(self):
         with (

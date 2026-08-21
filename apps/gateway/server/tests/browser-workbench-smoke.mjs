@@ -203,7 +203,7 @@ await withBrowser({
   }
 
   const lifecycleFixture = await evaluate(`(() => {const states=['starting','running','waiting','exited','desktop','resumable','archived'],labels={starting:'Starting',running:'Running',waiting:'Waiting',exited:'Exited',desktop:'Desktop',resumable:'Resume',archived:'Archived'};return states.map(state=>{const active=!['resumable','archived'].includes(state),container=document.createElement('div'),card=window.__faryoRenderSessionFixture({id:'anonymous-thread',title:'Anonymous session',route:'txy',routeLabel:'Workstation',source:'codex-cli',tmuxSession:active?'anonymous-tmux':'',managed:active&&state!=='desktop',agentRunning:state==='running',archived:state==='archived',state,updatedTs:1},container),choose=card.querySelector('.choose-folder-session');return{state:card.dataset.state,label:card.querySelector('.session-meta')?.textContent.includes(labels[state])||false,close:Boolean(card.querySelector('.close-session')),archive:Boolean(card.querySelector('.archive-session')),restore:Boolean(card.querySelector('.restore-session')),choose:Boolean(choose),chooseLabel:choose?.getAttribute('aria-label')||''};});})()`);
-  if (!Array.isArray(lifecycleFixture) || lifecycleFixture.some((item) => !item.label || item.state === 'desktop' && item.close || ['starting','running','waiting','exited'].includes(item.state) && !item.close || item.state==='resumable'&&(!item.archive||!item.choose||item.chooseLabel!=='Choose folder and resume') || item.state==='archived'&&!item.restore || item.state!=='resumable'&&(item.archive||item.choose) || item.state!=='archived'&&item.restore)) {
+  if (!Array.isArray(lifecycleFixture) || lifecycleFixture.some((item) => !item.label || item.state === 'desktop' && item.close || ['starting','running','waiting','exited'].includes(item.state) && !item.close || item.state==='resumable'&&(!item.archive||!item.choose||item.chooseLabel!=='Resume options') || item.state==='archived'&&!item.restore || item.state!=='resumable'&&(item.archive||item.choose) || item.state!=='archived'&&item.restore)) {
     throw new Error(`Session lifecycle cards are inconsistent: ${JSON.stringify(lifecycleFixture)}`);
   }
 
@@ -276,12 +276,33 @@ await withBrowser({
     || !explicitFolderSheet.body.includes('saved Codex conversation') || !explicitFolderSheet.folder || !explicitFolderSheet.primary) {
     throw new Error(`Explicit resume folder picker did not open: ${JSON.stringify(explicitFolderSheet)}`);
   }
+  const contextPicker = await evaluate(`(() => ({
+    visible: Boolean(document.getElementById('contextWindowPicker')?.getClientRects().length),
+    defaultSelected: document.querySelector('[data-context-window-k="0"]')?.getAttribute('aria-pressed') === 'true',
+    presets: [...document.querySelectorAll('[data-context-window-k]')].map((item) => item.textContent.trim()),
+    inputMin: document.getElementById('contextWindowCustom')?.min || '',
+    inputMax: document.getElementById('contextWindowCustom')?.max || '',
+  }))()`);
+  if (!contextPicker.visible || !contextPicker.defaultSelected
+    || !contextPicker.presets.includes('272K') || !contextPicker.presets.includes('1M')
+    || contextPicker.inputMin !== '32' || contextPicker.inputMax !== '1050') {
+    throw new Error(`Context-window controls are incomplete: ${JSON.stringify(contextPicker)}`);
+  }
+  await evaluate(`(() => {const input=document.getElementById('contextWindowCustom');input.value='272';input.dispatchEvent(new Event('input',{bubbles:true}));})()`);
   await evaluate("document.querySelector('#modalChoices .directory-row-folder')?.click()");
   for (let attempt = 0; attempt < 80; attempt += 1) {
     await delay(50);
     const selected = await evaluate("document.querySelector('#directoryBreadcrumb .directory-crumb[aria-current=\"location\"]')?.textContent||''");
     if (selected === 'selected') break;
     if (attempt === 79) throw new Error('Explicit resume folder navigation did not select the requested folder');
+  }
+  const retainedContext = await evaluate(`(() => ({
+    value: document.getElementById('contextWindowCustom')?.value || '',
+    active: document.querySelector('.context-window-custom')?.classList.contains('active') || false,
+    help: document.getElementById('contextWindowHelp')?.textContent || '',
+  }))()`);
+  if (retainedContext.value !== '272' || !retainedContext.active || !retainedContext.help.includes('auto-compact at 244K')) {
+    throw new Error(`Context-window choice did not survive folder navigation: ${JSON.stringify(retainedContext)}`);
   }
   await evaluate("[...document.querySelectorAll('#modalActions button')].find(item=>item.textContent==='Start resumed Codex here')?.click()");
   let explicitResumeNavigated = false;
@@ -295,7 +316,8 @@ await withBrowser({
   if (!explicitResumeNavigated || explicitResumeRequests.length !== 1
     || explicitResumeRequests[0]?.agent_session_id !== 'anonymous-explicit-thread'
     || explicitResumeRequests[0]?.cwd !== '/workspace/selected'
-    || explicitResumeRequests[0]?.cwd_token !== 'signed-selected-folder') {
+    || explicitResumeRequests[0]?.cwd_token !== 'signed-selected-folder'
+    || explicitResumeRequests[0]?.context_window_k !== 272) {
     throw new Error(`Explicit folder resume request is incorrect: ${JSON.stringify(explicitResumeRequests)}`);
   }
   await evaluate(`(() => {history.replaceState(null,'',location.pathname+location.search);document.getElementById('faryoExplicitResumeFixture')?.remove();})()`);
@@ -476,6 +498,9 @@ await withBrowser({
         headerBackAbsent: !document.getElementById('modalBack'),
         searchVisible: (() => { const item=document.getElementById('directorySearch');return Boolean(item&&item.getClientRects().length); })(),
         hiddenToggleVisible: (() => { const item=document.getElementById('directoryHiddenToggle');return Boolean(item&&item.getClientRects().length&&item.getAttribute('aria-pressed')==='false'); })(),
+        contextPickerVisible: (() => { const item=document.getElementById('contextWindowPicker');return Boolean(item&&item.getClientRects().length); })(),
+        contextDefault: document.querySelector('[data-context-window-k="0"]')?.getAttribute('aria-pressed') === 'true',
+        contextOneMillion: [...document.querySelectorAll('[data-context-window-k]')].some((item) => item.textContent.trim() === '1M'),
         sections: [...document.querySelectorAll('#modalChoices .directory-section')].map((item) => item.dataset.directorySection),
         recentCount: document.querySelectorAll('#modalChoices .directory-row-recent').length,
         folderCount: document.querySelectorAll('#modalChoices .directory-row-folder').length,
@@ -497,6 +522,7 @@ await withBrowser({
       || !cwdConfirmation.directoryMode || !cwdConfirmation.breadcrumbs || cwdConfirmation.breadcrumbs > 4
       || !cwdConfirmation.breadcrumbLabelsClean || !cwdConfirmation.currentCrumb
       || !cwdConfirmation.headerBackAbsent || !cwdConfirmation.searchVisible || !cwdConfirmation.hiddenToggleVisible
+      || !cwdConfirmation.contextPickerVisible || !cwdConfirmation.contextDefault || !cwdConfirmation.contextOneMillion
       || !cwdConfirmation.sections.includes('folders') || cwdConfirmation.recentCount > 4
       || !cwdConfirmation.folderCount || !cwdConfirmation.parentRowFirst || !cwdConfirmation.folderRowsHaveNoPaths
       || !cwdConfirmation.flatPrefixesAbsent || !cwdConfirmation.hasCancel || !cwdConfirmation.hasPrimary

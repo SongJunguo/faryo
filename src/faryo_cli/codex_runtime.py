@@ -11,6 +11,7 @@ from typing import Mapping
 
 VERSION_RE = re.compile(r"^v?(?P<major>\d+)(?:\.(?P<minor>\d+))?(?:\.(?P<patch>\d+))?")
 TRUE_VALUES = {"1", "true", "yes", "on"}
+PRIVATE_RUNTIME_PREFIXES = ("FARYO_", "GATEWAY_")
 
 
 def _executable(path: Path | str | None) -> Path | None:
@@ -151,10 +152,45 @@ def codex_argv(executable: str, *args: str) -> list[str]:
     return [str(path), *args]
 
 
-def codex_environment(argv: list[str], base: Mapping[str, str] | None = None) -> dict[str, str]:
-    """Expose the selected runtime's sibling npm to Codex child processes."""
+def sanitized_agent_environment(base: Mapping[str, str] | None = None) -> dict[str, str]:
+    """Remove Faryo service internals before starting tmux or agent processes."""
 
     environment = dict(os.environ if base is None else base)
+    roots = [
+        Path(value).expanduser()
+        for name in ("FARYO_INSTALL_ROOT", "FARYO_ROOT")
+        if (value := str(environment.get(name) or "").strip())
+    ]
+    python_path = str(environment.get("PYTHONPATH") or "")
+    if python_path and roots:
+        internal_paths = {
+            str((root / "src").resolve(strict=False))
+            for root in roots
+        }
+        kept = []
+        for entry in python_path.split(os.pathsep):
+            if not entry:
+                continue
+            try:
+                normalized = str(Path(entry).expanduser().resolve(strict=False))
+            except OSError:
+                normalized = entry
+            if normalized not in internal_paths:
+                kept.append(entry)
+        if kept:
+            environment["PYTHONPATH"] = os.pathsep.join(kept)
+        else:
+            environment.pop("PYTHONPATH", None)
+    for name in tuple(environment):
+        if name.startswith(PRIVATE_RUNTIME_PREFIXES):
+            environment.pop(name, None)
+    return environment
+
+
+def codex_environment(argv: list[str], base: Mapping[str, str] | None = None) -> dict[str, str]:
+    """Expose matching Node/npm to Codex without leaking Faryo internals."""
+
+    environment = sanitized_agent_environment(base)
     if not argv:
         return environment
     bin_dir = Path(argv[0]).expanduser().parent

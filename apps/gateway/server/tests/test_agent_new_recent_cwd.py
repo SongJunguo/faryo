@@ -25,6 +25,14 @@ class SelectRecentAgentCwdTest(unittest.TestCase):
         self.assertEqual(gateway.clean_agent_launch_command("codex"), "codex")
         self.assertIsNone(gateway.clean_agent_launch_command("claude"))
 
+    def test_context_window_is_optional_and_bounded_in_k_tokens(self) -> None:
+        self.assertEqual(gateway.clean_context_window_k(None), 0)
+        self.assertEqual(gateway.clean_context_window_k(272), 272)
+        self.assertEqual(gateway.clean_context_window_k("1000"), 1000)
+        for invalid in (True, 31, 1051, "272.5", "1m"):
+            with self.subTest(invalid=invalid), self.assertRaises(ValueError):
+                gateway.clean_context_window_k(invalid)
+
     def test_picks_most_recent_cwd(self) -> None:
         sessions = [session("~/brain/projects/old", 10), session("~/brain/projects/faryo", 20)]
         self.assertEqual(gateway.select_recent_agent_cwd(sessions, None), "~/brain/projects/faryo")

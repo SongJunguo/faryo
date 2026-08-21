@@ -110,6 +110,8 @@ document.addEventListener("click", (event) => {
 });
 const WORKBENCH_CACHE_KEY = "faryoWorkbenchSnapshot";
 const DIRECTORY_HIDDEN_PREFERENCE_KEY = "faryoDirectoryShowHiddenV1";
+const CONTEXT_WINDOW_MIN_K = 32;
+const CONTEXT_WINDOW_MAX_K = 1050;
 const labels = JSON.parse(
     document.getElementById("faryoRouteLabels")?.textContent || "{}",
   ),
@@ -390,7 +392,9 @@ function resetSheetMode() {
     toolbar = document.getElementById("directoryToolbar"),
     breadcrumb = document.getElementById("directoryBreadcrumb"),
     search = document.getElementById("directorySearch"),
-    hiddenToggle = document.getElementById("directoryHiddenToggle");
+    hiddenToggle = document.getElementById("directoryHiddenToggle"),
+    contextInput = document.getElementById("contextWindowCustom"),
+    contextError = document.getElementById("contextWindowError");
   modal.classList.remove("directory-mode");
   toolbar.hidden = true;
   breadcrumb.replaceChildren();
@@ -400,6 +404,19 @@ function resetSheetMode() {
   hiddenToggle.disabled = false;
   hiddenToggle.setAttribute("aria-pressed", "false");
   hiddenToggle.classList.remove("active");
+  for (const button of document.querySelectorAll("[data-context-window-k]")) {
+    button.onclick = null;
+    button.setAttribute(
+      "aria-pressed",
+      button.dataset.contextWindowK === "0" ? "true" : "false",
+    );
+  }
+  contextInput.value = "";
+  contextInput.oninput = null;
+  contextInput.removeAttribute("aria-invalid");
+  contextInput.closest(".context-window-custom")?.classList.remove("active");
+  contextError.hidden = true;
+  contextError.textContent = "";
 }
 function sheet(title, body, choices) {
   return new Promise((resolve) => {
@@ -980,6 +997,78 @@ function directorySection(title, items, done, more) {
   section.append(heading, ...items.map((item) => directoryRow(item, done)));
   return section;
 }
+function contextWindowValue(state) {
+  if (state.mode === "default") return 0;
+  const raw =
+    state.mode === "custom"
+      ? String(state.custom || "")
+      : String(state.k || "");
+  if (!/^[0-9]{1,4}$/.test(raw)) return null;
+  const value = Number.parseInt(raw, 10);
+  return value >= CONTEXT_WINDOW_MIN_K && value <= CONTEXT_WINDOW_MAX_K
+    ? value
+    : null;
+}
+function bindContextWindowPicker(state) {
+  const buttons = [...document.querySelectorAll("[data-context-window-k]")],
+    input = document.getElementById("contextWindowCustom"),
+    custom = input.closest(".context-window-custom"),
+    help = document.getElementById("contextWindowHelp"),
+    error = document.getElementById("contextWindowError");
+  const clearError = () => {
+      error.hidden = true;
+      error.textContent = "";
+      input.removeAttribute("aria-invalid");
+    },
+    sync = () => {
+      const selected = contextWindowValue(state);
+      for (const button of buttons) {
+        const value = Number.parseInt(button.dataset.contextWindowK || "0", 10);
+        button.setAttribute(
+          "aria-pressed",
+          String(
+            state.mode === "default"
+              ? value === 0
+              : state.mode === "preset" && value === state.k,
+          ),
+        );
+      }
+      custom.classList.toggle("active", state.mode === "custom");
+      if (state.mode === "default")
+        help.textContent = "Inherit this workstation's Codex settings.";
+      else if (selected !== null)
+        help.textContent = `${selected}K requested · auto-compact at ${Math.floor((selected * 90) / 100)}K. Codex may report a slightly smaller usable window.`;
+      else
+        help.textContent = `Enter a whole number from ${CONTEXT_WINDOW_MIN_K} to ${CONTEXT_WINDOW_MAX_K} K.`;
+    };
+  input.value = state.mode === "custom" ? String(state.custom || "") : "";
+  for (const button of buttons)
+    button.onclick = () => {
+      const value = Number.parseInt(button.dataset.contextWindowK || "0", 10);
+      state.mode = value ? "preset" : "default";
+      state.k = value;
+      state.custom = "";
+      input.value = "";
+      clearError();
+      sync();
+    };
+  input.oninput = () => {
+    state.mode = "custom";
+    state.custom = input.value.trim();
+    clearError();
+    sync();
+  };
+  sync();
+  return () => {
+    const value = contextWindowValue(state);
+    if (value !== null) return value;
+    error.textContent = `Enter a whole number from ${CONTEXT_WINDOW_MIN_K} to ${CONTEXT_WINDOW_MAX_K} K.`;
+    error.hidden = false;
+    input.setAttribute("aria-invalid", "true");
+    input.focus({ preventScroll: true });
+    return null;
+  };
+}
 function directorySheet(data, recent, label, options = {}) {
   return new Promise((resolve) => {
     const modal = document.getElementById("modal"),
@@ -997,6 +1086,9 @@ function directorySheet(data, recent, label, options = {}) {
     document.getElementById("modalBody").textContent =
       options.body || `Choose where this ${label} session should work.`;
     toolbar.hidden = false;
+    const readContextWindowK = bindContextWindowPicker(
+      options.contextWindowState || { mode: "default", k: 0, custom: "" },
+    );
     let expanded = false,
       currentData = data,
       showHidden = Boolean(data.showHidden ?? options.showHidden);
@@ -1107,12 +1199,15 @@ function directorySheet(data, recent, label, options = {}) {
     select.type = "button";
     select.className = "directory-primary";
     select.textContent = `Start ${label} here`;
-    select.addEventListener("click", () =>
+    select.addEventListener("click", () => {
+      const contextWindowK = readContextWindowK();
+      if (contextWindowK === null) return;
       done({
         cwd: String(currentData.path || ""),
         cwdToken: String(currentData.selectionToken || ""),
-      }),
-    );
+        contextWindowK,
+      });
+    });
     actions.replaceChildren(cancel, select);
     modal.onclick = (event) => {
       if (event.target === modal) done(null);
@@ -1149,6 +1244,7 @@ async function firstAvailableDirectoryPage(route, recent, showHidden = false) {
 }
 async function selectNewCwd(route, label, cwdChoices, body = "") {
   const recent = Array.isArray(cwdChoices?.[route]) ? cwdChoices[route] : [];
+  const contextWindowState = { mode: "default", k: 0, custom: "" };
   let showHidden = false;
   try {
     showHidden = localStorage.getItem(DIRECTORY_HIDDEN_PREFERENCE_KEY) === "1";
@@ -1160,6 +1256,7 @@ async function selectNewCwd(route, label, cwdChoices, body = "") {
     const selected = await directorySheet(data, recent, label, {
       showHidden,
       body,
+      contextWindowState,
       onToggleHidden: async (nextShowHidden, currentPath) => {
         const next = await directoryPage(
           route,
@@ -1193,6 +1290,8 @@ async function agentNew(route, command, directory) {
     payload.cwd = directory.cwd;
     payload.cwd_token = directory.cwdToken || "";
   }
+  if (directory?.contextWindowK)
+    payload.context_window_k = directory.contextWindowK;
   const request = async () =>
     fetchJson(
       "/api/agent/new",
@@ -1227,6 +1326,8 @@ async function resumeSession(
     payload.cwd = selectedDirectory.cwd;
     payload.cwd_token = selectedDirectory.cwdToken || "";
   }
+  if (selectedDirectory?.contextWindowK)
+    payload.context_window_k = selectedDirectory.contextWindowK;
   const request = async () =>
     fetchJson(
       "/api/agent/resume",
@@ -1254,6 +1355,8 @@ async function resumeSession(
     if (directory === null) return;
     payload.cwd = directory.cwd;
     payload.cwd_token = directory.cwdToken || "";
+    if (directory.contextWindowK)
+      payload.context_window_k = directory.contextWindowK;
     data = await request();
     if (data.requiresWorkingDirectory)
       throw new Error("The selected working directory was not accepted.");

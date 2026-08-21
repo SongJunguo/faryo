@@ -111,10 +111,10 @@ function SessionCard({ item, routeLabels, actions }) {
             class="mini-btn choose-folder-session"
             type="button"
             disabled={view.chooseFolderDisabled}
-            title="Choose folder and resume"
-            aria-label="Choose folder and resume"
+            title="Choose folder, context window and resume"
+            aria-label="Resume options"
           >
-            Choose folder
+            Options
           </button>
         )}
         <button class="mini-btn archive-session" type="button">

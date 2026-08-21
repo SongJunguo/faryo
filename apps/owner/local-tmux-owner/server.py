@@ -140,6 +140,9 @@ AGENT_START_READY_STABLE_SECONDS = 0.75
 AGENT_START_STATE_GRACE_SECONDS = 5.0
 CODEX_UPDATE_START_READY_TIMEOUT = 220.0
 AGENT_ARCHIVE_VERIFY_TIMEOUT = 3.0
+CONTEXT_WINDOW_MIN_K = 32
+CONTEXT_WINDOW_MAX_K = 1050
+CONTEXT_WINDOW_COMPACT_PERCENT = 90
 RUNTIME_LOCK = threading.RLock()
 AGENT_START_MONITOR_LOCK = threading.Lock()
 AGENT_START_MONITORS: dict[str, int] = {}
@@ -244,6 +247,7 @@ FAST_CONFIG_KEYS = {
 }
 SESSION_GIT_PREFIXES = ("🌿", "✏️", "✏", "⚠️")
 SESSION_GIT_ROOT_OPTION = "@faryo_git_root"
+SESSION_CONTEXT_WINDOW_OPTION = "@faryo_context_window_k"
 SESSION_TITLE_NOISE_RE = re.compile(r"^(?:📁 |Ctx |(?:gpt|o\d)[\w.\- ]+\s+(?:low|medium|high|xhigh)$)", re.I)
 class AgentProfile(NamedTuple):
     key: str
@@ -435,7 +439,51 @@ class Config:
 run_cmd = tmux_runtime.run_command
 
 def tmux(config: Config, args: list[str], *, timeout: float = 5.0) -> subprocess.CompletedProcess[str]:
-    return tmux_runtime.run_tmux(args, timeout=timeout)
+    return tmux_runtime.run_tmux(
+        args,
+        timeout=timeout,
+        environment=codex_runtime.sanitized_agent_environment(),
+    )
+
+
+def parse_tmux_global_environment(output: str) -> dict[str, str]:
+    values: dict[str, str] = {}
+    for line in output.splitlines():
+        if not line or line.startswith("-") or "=" not in line:
+            continue
+        name, value = line.split("=", 1)
+        if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name):
+            values[name] = value
+    return values
+
+
+def scrub_tmux_global_environment(config: Config) -> tuple[str, ...]:
+    """Keep a persistent tmux server from carrying Faryo service internals."""
+
+    result = tmux(config, ["show-environment", "-g"], timeout=2)
+    if result.returncode != 0:
+        return ()
+    current = parse_tmux_global_environment(result.stdout)
+    cleaned = codex_runtime.sanitized_agent_environment(current)
+    changed: list[str] = []
+    for name in sorted(current):
+        if name in cleaned and cleaned[name] == current[name]:
+            continue
+        if name == "PYTHONPATH" and cleaned.get(name):
+            update = tmux(
+                config,
+                ["set-environment", "-g", name, cleaned[name]],
+                timeout=2,
+            )
+        else:
+            update = tmux(
+                config,
+                ["set-environment", "-gu", name],
+                timeout=2,
+            )
+        if update.returncode == 0:
+            changed.append(name)
+    return tuple(changed)
 
 
 def tmux_target(config: Config) -> str:
@@ -881,6 +929,19 @@ def codex_auto_update_enabled() -> bool:
     }
 
 
+def codex_context_window_args(context_window_k: int = 0) -> list[str]:
+    if not context_window_k:
+        return []
+    tokens = context_window_k * 1000
+    compact_tokens = tokens * CONTEXT_WINDOW_COMPACT_PERCENT // 100
+    return [
+        "-c",
+        f"model_context_window={tokens}",
+        "-c",
+        f"model_auto_compact_token_limit={compact_tokens}",
+    ]
+
+
 def managed_codex_launch_argv(name: str, *args: str) -> tuple[list[str], bool]:
     if not codex_auto_update_enabled():
         return codex_cli_argv(*args), False
@@ -916,7 +977,12 @@ def agent_start_ready_timeout(config: Config, name: str) -> float:
 
 def installed_codex_version() -> str:
     try:
-        result = run_cmd(codex_cli_argv("--version"), timeout=4)
+        argv = codex_cli_argv("--version")
+        result = run_cmd(
+            argv,
+            timeout=4,
+            environment=codex_runtime.codex_environment(argv),
+        )
     except (OSError, OwnerError, subprocess.TimeoutExpired):
         return ""
     if result.returncode != 0:
@@ -929,7 +995,7 @@ def refresh_command_catalog() -> None:
     global _command_catalog_refreshing
     try:
         script = APP_DIR / "tests" / "codex-command-inventory.sh"
-        environment = dict(os.environ)
+        environment = codex_runtime.codex_environment(codex_cli_argv())
         environment["FARYO_CODEX_COMMAND_CATALOG"] = str(
             codex_command_policy.DEFAULT_RUNTIME_CATALOG
         )
@@ -989,6 +1055,7 @@ def codex_app_server_argv(*args: str) -> list[str]:
 _codex_app_server_client = codex_app_server.CodexAppServerClient(
     argv=codex_app_server_argv,
     client_version=lambda: release_version() or "0",
+    environment=codex_runtime.codex_environment,
 )
 
 
@@ -1122,9 +1189,10 @@ def ensure_agent_start_monitor(config: Config, name: str) -> bool:
     return True
 
 
-def start_agent_runtime(config: Config, cwd: Path, command: str, args: list[str], max_running: int = 0, wait_ready: bool = True, agent_id: str = "", title: str = "", launch_id: str = "") -> str:
+def start_agent_runtime(config: Config, cwd: Path, command: str, args: list[str], max_running: int = 0, wait_ready: bool = True, agent_id: str = "", title: str = "", launch_id: str = "", context_window_k: int = 0) -> str:
     clean_launch_id = clean_client_launch_id(launch_id)
     created_here = False
+    scrub_tmux_global_environment(config)
     with RUNTIME_LOCK:
         name = managed_launch_session(config, clean_launch_id) if clean_launch_id else ""
         if not name:
@@ -1132,7 +1200,11 @@ def start_agent_runtime(config: Config, cwd: Path, command: str, args: list[str]
             name = next_faryo_session_name(config)
             shell = agent_login_shell()
             if command == "codex":
-                argv, auto_update = managed_codex_launch_argv(name, *args)
+                argv, auto_update = managed_codex_launch_argv(
+                    name,
+                    *codex_context_window_args(context_window_k),
+                    *args,
+                )
             else:
                 argv, auto_update = [agent_launch_executable(command), *args], False
             launch = f"{shlex.join(argv)}; exec {shlex.quote(shell)} -l"
@@ -1149,6 +1221,13 @@ def start_agent_runtime(config: Config, cwd: Path, command: str, args: list[str]
                 tmux_session_option(config, name, "@faryo_codex_update", "pending")
             if clean_launch_id:
                 tmux_session_option(config, name, "@faryo_launch_id", clean_launch_id)
+            if context_window_k:
+                tmux_session_option(
+                    config,
+                    name,
+                    SESSION_CONTEXT_WINDOW_OPTION,
+                    str(context_window_k),
+                )
             if title:
                 tmux_session_option(config, name, "@faryo_session_title", clean_session_title(title))
             if agent_id:
@@ -1172,6 +1251,7 @@ def start_agent_runtime_async(
     agent_id: str = "",
     title: str = "",
     launch_id: str = "",
+    context_window_k: int = 0,
 ) -> str:
     name = start_agent_runtime(
         config,
@@ -1183,6 +1263,7 @@ def start_agent_runtime_async(
         agent_id=agent_id,
         title=title,
         launch_id=launch_id,
+        context_window_k=context_window_k,
     )
     ensure_agent_start_monitor(config, name)
     return name
@@ -1221,6 +1302,7 @@ def resume_codex_thread_session(
     history_root: str | None = None,
     cwd_override: Path | None = None,
     async_ready: bool = False,
+    context_window_k: int = 0,
 ) -> str:
     clean_id = clean_agent_session_id(thread_id)
     if not clean_id: raise OwnerError("invalid agent session id")
@@ -1241,6 +1323,7 @@ def resume_codex_thread_session(
             ["resume", "-C", str(cwd), clean_id],
             max_running,
             agent_id=clean_id,
+            context_window_k=context_window_k,
         )
 
 def resume_agent_session(
@@ -1251,6 +1334,7 @@ def resume_agent_session(
     history_root: str | None = None,
     cwd_override: Path | None = None,
     async_ready: bool = False,
+    context_window_k: int = 0,
 ) -> str:
     if source == "codex-cli":
         return resume_codex_thread_session(
@@ -1260,6 +1344,7 @@ def resume_agent_session(
             history_root,
             cwd_override,
             async_ready,
+            context_window_k,
         )
     raise OwnerError("unsupported agent source", HTTPStatus.BAD_REQUEST)
 
@@ -1357,6 +1442,25 @@ def active_agent_count(config: Config) -> int:
 
 def bounded_max_running(payload: dict[str, Any]) -> int:
     return int(payload.get("max_running") or payload.get("maxRunning") or 0)
+
+
+def bounded_context_window_k(payload: dict[str, Any]) -> int:
+    value = payload.get("context_window_k")
+    if value is None:
+        value = payload.get("contextWindowK")
+    raw = str(value if value is not None else "").strip()
+    if not raw or raw == "0":
+        return 0
+    if isinstance(value, bool) or not re.fullmatch(r"[0-9]{1,4}", raw):
+        raise OwnerError(
+            f"context window must be a whole number from {CONTEXT_WINDOW_MIN_K} to {CONTEXT_WINDOW_MAX_K} K"
+        )
+    context_window_k = int(raw)
+    if not CONTEXT_WINDOW_MIN_K <= context_window_k <= CONTEXT_WINDOW_MAX_K:
+        raise OwnerError(
+            f"context window must be a whole number from {CONTEXT_WINDOW_MIN_K} to {CONTEXT_WINDOW_MAX_K} K"
+        )
+    return context_window_k
 
 
 def agent_tail_ignorable(line: str, profile: AgentProfile) -> bool:
@@ -3788,6 +3892,7 @@ class Handler(SimpleHTTPRequestHandler):
                 if raw_launch_id and not launch_id:
                     raise OwnerError("invalid client launch id")
                 title = clean_session_title(payload.get("title"))
+                context_window_k = bounded_context_window_k(payload)
                 existing_launch = managed_launch_session(self.config, launch_id or "") if launch_id else ""
                 name = start_agent_runtime_async(
                     self.config,
@@ -3797,6 +3902,7 @@ class Handler(SimpleHTTPRequestHandler):
                     bounded_max_running(payload),
                     title=title,
                     launch_id=launch_id or "",
+                    context_window_k=context_window_k,
                 )
                 launch_state, _launch_running = agent_session_lifecycle(
                     self.config,
@@ -3837,6 +3943,7 @@ class Handler(SimpleHTTPRequestHandler):
                     raise OwnerError("missing agent session id")
                 if not source:
                     raise OwnerError("missing agent source")
+                context_window_k = bounded_context_window_k(payload)
                 raw_cwd = compact_text(payload.get("cwd"))
                 selected_cwd: Path | None = None
                 if raw_cwd:
@@ -3864,6 +3971,7 @@ class Handler(SimpleHTTPRequestHandler):
                     self.history_root(),
                     selected_cwd,
                     True,
+                    context_window_k,
                 )
                 launch_state, _launch_running = agent_session_lifecycle(
                     self.config,
@@ -4054,6 +4162,7 @@ def main() -> int:
         token=token,
         pane_width=args.pane_width,
     )
+    scrub_tmux_global_environment(config)
     try:
         ensure_pane_width(config)
     except OwnerError as exc:

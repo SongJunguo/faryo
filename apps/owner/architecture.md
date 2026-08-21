@@ -174,3 +174,10 @@ Expected:
 - Owner does not commit tokens, password hashes, or runtime secrets.
 - Owner does not expose arbitrary launch commands; the maintained launcher is
   the explicitly configured Codex runtime.
+- A bounded per-launch context value is converted to fixed Codex configuration
+  keys before process creation. It never edits the user config and cannot carry
+  arbitrary command-line arguments.
+- Owner scrubs Faryo/Gateway service-only values from persistent tmux globals at
+  startup and before managed launches. Codex checks, update preflight and App
+  Server processes use the same sanitized environment; unrelated user paths are
+  retained.

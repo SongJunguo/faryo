@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 import subprocess
+from typing import Mapping
 
 
 TMUX_SESSION_NAME_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,80}$")
@@ -12,7 +13,13 @@ CLIENT_MESSAGE_ID_RE = re.compile(r"^[A-Za-z0-9_.:-]{8,128}$")
 CLIENT_LAUNCH_ID_RE = re.compile(r"^[A-Za-z0-9_.:-]{8,128}$")
 
 
-def run_command(args: list[str], *, input_text: str | None = None, timeout: float = 5.0) -> subprocess.CompletedProcess[str]:
+def run_command(
+    args: list[str],
+    *,
+    input_text: str | None = None,
+    timeout: float = 5.0,
+    environment: Mapping[str, str] | None = None,
+) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         args,
         input=input_text,
@@ -23,11 +30,21 @@ def run_command(args: list[str], *, input_text: str | None = None, timeout: floa
         stderr=subprocess.PIPE,
         timeout=timeout,
         check=False,
+        env=dict(environment) if environment is not None else None,
     )
 
 
-def run_tmux(args: list[str], *, timeout: float = 5.0) -> subprocess.CompletedProcess[str]:
-    return run_command(["tmux", *args], timeout=timeout)
+def run_tmux(
+    args: list[str],
+    *,
+    timeout: float = 5.0,
+    environment: Mapping[str, str] | None = None,
+) -> subprocess.CompletedProcess[str]:
+    return run_command(
+        ["tmux", *args],
+        timeout=timeout,
+        environment=environment,
+    )
 
 
 def parse_process_table(output: str) -> dict[int, tuple[int, str]]:

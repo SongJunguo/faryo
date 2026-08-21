@@ -126,6 +126,9 @@ Gateway host: the machine reached by the public HTTPS edge.
 - Start/Resume returns a fast accepted Starting receipt after tmux creation.
   Owner's restart-safe, pane-identity monitor owns readiness and failure; Gateway
   does not hold the browser request open while Codex starts MCP servers.
+- Optional `context_window_k` is an integer-only launch field validated at both
+  trust boundaries. Gateway forwards no arbitrary CLI/TOML text; Owner derives
+  the matching context and 90% auto-compaction overrides for that process only.
 - `/hp/?session=...`, `/hp/api/...`, and required owner static assets proxy to
   the HP reverse tunnel on `127.0.0.1:18766`. This port must be provided by the
   real HP reverse tunnel; do not bridge it to the local Owner port.

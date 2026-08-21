@@ -57,11 +57,16 @@ the existing tmux TUI as the execution surface.
 - **Fast asynchronous launch:** Start/Resume opens the tmux session immediately
   with a real Starting state while a restart-safe monitor completes Codex/MCP
   readiness in the background.
+- **Per-session context windows:** new and resumed sessions can inherit the
+  workstation default, use 272K or 1M presets, or accept a bounded custom value
+  in K tokens without rewriting the global Codex configuration.
 - **Queued follow-up Send now:** when Codex advertises Esc-to-send-now, the
   squirrel gains an ESC badge; phone tap and desktop Escape share one verified
   action without pretending Faryo can edit the queue.
 - **Self-hosted security boundary:** Owner and Gateway stay on loopback behind an
   operator-controlled identity-aware HTTPS edge.
+- **Clean agent environment:** persistent tmux and Codex children do not inherit
+  Faryo service tokens, installation roots, or stale internal Python paths.
 
 ## Real UI Screenshots
 
@@ -97,7 +102,7 @@ Historical distribution and non-Codex platform paths may remain in the tree for
 upstream compatibility, but they are not part of this project's current validation
 or support claims.
 
-Current release: [Faryo 1.6.6](https://github.com/SongJunguo/faryo-codex-web-ui/releases/tag/v1.6.6).
+Current release: [Faryo 1.6.7](https://github.com/SongJunguo/faryo-codex-web-ui/releases/tag/v1.6.7).
 
 ## Current Functionality
 
@@ -250,8 +255,9 @@ micromark -> mdast -> CommonMark/GFM/math nodes -> safe HTML -> KaTeX
   Server `thread/archive` and `thread/unarchive`. Faryo never edits Codex's
   SQLite/rollout files directly and deliberately exposes no hard-delete action.
 - Keeps card-body clicks as the fast resume path using the thread's recorded
-  working directory, while `Choose folder` opens the authenticated directory
-  browser and resumes that same thread in an explicitly selected, signed cwd.
+  working directory and default Codex context. `Options` opens the authenticated
+  directory browser and resumes that same thread with an explicitly selected,
+  signed cwd and optional per-session context window.
   Active sessions do not expose this action; archived sessions must be restored
   first.
 - Allows remote Close only for sessions that Faryo created and stamped.
@@ -278,6 +284,11 @@ micromark -> mdast -> CommonMark/GFM/math nodes -> safe HTML -> KaTeX
   action. Folders always contains every Owner-returned child even when that path
   is also a configured Root, Location, Parent, or Recent shortcut; there is no
   automatic entry cap.
+- The same launch sheet offers Default, 272K and 1M context presets plus a
+  custom whole-number K field. A custom value is passed as one-off Codex config,
+  with auto-compaction at 90%; it does not edit `~/.codex/config.toml`. The
+  selected model/provider must support the requested window, and the session
+  header continues to show Codex's actual reported usable window.
 - Injects Owner tokens server-side so public browser URLs do not contain them.
 - Records body-free control metadata in a private mode-600, 7-day/5000-row
   audit using HMAC-pseudonymous targets. Security activity is scoped to the
@@ -335,7 +346,7 @@ initial allowed workspace:
 
 ```bash
 sha256sum --check install-faryo.sh.sha256
-bash install-faryo.sh --version v1.6.6 --workspace "$PWD"
+bash install-faryo.sh --version v1.6.7 --workspace "$PWD"
 ```
 
 Upgrading a pre-v1.5 checkout that still uses the dedicated Owner keepalive

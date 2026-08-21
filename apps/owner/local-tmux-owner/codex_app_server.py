@@ -7,7 +7,7 @@ import select
 import subprocess
 import threading
 import time
-from typing import Any, Callable
+from typing import Any, Callable, Mapping
 
 
 class CodexAppServerClient:
@@ -16,11 +16,13 @@ class CodexAppServerClient:
         *,
         argv: Callable[..., list[str]],
         client_version: Callable[[], str],
+        environment: Callable[[list[str]], Mapping[str, str]] | None = None,
         popen: Callable[..., subprocess.Popen[str]] = subprocess.Popen,
         monotonic: Callable[[], float] = time.monotonic,
     ) -> None:
         self.argv = argv
         self.client_version = client_version
+        self.environment = environment
         self.popen = popen
         self.monotonic = monotonic
         self.process: subprocess.Popen[str] | None = None
@@ -87,14 +89,16 @@ class CodexAppServerClient:
             return process
         self.stop_locked()
         try:
+            argv = self.argv("app-server", "--listen", "stdio://")
             process = self.popen(
-                self.argv("app-server", "--listen", "stdio://"),
+                argv,
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.DEVNULL,
                 text=True,
                 encoding="utf-8",
                 errors="replace",
+                env=dict(self.environment(argv)) if self.environment else None,
             )
         except OSError:
             return None
