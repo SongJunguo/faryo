@@ -10,6 +10,11 @@ export interface StatusShellView {
   quotaWeekPercent: number;
   modelText: string;
   modelTitle: string;
+  fastVisible: boolean;
+  fastActive: boolean;
+  fastDisabled: boolean;
+  fastText: string;
+  fastTitle: string;
   subtitleTitle: string;
   goalVisible: boolean;
   goalText: string;
@@ -27,6 +32,7 @@ export interface StatusShellController {
 
 interface StatusShellOptions {
   onGoalClick(): void;
+  onFastToggle(): void | Promise<void>;
 }
 
 const INITIAL_STATUS: StatusShellView = {
@@ -38,6 +44,11 @@ const INITIAL_STATUS: StatusShellView = {
   quotaWeekPercent: 0,
   modelText: "Connecting...",
   modelTitle: "Connecting",
+  fastVisible: false,
+  fastActive: false,
+  fastDisabled: true,
+  fastText: "Default",
+  fastTitle: "Session speed is unavailable",
   subtitleTitle: "Connecting",
   goalVisible: false,
   goalText: "",
@@ -74,6 +85,7 @@ function StatusShell({
   options: StatusShellOptions;
 }) {
   const [view, setView] = useState(store.get());
+  const [fastBusy, setFastBusy] = useState(false);
   useLayoutEffect(() => store.subscribe(setView), [store]);
   const quotaStyle = `--quota-pct:${view.quotaPercent};--quota-week-pct:${view.quotaWeekPercent}`;
   return (
@@ -105,6 +117,28 @@ function StatusShell({
         <span id="modelText" title={view.modelTitle}>
           {view.modelText}
         </span>
+        <button
+          id="fastToggle"
+          class={`speed-toggle${view.fastActive ? " active" : ""}`}
+          type="button"
+          aria-label={view.fastTitle}
+          aria-pressed={view.fastActive}
+          aria-busy={fastBusy}
+          title={view.fastTitle}
+          disabled={view.fastDisabled || fastBusy}
+          hidden={!view.fastVisible}
+          onClick={async () => {
+            if (fastBusy || view.fastDisabled) return;
+            setFastBusy(true);
+            try {
+              await options.onFastToggle();
+            } finally {
+              setFastBusy(false);
+            }
+          }}
+        >
+          {view.fastText}
+        </button>
       </div>
       <div class="meta-pills">
         <button

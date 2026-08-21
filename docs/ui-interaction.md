@@ -114,6 +114,15 @@ read-only TUI inventory when the Codex version changes. A newly discovered
 command is visibly unclassified and requires one explicit confirmation; Faryo
 never retries Enter blindly.
 
+The model row also exposes the selected conversation's `Default` or `Fast`
+service tier. Its button invokes the catalogued `/fast` local action through the
+same one-Enter structured command path. The TUI model row is authoritative:
+Faryo separates a trailing `fast` marker from the model and reasoning effort
+instead of falling back to the global config. The button preserves an unsent web
+draft, is disabled while the turn or another interaction is active, and updates
+only the selected session. Switching sessions hides the old state until the new
+status arrives.
+
 Pending interaction identity includes the selected session and generation.
 Reload/SSE reconnect rebuilds it from the real TUI, session switches clear the
 old sheet immediately, and late responses are ignored rather than rendered over

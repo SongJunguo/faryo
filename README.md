@@ -94,7 +94,7 @@ Historical distribution and non-Codex platform paths may remain in the tree for
 upstream compatibility, but they are not part of this project's current validation
 or support claims.
 
-Current release: [Faryo 1.6.3](https://github.com/SongJunguo/faryo-codex-web-ui/releases/tag/v1.6.3).
+Current release: [Faryo 1.6.4](https://github.com/SongJunguo/faryo-codex-web-ui/releases/tag/v1.6.4).
 
 ## Current Functionality
 
@@ -186,6 +186,10 @@ micromark -> mdast -> CommonMark/GFM/math nodes -> safe HTML -> KaTeX
   preview strip, with at most four compression/upload workers active at once
   and a 25 MiB server-side limit for each file.
 - Shows agent-reported context used/window and weekly quota when available.
+- Shows a session-scoped `Default`/`Fast` speed button beside the model. It
+  submits Codex's exact `/fast` local command once, preserves any unsent browser
+  draft, disables itself while Codex is busy or waiting on another interaction,
+  and never changes another tmux conversation or the global default.
 - Shows the current Codex Goal state as a compact header pill. Clicking it loads
   the current objective, status, elapsed time, and available budget fields from
   an authenticated, no-store endpoint; closing the panel clears that text from
@@ -315,7 +319,7 @@ initial allowed workspace:
 
 ```bash
 sha256sum --check install-faryo.sh.sha256
-bash install-faryo.sh --version v1.6.3 --workspace "$PWD"
+bash install-faryo.sh --version v1.6.4 --workspace "$PWD"
 ```
 
 Upgrading a pre-v1.5 checkout that still uses the dedicated Owner keepalive
@@ -380,7 +384,7 @@ layer while keeping Faryo's inner login enabled.
 
 The `main` branch was revalidated on 2026-08-21 with privacy-safe fixtures:
 
-- canonical source gate: 179 Owner, 115 Gateway, and 55 unified-CLI Python tests,
+- canonical source gate: 183 Owner, 115 Gateway, and 55 unified-CLI Python tests,
   plus Ruff, ESLint, Prettier, TypeScript and reproducible local browser bundles;
 - real authenticated Gateway at 390x844: `/model`, pending-menu reload, Cancel,
   `/usage`, Preact composer geometry and no fake chat turn;

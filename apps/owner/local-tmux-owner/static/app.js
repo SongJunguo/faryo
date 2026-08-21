@@ -39,6 +39,13 @@
   const statusShellController = typeof ownerUiApi.mountStatusShell === 'function'
     ? ownerUiApi.mountStatusShell($('statusShellRoot'), {
       onGoalClick: handleGoalPillClick,
+      onFastToggle: async () => {
+        try {
+          await toggleFastMode();
+        } catch (err) {
+          setError(userErrorMessage(err));
+        }
+      },
     })
     : null;
   if (!statusShellController) throw new Error('Faryo Preact status shell is unavailable');
@@ -115,6 +122,7 @@
   let statusRefreshInFlight = false, activeStatusRefreshController = null, statusRefreshRunId = 0, statusRefreshTimer = null;
   let liveState = 'fallback';
   let petSending = false, petSendTimer = null, petStopping = false, petStopTimer = null, agentRunning = false, queuedSendNowAvailable = false, interruptInFlight = false, lastPetPhase = '';
+  let currentFastStatus = 'off';
   let outputActivity = 0, outputActivityTimer = null, lastCaptureSignature = '', lastCompactCapture = null, lastFullCapture = null;
   let outputMode = 'compact', fullLocked = false, preserveErrorUntil = 0, seenInitialPageShow = false, errorTimer = null, currentPromptTip = '';
   let markdownRenderRevision = 0, highlighterRenderFrame = 0;
@@ -775,7 +783,7 @@
   }
 
   function setBusy(isBusy) {
-    for (const id of ['sendBtn', 'refreshBtn', 'dockFullBtn', 'detailsChatBtn', 'detailsRawBtn', 'detailsRefreshBtn', 'dockPlusBtn', 'attachmentBtn']) {
+    for (const id of ['sendBtn', 'refreshBtn', 'dockFullBtn', 'detailsChatBtn', 'detailsRawBtn', 'detailsRefreshBtn', 'dockPlusBtn', 'attachmentBtn', 'fastToggle']) {
       const el = $(id);
       if (el) el.disabled = isBusy;
     }
@@ -1289,9 +1297,25 @@
     return value.split('/').filter(Boolean).pop() || value;
   }
 
-  function compactModelLabel(model, fastStatus) {
-    const label = String(model || 'model').replace(/\s+/g, ' ').trim().replace(/\bgpt(?=[-\s])/i, 'GPT');
-    return fastStatus && fastStatus !== 'off' ? `${label} ⚡` : label;
+  function compactModelLabel(model) {
+    return String(model || 'model')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .replace(/\s+fast$/i, '')
+      .replace(/\bgpt(?=[-\s])/i, 'GPT');
+  }
+
+  function fastStatusModel(value, { visible = true, disabled = false } = {}) {
+    const active = String(value || '').toLowerCase() === 'on';
+    return {
+      fastVisible: visible,
+      fastActive: active,
+      fastDisabled: disabled,
+      fastText: active ? 'Fast' : 'Default',
+      fastTitle: active
+        ? 'Fast is enabled for this conversation. Click to use Default speed.'
+        : 'Default speed for this conversation. Click to enable Fast; Fast uses more quota.',
+    };
   }
 
   function updateFolderLabel(data) {
@@ -1342,7 +1366,17 @@
     const sessionLabel = data.sessionTitle || data.sessionId || data.session || 'Starting Codex';
     const modelLabel = data.agentState === 'starting'
       ? 'Starting Codex…'
-      : compactModelLabel(model, data.fastStatus);
+      : compactModelLabel(model);
+    const fastVisible = data.agentSource === 'codex-cli'
+      && !['starting', 'exited'].includes(String(data.agentState || ''));
+    currentFastStatus = String(data.fastStatus || '').toLowerCase() === 'on' ? 'on' : 'off';
+    const fastView = fastStatusModel(currentFastStatus, {
+      visible: fastVisible,
+      disabled: !fastVisible
+        || Boolean(data.agentRunning)
+        || Boolean(data.interaction)
+        || data.agentState === 'pending_interaction',
+    });
     selectedSession = data.session || selectedSession;
     if (data.session) {
       const currentUrl = new URL(location.href);
@@ -1365,7 +1399,8 @@
       quotaPercent: quota.percent,
       quotaWeekPercent: quota.weekPercent,
       modelText: modelLabel,
-      modelTitle: model,
+      modelTitle: `${model} · ${fastView.fastText} speed`,
+      ...fastView,
       subtitleTitle,
       goalVisible: goalModel.visible,
       goalText: goalModel.compact,
@@ -1383,7 +1418,7 @@
     syncStructuredInteraction(data.interaction || null);
     updateFolderLabel(data);
     if ($('detailsOwner')) $('detailsOwner').textContent = ownerLabel;
-    if ($('detailsModel')) $('detailsModel').textContent = modelLabel;
+    if ($('detailsModel')) $('detailsModel').textContent = `${modelLabel} · ${fastView.fastText}`;
     if ($('detailsGit')) $('detailsGit').textContent = gitModel.text;
     if (data.agentState === 'starting' && outputMode === 'compact' && !lastCompactCapture) {
       output.classList.add('compact-blocks');
@@ -1409,6 +1444,7 @@
     persistPromptDraft();
     persistPendingSubmission();
     selectedSession = session;
+    statusShellController.update({ fastVisible: false, fastDisabled: true });
     syncStructuredInteraction(null);
     clearGoalDetails();
     beginInitialLatestScroll();
@@ -2069,6 +2105,7 @@
       const status = await api(apiPath('/api/status'), { signal: controller.signal });
       if (runId !== statusRefreshRunId) return;
       renderStatus(status);
+      return status;
     } catch (err) {
       if (err.name === 'AbortError') return;
       throw err;
@@ -2132,7 +2169,7 @@
     try { sessionStorage.removeItem(commandPendingKey(session)); } catch (_error) {}
   }
 
-  async function submitLocalCommand(command) {
+  async function submitLocalCommand(command, options = {}) {
     const session = selectedSession, browserText = promptInput.value;
     const pending = commandRequest(command, session);
     const entry = commandCatalogEntry(command);
@@ -2159,16 +2196,35 @@
       confirmed,
     });
     clearCommandRequest(session);
-    if (selectedSession === session && promptInput.value === browserText) {
+    if (!options.preserveBrowserDraft && selectedSession === session && promptInput.value === browserText) {
       promptInput.value = '';
       persistPromptDraft();
       autosize();
       updateSendVisibility();
     }
     if (selectedSession === session) syncStructuredInteraction(response.interaction || null);
-    refreshStatus({ silent: true }).catch(handleBackgroundError);
+    if (!options.skipStatusRefresh)
+      refreshStatus({ silent: true }).catch(handleBackgroundError);
     refreshCapture(currentCaptureLines(), { silent: true }).catch(handleBackgroundError);
     return true;
+  }
+
+  async function toggleFastMode() {
+    const session = selectedSession;
+    const expected = currentFastStatus === 'on' ? 'off' : 'on';
+    await submitLocalCommand('/fast', {
+      preserveBrowserDraft: true,
+      skipStatusRefresh: true,
+    });
+    if (session !== selectedSession) return;
+    currentFastStatus = expected;
+    statusShellController.update(fastStatusModel(expected));
+    for (let attempt = 0; attempt < 5 && session === selectedSession; attempt += 1) {
+      await new Promise((resolve) => window.setTimeout(resolve, 120));
+      if (statusRefreshInFlight) continue;
+      await refreshStatus({ silent: true });
+      if (currentFastStatus === expected) break;
+    }
   }
 
 

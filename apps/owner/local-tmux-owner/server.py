@@ -224,7 +224,8 @@ AGENT_INPUT_PROMPT_RE = re.compile(r"^\s*[›>»](?:\s|$)")
 AGENT_META_RE = re.compile(r"^\s*((?:gpt|o\d)[\w.\- ]*)\s*·\s+(.+?)\s*$", re.I)
 NO_AGENT_META_RE = re.compile(r"a^")
 ROLLOUT_THREAD_ID_RE = re.compile(r"rollout-.*-(?P<id>[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})\.jsonl", re.I)
-REASONING_EFFORT_SUFFIX_RE = re.compile(r"\b(?P<effort>low|medium|high|xhigh)\s*$", re.I)
+REASONING_EFFORT_SUFFIX_RE = re.compile(r"\b(?P<effort>low|medium|high|xhigh|max|ultra)\s*$", re.I)
+FAST_MODEL_SUFFIX_RE = re.compile(r"\s+fast\s*$", re.I)
 FAST_STATUS_RE = re.compile(r"\bFast(?:\s+mode)?(?:\s+(?:is|set\s+to))?\s+(?P<state>on|off|true|false|enabled|disabled)\b", re.I)
 SHELL_PREP_RE = re.compile(r"^(?:pwd|clear|ls(?:\s+[-\w./~]+)*|cd(?:\s+[-\w./~]+)?)$")
 FAST_CONFIG_KEYS = {
@@ -1544,6 +1545,15 @@ def reasoning_effort_from_model_status(text: str | None) -> str | None:
     return match.group("effort").lower() if match else None
 
 
+def codex_model_status(value: str | None) -> tuple[str | None, str | None, str]:
+    """Split the TUI model row into model label, effort, and session speed."""
+    if not value:
+        return None, None, "off"
+    model = FAST_MODEL_SUFFIX_RE.sub("", str(value).strip()).strip()
+    fast_status = "on" if model != str(value).strip() else "off"
+    return model or None, reasoning_effort_from_model_status(model), fast_status
+
+
 def normalize_fast_state(value: str | bool | None) -> str | None:
     if isinstance(value, bool):
         return "on" if value else "off"
@@ -2838,8 +2848,7 @@ def status_payload(config: Config) -> dict[str, Any]:
             meta = latest_agent_meta(raw_text, capture_profile)
             fast_status = latest_fast_status(raw_text)
             if meta:
-                model = meta[0]
-                reasoning_effort = reasoning_effort_from_model_status(model)
+                model, reasoning_effort, fast_status = codex_model_status(meta[0])
                 meta_cwd = meta_cwd_path(meta[1])
         except Exception:
             pass

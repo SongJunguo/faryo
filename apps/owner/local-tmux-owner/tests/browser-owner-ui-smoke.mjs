@@ -31,9 +31,18 @@ for (const viewport of [
       await page.evaluate(() => {
         window.__composerClicks = [];
         window.__goalClicks = 0;
+        window.__fastClicks = 0;
         window.__statusController = window.FaryoOwnerUI.mountStatusShell(
           document.getElementById("status"),
-          { onGoalClick() { window.__goalClicks += 1; } },
+          {
+            onGoalClick() { window.__goalClicks += 1; },
+            onFastToggle() {
+              window.__fastClicks += 1;
+              return new Promise((resolve) => {
+                window.__resolveFastToggle = resolve;
+              });
+            },
+          },
         );
         window.__statusController.update({
           contextText: "Ctx 42% · 108k/258k",
@@ -44,6 +53,11 @@ for (const viewport of [
           quotaWeekPercent: 51,
           modelText: "GPT Example",
           modelTitle: "gpt-example",
+          fastVisible: true,
+          fastActive: false,
+          fastDisabled: false,
+          fastText: "Default",
+          fastTitle: "Default speed for this conversation",
           subtitleTitle: "Synthetic status",
           goalVisible: true,
           goalText: "Goal Active",
@@ -161,14 +175,42 @@ for (const viewport of [
           context: document.getElementById("ctxText")?.textContent || "",
           goal: document.getElementById("goalPill")?.textContent || "",
           git: document.getElementById("phasePill")?.textContent || "",
+          fast: document.getElementById("fastToggle")?.textContent || "",
+          fastPressed: document.getElementById("fastToggle")?.getAttribute("aria-pressed") || "",
+          fastDisabled: Boolean(document.getElementById("fastToggle")?.disabled),
         },
       }));
       if (!composer.prompt || !composer.sendVisible || !composer.plusHidden
         || composer.suggestionCount !== 2 || composer.injectedImage
         || composer.status.context !== "Ctx 42% · 108k/258k"
-        || composer.status.goal !== "Goal Active" || composer.status.git !== "🌿 main") {
+        || composer.status.goal !== "Goal Active" || composer.status.git !== "🌿 main"
+        || composer.status.fast !== "Default" || composer.status.fastPressed !== "false"
+        || composer.status.fastDisabled) {
         throw new Error(`Owner composer shell failed: ${JSON.stringify({ viewport, composer })}`);
       }
+      await page.locator("#fastToggle").click();
+      await page.waitForFunction(() => Boolean(window.__resolveFastToggle));
+      const fastBusy = await page.evaluate(() => ({
+        clicks: window.__fastClicks,
+        busy: document.getElementById("fastToggle")?.getAttribute("aria-busy") || "",
+        disabled: Boolean(document.getElementById("fastToggle")?.disabled),
+      }));
+      if (fastBusy.clicks !== 1 || fastBusy.busy !== "true" || !fastBusy.disabled)
+        throw new Error(`Fast toggle busy state failed: ${JSON.stringify(fastBusy)}`);
+      await page.evaluate(() => window.__resolveFastToggle());
+      await page.waitForFunction(() => document.getElementById("fastToggle")?.getAttribute("aria-busy") === "false");
+      await page.evaluate(() => window.__statusController.update({
+        fastActive: true,
+        fastText: "Fast",
+        fastTitle: "Fast is enabled for this conversation",
+      }));
+      const fastActive = await page.evaluate(() => ({
+        text: document.getElementById("fastToggle")?.textContent || "",
+        pressed: document.getElementById("fastToggle")?.getAttribute("aria-pressed") || "",
+        active: document.getElementById("fastToggle")?.classList.contains("active") || false,
+      }));
+      if (fastActive.text !== "Fast" || fastActive.pressed !== "true" || !fastActive.active)
+        throw new Error(`Fast toggle active state failed: ${JSON.stringify(fastActive)}`);
       await page.evaluate(() => document.getElementById("goalPill").click());
       if ((await page.evaluate(() => window.__goalClicks)) !== 1)
         throw new Error("Status Goal callback failed");
