@@ -94,7 +94,7 @@ Historical distribution and non-Codex platform paths may remain in the tree for
 upstream compatibility, but they are not part of this project's current validation
 or support claims.
 
-Current release: [Faryo 1.5.2](https://github.com/SongJunguo/faryo-codex-web-ui/releases/tag/v1.5.2).
+Current release: [Faryo 1.6.0](https://github.com/SongJunguo/faryo-codex-web-ui/releases/tag/v1.6.0).
 
 ## Current Functionality
 
@@ -304,7 +304,7 @@ initial allowed workspace:
 
 ```bash
 sha256sum --check install-faryo.sh.sha256
-bash install-faryo.sh --version v1.5.2 --workspace "$PWD"
+bash install-faryo.sh --version v1.6.0 --workspace "$PWD"
 ```
 
 Upgrading a pre-v1.5 checkout that still uses the dedicated Owner keepalive
@@ -366,68 +366,32 @@ layer while keeping Faryo's inner login enabled.
 
 ## Current Validation
 
-The `main` branch was revalidated on 2026-08-20 with privacy-safe fixtures:
+The `main` branch was revalidated on 2026-08-21 with privacy-safe fixtures:
 
-- source checks plus 131 Owner, 112 Gateway, and 51 unified-CLI Python tests;
-- Ruff fatal/Pyflakes checks, a Playwright system-browser fixture, deterministic
-  diff-review rebuild comparison and zero npm audit findings;
-- a workspace Git security matrix covering scope/symlink escape, disabled
-  external diff/textconv, adversarial filenames and bounded output;
-- 390x844/1440x900 read-only Changes checks with lazy/sanitized line/split diff,
-  redacted diagnostics download and unchanged tmux geometry;
-- body-free Attention transition, notification, dismissal and privacy checks;
-- an isolated real Codex App Server Current→Archived→Current round trip through
-  Owner, with stable totals, unchanged rollout SHA-256, and the real Codex home
-  untouched;
-- a 20-message browser delivery matrix including Chinese, multiline Markdown,
-  TeX, clipboard-image attachment, offline/background recovery, and failed-draft
-  cases at mobile and desktop sizes;
-- structured-JSONL and tmux-fallback Raw→Chat matrices, plus real deployed
-  390x844 and 1440x900 checks that restore rich Chat without a reload;
-- an isolated continuously updating Live terminal at 390x844 and 1440x900,
-  verifying the 180-line bound, stable DOM/scroll, selection-aware update pause,
-  deferred flush, explicit copy, and unchanged tmux geometry;
-- a two-session retry/delayed-response isolation test;
-- user-activated full-screen enter/exit from both header and Details at 390x844
-  and 1440x900, including collapsed-header exit, PWA manifest identity, denied/
-  unsupported fallback, no horizontal overflow and unchanged tmux geometry;
-- a real 390x844 Gateway document-scroll check in Edge: trusted wheel input
-  changes `window.scrollY`, leaves the inner conversation at scrollTop zero and
-  keeps the fixed composer visible, enabling native browser-toolbar retraction;
-- 390x844 mobile Chrome and 1440x900 desktop Edge long-conversation tests;
-- fast-scroll question-rail reveal, auto-hide, keyboard navigation, stable live
-  append, and unchanged conversation width;
-- local Markdown/KaTeX/Shiki, authenticated resources, CSP, and safe fallback;
-- an anonymous 40-turn history with a bounded 12-turn first page, cursor preload,
-  lazy oldest-page jump, eventual 40/40 completeness, and no tmux resize;
-- a private real structured Codex session with `14 total = 14 markers = 14 loaded`
-  using count-only diagnostics that never record its conversation text;
-- a 263.3 MiB rollout cold-read check at about 0.0025 s and 41.5 MiB process peak
-  RSS on the validated workstation;
-- a real Gateway `Start Codex` reaching a ready managed tmux in 0.853 s, followed
-  by exact cleanup of the test session;
-- a real `faryo1` start in the browser-selected recent directory, with a forged
-  directory credential rejected as HTTP 400 and the test session cleaned;
-- grouped directory-picker checks in 390x844 Chrome and 1440x900 Edge, including
-  search, parent navigation, collapsed breadcrumbs, fixed actions, start, and cleanup;
-- an isolated `codex-cli 0.148.0` PTY inventory matching all 46 visible slash
-  commands, plus desktop/mobile completion and real `/rename` title sync;
-- exact Markdown/TeX copy fixtures and privacy-safe real-answer hash checks in
-  Ubuntu Chrome and Microsoft Edge at 1440x900 and 390x844;
-- Owner/Gateway health and unchanged dimensions for every pre-existing Codex
-  tmux session after deployment.
-- desktop and mobile Gateway checks with exactly one Codex launcher and three
-  independently fetched 10-record history pages, server-side title/folder
-  search, date filtering, URL restoration, stale-request cancellation, and no
-  filtered snapshot persistence.
-- body-free audit tests for every maintained control action, CSRF denial,
-  HMAC targets, mode-600 retention/rotation, user/route scope, I/O failure and
-  revoke-all auth epochs; production Start→ready→Close leaves no test tmux.
-- explicit Starting/Running/Waiting/Exited/Desktop/Resumable state fixtures and
-  real workbench state counts, with Enter labelled as a TUI selection key.
-- authenticated `/projects` retirement checks, `/` brand navigation, preserved
-  generic Files-to-session handoff, and roughly 4,000 net lines of unreachable
-  Project Orchestration code removed without touching private runtime data.
+- canonical source gate: 176 Owner, 114 Gateway, and 53 unified-CLI Python tests,
+  plus Ruff, ESLint, Prettier, TypeScript and reproducible local browser bundles;
+- real authenticated Gateway at 390x844: `/model`, pending-menu reload, Cancel,
+  `/usage`, Preact composer geometry and no fake chat turn;
+- stale interaction/session responses, duplicate request IDs, generation 409,
+  CSRF, Owner token and body-free audit boundaries;
+- real asynchronous Start: about 51ms accepted Starting response, duplicate
+  launch reuse, Starting→Waiting browser transition, Owner-restart monitor
+  recovery and unchanged pane identity;
+- real queued follow-up Send now: mobile squirrel ESC badge, desktop physical
+  Escape, expedited API receipt and an observed Escape in the synthetic Codex
+  TUI; editable queue management remains unsupported;
+- active legacy thread-ID URL recovery, signed missing-cwd resume selection,
+  hidden-folder toggle, Git worktree status and server-paginated history search;
+- 20-message idempotent delivery including Chinese, Markdown/TeX, attachment,
+  offline/background/504 recovery, failed drafts and cross-session isolation;
+- local Markdown AST/GFM/KaTeX/Shiki, 40-turn lazy history, full question index,
+  exact Markdown/TeX copy, Raw→Chat isolation and 180-line stable Live tmux;
+- 390x844 and 1440x900 layout, keyboard/VisualViewport, document scrolling,
+  PWA/fullscreen, read-only sanitized diff and protected-resource checks;
+- release-version cache keys and Gateway script allowlist completeness: ordinary
+  reload/new tab loads the current app without hard refresh;
+- checksum update/rollback gates with `KillMode=process`; every deployed preview
+  preserved all pre-existing tmux session names, pane PIDs and 145x44 geometry.
 
 Run the canonical source checks:
 
