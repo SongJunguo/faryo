@@ -1,0 +1,130 @@
+# Codex App Server 流式架构参考审计
+
+状态：2026-08-22 已完成首轮审计，实施期间持续校验。
+
+本文只记录公开仓库、公开提交和可公开的技术结论，不记录部署域名、账号、Token、
+Cookie、会话正文或本机目录。Faryo 对参考项目采用 clean-room 架构借鉴，不复制其代码。
+
+## 固定参考快照
+
+| 项目 | 固定提交 | 用途 | 许可证边界 |
+| --- | --- | --- | --- |
+| [YepAnywhere](https://github.com/kzahel/yepanywhere) | `f1b0b08ea8bdfe07fdcf8256e5c579bd985844d5` | Codex delta 聚合、稳定消息身份、实时/持久态收敛、长历史渲染 | README 标注 MIT，但该快照根目录没有标准许可证文件；只借鉴公开架构思想，不复制代码 |
+| [HAPI](https://github.com/tiann/hapi) | `ca4390a32a17c82176afdf2a50e1e5555a3e9ac6` | 双向 App Server RPC、单写者切换、SSE cursor/replay/gap、Web 交互边界 | AGPL-3.0-only；只做行为和协议研究，不复制实现 |
+| [OpenAI Codex](https://github.com/openai/codex) | `ad9e8097fd3d0d2f1c1166575d2c6cd8cb9e1833` | App Server 官方协议、Unix socket、多连接、线程生命周期 | 上游官方源码与本机版本生成 schema 是协议依据 |
+
+两个第三方仓库均以完整工作树的浅克隆保存于仓库外的参考区，未加入 Faryo Git 历史、
+构建上下文或发布包。固定提交用于让审计结论可复核，后续上游变化不会静默改变本计划。
+
+## OpenAI App Server 的已确认能力
+
+本轮实现以 `codex-cli 0.149.0` 生成的 JSON Schema 为运行时基线。协议是版本化且仍在
+演进的实验接口，不能把字段集合写死为永久不变的产品契约。
+
+已从官方 README、生成 schema 和官方源码确认：
+
+- App Server 使用双向 JSON-RPC；每条连接必须完成 `initialize` / `initialized`。
+- `thread/start`、`thread/resume` 和 `turn/start` 是正式会话路径。
+- `item/agentMessage/delta` 提供回答正文增量；`item/completed` 提供同一 item 的最终值；
+  `turn/completed` 提供终态和 token usage。
+- Unix socket transport 在一个长期进程中接受多个 WebSocket 连接；慢连接有有界队列并会
+  被主动断开，不会无限积压内存。
+- 连接关闭只移除该连接的订阅和待处理 RPC；App Server 进程和活动线程不会随之退出。
+- 最后一个订阅者离开后，空闲线程会延迟卸载；活动 turn 可以继续执行。
+- 重连可以用 `thread/resume`、`thread/read`、`thread/turns/list` 和 `thread/items/list`
+  恢复权威状态，但 App Server 不承诺为新连接重放断线期间的每个正文 delta。
+- 同一个持久 thread 只能由一个 App Server 进程持有写锁；另一个进程 resume 会失败。
+- Unix socket lifecycle daemon 仍是 experimental，并假定 Codex 由官方 standalone
+  installer 管理。Faryo 当前不能把这个安装假设强加给所有 npm/NVM 用户。
+
+因此 Faryo 不自造 Codex Runtime Host，而是用独立的用户级服务直接监督官方
+`codex app-server --listen unix://…`。Faryo CLI 每次启动服务时动态解析受支持的 Codex
+launcher，避免把某个 NVM 版本目录写死到服务文件中；Owner 只作为协议客户端连接私有
+socket。Owner 重启不会杀死活动 turn，Codex 升级也不会在活动 turn 中途替换运行时。
+
+## 从 YepAnywhere 吸收的设计
+
+### 1. 实时尾部与持久历史分工
+
+YepAnywhere 将 provider JSONL 视为持久真相，将实时 provider stream 视为短暂尾部。
+Faryo 采用同样的责任划分：
+
+- delta 让用户立即看到回答，不承担长期存储职责；
+- final item 使用稳定 identity 覆盖 streaming item；
+- JSONL / App Server 历史页负责刷新、冷启动和断线后的最终收敛；
+- 不维护一份与 Codex 竞争的正文数据库。
+
+### 2. 高频更新不驱动整棵 UI
+
+YepAnywhere 的客户端将高频 token 更新限制在叶节点，并按负载自适应节流；Markdown、
+KaTeX 与代码高亮按闭合块和最终内容处理。Faryo 的 Preact 迁移采用相同原则：
+
+- `Map<itemId, accumulator>` 原地聚合 delta；
+- 每帧或短批次只发布一次尾部 revision；
+- 已完成历史块保持稳定 DOM identity；
+- 流式阶段只渲染可确认闭合的 Markdown/TeX，完成后执行一次完整富文本收敛；
+- 快速滚动期间沿用现有有界富 DOM 和脱水策略。
+
+### 3. 原始事件优先、增强异步完成
+
+实时正文不得等待语法高亮、diff 摘要或其他富化步骤。任何较慢的增强结果都用同一稳定
+identity 追加 revision，不能阻塞原始消息进入浏览器。
+
+## 从 HAPI 吸收的设计
+
+### 1. 真正双向的协议客户端
+
+HAPI 的客户端长期消费 JSONL RPC，分别处理 response、notification 和 App Server 发来的
+request。Faryo 现有同步 helper 会在等 response 时丢弃通知，也无法正确回答审批或用户输入
+请求，本次必须替换为一个单读循环、多 pending future、显式 server-request handler 的
+异步客户端。
+
+### 2. SSE cursor、replay 与 gap
+
+HAPI 的 Hub 使用有界事件环、epoch/sequence cursor 和 replay gap。Faryo 采用等价但独立的
+实现：
+
+- cursor 为 `{epoch}:{sequence}`；
+- 环同时限制事件数和总字节数；
+- `Last-Event-ID` 在窗口内时按序重放；
+- cursor 过旧或 epoch 不同时发送 `gap`，随后发送权威 snapshot；
+- replay 写出期间产生的新事件先排队，再接回 live，避免重放/实时交界丢事件。
+
+### 3. 会话所有权互斥
+
+HAPI 在 local 与 remote launcher 间做显式切换，而不是让两个输入端并发驱动同一进程。
+Faryo 将同一思想落实为 `web-managed` 与 `terminal-managed` 两种后端：
+
+- 现有 tmux/TUI 会话继续是 `terminal-managed`；
+- 新的 App Server 会话是 `web-managed`；
+- 两者共享历史入口和视觉组件，但不共享写权限；
+- 未证明线程已空闲、无草稿、无审批、无活动 turn 且原 writer 已释放前，禁止 handoff；
+- 第一阶段不提供自动双向 handoff，避免伪同步和 writer-lock 风险。
+
+HAPI 当前 Codex converter 会在正文 delta 到达时只更新“正在输出”状态，并在 item complete
+后一次性提交正文。因此它不是 Faryo 正文流式实现的直接范本；Faryo 直接消费官方
+`item/agentMessage/delta`。
+
+## 未采用的方案
+
+- 不把浏览器直接连到 Codex Unix socket：认证、协议兼容、审批与路径权限必须留在 Owner。
+- 不直接暴露 experimental WebSocket listener：官方明确标为 unsupported；只使用本机私有
+  Unix socket。
+- 不复制 HAPI 的 React/TanStack/assistant-ui 整套栈：Faryo 已有 Preact 和经实机验证的移动
+  app shell，整体重写会扩大回归面。
+- 不把每个 token 写入 Faryo 数据库：它会制造第二份不可靠的历史真相并增加隐私面。
+- 不继续用 tmux 文本猜测来驱动新 Web 会话：终端捕获只保留给既有兼容会话。
+- 不在首次实施中承诺 TUI 与 Web 对同一 thread 同时在线；官方 writer-lock 语义不允许这样做。
+
+## 需要持续验证的上游变化
+
+每次支持新的 Codex CLI 版本时，CI 或 `faryo doctor` 至少检查：
+
+1. 能生成当前版本 schema，且必需 method/notification 仍存在；
+2. initialize 能力和 server request union 能被兼容解析；
+3. 未知 notification 被记录计数但不会让 reader loop 崩溃；
+4. 未知 server request 默认 fail closed，并向网页给出可理解的不可用状态；
+5. `item/agentMessage/delta` 与 `item/completed` 的 stable identity 收敛仍成立；
+6. 断开 Owner 后 turn 继续，重连后最终历史可恢复；
+7. App Server 与 TUI 双写尝试被明确拒绝，而不是静默覆盖。
+
