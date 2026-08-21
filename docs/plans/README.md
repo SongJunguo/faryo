@@ -5,12 +5,14 @@
 
 ## Active
 
-- [`v1.7-preact-transcript-migration-plan.md`](v1.7-preact-transcript-migration-plan.md)：
-  渐进建立 Owner ConversationStore 和 Preact transcript 边界，修复折叠工作站名称与移动
-  键盘几何，并以量化门禁试点 TanStack Virtual；保持 v1.6.8 富正文离屏释放、Markdown/TeX、
-  复制、问题导航、可靠发送、认证与 tmux 几何不回归。
+当前没有未完成的版本计划。
 
 ## Completed or maintenance mode
+
+- [`v1.7-preact-transcript-migration-plan.md`](v1.7-preact-transcript-migration-plan.md)：
+  已建立 Owner ConversationStore 和 Preact transcript 生命周期边界，修复折叠工作站名称与
+  移动键盘几何；TanStack Virtual 量化试点因前插锚点未达标而未进入生产。source、匿名长
+  历史、真实部署、普通 reload、移动/Edge 浏览器和 tmux 几何门均通过。
 
 - [`long-conversation-rendering-plan.md`](long-conversation-rendering-plan.md)：参考 DeepSeek
   Harness 的稳定 key、可见窗口、实测高度与前插锚点契约，为长 Markdown/KaTeX 对话建立

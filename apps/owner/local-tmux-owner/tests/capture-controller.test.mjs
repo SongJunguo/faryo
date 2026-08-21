@@ -81,6 +81,43 @@ test("a response from an obsolete conversation scope is rejected", async () => {
   assert.deepEqual(captures, []);
 });
 
+test("an event from an obsolete conversation scope is rejected", async (context) => {
+  let applyEvent = null;
+  let scope = { session: "alpha", generation: 1, mode: "compact" };
+  const { controller, captures } = fixture({
+    getScope: () => ({ ...scope }),
+    acceptScope: (candidate) =>
+      candidate.session === scope.session &&
+      candidate.generation === scope.generation &&
+      candidate.mode === scope.mode,
+    eventIdleTimeoutMs: 1000,
+    eventStreamParser: {
+      createParser(callback) {
+        applyEvent = callback;
+        return { push() {} };
+      },
+    },
+    fetch: async () => ({
+      ok: true,
+      status: 200,
+      body: new ReadableStream({
+        start(stream) {
+          stream.enqueue(new TextEncoder().encode(": opened\n\n"));
+        },
+      }),
+    }),
+  });
+  context.after(() => controller.closeEventStream());
+  controller.startEventStream();
+  await delay(0);
+  scope = { session: "beta", generation: 2, mode: "compact" };
+  applyEvent({
+    type: "capture",
+    data: JSON.stringify({ ok: true, text: "obsolete event" }),
+  });
+  assert.deepEqual(captures, []);
+});
+
 test("missing streaming support selects the polling fallback", () => {
   const intervals = [];
   const { controller, states } = fixture({

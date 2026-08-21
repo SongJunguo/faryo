@@ -89,7 +89,8 @@ await withBrowser({
       warningCount: output?.querySelectorAll('.compact-capture-warning').length || 0,
       compactBlocks: output?.querySelectorAll('.compact-block').length || 0,
       phase: transcript?.querySelector('.transcript-shell')?.dataset.conversationPhase || '',
-      hasEmptyMessage: text.includes('No messages yet. Ask Codex to start this conversation.'),
+      hasEmptyMessage: text.includes('No messages yet')
+        && text.includes('Ask Codex to start this conversation.'),
       leakedTerminalStartup: /Codex ready|Ask Codex to do anything|for shortcuts/i.test(text),
       horizontalOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth + 1,
     };
@@ -107,7 +108,8 @@ await withBrowser({
     return document.documentElement.dataset.faryoAppReady === '1'
       && output?.dataset.captureSource === 'codex-app-server'
       && output?.dataset.structuredEmpty === 'true'
-      && document.getElementById('transcriptShellRoot')?.innerText.includes('No messages yet. Ask Codex to start this conversation.')
+      && document.getElementById('transcriptShellRoot')?.innerText.includes('No messages yet')
+      && document.getElementById('transcriptShellRoot')?.innerText.includes('Ask Codex to start this conversation.')
       && !output?.querySelector('.compact-capture-warning');
   }, null, { timeout: 25_000 });
 
