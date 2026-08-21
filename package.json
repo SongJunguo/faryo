@@ -11,7 +11,7 @@
     "check:diff-review": "node tools/diff-review/build.mjs --check",
     "check:gateway-preact": "node tools/gateway-preact/build.mjs --check",
     "check:owner-ui": "node tools/owner-ui/build.mjs --check",
-    "check:format": "prettier --check apps/gateway/server/static/workbench.js apps/gateway/server/static/workbench.css apps/gateway/ui/preact-workbench.jsx apps/gateway/ui/session-model.mjs apps/owner/ui tools/gateway-preact/build.mjs tools/owner-ui/build.mjs",
+    "check:format": "prettier --check apps/gateway/server/static/workbench.js apps/gateway/server/static/workbench.css apps/gateway/ui/preact-workbench.jsx apps/gateway/ui/session-model.mjs apps/owner/local-tmux-owner/tests/browser-owner-layout-smoke.mjs apps/owner/ui tools/gateway-preact/build.mjs tools/owner-ui/build.mjs",
     "check:lint": "eslint apps tools",
     "format:gateway": "prettier --write apps/gateway/server/static/workbench.js apps/gateway/server/static/workbench.css apps/gateway/ui/preact-workbench.jsx apps/gateway/ui/session-model.mjs tools/gateway-preact/build.mjs",
     "format:owner-ui": "prettier --write apps/owner/ui tools/owner-ui/build.mjs",

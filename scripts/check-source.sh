@@ -69,6 +69,7 @@ release_checks() {
   (cd "$ROOT" && PATH="$(dirname "$NODE_BIN"):$PATH" npm run --silent check:lint)
   (cd "$ROOT" && PATH="$(dirname "$NODE_BIN"):$PATH" npm run --silent check:format)
   (cd "$ROOT" && PATH="$(dirname "$NODE_BIN"):$PATH" npm run --silent test:browser-harness)
+  (cd "$ROOT" && PATH="$(dirname "$NODE_BIN"):$PATH" npm run --silent test:owner-layout-browser)
   (cd "$ROOT" && PATH="$(dirname "$NODE_BIN"):$PATH" npm run --silent check:diff-review)
   (cd "$ROOT" && PATH="$(dirname "$NODE_BIN"):$PATH" npm run --silent test:diff-review)
   (cd "$ROOT" && PATH="$(dirname "$NODE_BIN"):$PATH" npm run --silent check:gateway-preact)
