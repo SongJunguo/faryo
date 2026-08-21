@@ -118,6 +118,38 @@ test("an event from an obsolete conversation scope is rejected", async (context)
   assert.deepEqual(captures, []);
 });
 
+test("a buffered event from a closed stream cannot update the conversation", async () => {
+  let applyEvent = null;
+  const { controller, captures } = fixture({
+    eventIdleTimeoutMs: 1000,
+    eventStreamParser: {
+      createParser(callback) {
+        applyEvent = callback;
+        return { push() {} };
+      },
+    },
+    fetch: async () => ({
+      ok: true,
+      status: 200,
+      body: new ReadableStream({
+        start(stream) {
+          stream.enqueue(new TextEncoder().encode(": opened\n\n"));
+        },
+      }),
+    }),
+  });
+
+  controller.startEventStream();
+  await delay(0);
+  controller.closeEventStream();
+  applyEvent({
+    type: "capture",
+    data: JSON.stringify({ ok: true, text: "late event" }),
+  });
+
+  assert.deepEqual(captures, []);
+});
+
 test("missing streaming support selects the polling fallback", () => {
   const intervals = [];
   const { controller, states } = fixture({

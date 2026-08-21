@@ -5,6 +5,7 @@ repo_root="$(git rev-parse --show-toplevel)"
 # shellcheck source=../../../../scripts/runtime-env.sh
 source "$repo_root/scripts/runtime-env.sh"
 browser_smoke="$repo_root/apps/owner/local-tmux-owner/tests/browser-katex-smoke.mjs"
+immersive_smoke="$repo_root/apps/owner/local-tmux-owner/tests/browser-immersive-smoke.mjs"
 python_bin="${FARYO_HISTORY_PYTHON:-$(faryo_resolve_python)}"
 node_bin="${FARYO_HISTORY_NODE:-$(faryo_resolve_node)}"
 suffix="$$"
@@ -150,6 +151,7 @@ FARYO_CODEX_STATE_DB="$state_db" \
 FARYO_CODEX_SESSION_INDEX="$temp_root/session-index.jsonl" \
 FARYO_OWNER_DATA="$temp_root/data" \
 FARYO_OWNER_PANE_WIDTH=0 \
+PYTHONPATH="$repo_root/src${PYTHONPATH:+:$PYTHONPATH}" \
   "$python_bin" "$repo_root/apps/owner/local-tmux-owner/server.py" \
     --host 127.0.0.1 --port "$port" --session "$session" --token "$token" --pane-width 0 \
     >"$temp_root/owner.log" 2>&1 &
@@ -187,6 +189,13 @@ env \
   "FARYO_SMOKE_VIEWPORT_WIDTH=${FARYO_HISTORY_VIEWPORT_WIDTH:-390}" \
   "FARYO_SMOKE_VIEWPORT_HEIGHT=${FARYO_HISTORY_VIEWPORT_HEIGHT:-844}" \
   "$node_bin" "$browser_smoke"
+
+env \
+  "FARYO_IMMERSIVE_URL=http://127.0.0.1:$port/?token=$token&session=$session" \
+  'FARYO_IMMERSIVE_EXPECT_CONVERSATION_SCROLL=1' \
+  "FARYO_IMMERSIVE_WIDTH=${FARYO_HISTORY_VIEWPORT_WIDTH:-390}" \
+  "FARYO_IMMERSIVE_HEIGHT=${FARYO_HISTORY_VIEWPORT_HEIGHT:-844}" \
+  "$node_bin" "$immersive_smoke"
 
 final_size="$(tmux display-message -p -t "$session" '#{window_width}x#{window_height}')"
 [[ "$initial_size" == "$final_size" ]]

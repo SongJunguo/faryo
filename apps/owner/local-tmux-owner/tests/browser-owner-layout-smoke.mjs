@@ -29,7 +29,7 @@ await withBrowser(
           --app-font: sans-serif;
         }
       </style>
-      <div class="app">
+      <div class="app header-collapsed">
         <header class="collapsed">
           <div class="title-row">
             <div>
@@ -89,29 +89,39 @@ await withBrowser(
       }
     }
 
-    const keyboardLayout = await page.evaluate(() => {
-      document.documentElement.classList.add(
-        "document-scroll-mode",
-        "keyboard-open",
-      );
-      document.documentElement.style.setProperty(
-        "--faryo-visual-viewport-obscured-bottom",
-        "264px",
-      );
+    const appShell = async (keyboardInset) => page.evaluate((inset) => {
+      document.documentElement.style.setProperty("--faryo-keyboard-inset", `${inset}px`);
+      const app = document.querySelector('.app').getBoundingClientRect();
+      const main = document.querySelector('main');
+      const footer = document.querySelector('footer').getBoundingClientRect();
       return {
+        appHeight: app.height,
+        mainHeight: main.getBoundingClientRect().height,
         mainPaddingBottom: Number.parseFloat(
-          getComputedStyle(document.querySelector("main")).paddingBottom,
+          getComputedStyle(main).paddingBottom,
         ),
+        mainOverflow: getComputedStyle(main).overflowY,
+        mainOverflowAnchor: getComputedStyle(main).overflowAnchor,
+        footerPosition: getComputedStyle(document.querySelector('footer')).position,
+        footerBottom: footer.bottom,
+        documentOverflow: (document.scrollingElement || document.documentElement).scrollHeight > innerHeight + 1,
       };
-    });
-    if (keyboardLayout.mainPaddingBottom < 391) {
+    }, keyboardInset);
+    const keyboardClosed = await appShell(0);
+    const keyboardOpen = await appShell(240);
+    if (keyboardClosed.mainOverflow !== 'auto' || keyboardClosed.mainOverflowAnchor !== 'none'
+      || keyboardClosed.footerPosition !== 'relative'
+      || keyboardClosed.documentOverflow || keyboardOpen.documentOverflow
+      || keyboardClosed.mainPaddingBottom > 40
+      || Math.abs((keyboardClosed.mainHeight - keyboardOpen.mainHeight) - 240) > 1
+      || Math.abs((keyboardClosed.footerBottom - keyboardOpen.footerBottom) - 240) > 1) {
       throw new Error(
-        `Keyboard reserve did not reach the conversation surface: ${JSON.stringify(keyboardLayout)}`,
+        `Keyboard app shell violated its grid contract: ${JSON.stringify({ keyboardClosed, keyboardOpen })}`,
       );
     }
   },
 );
 
 console.log(
-  "faryo-owner-layout=PASS collapsed-label=safe mobile-keyboard-reserve=shared",
+  "faryo-owner-layout=PASS collapsed-label=safe keyboard-app-shell=grid",
 );

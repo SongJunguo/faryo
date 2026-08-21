@@ -118,7 +118,12 @@ export function createCaptureController(options = {}) {
     }
   }
 
-  function applyEvent(event, scope) {
+  function applyEvent(event, scope, controller, runId) {
+    if (
+      controller.signal.aborted
+      || eventController !== controller
+      || eventRunId !== runId
+    ) return;
     if (event.type !== "capture") return;
     const capture = JSON.parse(event.data || "{}");
     if (!scopeAccepted(scope)) return;
@@ -173,7 +178,7 @@ export function createCaptureController(options = {}) {
     setFallback(false);
     setSafetyRefresh(true);
     options.setLiveState("live");
-    const parser = options.eventStreamParser.createParser((event) => applyEvent(event, scope));
+    const parser = options.eventStreamParser.createParser((event) => applyEvent(event, scope, controller, runId));
     const reader = response.body.getReader();
     try {
       const decoder = new view.TextDecoder();

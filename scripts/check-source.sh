@@ -137,7 +137,7 @@ release_checks() {
     "$ROOT/apps/owner/local-tmux-owner/static/copy-fidelity.js" \
     "$ROOT/apps/owner/local-tmux-owner/static/clipboard-images.js" \
     "$ROOT/apps/owner/local-tmux-owner/static/immersive-mode.js" \
-    "$ROOT/apps/owner/local-tmux-owner/static/scroll-surface.js" \
+    "$ROOT/apps/owner/local-tmux-owner/static/keyboard-layout.js" \
     "$ROOT/apps/owner/local-tmux-owner/static/owner/changes-panel.mjs" \
     "$ROOT/apps/owner/local-tmux-owner/static/owner/api-client.mjs" \
     "$ROOT/apps/owner/local-tmux-owner/static/owner/attachment-controller.mjs" \
@@ -184,7 +184,7 @@ release_checks() {
   "$NODE_BIN" "$ROOT/apps/owner/local-tmux-owner/tests/copy-fidelity.test.js"
   "$NODE_BIN" "$ROOT/apps/owner/local-tmux-owner/tests/clipboard-images.test.js"
   "$NODE_BIN" "$ROOT/apps/owner/local-tmux-owner/tests/immersive-mode.test.js"
-  "$NODE_BIN" "$ROOT/apps/owner/local-tmux-owner/tests/scroll-surface.test.js"
+  "$NODE_BIN" "$ROOT/apps/owner/local-tmux-owner/tests/keyboard-layout.test.js"
   "$NODE_BIN" --test "$ROOT/apps/owner/local-tmux-owner/tests/changes-panel.test.mjs"
   "$NODE_BIN" --test "$ROOT/apps/owner/local-tmux-owner/tests/api-client.test.mjs"
   "$NODE_BIN" --test "$ROOT/apps/owner/local-tmux-owner/tests/attachment-controller.test.mjs"
@@ -354,7 +354,8 @@ assert "codex-commands.js" in index and "codex-commands.js" in gateway, "Codex c
 assert "copy-fidelity.js" in index and "copy-fidelity.js" in gateway, "copy fidelity must be loaded and proxied"
 assert "clipboard-images.js" in index and "clipboard-images.js" in gateway, "clipboard image paste must be loaded and proxied"
 assert "immersive-mode.js" in index and "immersive-mode.js" in gateway, "immersive display controller must be loaded and proxied"
-assert "scroll-surface.js" in index and "scroll-surface.js" in gateway, "mobile document scroll adapter must be loaded and proxied"
+assert "keyboard-layout.js" in index and "keyboard-layout.js" in gateway, "keyboard layout controller must be loaded and proxied"
+assert "scroll-surface.js" not in index and "scroll-surface.js" not in gateway, "retired document scroll adapter must not return"
 assert 'rel="manifest" href="/manifest.json"' in index, "every maintained PWA page must reference the root manifest"
 assert 'id="immersiveExitBtn"' in index and 'id="detailsFullscreenBtn"' in index, "fullscreen must expose explicit enter and exit controls"
 assert 'id="changesPanel"' in index and 'id="detailsChangesBtn"' in index, "Owner must expose read-only workspace changes"
@@ -417,7 +418,7 @@ assert 'import("./owner/api-client.mjs?v=faryo-owner-api-1")' in app, "Owner API
 assert 'import("./owner/attachment-controller.mjs?v=faryo-owner-attachments-1")' in app, "Owner attachments must use their native ES module"
 assert 'import("./owner/history-controller.mjs?v=faryo-owner-history-1")' in app, "Owner history must use its native ES module"
 assert 'import("./owner/rich-block-controller.mjs?v=faryo-owner-rich-blocks-1")' in app, "Owner long histories must use the versioned rich-block controller"
-assert 'import("./owner/capture-controller.mjs?v=faryo-owner-capture-2")' in app, "Owner capture must use its current versioned ES module"
+assert 'import("./owner/capture-controller.mjs?v=faryo-owner-capture-3")' in app, "Owner capture must use its current versioned ES module"
 assert 'import("./owner/composer-delivery.mjs?v=faryo-owner-composer-1")' in app, "Owner composer delivery must use its native ES module"
 assert "/api/workspace-changes" in owner_server and "/api/workspace-changes" in changes_panel_source, "workspace changes must use the scoped read-only Owner API"
 assert "/api/capabilities" in owner_server and "/api/diagnostics" in owner_server and "loadOwnerCapabilities" in app, "Owner must expose versioned redacted diagnostics"

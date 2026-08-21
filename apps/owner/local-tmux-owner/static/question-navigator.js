@@ -347,9 +347,9 @@
       const targetRect = target.getBoundingClientRect();
       const maximum = Math.max(0, scroller.scrollHeight - scroller.clientHeight);
       const top = targetScrollTop(scroller.scrollTop, targetRect.top, scrollerRect.top, 20, maximum);
-      const reducedMotion = Boolean(view.matchMedia?.('(prefers-reduced-motion: reduce)').matches);
-      const longJump = Math.abs(top - Number(scroller.scrollTop || 0)) > Number(scroller.clientHeight || 0) * 2;
-      if (typeof scroller.scrollTo === 'function') scroller.scrollTo({ top, behavior: reducedMotion || longJump ? 'auto' : 'smooth' });
+      // Question jumps may arrive in quick succession from keyboard or touch.
+      // A pending smooth-scroll frame can otherwise override the next target.
+      if (typeof scroller.scrollTo === 'function') scroller.scrollTo({ top, behavior: 'auto' });
       else scroller.scrollTop = top;
       setActive(requested);
       if (flashTarget) flashTarget.classList.remove('question-nav-flash');
@@ -466,5 +466,5 @@
     return Object.freeze({ sync, reset, destroy, jumpTo, updateActive, refreshLayout, get activeIndex() { return active; } });
   }
 
-  return Object.freeze({ version: '3', previewText, activeIndex, targetScrollTop, shouldRevealForScroll, createController });
+  return Object.freeze({ version: '4', previewText, activeIndex, targetScrollTop, shouldRevealForScroll, createController });
 });

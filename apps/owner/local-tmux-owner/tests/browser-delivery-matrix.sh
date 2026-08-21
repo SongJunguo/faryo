@@ -56,6 +56,7 @@ if [[ -z "$url_template" ]]; then
   owner_log="$temp_root/owner.log"
   FARYO_OWNER_INBOX_DIR="$temp_root/inbox" \
   FARYO_OWNER_PANE_WIDTH=0 \
+  PYTHONPATH="$repo_root/src${PYTHONPATH:+:$PYTHONPATH}" \
     "$python_bin" apps/owner/local-tmux-owner/server.py \
       --host 127.0.0.1 --port "$port" --session "$session" --token "$token" --pane-width 0 \
       >"$owner_log" 2>&1 &

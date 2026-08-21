@@ -168,16 +168,18 @@ the same Gateway protocol rather than create a second agent backend.
 
 ## Mobile display decision
 
-Faryo v1.2.1 locks `html/body` and scrolls the transcript inside `main`. Mobile
-Chromium dynamically retracts its browser bars when the document scrolls, but
-that browser behaviour is not an application API and does not follow the old
-inner scroll container.
+Faryo v1.8 uses one `100dvh` app shell and one bounded `main` conversation
+scrollport in direct Owner, Gateway, desktop and installed PWA views. The
+composer is a normal grid row rather than a fixed overlay. On supporting
+Chromium/Edge builds, a feature-detected VirtualKeyboard API overlay exposes
+`env(keyboard-inset-height)` as a fourth grid row. Other browsers use
+`interactive-widget=resizes-content`; neither path computes a keyboard height
+from `innerHeight`, VisualViewport offsets or device thresholds.
 
-The selected solution uses a small scroll-surface adapter. Narrow normal tabs
-reached through Gateway use genuine document-root scrolling; direct Owner,
-desktop and installed PWA views retain the bounded inner scroller. History
-anchors, question navigation and live-follow consume the same adapter contract.
-It then offers two stronger explicit modes:
+History anchors, question navigation, live-follow and deferred rich blocks all
+consume the same concrete scroll element. Browser address-bar retraction remains
+browser-controlled rather than a Faryo correctness dependency. Two explicit
+immersive modes are available:
 
 1. Manifest `display: standalone` for a persistent installed app window without
    the normal URL bar. Microsoft documents that standalone Edge PWAs omit normal

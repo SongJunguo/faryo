@@ -155,11 +155,12 @@ token or selected-session query.
 
 ## Immersive Display
 
-Faryo uses a tested scroll-surface adapter rather than scroll-position hacks.
-Narrow pages opened through Gateway in a normal browser use the document root,
-so mobile Edge/Chromium receive real page scroll and can apply their own dynamic
-toolbar behaviour. Direct Owner, desktop and installed standalone PWA views keep
-the bounded `main` scroller.
+Faryo uses one bounded conversation scrollport in every Owner/Gateway/PWA mode.
+The app shell is a `100dvh` grid whose composer is a normal layout row, so
+history anchors, question navigation, live follow and input geometry share one
+coordinate system. Supported Chromium/Edge builds expose the software-keyboard
+inset through the VirtualKeyboard API and CSS; other browsers fall back to
+`interactive-widget=resizes-content`. Neither path guesses keyboard pixels.
 
 - Gateway's root manifest uses `display: standalone`, and every maintained page
   references it. An installed Faryo launches without the normal URL bar.
@@ -172,6 +173,9 @@ the bounded `main` scroller.
   persisted, so reloads and newly opened sessions never enter automatically.
 - Unsupported or denied requests leave the page intact and point to the Home
   install path.
+- A normal browser tab may keep its address bar visible. Faryo does not force
+  browser chrome; installed standalone PWA and user-activated Fullscreen are the
+  explicit no-address-bar modes.
 
 ## Workspace Changes and Diagnostics
 
@@ -318,8 +322,9 @@ remains interrupt.
 - single reading column;
 - 10–12 px normal side padding;
 - stable large composer above the bottom safe area;
-- composer and conversation reserve share one measured VisualViewport snapshot,
-  so the keyboard neither double-lifts the input nor covers a tail-pinned reply;
+- composer remains a normal app-shell row; a browser-provided keyboard inset or
+  resized layout viewport shortens the conversation row without translating the
+  input by hand;
 - question rail overlays the extreme edge only while active;
 - tables, code, and display math use internal horizontal scrolling;
 - session/details panels cover the page instead of shrinking the conversation.
@@ -366,8 +371,9 @@ The maintained matrix includes:
 - user-activated full-screen enter/exit through header and Details, folded-header
   exit, manifest/standalone identity, rejection fallback and no horizontal
   overflow.
-- Gateway narrow-screen document height above the viewport, trusted root scroll,
-  inner-main scrollTop zero, fixed composer visibility and stable refresh anchor.
+- one non-document conversation scrollport, normal-flow composer, VirtualKeyboard
+  inset/viewport-resize paths, trusted touch scroll, stable refresh anchor and
+  user-activated Fullscreen/PWA behaviour.
 
 Detailed evidence is maintained in
 [`plans/v1.6-structured-interactions-and-owner-ui-plan.md`](plans/v1.6-structured-interactions-and-owner-ui-plan.md),

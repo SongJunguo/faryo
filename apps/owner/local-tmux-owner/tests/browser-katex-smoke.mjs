@@ -706,6 +706,16 @@ try {
         history.scrollRestoration = 'auto';
         sessionStorage.setItem('faryoSmokeReloadLatest', String(Date.now()));
         const scroller = document.getElementById('outputWrap');
+        const scrollTopDescriptor = Object.getOwnPropertyDescriptor(Element.prototype, 'scrollTop');
+        window.__faryoQuestionScrollAssignments = [];
+        Object.defineProperty(scroller, 'scrollTop', {
+          configurable: true,
+          get() { return scrollTopDescriptor.get.call(this); },
+          set(value) {
+            window.__faryoQuestionScrollAssignments.push({ value, stack: new Error().stack });
+            scrollTopDescriptor.set.call(this, value);
+          },
+        });
         if (scroller) scroller.scrollTop = 0;
       })()`,
     });
@@ -1715,6 +1725,10 @@ try {
   if (checkQuestionNavigator) {
     const fixtureResult = await send('Runtime.evaluate', {
       expression: `(() => {
+        // Freeze the production capture loop while this test owns the output
+        // DOM. Otherwise a legitimate live refresh can replace the synthetic
+        // question fixture halfway through the keyboard-navigation assertions.
+        window.dispatchEvent(new PageTransitionEvent('pagehide', { persisted: true }));
         const output = document.getElementById('output');
         const scroller = document.getElementById('outputWrap');
         if (!output || !scroller) return { ready: false };
@@ -1808,11 +1822,23 @@ try {
       throw new Error(`Question navigator obscures content while scrolling: ${JSON.stringify(translucentState)}`);
     }
 
-    await send('Runtime.evaluate', {
-      expression: `document.getElementById('promptInput')?.focus()`,
+    const focusSetup = await send('Runtime.evaluate', {
+      expression: `(() => {
+        const firstMarker = document.querySelector('#questionNavMarkers .question-nav-marker');
+        const focusable = [...document.querySelectorAll('button:not([disabled]), a[href], input:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])')]
+          .filter((element) => element.getClientRects().length > 0);
+        const markerIndex = focusable.indexOf(firstMarker);
+        const predecessor = markerIndex > 0 ? focusable[markerIndex - 1] : null;
+        predecessor?.focus();
+        return { markerIndex, predecessor: predecessor?.id || predecessor?.className || '' };
+      })()`,
+      returnByValue: true,
     });
+    if (Number(focusSetup.result?.value?.markerIndex ?? -1) < 1) {
+      throw new Error(`Question navigator has no preceding tab stop: ${JSON.stringify(focusSetup.result?.value || {})}`);
+    }
     let tabFocus = {};
-    for (let attempt = 0; attempt < 24; attempt += 1) {
+    for (let attempt = 0; attempt < 2; attempt += 1) {
       await send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Tab', code: 'Tab', windowsVirtualKeyCode: 9, nativeVirtualKeyCode: 9 });
       await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Tab', code: 'Tab', windowsVirtualKeyCode: 9, nativeVirtualKeyCode: 9 });
       const result = await send('Runtime.evaluate', {
@@ -1828,6 +1854,12 @@ try {
     if (!tabFocus.marker || tabFocus.focusedIndex !== '0') {
       throw new Error(`Question navigator was not reachable by Tab: ${JSON.stringify(tabFocus)}`);
     }
+    // CDP keyboard input may focus the page itself, which deliberately wakes
+    // the production live connection. Pause it again before inspecting the
+    // synthetic fixture.
+    await send('Runtime.evaluate', {
+      expression: `window.dispatchEvent(new PageTransitionEvent('pagehide', { persisted: true }))`,
+    });
     await delay(30);
     const previewResult = await send('Runtime.evaluate', {
       expression: `(() => {
@@ -1886,6 +1918,7 @@ try {
             scrollTop: scroller?.scrollTop || 0,
             active: active?.dataset.questionIndex || '',
             current: document.getElementById('questionNavCurrent')?.textContent || '',
+            targetOffset: scrollerRect && targetRect ? targetRect.top - scrollerRect.top : -1,
             targetDelta: scrollerRect && targetRect ? Math.abs(targetRect.top - scrollerRect.top - 20) : -1,
             previewHidden: !preview?.classList.contains('visible'),
           };
@@ -1899,10 +1932,7 @@ try {
       || jumped.targetDelta < 0 || jumped.targetDelta >= 10 || !jumped.previewHidden) {
       throw new Error(`Question navigator jump failed: ${JSON.stringify(jumped)}`);
     }
-    // Let native smooth scrolling finish before measuring whether a later DOM
-    // append moves the reader. Otherwise its final few animation pixels look
-    // like a refresh-induced jump.
-    await delay(260);
+    await delay(30);
 
     const appendResult = await send('Runtime.evaluate', {
       expression: `(() => {
@@ -1996,6 +2026,9 @@ try {
     if (hiddenState.shown || hiddenState.interactive) {
       throw new Error(`Question navigator did not auto-hide: ${JSON.stringify(hiddenState)}`);
     }
+    await send('Runtime.evaluate', {
+      expression: `window.dispatchEvent(new PageTransitionEvent('pageshow', { persisted: true }))`,
+    });
     console.log('faryo-browser-question-navigator=PASS questions=13 reveal=fast-scroll translucent=PASS auto-hide=PASS jump=8 live-append=preserved latest=13');
   }
 

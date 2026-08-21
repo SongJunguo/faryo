@@ -5,7 +5,10 @@
 
 ## Active
 
-当前没有未完成的版本计划。
+- [`v1.8-mobile-keyboard-app-shell-plan.md`](v1.8-mobile-keyboard-app-shell-plan.md)：
+  以单一会话滚动区、正常布局流 composer、VirtualKeyboard CSS inset 和
+  `interactive-widget=resizes-content` 后备替换移动端 fixed/VisualViewport 像素补偿；生产迁移、
+  匿名长历史、可靠发送和沉浸式浏览器矩阵已通过，等待版本化部署与 Android Edge 实机门。
 
 ## Completed or maintenance mode
 

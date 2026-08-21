@@ -10,7 +10,7 @@ const viewport = {
 };
 const screenshotPath = process.env.FARYO_IMMERSIVE_SCREENSHOT || '';
 const authCookie = process.env.FARYO_IMMERSIVE_AUTH_COOKIE || '';
-const expectDocumentScroll = process.env.FARYO_IMMERSIVE_EXPECT_DOCUMENT_SCROLL === '1';
+const expectConversationScroll = process.env.FARYO_IMMERSIVE_EXPECT_CONVERSATION_SCROLL === '1';
 if (!targetUrl) throw new Error('FARYO_IMMERSIVE_URL is required');
 
 await withBrowser({
@@ -23,8 +23,9 @@ await withBrowser({
   await page.waitForFunction((expectScroll) => {
     const ready = document.documentElement.dataset.faryoAppReady === '1'
       && document.documentElement.dataset.faryoImmersive === 'ready';
-    return ready && (!expectScroll || document.scrollingElement.scrollHeight > innerHeight + 80);
-  }, expectDocumentScroll, { timeout: 15000 });
+    const main = document.getElementById('outputWrap');
+    return ready && (!expectScroll || main.scrollHeight > main.clientHeight + 80);
+  }, expectConversationScroll, { timeout: 15000 });
 
   const baseline = await page.evaluate(() => ({
     ready: document.documentElement.dataset.faryoAppReady === '1'
@@ -44,36 +45,51 @@ await withBrowser({
     || baseline.detailsLabel !== 'Enter full screen' || !baseline.exitHidden || baseline.horizontalOverflow) {
     throw new Error(`Immersive baseline failed: ${JSON.stringify(baseline)}`);
   }
-  if (expectDocumentScroll && (baseline.scrollSurface !== 'document' || !baseline.documentScrollable
-    || baseline.mainOverflow !== 'visible' || baseline.footerPosition !== 'fixed')) {
-    throw new Error(`Mobile document scroll mode failed: ${JSON.stringify(baseline)}`);
-  }
-  if (!expectDocumentScroll && baseline.scrollSurface !== 'conversation') {
-    throw new Error(`Unexpected document scroll mode: ${JSON.stringify(baseline)}`);
+  if (baseline.scrollSurface !== 'conversation' || baseline.documentScrollable
+    || baseline.mainOverflow !== 'auto' || baseline.footerPosition !== 'relative') {
+    throw new Error(`Conversation app shell failed: ${JSON.stringify(baseline)}`);
   }
 
-  const verifyDocumentScroll = async () => {
-    if (!expectDocumentScroll) return;
-    await page.evaluate(() => window.scrollTo({ top: 0, behavior: 'auto' }));
+  const verifyConversationScroll = async () => {
+    if (!expectConversationScroll) return;
+    await page.evaluate(() => new Promise((resolve) => {
+      requestAnimationFrame(() => requestAnimationFrame(resolve));
+    }));
+    await page.evaluate(() => {
+      window.scrollTo({ top: 0, behavior: 'auto' });
+      document.getElementById('outputWrap').scrollTop = 0;
+      const navigator = document.getElementById('questionNavigator');
+      window.__faryoImmersiveRailWasRevealed = Boolean(navigator?.classList.contains('is-scrolling'));
+      window.__faryoImmersiveRailObserver?.disconnect();
+      window.__faryoImmersiveRailObserver = navigator ? new MutationObserver(() => {
+        if (navigator.classList.contains('is-scrolling')) window.__faryoImmersiveRailWasRevealed = true;
+      }) : null;
+      window.__faryoImmersiveRailObserver?.observe(navigator, { attributes: true, attributeFilter: ['class'] });
+    });
     await page.waitForTimeout(60);
     if (mobile) await trustedSwipe(page);
-    else await page.mouse.wheel(0, 360);
-    await page.waitForFunction(() => window.scrollY > 40);
-    const rootScroll = await page.evaluate(() => {
+    else {
+      await page.locator('#outputWrap').hover();
+      await page.mouse.wheel(0, 360);
+    }
+    await page.waitForFunction(() => document.getElementById('outputWrap').scrollTop > 40);
+    const conversationScroll = await page.evaluate(() => {
       const footer = document.querySelector('footer')?.getBoundingClientRect();
       return {
-        y: window.scrollY,
-        innerMain: document.getElementById('outputWrap')?.scrollTop || 0,
+        rootY: window.scrollY,
+        conversationY: document.getElementById('outputWrap')?.scrollTop || 0,
         footerVisible: Boolean(footer && footer.bottom <= innerHeight + 1 && footer.top >= 0),
         markerCount: document.querySelectorAll('#questionNavMarkers .question-nav-marker').length,
         railRevealed: document.getElementById('questionNavigator')?.classList.contains('is-scrolling') || false,
+        railWasRevealed: Boolean(window.__faryoImmersiveRailWasRevealed),
       };
     });
-    if (rootScroll.y <= 40 || rootScroll.innerMain !== 0 || !rootScroll.footerVisible) {
-      throw new Error(`Trusted document scroll failed: ${JSON.stringify(rootScroll)}`);
+    await page.evaluate(() => window.__faryoImmersiveRailObserver?.disconnect());
+    if (conversationScroll.rootY !== 0 || conversationScroll.conversationY <= 40 || !conversationScroll.footerVisible) {
+      throw new Error(`Trusted conversation scroll failed: ${JSON.stringify(conversationScroll)}`);
     }
-    if (rootScroll.markerCount >= 2 && !rootScroll.railRevealed) {
-      throw new Error(`Document scroll did not reach question navigation: ${JSON.stringify(rootScroll)}`);
+    if (conversationScroll.markerCount >= 2 && !conversationScroll.railRevealed && !conversationScroll.railWasRevealed) {
+      throw new Error(`Conversation scroll did not reach question navigation: ${JSON.stringify(conversationScroll)}`);
     }
     const promptGeometry = () => page.locator('.prompt-shell').evaluate((item) => {
       const rect = item.getBoundingClientRect();
@@ -88,15 +104,15 @@ await withBrowser({
     if (![before, focused, blurred].every((item) => item.visible)
       || Math.abs(before.width - focused.width) > 1 || Math.abs(before.height - focused.height) > 1
       || Math.abs(before.width - blurred.width) > 1 || Math.abs(before.height - blurred.height) > 1) {
-      throw new Error(`Document-scroll composer geometry changed: ${JSON.stringify({ before, focused, blurred })}`);
+      throw new Error(`App-shell composer geometry changed: ${JSON.stringify({ before, focused, blurred })}`);
     }
   };
 
   if (!baseline.supported) {
     await page.locator('#immersiveBtn').click();
     await page.waitForFunction(() => document.getElementById('errorBox')?.textContent.includes('Install Faryo from Home'));
-    await verifyDocumentScroll();
-    console.log(`faryo-browser-immersive=PASS viewport=${viewport.width}x${viewport.height} api=unsupported fallback=pwa root-scroll=${expectDocumentScroll ? 'yes' : 'no'}`);
+    await verifyConversationScroll();
+    console.log(`faryo-browser-immersive=PASS viewport=${viewport.width}x${viewport.height} api=unsupported fallback=pwa conversation-scroll=${expectConversationScroll ? 'yes' : 'no'}`);
     return;
   }
 
@@ -146,6 +162,6 @@ await withBrowser({
   await page.locator('#immersiveExitBtn').click();
   await page.waitForFunction(() => !document.fullscreenElement && !document.webkitFullscreenElement);
 
-  await verifyDocumentScroll();
-  console.log(`faryo-browser-immersive=PASS viewport=${viewport.width}x${viewport.height} api=fullscreen topbar=yes details=yes exit=yes root-scroll=${expectDocumentScroll ? 'yes' : 'no'}`);
+  await verifyConversationScroll();
+  console.log(`faryo-browser-immersive=PASS viewport=${viewport.width}x${viewport.height} api=fullscreen topbar=yes details=yes exit=yes conversation-scroll=${expectConversationScroll ? 'yes' : 'no'}`);
 });

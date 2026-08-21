@@ -4,7 +4,7 @@
   const attachmentControllerModulePromise = import("./owner/attachment-controller.mjs?v=faryo-owner-attachments-1");
   const historyControllerModulePromise = import("./owner/history-controller.mjs?v=faryo-owner-history-1");
   const richBlockControllerModulePromise = import("./owner/rich-block-controller.mjs?v=faryo-owner-rich-blocks-1");
-  const captureControllerModulePromise = import("./owner/capture-controller.mjs?v=faryo-owner-capture-2");
+  const captureControllerModulePromise = import("./owner/capture-controller.mjs?v=faryo-owner-capture-3");
   const composerDeliveryModulePromise = import("./owner/composer-delivery.mjs?v=faryo-owner-composer-1");
   const goalStatusModulePromise = import("./owner/goal-status.mjs?v=faryo-owner-goal-1");
   // Workspace review is an optional surface. Start loading it immediately,
@@ -90,7 +90,7 @@
   const copyFidelityApi = window.FaryoCopyFidelity || {};
   const clipboardImageApi = window.FaryoClipboardImages || {};
   const immersiveModeApi = window.FaryoImmersiveMode || {};
-  const scrollSurfaceApi = window.FaryoScrollSurface || {};
+  const keyboardLayoutApi = window.FaryoKeyboardLayout || {};
   document.documentElement.dataset.faryoClipboardPaste = (
     typeof clipboardImageApi.filesFromClipboard === 'function'
     && typeof clipboardImageApi.insertText === 'function'
@@ -147,20 +147,9 @@
   const routeMatch = location.pathname.match(/^\/(hp|pc|txy)(?:\/|$)/);
   const routeBase = routeMatch ? `/${routeMatch[1]}` : '';
   const isStandalone = window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone;
-  const useDocumentScroller = typeof scrollSurfaceApi.shouldUseDocumentScroller === 'function'
-    && scrollSurfaceApi.shouldUseDocumentScroller({ routeBase, width: window.innerWidth, standalone: Boolean(isStandalone) });
-  const conversationScroller = useDocumentScroller && typeof scrollSurfaceApi.createDocumentScroller === 'function'
-    ? scrollSurfaceApi.createDocumentScroller(window)
-    : outputWrap;
-  document.documentElement.classList.toggle('document-scroll-mode', useDocumentScroller);
-  document.documentElement.dataset.faryoScrollSurface = useDocumentScroller ? 'document' : 'conversation';
-  const visualViewportDock = typeof scrollSurfaceApi.createVisualViewportDock === 'function'
-    ? scrollSurfaceApi.createVisualViewportDock(window, {
-      root: document.documentElement,
-      enabled: useDocumentScroller,
-      dock: () => document.querySelector('footer'),
-    })
-    : null;
+  const conversationScroller = outputWrap;
+  document.documentElement.dataset.faryoScrollSurface = 'conversation';
+  let keyboardLayoutController = null;
   const OWNER_TOKEN_STORAGE_KEY = 'faryoOwnerToken:v1';
   const queryOwnerToken = params.get('token') || '';
   let ownerToken = queryOwnerToken;
@@ -345,6 +334,12 @@
     });
   }
   document.documentElement.dataset.faryoImmersive = immersiveController ? 'ready' : 'unavailable';
+  if (typeof keyboardLayoutApi.createKeyboardLayout === 'function') {
+    keyboardLayoutController = keyboardLayoutApi.createKeyboardLayout(window, {
+      root: document.documentElement,
+      onChange: (snapshot) => requestAnimationFrame(() => syncKeyboardState(snapshot)),
+    });
+  }
   restorePromptDraft();
   promptInput.addEventListener('input', () => {
     composerDelivery.discardPendingIfChanged(promptInput.value, selectedSession);
@@ -354,27 +349,20 @@
     renderCommandSuggestions();
   });
 
-  function syncKeyboardState() {
-    const viewport = window.visualViewport;
-    const keyboardOpen = viewport ? window.innerHeight - viewport.height > Math.max(110, window.innerHeight * 0.16) : false;
-    const keyboardActive = keyboardOpen || document.activeElement === promptInput;
+  function syncKeyboardState(keyboardSnapshot = keyboardLayoutController?.getSnapshot()) {
+    const keyboardActive = Boolean(keyboardSnapshot?.visible) || document.activeElement === promptInput;
     const previousKeyboardActive = document.documentElement.classList.contains('keyboard-open');
     const keepTailPinned = viewportTailPinned || isNearBottom();
     document.documentElement.classList.toggle('keyboard-open', keyboardActive);
-    const viewportSnapshot = visualViewportDock?.update();
-    if (useDocumentScroller && keepTailPinned
-      && (previousKeyboardActive !== keyboardActive || viewportSnapshot?.changed)) {
+    if (keepTailPinned && (previousKeyboardActive !== keyboardActive || keyboardSnapshot?.changed)) {
       requestAnimationFrame(() => scrollBottom(true));
     }
     updateSendVisibility();
     renderCommandSuggestions();
   }
-  promptInput.addEventListener('focus', syncKeyboardState);
+  promptInput.addEventListener('focus', () => syncKeyboardState());
   promptInput.addEventListener('blur', () => setTimeout(syncKeyboardState, 120));
   promptInput.addEventListener('blur', () => setTimeout(hideCommandSuggestions, 120));
-  window.visualViewport?.addEventListener('resize', syncKeyboardState);
-  window.visualViewport?.addEventListener('scroll', syncKeyboardState);
-  window.addEventListener('resize', syncKeyboardState);
   syncKeyboardState();
   function fitPromptTip(text) { return Array.from(text || '').length > 22 ? Array.from(text).slice(0, 21).join('') + '...' : text; }
   function setPromptTip(tip) { currentPromptTip = tip || PROMPT_TIPS[0]; promptInput.placeholder = fitPromptTip(currentPromptTip); promptInput.title = currentPromptTip; }
@@ -980,7 +968,7 @@
   richBlockController = createRichBlockController({
     view: window,
     scroller: conversationScroller,
-    observerRoot: useDocumentScroller ? null : outputWrap,
+    observerRoot: outputWrap,
     isNearBottom,
     renderBlock: (node, descriptor) => {
       node.innerHTML = renderTextWithFilesSafely(descriptor.text, descriptor.renderOptions);
@@ -2561,7 +2549,16 @@
   window.addEventListener('pageshow', handlePageShow);
   window.addEventListener('focus', resumeLiveConnection);
   window.addEventListener('online', resumeLiveConnection);
-  window.addEventListener('pagehide', () => { lastLiveWakeAt = 0; cancelInitialLatestScroll(); cancelActiveRefreshes(); closeEventStream(); setCaptureFallback(false); setStatusRefresh(false); setFullRefresh(false); });
+  window.addEventListener('pagehide', (event) => {
+    lastLiveWakeAt = 0;
+    cancelInitialLatestScroll();
+    cancelActiveRefreshes();
+    closeEventStream();
+    setCaptureFallback(false);
+    setStatusRefresh(false);
+    setFullRefresh(false);
+    if (!event.persisted) keyboardLayoutController?.destroy();
+  });
   document.addEventListener('visibilitychange', () => {
     setStatusRefresh(!document.hidden && headerStatusVisible());
     if (document.hidden) { lastLiveWakeAt = 0; cancelActiveRefreshes(); closeEventStream(); setCaptureFallback(false); setFullRefresh(false); }

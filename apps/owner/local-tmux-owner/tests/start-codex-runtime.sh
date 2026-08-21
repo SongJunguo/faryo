@@ -40,6 +40,7 @@ env -u SHELL -u FARYO_AGENT_SHELL \
   FARYO_START_DIRECTORY_ROOTS="$temp_root" \
   FARYO_OWNER_DATA="$temp_root/data" \
   FARYO_OWNER_PANE_WIDTH=0 \
+  PYTHONPATH="$repo_root/src${PYTHONPATH:+:$PYTHONPATH}" \
   "$python_bin" "$repo_root/apps/owner/local-tmux-owner/server.py" \
     --host 127.0.0.1 --port "$port" --token "$token" --pane-width 0 \
     >"$temp_root/owner.log" 2>&1 &

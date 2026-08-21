@@ -411,7 +411,7 @@ layer while keeping Faryo's inner login enabled.
 
 The `main` branch was revalidated on 2026-08-21 with privacy-safe fixtures:
 
-- canonical source gate: 195 Owner, 115 Gateway, and 56 unified-CLI Python tests,
+- canonical source gate: 199 Owner, 117 Gateway, and 57 unified-CLI Python tests,
   plus Ruff, ESLint, Prettier, TypeScript and reproducible local browser bundles;
 - real authenticated Gateway at 390x844: `/model`, pending-menu reload, Cancel,
   `/usage`, Preact composer geometry and no fake chat turn;
@@ -431,8 +431,9 @@ The `main` branch was revalidated on 2026-08-21 with privacy-safe fixtures:
   pageshow/focus/online live-stream restoration;
 - local Markdown AST/GFM/KaTeX/Shiki, 40-turn lazy history, full question index,
   exact Markdown/TeX copy, Raw→Chat isolation and 180-line stable Live tmux;
-- 390x844 and 1440x900 layout, keyboard/VisualViewport, document scrolling,
-  PWA/fullscreen, read-only sanitized diff and protected-resource checks;
+- 390x844 and 1440x900 layout, normal-flow keyboard app shell, single
+  conversation scrolling, PWA/fullscreen, read-only sanitized diff and
+  protected-resource checks;
 - release-version cache keys and Gateway script allowlist completeness: ordinary
   reload/new tab loads the current app without hard refresh;
 - checksum update/rollback gates with `KillMode=process`; every deployed preview
