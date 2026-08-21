@@ -955,6 +955,78 @@ try {
       await delay(900);
       await send('Runtime.evaluate', {
         expression: `(() => {
+          const profile = window.__faryoRapidScrollProfile = {
+            startedAt: 0, endedAt: 0, frameGaps: [], longTasks: [], richChanges: 0,
+          };
+          const scroller = document.getElementById('outputWrap');
+          scroller.scrollTop = scroller.scrollHeight;
+          profile.startedAt = performance.now();
+          let previous = profile.startedAt;
+          const deadline = previous + 4000;
+          const tick = (now) => {
+            profile.frameGaps.push({ at: now, gap: now - previous });
+            previous = now;
+            if (now < deadline) requestAnimationFrame(tick);
+          };
+          requestAnimationFrame(tick);
+          profile.taskObserver = new PerformanceObserver((list) => {
+            for (const entry of list.getEntries()) profile.longTasks.push({ startTime: entry.startTime, duration: entry.duration });
+          });
+          profile.taskObserver.observe({ entryTypes: ['longtask'] });
+          profile.richObserver = new MutationObserver((records) => { profile.richChanges += records.length; });
+          profile.richObserver.observe(document.getElementById('output'), {
+            attributes: true, attributeFilter: ['data-faryo-rich-state'], subtree: true,
+          });
+        })()`,
+      });
+      let rapidScrollEvents = 0;
+      for (let index = 0; index < 240; index += 1) {
+        await send('Input.dispatchMouseEvent', {
+          type: 'mouseWheel',
+          x: Math.max(20, Math.round((viewportWidth || 390) / 2)),
+          y: Math.max(80, Math.round((viewportHeight || 844) / 2)),
+          deltaX: 0,
+          deltaY: -420,
+        });
+        rapidScrollEvents += 1;
+        await delay(8);
+        if (index % 8 === 7) {
+          const reached = await send('Runtime.evaluate', {
+            expression: `document.getElementById('outputWrap')?.scrollTop <= 1`,
+            returnByValue: true,
+          });
+          if (reached.result?.value) break;
+        }
+      }
+      await send('Runtime.evaluate', { expression: `window.__faryoRapidScrollProfile.endedAt = performance.now()` });
+      await delay(500);
+      const rapidResult = await send('Runtime.evaluate', {
+        expression: `(() => {
+          const profile = window.__faryoRapidScrollProfile;
+          profile.taskObserver?.disconnect();
+          profile.richObserver?.disconnect();
+          const tasks = profile.longTasks.filter((entry) => entry.startTime <= profile.endedAt && entry.startTime + entry.duration >= profile.startedAt);
+          const frames = profile.frameGaps.filter((entry) => entry.at >= profile.startedAt && entry.at <= profile.endedAt + 34);
+          return {
+            scrollTop: Math.round(document.getElementById('outputWrap')?.scrollTop || 0),
+            richChanges: profile.richChanges,
+            longTasks: tasks.length,
+            maxLongTask: Math.round(Math.max(0, ...tasks.map((entry) => entry.duration))),
+            framesOver50: frames.filter((entry) => entry.gap > 50).length,
+            maxFrame: Math.round(Math.max(0, ...frames.map((entry) => entry.gap))),
+          };
+        })()`,
+        returnByValue: true,
+      });
+      const rapid = rapidResult.result?.value || {};
+      if (rapid.scrollTop > 1 || rapid.richChanges > 24 || rapid.maxLongTask > 100
+        || rapid.framesOver50 > 2 || rapid.maxFrame > 100) {
+        throw new Error(`Long-history rapid-scroll budget failed: ${JSON.stringify(rapid)}`);
+      }
+      console.log(`faryo-browser-long-history-scroll=PASS events=${rapidScrollEvents} rich-changes=${rapid.richChanges} max-long-task=${rapid.maxLongTask}ms max-frame=${rapid.maxFrame}ms`);
+
+      await send('Runtime.evaluate', {
+        expression: `(() => {
           window.__faryoResizeLongTasks = [];
           window.__faryoResizeObserver = new PerformanceObserver((list) => {
             for (const entry of list.getEntries()) window.__faryoResizeLongTasks.push(Math.round(entry.duration));

@@ -23,8 +23,8 @@
 
 - [`long-conversation-rendering-plan.md`](long-conversation-rendering-plan.md)：参考 DeepSeek
   Harness 的稳定 key、可见窗口、实测高度与前插锚点契约，为长 Markdown/KaTeX 对话建立
-  有界富 DOM，缓存问题导航几何并覆盖连续窗口/DPI 变化；已完成 source、匿名长历史、
-  隐私安全真实会话、Gateway 和本机 v1.6.8 部署验证。
+  有界富 DOM，缓存问题导航几何并覆盖连续窗口/DPI 变化；v1.8.6 继续加入快速滚动占位、
+  180 ms 停止门禁和程序滚动写入账本，保留完整逻辑历史与前插锚点。
 
 - [`session-context-window-plan.md`](session-context-window-plan.md)：为新建和恢复 Codex 会话
   增加会话级上下文窗口预设与自定义 `K` 输入，同时清理持久 tmux 继承的旧安装环境；已完成

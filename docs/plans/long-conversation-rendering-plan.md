@@ -2,6 +2,8 @@
 
 状态：已完成并部署为本机 v1.6.8 source candidate
 
+维护补强：v1.8.6 增加快速滚动 scroll-seek 门禁和滚动写入账本
+
 范围：Owner Compact Chat 的单会话历史、Markdown/KaTeX 富内容和问题导航
 
 隐私：性能证据只记录计数与耗时；不记录会话正文、域名、Token、账号或本机私有路径
@@ -67,3 +69,35 @@ Faryo 不复制 Harness 的 React/Cordis 应用壳，也不直接把
 - 版本化安装器已切换本机 v1.6.8；`faryo doctor` 为 22 OK、0 warning、0 failed，
   Owner/Gateway 活跃，所有既有 tmux 会话及窗口尺寸保持不变。经本机 Gateway 普通
   新标签页验证，v1.6.8 结构化历史、KaTeX 和桌面布局通过。
+
+## v1.8.6 快速滚动维护
+
+2026-08-22 的真实长会话复测发现，离屏释放虽然让静止后的富 DOM 保持有界，但快速连续
+上滚仍会沿途触发 Markdown/KaTeX 恢复；这会让主线程在滚动期间产生长任务和丢帧。网络只
+发生既定的两次历史分页请求，页面也没有调用音频播放、振动或输出 BEL 字符，因此听到的
+提示音不属于 Faryo 主动声音；浏览器或操作系统在卡顿/输入饱和时给出反馈是当前最合理的
+推断，但不把该推断写成已证明的声源。
+
+本次设计参考三类成熟契约：
+
+- DeepSeek Harness 的
+  [observed-top ledger](https://github.com/deepseek-ai/deepseek-harness/blob/master/.agents/notes/implemented/bug-fix/2026-08-06-reader-scroll-attribution-observed-top-ledger.md)
+  记录程序写入的滚动位置，不把锚点恢复误判为读者滚动；
+- React Virtuoso 的
+  [Scroll Seek Placeholders](https://virtuoso.dev/react-virtuoso/virtuoso/scroll-seek-placeholders/)
+  在速度较高时保留等高占位，停止后再恢复真实行；
+- TanStack Virtual 的
+  [chat virtualizer contract](https://tanstack.com/virtual/latest/docs/chat) 使用稳定 key、动态
+  测量、尾部锚定和有限 overscan，其
+  [Virtualizer API](https://tanstack.com/virtual/latest/docs/api/virtualizer) 也把 `isScrolling`
+  与停止延迟作为一等状态。
+
+Faryo 不因此重新引入此前未通过历史前插锚点门禁的外层 virtualizer。更小且与现有架构
+相容的改动是：快速滚动时暂停富正文恢复，保持已经测量或估算的等高占位；连续静止 180 ms
+后，每帧最多恢复一个当前可见正文；程序性的锚点补偿通过写入账本排除；到达绝对顶部后，
+正文增高不得把读者推回历史中部。隐藏后仍留在优先队列的项同时被清理，避免以后无法恢复。
+
+同一私有长会话仅输出匿名计数的 A/B 压测中，v1.8.5 在快速上滚期间发生 112 次富正文状态
+变化、2 个长任务，最长活动帧约 100 ms；v1.8.6 source candidate 降为 6 次状态变化、0 个
+长任务，最长活动帧约 17 ms，停止后 DOM 约 380 个节点。两侧都没有音频、振动或 BEL 调用。
+浏览器探针、单元测试和公开文档均不保存正文、域名、Token、账号或私有路径。

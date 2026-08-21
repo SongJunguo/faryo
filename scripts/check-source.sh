@@ -433,7 +433,7 @@ assert 'import("./owner/changes-panel.mjs?v=faryo-owner-changes-1")' in app, "Ow
 assert 'import("./owner/api-client.mjs?v=faryo-owner-api-1")' in app, "Owner API must use its native ES module"
 assert 'import("./owner/attachment-controller.mjs?v=faryo-owner-attachments-1")' in app, "Owner attachments must use their native ES module"
 assert 'import("./owner/history-controller.mjs?v=faryo-owner-history-1")' in app, "Owner history must use its native ES module"
-assert 'import("./owner/rich-block-controller.mjs?v=faryo-owner-rich-blocks-1")' in app, "Owner long histories must use the versioned rich-block controller"
+assert 'import("./owner/rich-block-controller.mjs?v=faryo-owner-rich-blocks-2")' in app, "Owner long histories must use the current versioned rich-block controller"
 assert 'import("./owner/capture-controller.mjs?v=faryo-owner-capture-3")' in app, "Owner capture must use its current versioned ES module"
 assert 'import("./owner/composer-delivery.mjs?v=faryo-owner-composer-1")' in app, "Owner composer delivery must use its native ES module"
 assert "/api/workspace-changes" in owner_server and "/api/workspace-changes" in changes_panel_source, "workspace changes must use the scoped read-only Owner API"

@@ -1,6 +1,13 @@
 const DEFAULT_EAGER_TAIL = 2;
 const DEFAULT_ROOT_MARGIN = "1200px 0px";
 const DEFAULT_RELEASE_DELAY_MS = 700;
+const DEFAULT_SCROLL_IDLE_MS = 180;
+
+export function isRapidScroll(delta, elapsedMs) {
+  const distance = Math.abs(Number(delta) || 0);
+  const elapsed = Math.max(1, Number(elapsedMs) || 0);
+  return distance >= 180 || (distance >= 48 && distance / elapsed >= 0.72);
+}
 
 export function estimatedBlockHeight(text, kind = "output") {
   const source = String(text || "");
@@ -14,7 +21,11 @@ export function estimatedBlockHeight(text, kind = "output") {
   return Math.max(minimum, Math.min(maximum, 30 + visualLines * lineHeight));
 }
 
-export function shouldRenderEagerly(index, total, eagerTail = DEFAULT_EAGER_TAIL) {
+export function shouldRenderEagerly(
+  index,
+  total,
+  eagerTail = DEFAULT_EAGER_TAIL,
+) {
   const count = Math.max(1, Number(eagerTail) || DEFAULT_EAGER_TAIL);
   return Number(index) >= Math.max(0, Number(total || 0) - count);
 }
@@ -30,17 +41,31 @@ export function createRichBlockController(options = {}) {
   const entries = new Map();
   const priority = [];
   const queued = new Set();
-  const releaseDelayMs = Math.max(0, Number(options.releaseDelayMs ?? DEFAULT_RELEASE_DELAY_MS));
+  const releaseDelayMs = Math.max(
+    0,
+    Number(options.releaseDelayMs ?? DEFAULT_RELEASE_DELAY_MS),
+  );
+  const scrollIdleMs = Math.max(
+    40,
+    Number(options.scrollIdleMs ?? DEFAULT_SCROLL_IDLE_MS),
+  );
   let priorityFrame = 0;
+  let scrollIdleTimer = 0;
   let destroyed = false;
   let tailPinned = true;
+  let rapidScrolling = false;
+  let lastScrollTop = Number(scroller?.scrollTop || 0);
+  let lastScrollAt = Number(view.performance?.now?.() || Date.now());
+  let writtenScrollTop = null;
 
-  const requestFrame = typeof view.requestAnimationFrame === "function"
-    ? view.requestAnimationFrame.bind(view)
-    : (callback) => view.setTimeout(callback, 0);
-  const cancelFrame = typeof view.cancelAnimationFrame === "function"
-    ? view.cancelAnimationFrame.bind(view)
-    : view.clearTimeout.bind(view);
+  const requestFrame =
+    typeof view.requestAnimationFrame === "function"
+      ? view.requestAnimationFrame.bind(view)
+      : (callback) => view.setTimeout(callback, 0);
+  const cancelFrame =
+    typeof view.cancelAnimationFrame === "function"
+      ? view.cancelAnimationFrame.bind(view)
+      : view.clearTimeout.bind(view);
 
   function isNearBottom() {
     return typeof options.isNearBottom === "function" && options.isNearBottom();
@@ -50,20 +75,36 @@ export function createRichBlockController(options = {}) {
     return Number(scroller?.getBoundingClientRect?.().top || 0);
   }
 
-  function preserveScrollAnchor(node, before, wasNearBottom) {
+  function preserveScrollAnchor(node, before, wasNearBottom, readerAtTop) {
     if (wasNearBottom || !before || !scroller) return;
+    // Reaching the absolute top is an explicit reader position. Expanding the
+    // first deferred block must not push the reader back into the transcript,
+    // including through the browser's own overflow anchoring.
+    if (readerAtTop) {
+      writtenScrollTop = 0;
+      scroller.scrollTop = 0;
+      return;
+    }
     const after = node.getBoundingClientRect?.();
     // A tall deferred block can start above the viewport while its lower edge
     // still overlaps it. Preserve the content below that block (the history
     // anchor) whenever the block itself begins above the reading surface.
     if (!after || before.top >= scrollerTop() + 1) return;
     const delta = Number(after.height || 0) - Number(before.height || 0);
-    if (Math.abs(delta) > 0.5) scroller.scrollTop = Number(scroller.scrollTop || 0) + delta;
+    if (Math.abs(delta) > 0.5) {
+      const nextScrollTop = Number(scroller.scrollTop || 0) + delta;
+      writtenScrollTop = nextScrollTop;
+      scroller.scrollTop = nextScrollTop;
+    }
   }
 
   function placeholder(entry, height = 0) {
     const node = entry.node;
-    const preservedHeight = Math.max(1, Number(height) || estimatedBlockHeight(entry.descriptor.text, entry.descriptor.kind));
+    const preservedHeight = Math.max(
+      1,
+      Number(height) ||
+        estimatedBlockHeight(entry.descriptor.text, entry.descriptor.kind),
+    );
     const skeleton = node.ownerDocument.createElement("span");
     skeleton.className = "rich-block-placeholder math-ignore";
     skeleton.setAttribute("aria-hidden", "true");
@@ -76,25 +117,35 @@ export function createRichBlockController(options = {}) {
   }
 
   function hydrate(entry) {
-    if (!entry || entry.state === "rendered" || !entry.node.isConnected || destroyed) return false;
+    if (
+      !entry ||
+      entry.state === "rendered" ||
+      !entry.node.isConnected ||
+      destroyed
+    )
+      return false;
     queued.delete(entry.node);
     const node = entry.node;
     const before = node.getBoundingClientRect?.() || null;
     const wasNearBottom = isNearBottom();
+    const readerAtTop = Number(scroller?.scrollTop || 0) <= 1;
     node.style.removeProperty("block-size");
     renderBlock(node, entry.descriptor);
     node.dataset.faryoRichState = "rendered";
     node.removeAttribute("aria-busy");
     entry.state = "rendered";
-    entry.height = Number(node.getBoundingClientRect?.().height || entry.height || 0);
-    preserveScrollAnchor(node, before, wasNearBottom);
+    entry.height = Number(
+      node.getBoundingClientRect?.().height || entry.height || 0,
+    );
+    preserveScrollAnchor(node, before, wasNearBottom, readerAtTop);
     options.onHydrated?.(node, entry.descriptor, { wasNearBottom });
     return true;
   }
 
   function containsActiveSelection(node) {
     const selection = view.getSelection?.();
-    if (!selection || selection.isCollapsed || !selection.rangeCount) return false;
+    if (!selection || selection.isCollapsed || !selection.rangeCount)
+      return false;
     try {
       return selection.getRangeAt(0).intersectsNode(node);
     } catch (_error) {
@@ -104,15 +155,18 @@ export function createRichBlockController(options = {}) {
 
   function dehydrate(entry) {
     if (
-      !entry
-      || entry.state !== "rendered"
-      || entry.visible
-      || entry.pinned
-      || !entry.node.isConnected
-      || containsActiveSelection(entry.node)
-      || destroyed
-    ) return false;
-    const height = Number(entry.node.getBoundingClientRect?.().height || entry.height || 0);
+      !entry ||
+      entry.state !== "rendered" ||
+      entry.visible ||
+      entry.pinned ||
+      !entry.node.isConnected ||
+      containsActiveSelection(entry.node) ||
+      destroyed
+    )
+      return false;
+    const height = Number(
+      entry.node.getBoundingClientRect?.().height || entry.height || 0,
+    );
     placeholder(entry, height);
     options.onReleased?.(entry.node, entry.descriptor);
     return true;
@@ -120,9 +174,14 @@ export function createRichBlockController(options = {}) {
 
   function drainPriority() {
     priorityFrame = 0;
+    if (rapidScrolling) return;
     while (priority.length) {
       const entry = priority.shift();
-      if (!entry || !queued.has(entry.node) || !entry.visible) continue;
+      if (!entry || !queued.has(entry.node)) continue;
+      if (!entry.visible) {
+        queued.delete(entry.node);
+        continue;
+      }
       hydrate(entry);
       break;
     }
@@ -135,37 +194,88 @@ export function createRichBlockController(options = {}) {
     if (!entry || entry.state === "rendered" || queued.has(entry.node)) return;
     queued.add(entry.node);
     priority.push(entry);
-    if (!priorityFrame) priorityFrame = requestFrame(drainPriority);
+    if (!rapidScrolling && !priorityFrame)
+      priorityFrame = requestFrame(drainPriority);
+  }
+
+  function finishRapidScroll() {
+    scrollIdleTimer = 0;
+    rapidScrolling = false;
+    if (
+      !priorityFrame &&
+      priority.some((entry) => entry?.visible && queued.has(entry.node))
+    ) {
+      priorityFrame = requestFrame(drainPriority);
+    }
+  }
+
+  function noteScroll() {
+    const now = Number(view.performance?.now?.() || Date.now());
+    const nextScrollTop = Number(scroller?.scrollTop || 0);
+    if (
+      writtenScrollTop !== null &&
+      Math.abs(nextScrollTop - writtenScrollTop) <= 0.5
+    ) {
+      writtenScrollTop = null;
+      lastScrollTop = nextScrollTop;
+      lastScrollAt = now;
+      return;
+    }
+    writtenScrollTop = null;
+    const rapid = isRapidScroll(
+      nextScrollTop - lastScrollTop,
+      now - lastScrollAt,
+    );
+    lastScrollTop = nextScrollTop;
+    lastScrollAt = now;
+    if (!rapid && !rapidScrolling) return;
+    rapidScrolling = true;
+    if (priorityFrame) cancelFrame(priorityFrame);
+    priorityFrame = 0;
+    if (scrollIdleTimer) view.clearTimeout(scrollIdleTimer);
+    scrollIdleTimer = view.setTimeout(finishRapidScroll, scrollIdleMs);
   }
 
   function scheduleRelease(entry) {
-    if (!entry || entry.releaseTimer || entry.state !== "rendered" || entry.visible || entry.pinned) return;
+    if (
+      !entry ||
+      entry.releaseTimer ||
+      entry.state !== "rendered" ||
+      entry.visible ||
+      entry.pinned
+    )
+      return;
     entry.releaseTimer = view.setTimeout(() => {
       entry.releaseTimer = 0;
-      if (!dehydrate(entry) && !entry.visible && !entry.pinned) scheduleRelease(entry);
+      if (!dehydrate(entry) && !entry.visible && !entry.pinned)
+        scheduleRelease(entry);
     }, releaseDelayMs);
   }
 
   const Observer = view.IntersectionObserver;
-  const observer = typeof Observer === "function"
-    ? new Observer((changes) => {
-      for (const change of changes) {
-        const entry = entries.get(change.target);
-        if (!entry) continue;
-        entry.visible = Boolean(change.isIntersecting);
-        if (entry.releaseTimer) {
-          view.clearTimeout(entry.releaseTimer);
-          entry.releaseTimer = 0;
-        }
-        if (entry.visible) {
-          prioritize(entry);
-        } else scheduleRelease(entry);
-      }
-    }, {
-      root: options.observerRoot || null,
-      rootMargin: options.rootMargin || DEFAULT_ROOT_MARGIN,
-    })
-    : null;
+  const observer =
+    typeof Observer === "function"
+      ? new Observer(
+          (changes) => {
+            for (const change of changes) {
+              const entry = entries.get(change.target);
+              if (!entry) continue;
+              entry.visible = Boolean(change.isIntersecting);
+              if (entry.releaseTimer) {
+                view.clearTimeout(entry.releaseTimer);
+                entry.releaseTimer = 0;
+              }
+              if (entry.visible) {
+                prioritize(entry);
+              } else scheduleRelease(entry);
+            }
+          },
+          {
+            root: options.observerRoot || null,
+            rootMargin: options.rootMargin || DEFAULT_ROOT_MARGIN,
+          },
+        )
+      : null;
 
   function prepare(node, descriptor, prepareOptions = {}) {
     if (!node || !descriptor) return;
@@ -262,13 +372,22 @@ export function createRichBlockController(options = {}) {
     tailPinned = true;
     if (priorityFrame) cancelFrame(priorityFrame);
     priorityFrame = 0;
+    if (scrollIdleTimer) view.clearTimeout(scrollIdleTimer);
+    scrollIdleTimer = 0;
+    rapidScrolling = false;
+    writtenScrollTop = null;
+    lastScrollTop = Number(scroller?.scrollTop || 0);
+    lastScrollAt = Number(view.performance?.now?.() || Date.now());
   }
 
   function destroy() {
     destroyed = true;
     clear();
     observer?.disconnect();
+    scroller?.removeEventListener?.("scroll", noteScroll);
   }
+
+  scroller?.addEventListener?.("scroll", noteScroll, { passive: true });
 
   return Object.freeze({
     clear,
@@ -279,13 +398,18 @@ export function createRichBlockController(options = {}) {
     setTailPinned,
     get pendingCount() {
       let total = 0;
-      for (const entry of entries.values()) if (entry.state !== "rendered") total += 1;
+      for (const entry of entries.values())
+        if (entry.state !== "rendered") total += 1;
       return total;
     },
     get renderedCount() {
       let total = 0;
-      for (const entry of entries.values()) if (entry.state === "rendered") total += 1;
+      for (const entry of entries.values())
+        if (entry.state === "rendered") total += 1;
       return total;
+    },
+    get rapidScrolling() {
+      return rapidScrolling;
     },
   });
 }

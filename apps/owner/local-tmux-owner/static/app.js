@@ -3,7 +3,7 @@
   const apiClientModulePromise = import("./owner/api-client.mjs?v=faryo-owner-api-1");
   const attachmentControllerModulePromise = import("./owner/attachment-controller.mjs?v=faryo-owner-attachments-1");
   const historyControllerModulePromise = import("./owner/history-controller.mjs?v=faryo-owner-history-1");
-  const richBlockControllerModulePromise = import("./owner/rich-block-controller.mjs?v=faryo-owner-rich-blocks-1");
+  const richBlockControllerModulePromise = import("./owner/rich-block-controller.mjs?v=faryo-owner-rich-blocks-2");
   const captureControllerModulePromise = import("./owner/capture-controller.mjs?v=faryo-owner-capture-3");
   const composerDeliveryModulePromise = import("./owner/composer-delivery.mjs?v=faryo-owner-composer-1");
   const goalStatusModulePromise = import("./owner/goal-status.mjs?v=faryo-owner-goal-1");
