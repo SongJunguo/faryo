@@ -130,6 +130,12 @@ check. Production never loads these assets from a CDN.
 
 ## Runtime and bundled assets
 
+- Codex auto-update adds no third-party Faryo dependency. Its preflight uses
+  Python standard-library JSON, subprocess and Linux `flock`, then delegates
+  npm-based installations to the npm paired with the dynamically discovered
+  Codex runtime. The only accepted package target is `@openai/codex`; update
+  state is mode 600 and contains versions, timestamps and a bounded result only.
+
 - Gateway runtime Python dependencies are exact-pinned in
   `apps/gateway/requirements.txt`. v1.4 adopts Starlette 1.6.0 and Uvicorn
   0.52.4 under BSD-3-Clause, with base-only transitive pins AnyIO 4.14.2

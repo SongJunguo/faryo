@@ -15,7 +15,7 @@ import codex_command_policy as policy
 class CodexCommandPolicyTest(unittest.TestCase):
     def test_fallback_is_a_versioned_snapshot_not_a_protocol_constant(self):
         catalog = policy.load_catalog(runtime_path=None)
-        self.assertEqual("0.148.0", catalog.tested_codex_version)
+        self.assertEqual("0.149.0", catalog.tested_codex_version)
         self.assertEqual("fallback", catalog.source)
         self.assertFalse(catalog.drifted)
         self.assertGreater(len(catalog.entries), 40)

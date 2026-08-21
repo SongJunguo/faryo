@@ -52,6 +52,7 @@ import codex_app_server
 import codex_command_policy
 import codex_tui_interactions
 import interaction_service
+from faryo_cli import codex_runtime
 
 SHARED_DIR = Path(__file__).resolve().parents[2] / "shared"
 if str(SHARED_DIR) not in sys.path:
@@ -137,12 +138,21 @@ MAX_MANAGED_AGENT_IDLE_SECONDS = 24 * 60 * 60
 AGENT_START_READY_TIMEOUT = 15.0
 AGENT_START_READY_STABLE_SECONDS = 0.75
 AGENT_START_STATE_GRACE_SECONDS = 5.0
+CODEX_UPDATE_START_READY_TIMEOUT = 220.0
 AGENT_ARCHIVE_VERIFY_TIMEOUT = 3.0
 RUNTIME_LOCK = threading.RLock()
 AGENT_START_MONITOR_LOCK = threading.Lock()
 AGENT_START_MONITORS: dict[str, int] = {}
 RELEASE_VERSION_CACHE: str | None = None
 FARYO_OWNER_DATA = Path(os.environ.get("FARYO_OWNER_DATA", str(Path.home() / ".faryo" / "owner" / "data"))).expanduser()
+CODEX_UPDATE_STATE_DIR = Path(
+    os.environ.get(
+        "FARYO_CODEX_UPDATE_STATE_DIR",
+        str(FARYO_OWNER_DATA.parent / "state"),
+    )
+).expanduser()
+CODEX_UPDATE_PREFLIGHT = APP_DIR / "codex_update_preflight.py"
+CODEX_UPDATE_SESSION_STATES = {"pending", "current", "updated", "failed", "reconciled"}
 FILE_INBOX_ROOT = Path(os.environ.get("FARYO_OWNER_INBOX_DIR", str(FARYO_OWNER_DATA / "inbox"))).expanduser()
 CACHE_ROOT = Path(os.environ.get("FARYO_OWNER_CACHE_DIR", str(FARYO_OWNER_DATA / "cache"))).expanduser()
 LOGS_ROOT = Path(os.environ.get("FARYO_OWNER_LOGS_DIR", str(FARYO_OWNER_DATA / "logs"))).expanduser()
@@ -844,12 +854,13 @@ def change_codex_thread_archive_state(config: Config, thread_id: str, archived: 
 
 
 def agent_launch_executable(command: str) -> str:
-    configured = os.environ.get("FARYO_CODEX_BIN", "").strip() if command == "codex" else ""
-    if configured:
-        path = Path(configured).expanduser()
-        if not path.is_file() or not os.access(path, os.X_OK):
-            raise OwnerError("configured Codex executable is missing or not executable", HTTPStatus.BAD_GATEWAY)
-        return str(path)
+    if command == "codex":
+        configured = os.environ.get("FARYO_CODEX_BIN", "").strip()
+        resolved = codex_runtime.resolve_codex(configured, Path.home())
+        if resolved:
+            return resolved
+        if os.environ.get("FARYO_CODEX_BIN_PINNED", "").strip().lower() in {"1", "true", "yes", "on"}:
+            raise OwnerError("pinned Codex executable is missing or not executable", HTTPStatus.BAD_GATEWAY)
     executable = shutil.which(command)
     if not executable:
         raise OwnerError("Codex executable was not found in the Owner environment", HTTPStatus.BAD_GATEWAY)
@@ -857,21 +868,50 @@ def agent_launch_executable(command: str) -> str:
 
 
 def codex_cli_argv(*args: str) -> list[str]:
-    """Build a Codex command that also works outside a login shell."""
-    executable = Path(agent_launch_executable("codex")).expanduser()
-    try:
-        resolved = executable.resolve()
-    except OSError:
-        resolved = executable
-    if resolved.suffix == ".js":
-        # NVM installs codex.js below <version>/lib/node_modules and node below
-        # <version>/bin. A systemd/tmux Owner may not inherit that bin directory
-        # in PATH, so invoke the matching runtime explicitly when available.
-        for parent in resolved.parents:
-            node = parent / "bin" / "node"
-            if node.is_file() and os.access(node, os.X_OK):
-                return [str(node), str(resolved), *args]
-    return [str(executable), *args]
+    """Resolve Codex dynamically, then freeze one matching runtime per exec."""
+    return codex_runtime.codex_argv(agent_launch_executable("codex"), *args)
+
+
+def codex_auto_update_enabled() -> bool:
+    return os.environ.get("FARYO_CODEX_AUTO_UPDATE", "1").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
+def managed_codex_launch_argv(name: str, *args: str) -> tuple[list[str], bool]:
+    if not codex_auto_update_enabled():
+        return codex_cli_argv(*args), False
+    launch = codex_cli_argv(
+        "-c",
+        "check_for_update_on_startup=false",
+        *args,
+    )
+    return (
+        [
+            sys.executable,
+            "-I",
+            str(CODEX_UPDATE_PREFLIGHT),
+            "--session",
+            name,
+            "--state-dir",
+            str(CODEX_UPDATE_STATE_DIR),
+            "--",
+            *launch,
+        ],
+        True,
+    )
+
+
+def agent_start_ready_timeout(config: Config, name: str) -> float:
+    update_status = tmux_session_option(config, name, "@faryo_codex_update")
+    return (
+        CODEX_UPDATE_START_READY_TIMEOUT
+        if update_status in CODEX_UPDATE_SESSION_STATES
+        else AGENT_START_READY_TIMEOUT
+    )
 
 
 def installed_codex_version() -> str:
@@ -935,8 +975,15 @@ def refresh_command_catalog_if_needed() -> bool:
     return True
 
 
+_codex_app_server_launch_version = ""
+_codex_installation_reconcile_lock = threading.Lock()
+
+
 def codex_app_server_argv(*args: str) -> list[str]:
-    return codex_cli_argv(*args)
+    global _codex_app_server_launch_version
+    argv = codex_cli_argv(*args)
+    _codex_app_server_launch_version = installed_codex_version()
+    return argv
 
 
 _codex_app_server_client = codex_app_server.CodexAppServerClient(
@@ -995,9 +1042,10 @@ def wait_for_agent_runtime_ready(
     expected_pane_pid: int = 0,
 ) -> str:
     target = Config(name, config.token, config.pane_width)
-    deadline = time.monotonic() + AGENT_START_READY_TIMEOUT
+    deadline = time.monotonic() + agent_start_ready_timeout(config, name)
     ready_since: float | None = None
     while time.monotonic() < deadline:
+        reconcile_managed_codex_update(config, name)
         if expected_pane_pid and get_pane_pid(target) != expected_pane_pid:
             raise OwnerError("agent runtime identity changed", HTTPStatus.CONFLICT)
         if has_session(target) and codex_cli_in_pane(target):
@@ -1083,7 +1131,10 @@ def start_agent_runtime(config: Config, cwd: Path, command: str, args: list[str]
             if max_running and active_agent_count(config) >= max_running: raise OwnerError("running agent limit reached", HTTPStatus.CONFLICT)
             name = next_faryo_session_name(config)
             shell = agent_login_shell()
-            argv = codex_cli_argv(*args) if command == "codex" else [agent_launch_executable(command), *args]
+            if command == "codex":
+                argv, auto_update = managed_codex_launch_argv(name, *args)
+            else:
+                argv, auto_update = [agent_launch_executable(command), *args], False
             launch = f"{shlex.join(argv)}; exec {shlex.quote(shell)} -l"
             res = tmux(config, ["new-session", "-d", "-s", name, "-c", str(cwd), shell, "-lc", launch], timeout=5)
             if res.returncode != 0: raise OwnerError(res.stderr.strip() or "tmux session start failed", HTTPStatus.INTERNAL_SERVER_ERROR)
@@ -1094,6 +1145,8 @@ def start_agent_runtime(config: Config, cwd: Path, command: str, args: list[str]
             if git_root := git_root_for_cwd(cwd):
                 tmux_session_option(config, name, SESSION_GIT_ROOT_OPTION, git_root)
             if source := AGENT_SOURCE_BY_COMMAND.get(command): tmux_session_option(config, name, "@faryo_agent_source", source)
+            if auto_update and tmux_session_option(config, name, "@faryo_codex_update") not in CODEX_UPDATE_SESSION_STATES:
+                tmux_session_option(config, name, "@faryo_codex_update", "pending")
             if clean_launch_id:
                 tmux_session_option(config, name, "@faryo_launch_id", clean_launch_id)
             if title:
@@ -1236,6 +1289,7 @@ def managed_session(config: Config, name: str | None) -> bool:
 def agent_session_lifecycle(config: Config, name: str, profile: AgentProfile | None = None, is_managed: bool | None = None, now: float | None = None) -> tuple[str, bool]:
     """Return the user-facing lifecycle state and whether the agent is busy."""
     target = Config(name, config.token, config.pane_width)
+    reconcile_managed_codex_update(config, name)
     managed = managed_session(config, name) if is_managed is None else is_managed
     detected = agent_profile_in_pane(target) if profile is None else profile
     if managed and tmux_session_option(config, name, "@faryo_start_error"):
@@ -1245,7 +1299,7 @@ def agent_session_lifecycle(config: Config, name: str, profile: AgentProfile | N
     except ValueError:
         started_at = 0.0
     current = time.time() if now is None else now
-    if started_at and current - started_at <= AGENT_START_READY_TIMEOUT + AGENT_START_STATE_GRACE_SECONDS:
+    if started_at and current - started_at <= agent_start_ready_timeout(config, name) + AGENT_START_STATE_GRACE_SECONDS:
         ensure_agent_start_monitor(config, name)
         return "starting", False
     if detected is not None:
@@ -1737,6 +1791,27 @@ def _stop_codex_app_server_locked() -> None:
 
 def stop_codex_app_server() -> None:
     _codex_app_server_client.stop()
+
+
+def reconcile_codex_installation() -> bool:
+    """Restart version-bound helpers after the preflight replaced Codex."""
+    global _codex_app_server_launch_version
+    with _codex_installation_reconcile_lock:
+        installed = installed_codex_version()
+        if not installed or installed == _codex_app_server_launch_version:
+            return False
+        stop_codex_app_server()
+        _codex_app_server_launch_version = installed
+        refresh_command_catalog_if_needed()
+        return True
+
+
+def reconcile_managed_codex_update(config: Config, name: str) -> bool:
+    if tmux_session_option(config, name, "@faryo_codex_update") != "updated":
+        return False
+    changed = reconcile_codex_installation()
+    tmux_session_option(config, name, "@faryo_codex_update", "reconciled")
+    return changed
 
 
 def _start_codex_app_server_locked(timeout: float) -> subprocess.Popen[str] | None:
@@ -2306,6 +2381,16 @@ def codex_structured_capture(config: Config, lines: int) -> tuple[str, str, str]
     return text, thread_id, "codex-app-server"
 
 
+def codex_empty_managed_capture(config: Config) -> bool:
+    """Recognize a new managed 0-turn TUI before Codex allocates a thread id."""
+    return bool(
+        managed_session(config, config.session)
+        and tmux_session_option(config, config.session, "@faryo_launch_id")
+        and not tmux_session_option(config, config.session, "@faryo_agent_session_id")
+        and agent_ready_for_input(config, CODEX_PROFILE)
+    )
+
+
 def rate_limit_from_response(result: dict[str, Any]) -> dict[str, Any] | None:
     snapshots = result.get("rateLimitsByLimitId")
     snapshot = snapshots.get("codex") if isinstance(snapshots, dict) else None
@@ -2869,6 +2954,11 @@ def status_payload(config: Config) -> dict[str, Any]:
             weekly_rate_limit = None
     managed = bool(tmux_alive and managed_session(config, config.session))
     agent_state, agent_running = agent_session_lifecycle(config, config.session, profile, managed) if tmux_alive else ("exited", False)
+    codex_update_status = (
+        tmux_session_option(config, config.session, "@faryo_codex_update")
+        if tmux_alive
+        else ""
+    )
     interaction_state = {"interaction": None, "interactionRevision": "none"}
     if tmux_alive and profile is CODEX_PROFILE:
         interaction_state = interaction_snapshot(config)
@@ -2891,6 +2981,7 @@ def status_payload(config: Config) -> dict[str, Any]:
         "model": model,
         "reasoningEffort": reasoning_effort,
         "fastStatus": fast_status,
+        "codexUpdateStatus": codex_update_status,
         "gitStatus": git_status(session_git_cwd(config, config.session, cwd)),
         "sessionTitle": session_title,
         "sessionId": thread.get("id") if thread else None,
@@ -3504,6 +3595,9 @@ class Handler(SimpleHTTPRequestHandler):
                         text, thread_id, capture_source = structured
                         if agent_running:
                             live_text = codex_live_tail(terminal_text)
+                    elif codex_empty_managed_capture(target):
+                        text = ""
+                        capture_source = "codex-empty"
                 payload = {
                     "ok": True,
                     "text": text,
@@ -3614,6 +3708,9 @@ class Handler(SimpleHTTPRequestHandler):
                             text, thread_id, capture_source = structured
                             if agent_running:
                                 live_text = codex_live_tail(terminal_text)
+                        elif codex_empty_managed_capture(target):
+                            text = ""
+                            capture_source = "codex-empty"
                     session_metadata = codex_capture_session_metadata(thread_id)
                     current_terminal = tmux_current_capture(target)
                     queued_send_now = bool(

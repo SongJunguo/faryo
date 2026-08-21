@@ -440,7 +440,10 @@ def initialize_private_config(
             "FARYO_GATEWAY_ENV": str(layout.gateway_env),
             "GATEWAY_AUTH_CONFIG": str(layout.gateway_auth),
             "FARYO_PYTHON": str(venv_python(version_dir)),
-            "FARYO_CODEX_BIN": codex,
+            # Discovery is dynamic on every managed launch.  Keep the
+            # installation check above, but do not pin an NVM version path.
+            "FARYO_CODEX_BIN": "",
+            "FARYO_CODEX_BIN_PINNED": "0",
             "FARYO_START_DIRECTORY_ROOTS": str(selected_workspace),
             "FARYO_GATEWAY_WORKSPACE_ROOT": str(selected_workspace),
             "FARYO_GATEWAY_ROUTE": "txy",

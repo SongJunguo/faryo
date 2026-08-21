@@ -75,5 +75,6 @@ test("revision changes replace stale turn state", () => {
 test("structured capture detection stays source-specific", () => {
   assert.equal(isStructuredCapture({ captureSource: "codex-jsonl" }), true);
   assert.equal(isStructuredCapture({ captureSource: "codex-app-server" }), true);
+  assert.equal(isStructuredCapture({ captureSource: "codex-empty" }), true);
   assert.equal(isStructuredCapture({ captureSource: "tmux" }), false);
 });

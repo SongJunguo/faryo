@@ -125,6 +125,7 @@
   let currentFastStatus = 'off';
   let outputActivity = 0, outputActivityTimer = null, lastCaptureSignature = '', lastCompactCapture = null, lastFullCapture = null;
   let outputMode = 'compact', fullLocked = false, preserveErrorUntil = 0, seenInitialPageShow = false, errorTimer = null, currentPromptTip = '';
+  let lastCodexUpdateNotice = '';
   let markdownRenderRevision = 0, highlighterRenderFrame = 0;
   const markdownHtmlCache = new Map();
   const pendingAttachments = [];
@@ -1365,7 +1366,9 @@
     const weeklyRateLimit = data.weeklyRateLimit || {};
     const sessionLabel = data.sessionTitle || data.sessionId || data.session || 'Starting Codex';
     const modelLabel = data.agentState === 'starting'
-      ? 'Starting Codex…'
+      ? data.codexUpdateStatus === 'pending'
+        ? 'Checking Codex update…'
+        : 'Starting Codex…'
       : compactModelLabel(model);
     const fastVisible = data.agentSource === 'codex-cli'
       && !['starting', 'exited'].includes(String(data.agentState || ''));
@@ -1422,7 +1425,13 @@
     if ($('detailsGit')) $('detailsGit').textContent = gitModel.text;
     if (data.agentState === 'starting' && outputMode === 'compact' && !lastCompactCapture) {
       output.classList.add('compact-blocks');
-      output.innerHTML = '<section class="compact-block output startup-card" role="status"><div class="markdown-body"><strong>Starting Codex…</strong><p>The session is open. Faryo will connect automatically when startup finishes.</p></div></section>';
+      const updatePending = data.codexUpdateStatus === 'pending';
+      output.innerHTML = `<section class="compact-block output startup-card" role="status"><div class="markdown-body"><strong>${updatePending ? 'Checking for a Codex update…' : 'Starting Codex…'}</strong><p>${updatePending ? 'Faryo will install an available official Codex update, then open this conversation automatically.' : 'The session is open. Faryo will connect automatically when startup finishes.'}</p></div></section>`;
+    }
+    const updateNotice = `${data.session || ''}:${data.codexUpdateStatus || ''}`;
+    if (data.codexUpdateStatus === 'failed' && updateNotice !== lastCodexUpdateNotice) {
+      lastCodexUpdateNotice = updateNotice;
+      setError('Codex auto-update failed, so Faryo continued with the installed version.', { timeoutMs: 10000 });
     }
     if (data.launchError) {
       launchErrorVisible = true;

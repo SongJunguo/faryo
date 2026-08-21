@@ -58,12 +58,26 @@ class CodexTranscriptTest(unittest.TestCase):
             executable = Path(root) / "codex"
             executable.write_text("#!/bin/sh\n", encoding="utf-8")
             executable.chmod(0o755)
-            with mock.patch.dict(server.os.environ, {"FARYO_CODEX_BIN": str(executable)}, clear=False):
+            with mock.patch.dict(
+                server.os.environ,
+                {
+                    "FARYO_CODEX_BIN": str(executable),
+                    "FARYO_CODEX_BIN_PINNED": "1",
+                },
+                clear=False,
+            ):
                 with mock.patch.object(server.shutil, "which", return_value="/usr/bin/codex"):
                     self.assertEqual(server.agent_launch_executable("codex"), str(executable))
 
     def test_invalid_configured_codex_executable_fails_before_tmux(self):
-        with mock.patch.dict(server.os.environ, {"FARYO_CODEX_BIN": "/missing/codex"}, clear=False):
+        with mock.patch.dict(
+            server.os.environ,
+            {
+                "FARYO_CODEX_BIN": "/missing/codex",
+                "FARYO_CODEX_BIN_PINNED": "1",
+            },
+            clear=False,
+        ):
             with self.assertRaises(server.OwnerError) as raised:
                 server.agent_launch_executable("codex")
 
@@ -78,9 +92,13 @@ class CodexTranscriptTest(unittest.TestCase):
                 self.assertEqual(server.agent_login_shell(), "/bin/bash")
 
     def test_codex_executable_falls_back_to_service_path(self):
-        with mock.patch.dict(server.os.environ, {}, clear=False):
+        with mock.patch.dict(server.os.environ, {"FARYO_CODEX_BIN_PINNED": "0"}, clear=False):
             server.os.environ.pop("FARYO_CODEX_BIN", None)
-            with mock.patch.object(server.shutil, "which", return_value="/usr/bin/codex"):
+            with mock.patch.object(
+                server.codex_runtime,
+                "resolve_codex",
+                return_value="/usr/bin/codex",
+            ):
                 self.assertEqual(server.agent_launch_executable("codex"), "/usr/bin/codex")
 
     def test_app_server_uses_the_node_next_to_a_configured_codex_script(self):
@@ -97,6 +115,40 @@ class CodexTranscriptTest(unittest.TestCase):
                 command = server.codex_app_server_argv("app-server", "--listen", "stdio://")
 
         self.assertEqual(command, [str(node), str(script), "app-server", "--listen", "stdio://"])
+
+    def test_codex_update_restarts_version_bound_helpers_once(self):
+        previous = server._codex_app_server_launch_version
+        server._codex_app_server_launch_version = "0.148.0"
+        try:
+            with (
+                mock.patch.object(server, "installed_codex_version", return_value="0.149.0"),
+                mock.patch.object(server, "stop_codex_app_server") as stop,
+                mock.patch.object(server, "refresh_command_catalog_if_needed") as refresh,
+            ):
+                self.assertTrue(server.reconcile_codex_installation())
+                self.assertFalse(server.reconcile_codex_installation())
+        finally:
+            server._codex_app_server_launch_version = previous
+
+        stop.assert_called_once_with()
+        refresh.assert_called_once_with()
+
+    def test_managed_update_marker_is_reconciled_and_consumed(self):
+        values = iter(["updated"])
+
+        def option(_config, _name, key, value=None):
+            if value is not None:
+                self.assertEqual((key, value), ("@faryo_codex_update", "reconciled"))
+                return ""
+            return next(values)
+
+        with (
+            mock.patch.object(server, "tmux_session_option", side_effect=option),
+            mock.patch.object(server, "reconcile_codex_installation", return_value=True) as reconcile,
+        ):
+            self.assertTrue(server.reconcile_managed_codex_update(mock.sentinel.config, "faryo1"))
+
+        reconcile.assert_called_once_with()
 
     def test_preserves_original_latex_from_agent_messages(self):
         formula = (
@@ -606,6 +658,34 @@ class CodexTranscriptTest(unittest.TestCase):
             capture = server.codex_structured_capture(mock.sentinel.config, 320)
 
         self.assertIsNone(capture)
+
+    def test_new_managed_ready_tui_is_an_empty_structured_conversation(self):
+        def option(_config, _session, key, _value=None):
+            return {
+                "@faryo_launch_id": "web-anonymous-launch",
+                "@faryo_agent_session_id": "",
+            }.get(key, "")
+
+        with (
+            mock.patch.object(server, "managed_session", return_value=True),
+            mock.patch.object(server, "tmux_session_option", side_effect=option),
+            mock.patch.object(server, "agent_ready_for_input", return_value=True),
+        ):
+            self.assertTrue(server.codex_empty_managed_capture(server.Config("faryo1", "token", 0)))
+
+    def test_known_thread_never_masks_a_real_structured_read_failure(self):
+        def option(_config, _session, key, _value=None):
+            return {
+                "@faryo_launch_id": "web-anonymous-launch",
+                "@faryo_agent_session_id": "thread-known",
+            }.get(key, "")
+
+        with (
+            mock.patch.object(server, "managed_session", return_value=True),
+            mock.patch.object(server, "tmux_session_option", side_effect=option),
+            mock.patch.object(server, "agent_ready_for_input", return_value=True),
+        ):
+            self.assertFalse(server.codex_empty_managed_capture(server.Config("faryo1", "token", 0)))
 
     def test_stale_app_server_thread_survives_a_transient_read_failure(self):
         thread = {"turns": [{"items": [{"type": "agentMessage", "text": "cached"}]}]}

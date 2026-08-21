@@ -175,7 +175,7 @@ class AgentSessionTest(unittest.TestCase):
         with (
             mock.patch.object(server, "active_agent_count", return_value=0),
             mock.patch.object(server, "agent_login_shell", return_value="/bin/bash"),
-            mock.patch.object(server, "codex_cli_argv", return_value=["/runtime/node", "/runtime/codex.js"]),
+            mock.patch.object(server, "codex_cli_argv", return_value=["/runtime/node", "/runtime/codex.js"]) as codex_argv,
             mock.patch.object(server, "git_root_for_cwd", return_value="/workspace"),
             mock.patch.object(server, "tmux", return_value=completed) as tmux,
             mock.patch.object(server, "tmux_session_option") as session_option,
@@ -193,12 +193,50 @@ class AgentSessionTest(unittest.TestCase):
         self.assertTrue(name.startswith("faryo") and name[5:].isdigit())
         self.assertIn("/bin/bash", launch)
         self.assertIn("/runtime/codex.js", launch[-1])
+        self.assertIn("codex_update_preflight.py", launch[-1])
+        self.assertIn(" -I ", launch[-1])
+        codex_argv.assert_called_once_with(
+            "-c",
+            "check_for_update_on_startup=false",
+        )
         session_option.assert_any_call(self.config, name, "@faryo_managed", "1")
         session_option.assert_any_call(self.config, name, "@faryo_launch_id", "web-launch-123")
         session_option.assert_any_call(self.config, name, "@faryo_git_root", "/workspace")
+        session_option.assert_any_call(self.config, name, "@faryo_codex_update", "pending")
         self.assertTrue(any(call.args[2] == "@faryo_starting_at" and call.args[3] for call in session_option.call_args_list))
         session_option.assert_any_call(self.config, name, "@faryo_starting_at", "")
         ensure_width.assert_called_once()
+
+    def test_codex_update_preflight_extends_only_managed_start_readiness(self):
+        with mock.patch.object(
+            server,
+            "tmux_session_option",
+            return_value="pending",
+        ):
+            self.assertEqual(
+                server.agent_start_ready_timeout(self.config, "faryo1"),
+                server.CODEX_UPDATE_START_READY_TIMEOUT,
+            )
+        with mock.patch.object(server, "tmux_session_option", return_value=""):
+            self.assertEqual(
+                server.agent_start_ready_timeout(self.config, "faryo1"),
+                server.AGENT_START_READY_TIMEOUT,
+            )
+
+    def test_codex_auto_update_can_be_disabled_without_changing_other_launches(self):
+        with (
+            mock.patch.dict(server.os.environ, {"FARYO_CODEX_AUTO_UPDATE": "0"}),
+            mock.patch.object(
+                server,
+                "codex_cli_argv",
+                return_value=["/runtime/codex"],
+            ) as codex_argv,
+        ):
+            argv, enabled = server.managed_codex_launch_argv("faryo1", "resume", "thread-a")
+
+        self.assertFalse(enabled)
+        self.assertEqual(argv, ["/runtime/codex"])
+        codex_argv.assert_called_once_with("resume", "thread-a")
 
     def test_new_agent_ready_window_must_remain_stable(self):
         completed = server.subprocess.CompletedProcess(["tmux"], 0, "", "")

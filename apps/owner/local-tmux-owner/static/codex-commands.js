@@ -25,13 +25,15 @@
     { command: '/compact', description: 'Summarize the conversation to free context', category: 'Conversation' },
     { command: '/plan', description: 'Switch to Plan mode', category: 'Work' },
     { command: '/goal', description: 'Set or view a long-running task goal', category: 'Work' },
-    { command: '/agent', description: 'Switch the active agent thread', category: 'Agents' },
+    { command: '/agents', description: 'View and switch between active agent sessions', category: 'Agents' },
     { command: '/side', aliases: ['/btw'], description: 'Start a side conversation in an ephemeral fork', category: 'Agents' },
     { command: '/copy', description: 'Copy the last response as Markdown', category: 'Export' },
     { command: '/export', description: 'Export the conversation as Markdown', category: 'Export' },
     { command: '/raw', description: 'Toggle copy-friendly raw scrollback', category: 'Interface' },
     { command: '/diff', description: 'Show the Git diff, including untracked files', category: 'Inspect' },
     { command: '/mention', insert: '/mention ', argumentHint: '<path>', description: 'Mention a file', category: 'Context' },
+    { command: '/cd', description: 'Change the current working directory', category: 'Context' },
+    { command: '/pwd', description: 'Show the current working directory', category: 'Inspect' },
     { command: '/status', description: 'Show session configuration and token usage', category: 'Inspect' },
     { command: '/usage', description: 'View account usage or reset a usage limit', category: 'Inspect' },
     { command: '/title', description: 'Configure terminal-title items', category: 'Interface' },
@@ -46,8 +48,6 @@
     { command: '/ps', description: 'List background terminals', category: 'Runtime' },
     { command: '/stop', description: 'Stop all background terminals', category: 'Runtime', risk: 'interrupts work' },
     { command: '/clear', description: 'Clear the terminal and start a new chat', category: 'Conversation', risk: 'changes thread' },
-    { command: '/personality', description: 'Choose a Codex communication style', category: 'Model' },
-    { command: '/subagents', aliasFor: '/agent', description: 'Switch the active agent thread', category: 'Agents' },
   ].map((entry) => Object.freeze({ ...entry, aliases: Object.freeze(entry.aliases || []) })));
 
   const launchInventory = Object.freeze([
@@ -145,7 +145,7 @@
 
   const api = {
     version: '1',
-    testedCodexVersion: '0.148.0',
+    testedCodexVersion: '0.149.0',
     observedCodexVersion: '',
     catalogDrifted: false,
     get inventory() { return inventory; },

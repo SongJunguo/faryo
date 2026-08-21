@@ -61,6 +61,15 @@ background monitor then observes the real Codex process and drives Starting to
 Waiting, a structured startup interaction, or Exited with a bounded error.
 Owner restart reconstructs that monitor from the private tmux marker. A missing
 CLI, invalid configured path, or unavailable shell still fails before redirect.
+For Faryo-managed launches, Starting first runs a serialized automatic Codex
+update preflight. Runtime discovery follows NVM's current recursive default
+alias on every launch rather than persisting a Node-version path. The preflight
+uses the matching npm only for the fixed official Codex package, verifies the
+result, and launches a new TUI with the redundant startup update prompt disabled.
+An update failure produces a bounded notice and continues with the installed
+version; it never strands the browser in an updater screen. If the binary
+changes, Owner restarts its shared App Server and refreshes the private command
+catalog before normal capture continues.
 Managed sessions use the first free `faryoN` name. The start flow asks for the
 workstation, then opens a directory-only browser at the most recent cwd. It
 shows the current path, parent, configured roots, recent locations and every

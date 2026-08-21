@@ -14,7 +14,8 @@ export function emptyConversationHistory() {
 
 export function isStructuredCapture(capture) {
   return capture?.captureSource === "codex-jsonl"
-    || capture?.captureSource === "codex-app-server";
+    || capture?.captureSource === "codex-app-server"
+    || capture?.captureSource === "codex-empty";
 }
 
 export function createHistoryController(options = {}) {

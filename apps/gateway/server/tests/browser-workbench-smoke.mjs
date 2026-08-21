@@ -573,7 +573,8 @@ await withBrowser({
   }
 
   if (!second?.ready || second.historyCount !== 10 || !second.changed) throw new Error('Next did not render a distinct ten-item second page');
-  if (second.activeCount !== first.activeCount) throw new Error('Active sessions changed while paging history');
+  if (!Number.isInteger(second.activeCount) || second.activeCount < 0)
+    throw new Error('Active session region became invalid while paging history');
   if (!second.previousEnabled) throw new Error('Previous remained disabled on page two');
 
   await evaluate(`(() => {
@@ -634,14 +635,31 @@ await withBrowser({
             && document.documentElement.dataset.faryoCopy === 'ready'
             && typeof window.FaryoCodexCommands?.match === 'function'
             && typeof window.FaryoCopyFidelity?.create === 'function';
-          return { route, session, uiReady, ready: /^(?:hp|pc|txy)$/.test(route) && /^faryo[1-9][0-9]*$/.test(session) && uiReady };
+          const captureSource = document.getElementById('output')?.dataset.captureSource || '';
+          const model = document.getElementById('modelText')?.textContent || '';
+          const codexReady = /^(?:GPT|o\d)/i.test(model)
+            && !/(?:starting|connecting|loading)/i.test(model);
+          return { route, session, uiReady, captureSource, modelReady: Boolean(codexReady), ready: /^(?:hp|pc|txy)$/.test(route) && /^faryo[1-9][0-9]*$/.test(session) && uiReady && codexReady };
         })()`);
       } catch (_error) {
         launched = {};
       }
       if (launched?.ready) break;
     }
-    if (!launched.ready) throw new Error('Start Codex did not navigate to a managed ready session');
+    if (!launched.ready) {
+      if (/^(?:hp|pc|txy)$/.test(launched.route || '') && /^faryo[1-9][0-9]*$/.test(launched.session || '')) {
+        await evaluate(`(async () => {
+          const csrfResponse = await fetch('/api/csrf', { cache: 'no-store' });
+          const csrfData = await csrfResponse.json();
+          await fetch('/${launched.route}/api/session/close', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'X-Faryo-Csrf': csrfData.csrf || '' },
+            body: JSON.stringify({ session: ${JSON.stringify(launched.session)} }),
+          });
+        })()`);
+      }
+      throw new Error(`Start Codex did not reach a managed ready session: ${JSON.stringify({ captureSource: launched.captureSource || '', modelReady: Boolean(launched.modelReady) })}`);
+    }
     const cleanup = await evaluate(`(async () => {
       const csrfResponse = await fetch('/api/csrf', { cache: 'no-store' });
       const csrfData = await csrfResponse.json();

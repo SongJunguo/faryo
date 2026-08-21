@@ -9,6 +9,10 @@
 
 ## Completed or maintenance mode
 
+- [`codex-auto-update-runtime-plan.md`](codex-auto-update-runtime-plan.md)：动态解析 NVM
+  default，启动前串行自动更新，失败后继续旧版，并同步新版命令目录与 App Server；已完成
+  真实新会话、浏览器、部署和 v1.6.5 发布门禁。
+
 - [`v1.6-structured-interactions-and-owner-ui-plan.md`](v1.6-structured-interactions-and-owner-ui-plan.md)：
   统一 Codex pending interaction、动态 slash catalog、Goal/Git/history/resume 修复、Owner
   Preact/TypeScript shell、快速异步启动、普通刷新资产版本化与 queued Esc Send now；已完成

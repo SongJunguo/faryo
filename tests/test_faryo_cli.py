@@ -21,7 +21,7 @@ SRC = ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
-from faryo_cli import application, cli, diagnostics, installer, maintenance, migration, operations, runtime, updates
+from faryo_cli import application, cli, codex_runtime, diagnostics, installer, maintenance, migration, operations, runtime, updates
 
 
 class FaryoCliTest(unittest.TestCase):
@@ -83,9 +83,12 @@ class FaryoCliTest(unittest.TestCase):
             report = self.report(self.layout(Path(temp)))
 
         encoded = json.dumps(report, ensure_ascii=False).lower()
+        by_id = {item["id"]: item for item in report["checks"]}
         self.assertTrue(report["ok"])
         self.assertEqual(report["counts"]["error"], 0)
         self.assertEqual(report["runtime"]["tmuxSessions"], 4)
+        self.assertEqual(by_id["codex-discovery"]["detail"], "dynamic per launch")
+        self.assertEqual(by_id["codex-auto-update"]["detail"], "enabled; not checked")
         self.assertTrue(diagnostics.compact_status(report)["legacyOwner"])
         for forbidden in ("private-owner-token", "private@example.invalid", str(Path(temp)).lower(), "/private/bin/codex"):
             self.assertNotIn(forbidden, encoded)
@@ -169,10 +172,35 @@ class FaryoCliTest(unittest.TestCase):
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_text("#!/bin/sh\n", encoding="utf-8")
                 path.chmod(0o700)
+            alias = home / ".nvm/alias/default"
+            alias.parent.mkdir(parents=True)
+            alias.write_text("24\n", encoding="utf-8")
 
             with mock.patch.object(diagnostics.shutil, "which", return_value=None):
                 self.assertEqual(diagnostics.resolve_codex("", home), str(latest))
-                self.assertEqual(diagnostics.resolve_codex(str(older), home), str(older))
+                self.assertEqual(diagnostics.resolve_codex(str(older), home), str(latest))
+                with mock.patch.dict(os.environ, {"FARYO_CODEX_BIN_PINNED": "1"}):
+                    self.assertEqual(diagnostics.resolve_codex(str(older), home), str(older))
+
+    def test_codex_resolution_follows_recursive_nvm_default_alias(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            home = Path(temp)
+            older = home / ".nvm/versions/node/v22.0.0/bin/codex"
+            selected = home / ".nvm/versions/node/v24.1.0/bin/codex"
+            for path in (older, selected):
+                path.parent.mkdir(parents=True)
+                path.write_text("#!/bin/sh\n", encoding="utf-8")
+                path.chmod(0o700)
+            alias = home / ".nvm/alias"
+            (alias / "lts").mkdir(parents=True)
+            (alias / "default").write_text("lts/*\n", encoding="utf-8")
+            (alias / "lts/*").write_text("lts/example\n", encoding="utf-8")
+            (alias / "lts/example").write_text("v24.1.0\n", encoding="utf-8")
+
+            self.assertEqual(
+                codex_runtime.resolve_codex("", home, {"HOME": str(home), "PATH": "/usr/bin"}),
+                str(selected),
+            )
 
     def test_codex_javascript_launcher_uses_sibling_node(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -727,7 +755,9 @@ class FaryoCliTest(unittest.TestCase):
             owner = diagnostics.read_env(layout.owner_env)
             gateway = diagnostics.read_env(layout.gateway_env)
             self.assertEqual(owner["FARYO_START_DIRECTORY_ROOTS"], str(workspace))
-            self.assertEqual(owner["FARYO_CODEX_BIN"], str(codex))
+            self.assertEqual(owner["FARYO_CODEX_BIN"], "")
+            self.assertEqual(owner["FARYO_CODEX_BIN_PINNED"], "0")
+            self.assertEqual(owner["FARYO_CODEX_AUTO_UPDATE"], "1")
             self.assertEqual(gateway["FARYO_GATEWAY_SESSION_HOURS"], "720")
             self.assertEqual(gateway["FARYO_DEFAULT_WORKSPACE"], str(workspace))
             self.assertEqual(gateway["FARYO_PYTHON"], str(python))

@@ -35,6 +35,8 @@ before_sizes="$(tmux list-panes -a -F '#{session_name} #{window_width}x#{window_
 env -u SHELL -u FARYO_AGENT_SHELL \
   PATH=/usr/bin:/bin \
   FARYO_CODEX_BIN="$temp_root/codex" \
+  FARYO_CODEX_BIN_PINNED=1 \
+  FARYO_CODEX_AUTO_UPDATE=0 \
   FARYO_START_DIRECTORY_ROOTS="$temp_root" \
   FARYO_OWNER_DATA="$temp_root/data" \
   FARYO_OWNER_PANE_WIDTH=0 \

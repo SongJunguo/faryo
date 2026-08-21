@@ -8,13 +8,13 @@ const commands = require(path.join(__dirname, '../static/codex-commands.js'));
 const expectedVisibleCommands = [
   '/model', '/fast', '/ide', '/permissions', '/keymap', '/vim', '/experimental', '/approve',
   '/memories', '/skills', '/import', '/hooks', '/review', '/rename', '/new', '/archive',
-  '/delete', '/resume', '/fork', '/init', '/compact', '/plan', '/goal', '/agent', '/side',
-  '/copy', '/export', '/raw', '/diff', '/mention', '/status', '/usage', '/title', '/statusline',
+  '/delete', '/resume', '/fork', '/init', '/compact', '/plan', '/goal', '/agents', '/side',
+  '/copy', '/export', '/raw', '/diff', '/mention', '/cd', '/pwd', '/status', '/usage', '/title', '/statusline',
   '/theme', '/pets', '/mcp', '/plugins', '/logout', '/exit', '/feedback', '/ps', '/stop',
-  '/clear', '/personality', '/subagents',
+  '/clear',
 ];
 
-assert.equal(commands.testedCodexVersion, '0.148.0');
+assert.equal(commands.testedCodexVersion, '0.149.0');
 assert.deepEqual(commands.inventory.map((entry) => entry.command), expectedVisibleCommands);
 const catalog = JSON.parse(fs.readFileSync(path.join(__dirname, '../static/codex-command-catalog.json'), 'utf8'));
 assert.deepEqual(catalog.commands.map((entry) => entry.command), expectedVisibleCommands);
@@ -31,7 +31,8 @@ assert.equal(sideAlias.command, '/side');
 assert.equal(sideAlias.matchedAlias, '/btw');
 assert.equal(sideAlias.value, '/btw');
 
-assert.equal(commands.match('/prsnlty')[0].command, '/personality');
+assert.equal(commands.match('/agnts')[0].command, '/agents');
+assert.equal(commands.match('/pw')[0].command, '/pwd');
 assert.equal(commands.match('/syntax')[0].command, '/theme');
 assert.equal(commands.match('/model').length, 0);
 

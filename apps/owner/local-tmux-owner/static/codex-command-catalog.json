@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "testedCodexVersion": "0.148.0",
+  "testedCodexVersion": "0.149.0",
   "commands": [
     {"command":"/model","description":"Choose the model and reasoning effort","category":"Model","behavior":"menu"},
     {"command":"/fast","description":"Toggle faster responses with increased usage","category":"Model","behavior":"local_action"},
@@ -25,13 +25,15 @@
     {"command":"/compact","description":"Summarize the conversation to free context","category":"Conversation","behavior":"workflow"},
     {"command":"/plan","description":"Switch to Plan mode","category":"Work","behavior":"local_action"},
     {"command":"/goal","description":"Set or view a long-running task goal","category":"Work","behavior":"menu"},
-    {"command":"/agent","description":"Switch the active agent thread","category":"Agents","behavior":"menu"},
+    {"command":"/agents","description":"View and switch between active agent sessions","category":"Agents","behavior":"menu"},
     {"command":"/side","description":"Start a side conversation in an ephemeral fork","category":"Agents","behavior":"workflow","aliases":["/btw"]},
     {"command":"/copy","description":"Copy the last response as Markdown","category":"Export","behavior":"local_action"},
     {"command":"/export","description":"Export the conversation as Markdown","category":"Export","behavior":"local_action"},
     {"command":"/raw","description":"Toggle copy-friendly raw scrollback","category":"Interface","behavior":"local_action"},
     {"command":"/diff","description":"Show the Git diff, including untracked files","category":"Inspect","behavior":"local_action"},
     {"command":"/mention","description":"Mention a file","category":"Context","behavior":"argument","argumentHint":"<path>"},
+    {"command":"/cd","description":"Change the current working directory","category":"Context","behavior":"workflow"},
+    {"command":"/pwd","description":"Show the current working directory","category":"Inspect","behavior":"local_action"},
     {"command":"/status","description":"Show session configuration and token usage","category":"Inspect","behavior":"local_action"},
     {"command":"/usage","description":"View account usage or reset a usage limit","category":"Inspect","behavior":"menu"},
     {"command":"/title","description":"Configure terminal-title items","category":"Interface","behavior":"menu"},
@@ -45,8 +47,6 @@
     {"command":"/feedback","description":"Send logs to the Codex maintainers","category":"Support","behavior":"workflow"},
     {"command":"/ps","description":"List background terminals","category":"Runtime","behavior":"local_action"},
     {"command":"/stop","description":"Stop all background terminals","category":"Runtime","behavior":"dangerous"},
-    {"command":"/clear","description":"Clear the terminal and start a new chat","category":"Conversation","behavior":"dangerous"},
-    {"command":"/personality","description":"Choose a Codex communication style","category":"Model","behavior":"menu"},
-    {"command":"/subagents","description":"Switch the active agent thread","category":"Agents","behavior":"menu"}
+    {"command":"/clear","description":"Clear the terminal and start a new chat","category":"Conversation","behavior":"dangerous"}
   ]
 }

@@ -37,7 +37,7 @@ faryo_resolve_conda() {
     "${HOME:-}/anaconda3/bin/conda"
   do
     [[ -n "$candidate" && -x "$candidate" ]] || continue
-    readlink -f -- "$candidate"
+    printf '%s\n' "$candidate"
     return 0
   done
   return 1
@@ -117,13 +117,35 @@ faryo_latest_nvm_codex() {
   return 1
 }
 
+faryo_nvm_default_codex() {
+  local root node_path candidate
+  for root in "${NVM_DIR:-}" "${HOME:-}/.nvm"; do
+    [[ -s "$root/nvm.sh" ]] || continue
+    node_path=$(NVM_DIR="$root" bash -c 'source "$NVM_DIR/nvm.sh" --no-use >/dev/null 2>&1; nvm which default 2>/dev/null' 2>/dev/null | tail -n 1) || true
+    [[ -n "$node_path" ]] || continue
+    candidate="$(dirname "$node_path")/codex"
+    [[ -x "$candidate" ]] || continue
+    readlink -f -- "$candidate"
+    return 0
+  done
+  return 1
+}
+
 faryo_resolve_codex() {
-  local candidate
-  if [[ -n "${FARYO_CODEX_BIN:-}" ]]; then
-    candidate=$(faryo_command_path "$FARYO_CODEX_BIN") || {
-      echo "FARYO_CODEX_BIN is not executable: $FARYO_CODEX_BIN" >&2
+  local candidate configured="${FARYO_CODEX_BIN:-}"
+  if [[ "${FARYO_CODEX_BIN_PINNED:-0}" == "1" ]]; then
+    [[ -n "$configured" ]] || {
+      echo "FARYO_CODEX_BIN_PINNED requires FARYO_CODEX_BIN" >&2
       return 1
     }
+    candidate=$(faryo_command_path "$configured") || {
+      echo "FARYO_CODEX_BIN is not executable: $configured" >&2
+      return 1
+    }
+    printf '%s\n' "$candidate"
+    return 0
+  fi
+  if candidate=$(faryo_nvm_default_codex); then
     printf '%s\n' "$candidate"
     return 0
   fi
@@ -141,6 +163,10 @@ faryo_resolve_codex() {
     return 0
   done
   if candidate=$(faryo_latest_nvm_codex); then
+    printf '%s\n' "$candidate"
+    return 0
+  fi
+  if [[ -n "$configured" ]] && candidate=$(faryo_command_path "$configured"); then
     printf '%s\n' "$candidate"
     return 0
   fi

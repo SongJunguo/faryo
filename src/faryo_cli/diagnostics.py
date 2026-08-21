@@ -5,15 +5,17 @@ from __future__ import annotations
 from dataclasses import dataclass
 import http.client
 import importlib.util
+import json
 import os
 from pathlib import Path
-import re
 import shlex
 import shutil
 import stat
 import subprocess
 import sys
 from typing import Any, Mapping
+
+from . import codex_runtime
 
 
 SCHEMA_VERSION = 1
@@ -111,41 +113,15 @@ def argv_version(argv: list[str]) -> str | None:
     return text[0][:96] if result.returncode == 0 and text else None
 
 
-def resolve_codex(configured: str, home: Path) -> str:
-    if configured:
-        candidate = Path(configured).expanduser() if "/" in configured else Path(shutil.which(configured) or "")
-        return str(candidate) if candidate.is_file() and os.access(candidate, os.X_OK) else ""
-    path_candidate = shutil.which("codex")
-    if path_candidate:
-        return path_candidate
-    for candidate in (
-        home / ".local/share/npm-global/bin/codex",
-        home / ".local/bin/codex",
-        Path("/usr/local/bin/codex"),
-    ):
-        if candidate.is_file() and os.access(candidate, os.X_OK):
-            return str(candidate)
-    nvm_root = home / ".nvm/versions/node"
-    if nvm_root.is_dir():
-        candidates = [path for path in nvm_root.glob("*/bin/codex") if path.is_file() and os.access(path, os.X_OK)]
-        if candidates:
-            return str(sorted(candidates, key=lambda path: tuple(int(value) for value in re.findall(r"\d+", path.parent.parent.name)))[-1])
-    return ""
+def resolve_codex(configured: str, home: Path, *, pinned: bool | None = None) -> str:
+    values = dict(os.environ)
+    if pinned is not None:
+        values["FARYO_CODEX_BIN_PINNED"] = "1" if pinned else "0"
+    return codex_runtime.resolve_codex(configured, home, values)
 
 
 def codex_argv(executable: str, *args: str) -> list[str]:
-    path = Path(executable).expanduser()
-    try:
-        resolved = path.resolve(strict=True)
-    except OSError:
-        return [executable, *args]
-    marker = "/lib/node_modules/"
-    value = str(resolved)
-    if marker in value:
-        node = Path(value.split(marker, 1)[0]) / "bin/node"
-        if node.is_file() and os.access(node, os.X_OK):
-            return [str(node), value, *args]
-    return [executable, *args]
+    return codex_runtime.codex_argv(executable, *args)
 
 
 def service_state(name: str) -> str:
@@ -244,9 +220,24 @@ def build_report(layout: Layout | None = None) -> dict[str, Any]:
 
     tmux_version = command_version("tmux", "-V")
     checks.append(check("tmux", "ok" if tmux_version else "error", tmux_version or "not found"))
-    codex_path = resolve_codex(owner.get("FARYO_CODEX_BIN") or "", selected.home)
+    pinned_codex = (owner.get("FARYO_CODEX_BIN_PINNED") or "0").strip().lower() in {"1", "true", "yes", "on"}
+    codex_path = resolve_codex(
+        owner.get("FARYO_CODEX_BIN") or "",
+        selected.home,
+        pinned=pinned_codex,
+    )
     codex_version = argv_version(codex_argv(codex_path, "--version")) if codex_path else None
     checks.append(check("codex", "ok" if codex_version else "error", codex_version or "not found or not on PATH"))
+    checks.append(check("codex-discovery", "ok", "pinned override" if pinned_codex else "dynamic per launch"))
+    auto_update = (owner.get("FARYO_CODEX_AUTO_UPDATE") or "1").strip().lower() in {"1", "true", "yes", "on"}
+    update_result = "not checked"
+    try:
+        update_state = json.loads((selected.faryo_home / "owner/state/codex-auto-update.json").read_text(encoding="utf-8"))
+        if isinstance(update_state, dict) and update_state.get("result") in {"current", "updated", "failed"}:
+            update_result = str(update_state["result"])
+    except (OSError, json.JSONDecodeError):
+        pass
+    checks.append(check("codex-auto-update", "ok", f"{'enabled' if auto_update else 'disabled'}; {update_result}"))
     checks.append(check("curl", "ok" if shutil.which("curl") else "error", "available" if shutil.which("curl") else "not found"))
     missing_modules = [name for name in ("anyio", "bcrypt", "starlette", "uvicorn") if importlib.util.find_spec(name) is None]
     checks.append(check("runtime-dependencies", "error" if missing_modules else "ok", "missing runtime packages" if missing_modules else "available"))

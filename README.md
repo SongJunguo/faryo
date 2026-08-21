@@ -94,7 +94,7 @@ Historical distribution and non-Codex platform paths may remain in the tree for
 upstream compatibility, but they are not part of this project's current validation
 or support claims.
 
-Current release: [Faryo 1.6.4](https://github.com/SongJunguo/faryo-codex-web-ui/releases/tag/v1.6.4).
+Current release: [Faryo 1.6.5](https://github.com/SongJunguo/faryo-codex-web-ui/releases/tag/v1.6.5).
 
 ## Current Functionality
 
@@ -201,7 +201,7 @@ micromark -> mdast -> CommonMark/GFM/math nodes -> safe HTML -> KaTeX
   preserves the same DOM node and manual scroll position, pauses updates while
   its text is selected, and offers one-click copy of the visible terminal text.
 - Uses a versioned slash-command catalog populated by a private, read-only TUI
-  inventory probe. The bundled Codex 0.148.0 fallback contains 46 classified
+  inventory probe. The bundled Codex 0.149.0 fallback contains 46 classified
   commands; future additions appear as unclassified instead of being silently
   submitted or hard-coded forever.
 - Routes `/model`, `/usage`, permissions, approvals, resume questions, and
@@ -252,6 +252,14 @@ micromark -> mdast -> CommonMark/GFM/math nodes -> safe HTML -> KaTeX
 - `Start Codex` resolves the configured CLI with its matching Node runtime,
   selects an available login shell, creates the managed tmux, and immediately
   opens its Starting page; a pane-identity monitor owns final readiness/failure.
+- Codex discovery is dynamic on every managed launch: Faryo follows the current
+  NVM default and stable user commands before treating an old generated path as
+  a fallback. It freezes an absolute Node/Codex pair only for that one process.
+- Before new or resumed TUI startup, a locked preflight checks the fixed official
+  `@openai/codex` package, updates it with the matching NVM npm when necessary,
+  verifies the installed version, and then starts a fresh Codex process. Failed
+  or timed-out updates continue with the installed version instead of losing the
+  conversation to an in-TUI restart prompt.
 - Start retries carry one stable launch ID across browser, Gateway, Owner
   restarts, and lost responses, so an ambiguous retry returns the same managed
   tmux instead of creating a duplicate. HTML login/edge errors are classified
@@ -310,8 +318,10 @@ UI asset remains local and independently documented.
 Faryo does not modify Conda base or install Python packages into the operating
 system interpreter. The installer uses Ubuntu's compatible `python3` only to
 create an isolated, version-specific private venv below
-`~/.local/share/faryo/`. Node, npm, Git, Ruff, and Playwright are development
-requirements, not production runtime requirements.
+`~/.local/share/faryo/`. Faryo itself does not require a separate production
+Node/npm installation; when Codex was installed through npm, automatic updates
+reuse the Node/npm shipped beside that discovered Codex launcher. Git, Ruff,
+Playwright, and the root Node toolchain remain development requirements.
 
 For a tagged release, download the reviewed installer and its checksum from the
 same GitHub Release, verify it, then run it from the directory that should be the
@@ -319,7 +329,7 @@ initial allowed workspace:
 
 ```bash
 sha256sum --check install-faryo.sh.sha256
-bash install-faryo.sh --version v1.6.4 --workspace "$PWD"
+bash install-faryo.sh --version v1.6.5 --workspace "$PWD"
 ```
 
 Upgrading a pre-v1.5 checkout that still uses the dedicated Owner keepalive
@@ -384,7 +394,7 @@ layer while keeping Faryo's inner login enabled.
 
 The `main` branch was revalidated on 2026-08-21 with privacy-safe fixtures:
 
-- canonical source gate: 183 Owner, 115 Gateway, and 55 unified-CLI Python tests,
+- canonical source gate: 195 Owner, 115 Gateway, and 56 unified-CLI Python tests,
   plus Ruff, ESLint, Prettier, TypeScript and reproducible local browser bundles;
 - real authenticated Gateway at 390x844: `/model`, pending-menu reload, Cancel,
   `/usage`, Preact composer geometry and no fake chat turn;

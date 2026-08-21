@@ -14,6 +14,9 @@ trap cleanup EXIT INT TERM
 python_stub="$fixture/conda-env/bin/python"
 node_root="$fixture/nvm/versions/node/v24.0.0"
 node_stub="$node_root/bin/node"
+mkdir -p "$fixture/nvm/alias"
+printf 'v24.0.0\n' >"$fixture/nvm/alias/default"
+printf '# nvm fixture\nnvm() { [[ "$1 $2" == "which default" ]] && printf "%s\\n" "$NVM_DIR/versions/node/v24.0.0/bin/node"; }\n' >"$fixture/nvm/nvm.sh"
 codex_launcher="$node_root/bin/codex"
 codex_stub="$node_root/lib/node_modules/@openai/codex/bin/codex.js"
 mkdir -p "$(dirname "$python_stub")" "$(dirname "$node_stub")" "$(dirname "$codex_stub")"
@@ -39,7 +42,7 @@ resolved=$(env -u FARYO_PYTHON CONDA_PREFIX="$fixture/conda-env" bash -c \
 resolved=$(FARYO_NODE_BIN="$node_stub" faryo_resolve_node)
 [[ "$resolved" == "$node_stub" ]]
 
-resolved=$(FARYO_CODEX_BIN="$codex_launcher" faryo_resolve_codex)
+resolved=$(FARYO_CODEX_BIN="$codex_launcher" FARYO_CODEX_BIN_PINNED=1 faryo_resolve_codex)
 [[ "$resolved" == "$codex_stub" ]]
 
 resolved=$(env -u FARYO_CODEX_BIN HOME="$fixture" NVM_DIR="$fixture/nvm" PATH=/usr/bin:/bin bash -c \
@@ -82,8 +85,10 @@ if FARYO_NODE_BIN="$fixture/missing-node" faryo_resolve_node >/dev/null 2>&1; th
   echo "invalid explicit Node unexpectedly resolved" >&2
   exit 1
 fi
-if FARYO_CODEX_BIN="$fixture/missing-codex" faryo_resolve_codex >/dev/null 2>&1; then
-  echo "invalid explicit Codex unexpectedly resolved" >&2
+resolved=$(HOME="$fixture" NVM_DIR="$fixture/nvm" PATH=/usr/bin:/bin FARYO_CODEX_BIN="$fixture/missing-codex" faryo_resolve_codex)
+[[ "$resolved" == "$codex_stub" ]]
+if HOME="$fixture" NVM_DIR="$fixture/nvm" PATH=/usr/bin:/bin FARYO_CODEX_BIN="$fixture/missing-codex" FARYO_CODEX_BIN_PINNED=1 faryo_resolve_codex >/dev/null 2>&1; then
+  echo "invalid pinned Codex unexpectedly resolved" >&2
   exit 1
 fi
 
