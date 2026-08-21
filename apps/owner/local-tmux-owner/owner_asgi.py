@@ -9,6 +9,7 @@ from starlette.applications import Starlette
 from starlette.middleware.gzip import GZipMiddleware
 from starlette.requests import Request
 
+import appserver_runtime
 import owner_asgi_control
 import owner_asgi_events
 import owner_asgi_read
@@ -16,7 +17,7 @@ import owner_asgi_support
 
 
 def create_app(core: Any, config: Any, runtime: Any | None = None) -> Starlette:
-    web_runtime = runtime or core.appserver_runtime.AppServerRuntime(
+    web_runtime = runtime or appserver_runtime.AppServerRuntime(
         socket_path=core.APP_SERVER_SOCKET,
         registry_path=core.APP_SERVER_REGISTRY,
         client_version=core.release_version() or "0",

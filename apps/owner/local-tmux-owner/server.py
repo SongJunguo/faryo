@@ -42,6 +42,7 @@ import delivery_service
 import codex_history
 import codex_app_server
 import appserver_runtime
+import appserver_history
 import codex_command_policy
 import codex_tui_interactions
 import interaction_service
@@ -2491,6 +2492,17 @@ def web_capture_payload_from_state(capture: dict[str, Any], lines: int) -> dict[
     record = capture.get("record") or {}
     snapshot = capture.get("snapshot") or {}
     messages = capture.get("messages") or []
+    snapshot_items = snapshot.get("items") if isinstance(snapshot.get("items"), list) else []
+    streaming_item = next(
+        (
+            item
+            for item in reversed(snapshot_items)
+            if isinstance(item, dict)
+            and item.get("type") == "agentMessage"
+            and not bool(item.get("final"))
+        ),
+        None,
+    )
     lifecycle = str(snapshot.get("lifecycle") or "loading")
     running = lifecycle in {"running", "waiting_for_approval", "waiting_for_input"}
     return {
@@ -2509,6 +2521,9 @@ def web_capture_payload_from_state(capture: dict[str, Any], lines: int) -> dict[
         "interaction": snapshot.get("interaction"),
         "interactionRevision": str(snapshot.get("interactionRevision") or "none"),
         "streamRevision": int(snapshot.get("revision") or 0),
+        "streamItemId": str(streaming_item.get("id") or "") if streaming_item else "",
+        "streamTurnId": str(streaming_item.get("turnId") or "") if streaming_item else "",
+        "streamItemRevision": int(streaming_item.get("revision") or 0) if streaming_item else 0,
         "backend": "web-managed",
         "updatedAt": now_iso(),
     }
@@ -2524,6 +2539,34 @@ def web_capture_payload(
     except appserver_runtime.AppServerRuntimeError as exc:
         raise OwnerError(str(exc), HTTPStatus.BAD_GATEWAY) from exc
     return web_capture_payload_from_state(capture, lines)
+
+
+def web_conversation_history_page(
+    capture: dict[str, Any],
+    *,
+    limit: int,
+    cursor: str = "",
+    around: int | None = None,
+) -> dict[str, Any]:
+    record = capture.get("record") if isinstance(capture.get("record"), dict) else {}
+    snapshot = capture.get("snapshot") if isinstance(capture.get("snapshot"), dict) else {}
+    try:
+        return appserver_history.conversation_history_page(
+            snapshot,
+            thread_id=str(record.get("threadId") or ""),
+            limit=limit,
+            cursor=cursor,
+            around=around,
+            max_page_turns=CODEX_HISTORY_MAX_PAGE_TURNS,
+            page_char_budget=CODEX_HISTORY_PAGE_CHAR_BUDGET,
+            preview_chars=CODEX_HISTORY_PREVIEW_CHARS,
+            updated_at=now_iso,
+        )
+    except codex_history.HistoryCursorError as exc:
+        raise OwnerError(
+            str(exc),
+            HTTPStatus.CONFLICT if exc.expired else HTTPStatus.BAD_REQUEST,
+        ) from exc
 
 
 def web_status_payload(runtime: appserver_runtime.AppServerRuntime, session: str) -> dict[str, Any]:

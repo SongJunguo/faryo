@@ -14,6 +14,11 @@ from starlette.requests import Request
 from starlette.responses import HTMLResponse, Response
 from starlette.routing import Route
 
+import codex_command_policy
+import codex_history
+import runtime_diagnostics
+import workspace_changes
+
 def terminal_capture_response(core: Any, target: Any, lines: int, want_html: bool) -> dict[str, Any]:
     core.ensure_pane_width(target)
     profile = core.agent_profile_in_pane(target) or core.RUNTIME_PROFILE
@@ -119,7 +124,7 @@ class OwnerReadRoutes:
             if runtime.has_session(session):
                 capture = await to_thread.run_sync(lambda: runtime.capture(session), abandon_on_cancel=True)
                 goal = (capture.get("snapshot") or {}).get("goal")
-                payload = {"ok": True, **core.codex_history.goal_details(goal), "updatedAt": core.now_iso()}
+                payload = {"ok": True, **codex_history.goal_details(goal), "updatedAt": core.now_iso()}
             else:
                 target = self.support.target(session)
                 payload = {
@@ -132,7 +137,7 @@ class OwnerReadRoutes:
         if path == "/api/command-catalog":
             return self.support.json_response({
                 "ok": True,
-                **core.codex_command_policy.default_catalog().public_value(),
+                **codex_command_policy.default_catalog().public_value(),
                 "updatedAt": core.now_iso(),
             })
 
@@ -140,16 +145,20 @@ class OwnerReadRoutes:
             return await self._diagnostics(path)
 
         if path == "/api/workspace-changes":
-            target = self.support.target(session)
-            cwd = await to_thread.run_sync(lambda: core.get_pane_cwd(target), abandon_on_cancel=True)
+            if runtime.has_session(session):
+                capture = await to_thread.run_sync(lambda: runtime.capture(session), abandon_on_cancel=True)
+                cwd = str((capture.get("record") or {}).get("cwd") or "")
+            else:
+                target = self.support.target(session)
+                cwd = await to_thread.run_sync(lambda: core.get_pane_cwd(target), abandon_on_cancel=True)
             if not cwd:
                 raise core.OwnerError("workspace unavailable", HTTPStatus.NOT_FOUND)
             try:
                 changes = await to_thread.run_sync(
-                    lambda: core.workspace_changes.collect_workspace_changes(cwd, self.support.workspace_root(request)),
+                    lambda: workspace_changes.collect_workspace_changes(cwd, self.support.workspace_root(request)),
                     abandon_on_cancel=True,
                 )
-            except core.workspace_changes.WorkspaceChangesError as exc:
+            except workspace_changes.WorkspaceChangesError as exc:
                 status = {
                     "workspace-out-of-scope": HTTPStatus.FORBIDDEN,
                     "workspace-unavailable": HTTPStatus.NOT_FOUND,
@@ -229,7 +238,7 @@ class OwnerReadRoutes:
                 configured = bool(core.codex_app_server_argv("app-server"))
             except Exception:
                 configured = False
-            capabilities = core.runtime_diagnostics.capability_payload(
+            capabilities = runtime_diagnostics.capability_payload(
                 core.release_version(),
                 configured,
                 core.AGENT_STATE_DB.is_file(),
@@ -256,7 +265,7 @@ class OwnerReadRoutes:
                 receipt_count = 0
             with core._codex_thread_cache_lock:
                 cache_count = len(core._codex_thread_cache)
-            diagnostics = core.runtime_diagnostics.diagnostics_payload(
+            diagnostics = runtime_diagnostics.diagnostics_payload(
                 capabilities,
                 tmux_sessions=len(sessions),
                 managed_sessions=managed_count,
@@ -365,24 +374,12 @@ class OwnerReadRoutes:
                     lambda: self.support.runtime.capture(session),
                     abandon_on_cancel=True,
                 )
-                revision = f"appserver-{int((capture.get('snapshot') or {}).get('revision') or 0):x}"
-                payload = {
-                    "ok": True,
-                    "source": "codex-app-server",
-                    "revision": revision,
-                    "totalTurns": 0,
-                    "start": 0,
-                    "end": 0,
-                    "hasOlder": False,
-                    "hasNewer": False,
-                    "olderCursor": "",
-                    "newerCursor": "",
-                    "questions": [],
-                    "turns": [],
-                    "pageChars": 0,
-                    "oversized": False,
-                    "updatedAt": core.now_iso(),
-                }
+                payload = core.web_conversation_history_page(
+                    capture,
+                    limit=limit,
+                    cursor=cursor,
+                    around=around,
+                )
         else:
             target = self.support.target(session)
             payload = await to_thread.run_sync(

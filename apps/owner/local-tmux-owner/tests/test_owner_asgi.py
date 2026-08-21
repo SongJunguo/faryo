@@ -4,6 +4,7 @@ import http.client
 import json
 from pathlib import Path
 import socket
+import subprocess
 import sys
 import tempfile
 import threading
@@ -132,6 +133,12 @@ class OwnerAsgiTest(unittest.TestCase):
     def setUp(self) -> None:
         self.temp = tempfile.TemporaryDirectory()
         self.cwd = self.temp.name
+        subprocess.run(
+            ["git", "init", "-q", self.cwd],
+            check=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
         self.runtime = FakeRuntime(self.cwd)
         self.config = server.Config(server.DEFAULT_SESSION, "fixture-owner-token", 0)
         self.app = owner_asgi.create_app(server, self.config, self.runtime)
@@ -192,6 +199,12 @@ class OwnerAsgiTest(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(web_status["backend"], "web-managed")
         self.assertEqual(web_status["sessionId"], "thread_demo")
+
+        for path in ("/api/capabilities", "/api/diagnostics", "/api/workspace-changes?session=faryo1"):
+            status, headers, body = self.request("GET", path, token=True)
+            self.assertEqual(status, 200, path)
+            self.assertEqual(headers.get("cache-control"), "no-store", path)
+            self.assertTrue(json.loads(body)["ok"], path)
 
         status, _headers, body = self.request(
             "POST",

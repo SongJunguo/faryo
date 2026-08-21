@@ -11,7 +11,11 @@ from appserver_protocol import agent_message_text, item_identity
 HANDLED_NOTIFICATION_METHODS = frozenset({
     "error",
     "item/agentMessage/delta",
+    "item/commandExecution/outputDelta",
     "item/completed",
+    "item/fileChange/outputDelta",
+    "item/plan/delta",
+    "item/reasoning/summaryTextDelta",
     "item/started",
     "thread/goal/cleared",
     "thread/goal/updated",
@@ -24,6 +28,73 @@ HANDLED_NOTIFICATION_METHODS = frozenset({
     "turn/error",
     "turn/started",
 })
+
+
+def _bounded_text(value: Any, limit: int = 2_000) -> str:
+    text = " ".join(str(value or "").split())
+    return text if len(text) <= limit else text[: limit - 1] + "…"
+
+
+def _path_label(value: Any) -> str:
+    text = str(value or "").replace("\\", "/").rstrip("/")
+    return text.rsplit("/", 1)[-1] if text else "file"
+
+
+def item_process_text(item: Mapping[str, Any], *, final: bool = False) -> str:
+    item_type = str(item.get("type") or "")
+    status = str(item.get("status") or "")
+    completed = final or status.lower() in {"completed", "failed", "declined"}
+    if item_type == "plan":
+        text = str(item.get("text") or "").strip()
+        return f"Updated Plan\n{text}" if text else "Updated Plan"
+    if item_type == "reasoning":
+        return "Working"
+    if item_type == "commandExecution":
+        command = _bounded_text(item.get("command")) or "command"
+        exit_code = item.get("exitCode", item.get("exit_code"))
+        suffix = f" · exit {exit_code}" if completed and isinstance(exit_code, int) else ""
+        return f"{'Ran' if completed else 'Running'} {command}{suffix}"
+    if item_type == "fileChange":
+        changes = item.get("changes") if isinstance(item.get("changes"), list) else []
+        paths = [_path_label(change.get("path")) for change in changes if isinstance(change, Mapping)]
+        if not paths:
+            return "Edited files" if completed else "Editing files"
+        prefix = "Edited" if completed else "Editing"
+        return "\n".join(f"{prefix} {path}" for path in paths[:8])
+    if item_type == "mcpToolCall":
+        label = ".".join(
+            part for part in (_bounded_text(item.get("server"), 120), _bounded_text(item.get("tool"), 120)) if part
+        ) or "MCP tool"
+        return f"Called {label}" if completed else f"Calling {label}"
+    if item_type == "dynamicToolCall":
+        label = ".".join(
+            part
+            for part in (_bounded_text(item.get("namespace"), 120), _bounded_text(item.get("tool"), 120))
+            if part
+        ) or "tool"
+        return f"Called {label}" if completed else f"Calling {label}"
+    if item_type == "webSearch":
+        query = _bounded_text(item.get("query"), 240)
+        return f"{'Searched' if completed else 'Searching the web'} {query}".rstrip()
+    if item_type == "todoList":
+        rows = []
+        for entry in item.get("items") or []:
+            if not isinstance(entry, Mapping):
+                continue
+            marker = "✓" if entry.get("completed") else "□"
+            text = _bounded_text(entry.get("text"), 400)
+            if text:
+                rows.append(f"{marker} {text}")
+        return "Updated Plan" + ("\n" + "\n".join(rows) if rows else "")
+    if item_type == "contextCompaction":
+        return "Context compacted"
+    if item_type == "imageView":
+        return f"Viewed Image {_path_label(item.get('path'))}"
+    if item_type == "subAgentActivity":
+        return "Working with a background agent"
+    if item_type == "error":
+        return "⚠ " + (_bounded_text(item.get("message"), 800) or "Codex error")
+    return ""
 
 
 def user_message_text(item: Mapping[str, Any]) -> str:
@@ -129,6 +200,10 @@ class WebSessionActor:
             return self._item_started(params)
         if method == "item/agentMessage/delta":
             return self._agent_delta(params)
+        if method == "item/plan/delta":
+            return self._plan_delta(params)
+        if method in {"item/commandExecution/outputDelta", "item/fileChange/outputDelta", "item/reasoning/summaryTextDelta"}:
+            return []
         if method == "item/completed":
             return self._item_completed(params)
         if method == "turn/completed":
@@ -164,11 +239,14 @@ class WebSessionActor:
                 id=item_id,
                 turn_id=turn_id,
                 type=str(item.get("type") or "unknown"),
-                text=agent_message_text(item),
+                text=agent_message_text(item) or item_process_text(item),
                 raw=dict(item),
             )
             self.items[item_id] = projection
             self.item_order.append(item_id)
+        else:
+            projection.raw = dict(item)
+            projection.text = agent_message_text(item) or item_process_text(item)
         return [self._event("item.started", turn_id=turn_id, item_id=item_id, payload={"item": projection.public()})]
 
     def _agent_delta(self, params: Mapping[str, Any]) -> list[ActorEvent]:
@@ -184,6 +262,8 @@ class WebSessionActor:
             self.item_order.append(item_id)
         if projection.final:
             return []
+        if projection.text == "Updated Plan":
+            projection.text += "\n"
         projection.text += delta
         projection.revision += 1
         return [
@@ -192,7 +272,32 @@ class WebSessionActor:
                 turn_id=turn_id,
                 item_id=item_id,
                 revision=projection.revision,
-                payload={"delta": delta, "textLength": len(projection.text)},
+                payload={"deltaChars": len(delta), "textLength": len(projection.text)},
+            )
+        ]
+
+    def _plan_delta(self, params: Mapping[str, Any]) -> list[ActorEvent]:
+        identity = item_identity(params)
+        delta = params.get("delta")
+        if identity is None or not isinstance(delta, str):
+            return []
+        _thread_id, turn_id, item_id = identity
+        projection = self.items.get(item_id)
+        if projection is None:
+            projection = ItemProjection(id=item_id, turn_id=turn_id, type="plan", text="Updated Plan\n")
+            self.items[item_id] = projection
+            self.item_order.append(item_id)
+        if projection.final:
+            return []
+        projection.text += delta
+        projection.revision += 1
+        return [
+            self._event(
+                "item.delta",
+                turn_id=turn_id,
+                item_id=item_id,
+                revision=projection.revision,
+                payload={"deltaChars": len(delta), "textLength": len(projection.text)},
             )
         ]
 
@@ -207,11 +312,11 @@ class WebSessionActor:
             projection = ItemProjection(id=item_id, turn_id=turn_id, type=str(item.get("type") or "unknown"))
             self.items[item_id] = projection
             self.item_order.append(item_id)
-        final_text = agent_message_text(item)
+        final_text = agent_message_text(item) or item_process_text(item, final=True)
         changed = not projection.final or projection.raw != dict(item) or projection.text != final_text
         projection.type = str(item.get("type") or projection.type)
         projection.raw = dict(item)
-        if projection.type == "agentMessage":
+        if final_text:
             projection.text = final_text
         projection.final = True
         if changed:
@@ -302,6 +407,8 @@ class WebSessionActor:
                 text = user_message_text(projection.raw)
                 if text:
                     messages.append(("user", text))
+            elif projection.text:
+                messages.append(("process", projection.text))
         return messages
 
     def hydrate(self, thread: Mapping[str, Any], turns: list[Mapping[str, Any]] | None = None) -> None:

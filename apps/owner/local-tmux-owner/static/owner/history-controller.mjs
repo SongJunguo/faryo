@@ -199,7 +199,12 @@ export function createHistoryController(options = {}) {
   }
 
   function scheduleRefresh(capture, delay = 80) {
-    if (options.getOutputMode() !== "compact" || capture?.captureSource !== "codex-jsonl") return;
+    const source = String(capture?.captureSource || "");
+    if (
+      options.getOutputMode() !== "compact"
+      || !["codex-jsonl", "codex-app-server"].includes(source)
+      || (source === "codex-app-server" && capture?.streaming)
+    ) return;
     if (history.sessionId && capture.sessionId && history.sessionId !== capture.sessionId) {
       reset();
       options.beginInitialLatestScroll();

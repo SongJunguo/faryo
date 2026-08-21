@@ -104,6 +104,7 @@ class AsyncCodexAppServerClient:
         self._ready = asyncio.Event()
         self._closing = False
         self.initialize_result: dict[str, Any] = {}
+        self.experimental_api = False
 
     @property
     def ready(self) -> bool:
@@ -137,19 +138,30 @@ class AsyncCodexAppServerClient:
                 name="faryo-appserver-reader",
             )
             try:
-                result = await self._rpc_once(
-                    "initialize",
-                    {
-                        "clientInfo": {
-                            "name": "faryo",
-                            "title": "Faryo",
-                            "version": self.client_version,
+                client_info = {
+                    "name": "faryo",
+                    "title": "Faryo",
+                    "version": self.client_version,
+                }
+                try:
+                    result = await self._rpc_once(
+                        "initialize",
+                        {
+                            "clientInfo": client_info,
+                            "capabilities": {"experimentalApi": True},
                         },
-                        "capabilities": {"experimentalApi": True},
-                    },
-                    timeout=self.rpc_timeout,
-                    require_ready=False,
-                )
+                        timeout=self.rpc_timeout,
+                        require_ready=False,
+                    )
+                    self.experimental_api = True
+                except AppServerRequestError:
+                    result = await self._rpc_once(
+                        "initialize",
+                        {"clientInfo": client_info, "capabilities": None},
+                        timeout=self.rpc_timeout,
+                        require_ready=False,
+                    )
+                    self.experimental_api = False
                 if not isinstance(result, dict):
                     raise AppServerProtocolError("initialize returned a non-object result")
                 await self._send_json({"method": "initialized", "params": {}})
@@ -355,6 +367,7 @@ class AsyncCodexAppServerClient:
 
     async def _close_locked(self, *, notify: bool) -> None:
         self._ready.clear()
+        self.experimental_api = False
         socket = self._socket
         self._socket = None
         if socket is not None:

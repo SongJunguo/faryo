@@ -23,6 +23,14 @@ export function createCaptureController(options = {}) {
   let deliveryRevision = 0;
   let lastEventId = "";
   let eventCursorScope = "";
+  let pendingEventDelivery = null;
+  let eventDeliveryFrame = 0;
+  const requestFrame = typeof view.requestAnimationFrame === "function"
+    ? view.requestAnimationFrame.bind(view)
+    : (callback) => view.setTimeout(callback, 0);
+  const cancelFrame = typeof view.cancelAnimationFrame === "function"
+    ? view.cancelAnimationFrame.bind(view)
+    : view.clearTimeout.bind(view);
 
   function currentScope() {
     return typeof options.getScope === "function" ? options.getScope() : null;
@@ -52,6 +60,28 @@ export function createCaptureController(options = {}) {
     deliveryRevision += 1;
     options.onCapture(capture, meta);
     return true;
+  }
+
+  function cancelPendingEventDelivery() {
+    if (eventDeliveryFrame) cancelFrame(eventDeliveryFrame);
+    eventDeliveryFrame = 0;
+    pendingEventDelivery = null;
+  }
+
+  function queueEventCapture(capture, meta) {
+    if (!capture?.streaming) {
+      cancelPendingEventDelivery();
+      deliverCapture(capture, meta);
+      return;
+    }
+    pendingEventDelivery = { capture, meta };
+    if (eventDeliveryFrame) return;
+    eventDeliveryFrame = requestFrame(() => {
+      eventDeliveryFrame = 0;
+      const pending = pendingEventDelivery;
+      pendingEventDelivery = null;
+      if (pending) deliverCapture(pending.capture, pending.meta);
+    });
   }
 
   async function refresh(lines = options.currentLines(), requestOptions = {}) {
@@ -132,7 +162,7 @@ export function createCaptureController(options = {}) {
     if (event.type !== "capture") return;
     const capture = JSON.parse(event.data || "{}");
     options.setLiveState("live");
-    deliverCapture(capture, { source: "event", safety: false, scope });
+    queueEventCapture(capture, { source: "event", safety: false, scope });
   }
 
   function closeEventStream() {
@@ -141,6 +171,7 @@ export function createCaptureController(options = {}) {
     eventRunId += 1;
     eventController?.abort();
     eventController = null;
+    cancelPendingEventDelivery();
     setSafetyRefresh(false);
   }
 

@@ -38,6 +38,8 @@ RUNTIME_RECONNECT_MAX_SECONDS = 8.0
 MAX_SEND_CHARS = 120_000
 CLIENT_MESSAGE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$")
 SEND_RECEIPT_TTL_SECONDS = 48 * 60 * 60
+SEND_ACK_WAIT_SECONDS = 0.35
+DELTA_PUBLISH_INTERVAL_SECONDS = 0.04
 
 
 class AppServerRuntimeError(RuntimeError):
@@ -79,6 +81,8 @@ class AppServerRuntime:
         self.send_tasks: dict[str, tuple[str, str, asyncio.Task[dict[str, Any]]]] = {}
         self.send_receipts: dict[str, dict[str, Any]] = {}
         self.command_receipts: dict[str, dict[str, Any]] = {}
+        self.pending_delta_events: dict[tuple[str, str], tuple[WebSessionRecord, ActorEvent]] = {}
+        self.delta_flush_handles: dict[tuple[str, str], asyncio.TimerHandle] = {}
         self.interactions = AppServerInteractionBroker(
             on_open=self._interaction_opened,
             on_close=self._interaction_closed,
@@ -130,6 +134,7 @@ class AppServerRuntime:
                 "sessionCount": len(self.registry.values()),
                 "loadedSessionCount": len(self.actors),
                 "pendingRpcCount": self.client.pending_count if self.client is not None else 0,
+                "experimentalApi": bool(getattr(self.client, "experimental_api", False)) if self.client is not None else False,
                 "lastError": self.last_error,
                 "eventCursor": self.journal.latest.render(),
                 "eventCount": len(self.journal.events),
@@ -332,6 +337,7 @@ class AppServerRuntime:
                 self._set_state("reconnecting", self._error_class(exc))
                 self.reconnect_count += 1
             finally:
+                self._flush_all_deltas()
                 await client.close()
                 if self.client is client:
                     self.client = None
@@ -382,6 +388,11 @@ class AppServerRuntime:
             actor = WebSessionActor(session_id=record.name, thread_id=record.thread_id)
             self.actors[record.name] = actor
         for event in actor.apply(method, params):
+            if event.kind == "item.delta" and event.item_id:
+                self._queue_delta(record, event)
+                continue
+            if event.item_id:
+                self._flush_delta((record.name, event.item_id))
             self._publish(record, event)
         if method == "thread/name/updated":
             name = params.get("threadName")
@@ -495,11 +506,20 @@ class AppServerRuntime:
                 self._remember_send_receipt(client_message_id, name, digest, result)
                 return result
         existing = self.send_tasks.get(client_message_id)
-        duplicate = existing is not None
         if existing is not None:
             existing_name, existing_digest, task = existing
             if existing_name != name or existing_digest != digest:
                 raise AppServerRuntimeError("client message id was already used for different content")
+            if task.done():
+                result = await asyncio.shield(task)
+                return {**result, "duplicate": True}
+            return self._delivery_receipt(
+                name,
+                client_message_id,
+                "",
+                duplicate=True,
+                delivery_state="submitting",
+            )
         else:
             task = asyncio.create_task(
                 self._perform_send(record, value, client_message_id),
@@ -509,10 +529,18 @@ class AppServerRuntime:
             task.add_done_callback(
                 lambda completed, message_id=client_message_id: self._send_task_completed(message_id, completed)
             )
-        result = await asyncio.shield(task)
-        if duplicate:
-            result = {**result, "duplicate": True}
-        return result
+        try:
+            return await asyncio.wait_for(
+                asyncio.shield(task),
+                timeout=SEND_ACK_WAIT_SECONDS,
+            )
+        except asyncio.TimeoutError:
+            return self._delivery_receipt(
+                name,
+                client_message_id,
+                "",
+                delivery_state="submitting",
+            )
 
     async def _perform_send(
         self,
@@ -534,12 +562,19 @@ class AppServerRuntime:
         return self._delivery_receipt(record.name, client_message_id, turn_id)
 
     @staticmethod
-    def _delivery_receipt(name: str, client_message_id: str, turn_id: str, *, duplicate: bool = False) -> dict[str, Any]:
+    def _delivery_receipt(
+        name: str,
+        client_message_id: str,
+        turn_id: str,
+        *,
+        duplicate: bool = False,
+        delivery_state: str = "submitted",
+    ) -> dict[str, Any]:
         return {
             "accepted": True,
             "deliveryId": client_message_id,
             "delivery": "accepted",
-            "deliveryState": "submitted",
+            "deliveryState": delivery_state,
             "session": name,
             "enterAttempts": 0,
             "clientMessageId": client_message_id,
@@ -772,9 +807,68 @@ class AppServerRuntime:
                 item_id=event.item_id,
                 kind=event.kind,
                 revision=event.revision,
-                payload=event.payload,
+                payload=self._journal_payload(event),
             )
             self.condition.notify_all()
+
+    @staticmethod
+    def _journal_payload(event: ActorEvent) -> dict[str, Any]:
+        """Keep the replay journal body-free; snapshots remain authoritative in the actor."""
+
+        if event.kind == "item.delta":
+            return {
+                "batchCount": int(event.payload.get("batchCount") or 1),
+                "deltaChars": int(event.payload.get("deltaChars") or 0),
+                "textLength": int(event.payload.get("textLength") or 0),
+            }
+        return {}
+
+    def _queue_delta(self, record: WebSessionRecord, event: ActorEvent) -> None:
+        if not event.item_id:
+            return
+        key = (record.name, event.item_id)
+        previous = self.pending_delta_events.get(key)
+        batch_count = 1
+        delta_chars = int(event.payload.get("deltaChars") or 0)
+        if previous is not None:
+            previous_event = previous[1]
+            batch_count += int(previous_event.payload.get("batchCount") or 1)
+            delta_chars += int(previous_event.payload.get("deltaChars") or 0)
+        batched = ActorEvent(
+            kind="item.delta",
+            turn_id=event.turn_id,
+            item_id=event.item_id,
+            revision=event.revision,
+            payload={
+                "batchCount": batch_count,
+                "deltaChars": delta_chars,
+                "textLength": int(event.payload.get("textLength") or 0),
+            },
+        )
+        self.pending_delta_events[key] = (record, batched)
+        if key in self.delta_flush_handles:
+            return
+        loop = self.loop
+        if loop is None or not loop.is_running():
+            self._flush_delta(key)
+            return
+        self.delta_flush_handles[key] = loop.call_later(
+            DELTA_PUBLISH_INTERVAL_SECONDS,
+            self._flush_delta,
+            key,
+        )
+
+    def _flush_delta(self, key: tuple[str, str]) -> None:
+        handle = self.delta_flush_handles.pop(key, None)
+        if handle is not None:
+            handle.cancel()
+        pending = self.pending_delta_events.pop(key, None)
+        if pending is not None:
+            self._publish(*pending)
+
+    def _flush_all_deltas(self) -> None:
+        for key in list(self.pending_delta_events):
+            self._flush_delta(key)
 
     def _interaction_opened(self, name: str, interaction: dict[str, Any]) -> None:
         record = self.registry.get(name)

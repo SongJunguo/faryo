@@ -3,6 +3,8 @@ import test from "node:test";
 
 import { createHistoryController, emptyConversationHistory, isStructuredCapture } from "../static/owner/history-controller.mjs";
 
+const delay = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
+
 function fixture(overrides = {}) {
   const output = { querySelectorAll: () => [] };
   const view = {
@@ -77,4 +79,27 @@ test("structured capture detection stays source-specific", () => {
   assert.equal(isStructuredCapture({ captureSource: "codex-app-server" }), true);
   assert.equal(isStructuredCapture({ captureSource: "codex-empty" }), true);
   assert.equal(isStructuredCapture({ captureSource: "tmux" }), false);
+});
+
+test("app-server history refresh waits for a settled capture", async () => {
+  let requests = 0;
+  const controller = fixture({
+    refreshMinMs: 1,
+    api: async () => {
+      requests += 1;
+      return {
+        revision: "rev-live",
+        totalTurns: 1,
+        start: 0,
+        questions: [{ index: 0, key: "q0", preview: "Question" }],
+        turns: [{ index: 0, key: "q0", text: "› Question\n\n• Answer" }],
+      };
+    },
+  });
+  controller.scheduleRefresh({ captureSource: "codex-app-server", streaming: true, text: "Partial" }, 1);
+  await delay(10);
+  assert.equal(requests, 0);
+  controller.scheduleRefresh({ captureSource: "codex-app-server", streaming: false, text: "Final" }, 1);
+  await delay(20);
+  assert.equal(requests, 1);
 });

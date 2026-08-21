@@ -12,6 +12,7 @@ if str(APP_DIR) not in sys.path:
 
 from appserver_events import EventJournal
 from appserver_capabilities import inspect_schema_directory
+from appserver_history import conversation_history_page
 from appserver_protocol import (
     AppServerProtocolError,
     AppServerUnavailable,
@@ -24,16 +25,24 @@ from appserver_transport import AsyncCodexAppServerClient
 
 
 class FakeSocket:
-    def __init__(self) -> None:
+    def __init__(self, *, reject_experimental: bool = False) -> None:
         self.incoming: asyncio.Queue[str | BaseException] = asyncio.Queue()
         self.sent: list[dict] = []
         self.closed = False
+        self.reject_experimental = reject_experimental
 
     async def send(self, message: str) -> None:
         body = json.loads(message)
         self.sent.append(body)
         if body.get("method") == "initialize" and "id" in body:
-            await self.incoming.put(json.dumps({"id": body["id"], "result": {"userAgent": "test/0"}}))
+            capabilities = (body.get("params") or {}).get("capabilities")
+            if self.reject_experimental and isinstance(capabilities, dict):
+                await self.incoming.put(json.dumps({
+                    "id": body["id"],
+                    "error": {"code": -32602, "message": "unsupported capability"},
+                }))
+            else:
+                await self.incoming.put(json.dumps({"id": body["id"], "result": {"userAgent": "test/0"}}))
 
     async def recv(self) -> str:
         value = await self.incoming.get()
@@ -88,6 +97,75 @@ class ProtocolTest(unittest.TestCase):
         self.assertTrue(item.final)
         self.assertEqual(actor.lifecycle, "idle")
 
+    def test_tool_activity_is_bounded_and_hidden_reasoning_is_not_exposed(self) -> None:
+        actor = WebSessionActor(session_id="session_demo", thread_id="thread_demo")
+        actor.apply(
+            "turn/started",
+            {"threadId": "thread_demo", "turn": {"id": "turn_demo", "status": "inProgress"}},
+        )
+        actor.apply(
+            "item/started",
+            {
+                "threadId": "thread_demo",
+                "turnId": "turn_demo",
+                "item": {
+                    "id": "command_demo",
+                    "type": "commandExecution",
+                    "command": "python -m pytest",
+                    "status": "inProgress",
+                },
+            },
+        )
+        actor.apply(
+            "item/completed",
+            {
+                "threadId": "thread_demo",
+                "turnId": "turn_demo",
+                "item": {
+                    "id": "command_demo",
+                    "type": "commandExecution",
+                    "command": "python -m pytest",
+                    "status": "completed",
+                    "exitCode": 0,
+                    "aggregatedOutput": "private command output is not projected",
+                },
+            },
+        )
+        actor.apply(
+            "item/completed",
+            {
+                "threadId": "thread_demo",
+                "turnId": "turn_demo",
+                "item": {
+                    "id": "reasoning_demo",
+                    "type": "reasoning",
+                    "text": "hidden reasoning body",
+                },
+            },
+        )
+        actor.apply(
+            "item/completed",
+            {
+                "threadId": "thread_demo",
+                "turnId": "turn_demo",
+                "item": {
+                    "id": "change_demo",
+                    "type": "fileChange",
+                    "status": "completed",
+                    "changes": [{"path": "/workspace/src/app.py", "kind": "update", "diff": "private diff"}],
+                },
+            },
+        )
+        messages = actor.messages()
+        rendered = "\n".join(text for _role, text in messages)
+
+        self.assertIn(("process", "Ran python -m pytest · exit 0"), messages)
+        self.assertIn(("process", "Working"), messages)
+        self.assertIn(("process", "Edited app.py"), messages)
+        self.assertNotIn("hidden reasoning body", rendered)
+        self.assertNotIn("private command output", rendered)
+        self.assertNotIn("private diff", rendered)
+
     def test_event_journal_replay_gap_reset_and_byte_bound(self) -> None:
         journal = EventJournal(max_events=3, max_bytes=800, epoch="epoch")
         first = journal.publish(session_id="s", thread_id="t", kind="one", payload={"n": 1})
@@ -101,6 +179,44 @@ class ProtocolTest(unittest.TestCase):
         self.assertLessEqual(len(tuple(journal)), 3)
         self.assertLessEqual(journal.total_bytes, 800)
         self.assertEqual(journal.replay(first.id).status, "gap")
+
+    def test_live_snapshot_history_pages_until_jsonl_becomes_authoritative(self) -> None:
+        snapshot = {
+            "revision": 999,
+            "turns": [
+                {
+                    "id": f"turn_{index}",
+                    "status": "completed",
+                    "items": [
+                        {
+                            "id": f"user_{index}",
+                            "type": "userMessage",
+                            "content": [{"type": "text", "text": f"Question {index}"}],
+                        },
+                        {"id": f"answer_{index}", "type": "agentMessage", "text": f"Answer {index}"},
+                    ],
+                }
+                for index in range(30)
+            ],
+        }
+        options = {
+            "thread_id": "thread_demo",
+            "limit": 5,
+            "max_page_turns": 24,
+            "page_char_budget": 100_000,
+            "preview_chars": 80,
+            "updated_at": lambda: "now",
+        }
+        latest = conversation_history_page(snapshot, **options)
+        older = conversation_history_page(snapshot, cursor=latest["olderCursor"], **options)
+        around = conversation_history_page(snapshot, around=3, **options)
+
+        self.assertEqual(latest["source"], "codex-app-server")
+        self.assertEqual(latest["totalTurns"], 30)
+        self.assertEqual([turn["index"] for turn in latest["turns"]], [25, 26, 27, 28, 29])
+        self.assertEqual([turn["index"] for turn in older["turns"]], [20, 21, 22, 23, 24])
+        self.assertIn("Question 3", around["turns"][3 - around["start"]]["text"])
+        self.assertEqual(len(latest["questions"]), 30)
 
 
 class TransportTest(unittest.IsolatedAsyncioTestCase):
@@ -136,6 +252,28 @@ class TransportTest(unittest.IsolatedAsyncioTestCase):
         await asyncio.sleep(0)
         self.assertEqual(result["thread"]["id"], "thread_demo")
         self.assertEqual(self.notifications[0][0], "turn/started")
+
+    async def test_initialize_retries_without_experimental_capability_when_rejected(self) -> None:
+        socket = FakeSocket(reject_experimental=True)
+
+        async def connector():
+            return socket
+
+        client = AsyncCodexAppServerClient(
+            connector=connector,
+            client_version="test",
+            rpc_timeout=0.5,
+        )
+        try:
+            result = await client.connect()
+            initialize = [message for message in socket.sent if message.get("method") == "initialize"]
+            self.assertEqual(result, {"userAgent": "test/0"})
+            self.assertEqual(len(initialize), 2)
+            self.assertEqual(initialize[0]["params"]["capabilities"], {"experimentalApi": True})
+            self.assertIsNone(initialize[1]["params"]["capabilities"])
+            self.assertFalse(client.experimental_api)
+        finally:
+            await client.close()
 
     async def test_server_request_is_answered_and_unknown_request_fails_closed(self) -> None:
         self.client.register_server_request("item/requestApproval", lambda params: {"decision": "decline"})

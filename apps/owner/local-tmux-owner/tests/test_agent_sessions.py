@@ -175,6 +175,33 @@ class AgentSessionTest(unittest.TestCase):
 
         self.assertNotEqual(before, after)
 
+    def test_web_capture_exposes_stable_identity_only_for_the_active_agent_item(self):
+        capture = server.web_capture_payload_from_state(
+            {
+                "record": {"threadId": "thread-a", "title": "Demo"},
+                "messages": [("user", "Question"), ("assistant", "Partial")],
+                "snapshot": {
+                    "lifecycle": "running",
+                    "revision": 7,
+                    "items": [
+                        {
+                            "id": "answer-a",
+                            "turnId": "turn-a",
+                            "type": "agentMessage",
+                            "revision": 3,
+                            "final": False,
+                        }
+                    ],
+                },
+            },
+            320,
+        )
+
+        self.assertTrue(capture["streaming"])
+        self.assertEqual(capture["streamItemId"], "answer-a")
+        self.assertEqual(capture["streamTurnId"], "turn-a")
+        self.assertEqual(capture["streamItemRevision"], 3)
+
     def test_directory_browser_lists_only_allowed_visible_directories(self):
         with tempfile.TemporaryDirectory() as root:
             workspace = Path(root) / "workspace"

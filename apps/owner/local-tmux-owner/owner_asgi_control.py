@@ -12,6 +12,8 @@ from starlette.requests import Request
 from starlette.responses import Response
 from starlette.routing import Route
 
+import appserver_runtime
+
 
 class OwnerControlRoutes:
     def __init__(self, core: Any, support: Any) -> None:
@@ -161,7 +163,7 @@ class OwnerControlRoutes:
                     ),
                     abandon_on_cancel=True,
                 )
-            except core.appserver_runtime.AppServerRuntimeError as exc:
+            except appserver_runtime.AppServerRuntimeError as exc:
                 raise core.OwnerError(str(exc), HTTPStatus.SERVICE_UNAVAILABLE) from exc
             return self._ok({"accepted": True, **result})
         existing_launch = core.managed_launch_session(self.support.config, launch_id or "") if launch_id else ""
@@ -197,7 +199,7 @@ class OwnerControlRoutes:
                     lambda: self.support.runtime.close_session(session),
                     abandon_on_cancel=True,
                 )
-            except self.core.appserver_runtime.AppServerRuntimeError as exc:
+            except appserver_runtime.AppServerRuntimeError as exc:
                 raise self.core.OwnerError(str(exc), HTTPStatus.CONFLICT) from exc
             return self._ok(result)
         await to_thread.run_sync(
@@ -304,7 +306,7 @@ class OwnerControlRoutes:
                 ),
                 abandon_on_cancel=True,
             )
-        except core.appserver_runtime.AppServerRuntimeError as exc:
+        except appserver_runtime.AppServerRuntimeError as exc:
             raise core.OwnerError(str(exc), HTTPStatus.SERVICE_UNAVAILABLE) from exc
         return self._ok({"accepted": True, **result})
 
@@ -343,7 +345,7 @@ class OwnerControlRoutes:
                     abandon_on_cancel=True,
                 )
                 return self._ok(result)
-        except core.appserver_runtime.AppServerRuntimeError as exc:
+        except appserver_runtime.AppServerRuntimeError as exc:
             raise core.OwnerError(str(exc), HTTPStatus.BAD_GATEWAY) from exc
         if path == "/api/interaction/start":
             try:
@@ -356,7 +358,7 @@ class OwnerControlRoutes:
                     ),
                     abandon_on_cancel=True,
                 )
-            except core.appserver_runtime.AppServerRuntimeError as exc:
+            except appserver_runtime.AppServerRuntimeError as exc:
                 raise core.OwnerError(str(exc), HTTPStatus.CONFLICT) from exc
             return self._ok(result)
         return self.support.json_response(

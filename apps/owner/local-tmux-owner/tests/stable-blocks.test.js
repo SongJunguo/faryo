@@ -72,6 +72,21 @@ const appendedResult = stableBlocks.reconcile(container, appendedPlan, createNod
 assert.deepEqual(appendedResult, { created: 1, reused: 5, removed: 0, stable: 4 });
 assert.deepEqual(container.children.slice(0, 5), originalNodes);
 
+const streamingContainer = new FakeContainer();
+const streamingFirst = stableBlocks.plan([
+  { kind: 'output', text: 'Partial', keyHint: 'thread:turn:item', mutable: true },
+], { mode: 'streaming', revision: 0 });
+const streamingFirstResult = stableBlocks.reconcile(streamingContainer, streamingFirst, createNode);
+const streamingNode = streamingContainer.children[0];
+const streamingNext = stableBlocks.plan([
+  { kind: 'output', text: 'Partial answer', keyHint: 'thread:turn:item', mutable: true },
+], { mode: 'streaming', revision: 0 });
+const streamingNextResult = stableBlocks.reconcile(streamingContainer, streamingNext, createNode);
+assert.deepEqual(streamingFirstResult, { created: 1, reused: 0, removed: 0, stable: 0 });
+assert.deepEqual(streamingNextResult, { created: 0, reused: 1, removed: 0, stable: 0 });
+assert.equal(streamingContainer.children[0], streamingNode, 'a streaming item must retain one keyed DOM node');
+assert.equal(streamingNode.__faryoBlockSignature, streamingNext[0].signature);
+
 const changedTailPlan = stableBlocks.plan([
   ...initialBlocks,
   { kind: 'status', text: 'Complete' },

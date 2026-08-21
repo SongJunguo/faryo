@@ -24,7 +24,11 @@
       const text = String(block?.text ?? '');
       const signature = [mode, revision, kind, text].join('\u0000');
       const digest = fingerprint(signature);
-      const identity = `${digest}-${text.length.toString(36)}`;
+      const keyHint = String(block?.keyHint || '');
+      const mutable = Boolean(block?.mutable && keyHint);
+      const identity = keyHint
+        ? `h-${fingerprint([kind, keyHint].join('\u0000'))}`
+        : `${digest}-${text.length.toString(36)}`;
       const occurrence = occurrences.get(identity) || 0;
       occurrences.set(identity, occurrence + 1);
       return {
@@ -34,6 +38,7 @@
         signature,
         key: `b-${identity}-${occurrence.toString(36)}`,
         stable: index < stableLimit,
+        mutable,
       };
     });
   }
@@ -57,7 +62,11 @@
     desired.forEach((model, index) => {
       const candidates = buckets.get(model.key) || [];
       let node = candidates.find((candidate) => (
-        !retained.has(candidate) && candidate.__faryoBlockSignature === model.signature
+        !retained.has(candidate)
+        && (
+          candidate.__faryoBlockSignature === model.signature
+          || (model.mutable && candidate.dataset?.faryoBlockMutable === 'true')
+        )
       ));
       if (node) {
         reused += 1;
@@ -68,6 +77,7 @@
       }
       node.dataset.faryoBlockKey = model.key;
       node.dataset.faryoBlockStable = model.stable ? 'true' : 'false';
+      node.dataset.faryoBlockMutable = model.mutable ? 'true' : 'false';
       node.__faryoBlockSignature = model.signature;
       retained.add(node);
       const current = container.children[index] || null;

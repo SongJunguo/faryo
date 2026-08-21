@@ -150,6 +150,65 @@ test("a buffered event from a closed stream cannot update the conversation", asy
   assert.deepEqual(captures, []);
 });
 
+test("streaming captures coalesce per frame and final state flushes immediately", async (context) => {
+  let applyEvent = null;
+  let nextFrame = 1;
+  const frames = new Map();
+  const { controller, captures } = fixture({
+    view: {
+      AbortController,
+      ReadableStream,
+      TextDecoder,
+      clearInterval,
+      clearTimeout,
+      setInterval,
+      setTimeout,
+      requestAnimationFrame(callback) {
+        const id = nextFrame++;
+        frames.set(id, callback);
+        return id;
+      },
+      cancelAnimationFrame(id) {
+        frames.delete(id);
+      },
+    },
+    eventIdleTimeoutMs: 1000,
+    eventStreamParser: {
+      createParser(callback) {
+        applyEvent = callback;
+        return { push() {} };
+      },
+    },
+    fetch: async () => ({
+      ok: true,
+      status: 200,
+      body: new ReadableStream({
+        start(stream) {
+          stream.enqueue(new TextEncoder().encode(": opened\n\n"));
+        },
+      }),
+    }),
+  });
+  context.after(() => controller.closeEventStream());
+  controller.startEventStream();
+  await delay(0);
+
+  for (const text of ["one", "two", "three"]) {
+    applyEvent({ type: "capture", data: JSON.stringify({ ok: true, text, streaming: true }) });
+  }
+  assert.equal(captures.length, 0);
+  assert.equal(frames.size, 1);
+  const callback = frames.values().next().value;
+  frames.clear();
+  callback();
+  assert.deepEqual(captures.map(([capture]) => capture.text), ["three"]);
+
+  applyEvent({ type: "capture", data: JSON.stringify({ ok: true, text: "partial", streaming: true }) });
+  applyEvent({ type: "capture", data: JSON.stringify({ ok: true, text: "final", streaming: false }) });
+  assert.equal(frames.size, 0);
+  assert.deepEqual(captures.map(([capture]) => capture.text), ["three", "final"]);
+});
+
 test("reconnect resumes from the last accepted event id", async (context) => {
   const eventUrls = [];
   let applyEvent = null;

@@ -109,6 +109,8 @@ class FakeRuntimeClient:
             prompt = params["input"][0]["text"]
             if prompt == "Slow send":
                 await asyncio.sleep(0.08)
+            elif prompt == "Very slow send":
+                await asyncio.sleep(0.7)
             user_item = {
                 "id": f"user_{self.turn_number}",
                 "type": "userMessage",
@@ -259,6 +261,11 @@ class RuntimeTest(unittest.TestCase):
         self.assertFalse(resumed["duplicate"])
         self.assertIn("item.delta", [event.kind for event in replay.events])
         self.assertIn("item.final", [event.kind for event in replay.events])
+        delta_events = [event for event in replay.events if event.kind == "item.delta"]
+        self.assertEqual(len(delta_events), 1)
+        self.assertEqual(delta_events[0].payload["batchCount"], 2)
+        self.assertEqual(delta_events[0].payload["textLength"], len("Answer $x^2$."))
+        self.assertNotIn("Answer", repr([event.payload for event in replay.events]))
         self.assertEqual(status["pendingRpcCount"], 0)
         self.assertEqual(len(clients), 1)
 
@@ -361,6 +368,47 @@ class RuntimeTest(unittest.TestCase):
         self.assertEqual(len(results), 2)
         self.assertEqual(sum(bool(result["duplicate"]) for result in results), 1)
         self.assertTrue(duplicate_after["duplicate"])
+
+    def test_slow_turn_start_returns_a_fast_idempotent_submitting_receipt(self) -> None:
+        clients = []
+
+        def factory(notification, disconnected):
+            client = FakeRuntimeClient(notification, disconnected)
+            clients.append(client)
+            return client
+
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            runtime = AppServerRuntime(
+                socket_path=root / "app.sock",
+                registry_path=root / "registry.json",
+                client_version="test",
+                client_factory=factory,
+            )
+            runtime.start()
+            self.assertTrue(runtime.wait_ready(2))
+            session = runtime.start_session(cwd="/workspace")["session"]
+            started_at = time.monotonic()
+            first = runtime.send(session, "Very slow send", "client_slow_ack")
+            elapsed = time.monotonic() - started_at
+            duplicate = runtime.send(session, "Very slow send", "client_slow_ack")
+            deadline = time.monotonic() + 2
+            settled = duplicate
+            while time.monotonic() < deadline:
+                settled = runtime.send(session, "Very slow send", "client_slow_ack")
+                if settled["deliveryState"] == "submitted":
+                    break
+                time.sleep(0.01)
+            runtime.stop()
+
+        self.assertLess(elapsed, 0.6)
+        self.assertEqual(first["deliveryState"], "submitting")
+        self.assertFalse(first["duplicate"])
+        self.assertEqual(duplicate["deliveryState"], "submitting")
+        self.assertTrue(duplicate["duplicate"])
+        self.assertEqual(settled["deliveryState"], "submitted")
+        self.assertTrue(settled["duplicate"])
+        self.assertEqual(clients[0].turn_start_calls, 1)
 
     def test_web_commands_use_app_server_apis_instead_of_terminal_menus(self) -> None:
         clients = []

@@ -97,6 +97,7 @@ release_checks() {
     "$ROOT/apps/owner/local-tmux-owner/appserver_capabilities.py" \
     "$ROOT/apps/owner/local-tmux-owner/appserver_commands.py" \
     "$ROOT/apps/owner/local-tmux-owner/appserver_events.py" \
+    "$ROOT/apps/owner/local-tmux-owner/appserver_history.py" \
     "$ROOT/apps/owner/local-tmux-owner/appserver_protocol.py" \
     "$ROOT/apps/owner/local-tmux-owner/appserver_registry.py" \
     "$ROOT/apps/owner/local-tmux-owner/appserver_requests.py" \
@@ -112,6 +113,7 @@ release_checks() {
     "$ROOT/apps/owner/local-tmux-owner/workspace_changes.py" \
     "$ROOT/apps/owner/local-tmux-owner/runtime_diagnostics.py" \
     "$ROOT/apps/owner/local-tmux-owner/tests/owner-archive-roundtrip.py" \
+    "$ROOT/apps/owner/local-tmux-owner/tests/real-appserver-streaming.py" \
     "$ROOT/apps/gateway/server/server.py" \
     "$ROOT/apps/gateway/server/gateway_security.py" \
     "$ROOT/apps/gateway/server/asgi_app.py" \
@@ -188,6 +190,7 @@ release_checks() {
   "$NODE_BIN" --check "$ROOT/apps/owner/local-tmux-owner/tests/browser-empty-conversation-smoke.mjs"
   "$NODE_BIN" --check "$ROOT/apps/owner/local-tmux-owner/tests/browser-fast-toggle-smoke.mjs"
   "$NODE_BIN" --check "$ROOT/apps/owner/local-tmux-owner/tests/browser-live-resilience.mjs"
+  "$NODE_BIN" --check "$ROOT/apps/owner/local-tmux-owner/tests/browser-real-appserver-streaming.mjs"
   "$NODE_BIN" --check "$ROOT/apps/owner/local-tmux-owner/tests/browser-structured-interactions.mjs"
   "$NODE_BIN" --check "$ROOT/apps/owner/local-tmux-owner/tests/browser-goal-details.mjs"
   "$NODE_BIN" --check "$ROOT/apps/gateway/server/tests/browser-workbench-smoke.mjs"
@@ -459,13 +462,18 @@ rich_block_controller_source = (root / "apps/owner/local-tmux-owner/static/owner
 capture_controller_source = (root / "apps/owner/local-tmux-owner/static/owner/capture-controller.mjs").read_text(encoding="utf-8")
 composer_delivery_source = (root / "apps/owner/local-tmux-owner/static/owner/composer-delivery.mjs").read_text(encoding="utf-8")
 goal_status_source = (root / "apps/owner/local-tmux-owner/static/owner/goal-status.mjs").read_text(encoding="utf-8")
-assert 'import("./owner/changes-panel.mjs?v=faryo-owner-changes-1")' in app, "Owner Changes must use its native ES module"
-assert 'import("./owner/api-client.mjs?v=faryo-owner-api-1")' in app, "Owner API must use its native ES module"
-assert 'import("./owner/attachment-controller.mjs?v=faryo-owner-attachments-1")' in app, "Owner attachments must use their native ES module"
-assert 'import("./owner/history-controller.mjs?v=faryo-owner-history-1")' in app, "Owner history must use its native ES module"
-assert 'import("./owner/rich-block-controller.mjs?v=faryo-owner-rich-blocks-2")' in app, "Owner long histories must use the current versioned rich-block controller"
-assert 'import("./owner/capture-controller.mjs?v=faryo-owner-capture-4")' in app, "Owner capture must use its current versioned ES module"
-assert 'import("./owner/composer-delivery.mjs?v=faryo-owner-composer-1")' in app, "Owner composer delivery must use its native ES module"
+assert "document.currentScript" in app and "assetRevision" in app and "encodeURIComponent(assetRevision)" in app, "Owner modules must inherit the content-versioned app revision"
+for owner_module in (
+    "changes-panel.mjs",
+    "api-client.mjs",
+    "attachment-controller.mjs",
+    "history-controller.mjs",
+    "rich-block-controller.mjs",
+    "capture-controller.mjs",
+    "composer-delivery.mjs",
+    "goal-status.mjs",
+):
+    assert f"ownerModule('{owner_module}')" in app, f"Owner module is not revisioned: {owner_module}"
 assert "/api/workspace-changes" in owner_asgi_read_source and "/api/workspace-changes" in changes_panel_source, "workspace changes must use the scoped read-only Owner API"
 assert "/api/capabilities" in owner_asgi_read_source and "/api/diagnostics" in owner_asgi_read_source and "loadOwnerCapabilities" in app, "Owner must expose versioned redacted diagnostics"
 assert '"pendingQueueManagement": False' in runtime_diagnostics_source and '"pendingQueue": "unsupported"' in runtime_diagnostics_source, "Faryo must not overclaim editable Codex queues"

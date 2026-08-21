@@ -1,15 +1,18 @@
 (async () => {
   'use strict';
-  const apiClientModulePromise = import("./owner/api-client.mjs?v=faryo-owner-api-1");
-  const attachmentControllerModulePromise = import("./owner/attachment-controller.mjs?v=faryo-owner-attachments-1");
-  const historyControllerModulePromise = import("./owner/history-controller.mjs?v=faryo-owner-history-1");
-  const richBlockControllerModulePromise = import("./owner/rich-block-controller.mjs?v=faryo-owner-rich-blocks-2");
-  const captureControllerModulePromise = import("./owner/capture-controller.mjs?v=faryo-owner-capture-4");
-  const composerDeliveryModulePromise = import("./owner/composer-delivery.mjs?v=faryo-owner-composer-1");
-  const goalStatusModulePromise = import("./owner/goal-status.mjs?v=faryo-owner-goal-1");
+  const appScript = document.currentScript;
+  const assetRevision = new URL(appScript?.src || location.href).searchParams.get('v') || 'dev';
+  const ownerModule = (name) => import(`./owner/${name}?v=${encodeURIComponent(assetRevision)}`);
+  const apiClientModulePromise = ownerModule('api-client.mjs');
+  const attachmentControllerModulePromise = ownerModule('attachment-controller.mjs');
+  const historyControllerModulePromise = ownerModule('history-controller.mjs');
+  const richBlockControllerModulePromise = ownerModule('rich-block-controller.mjs');
+  const captureControllerModulePromise = ownerModule('capture-controller.mjs');
+  const composerDeliveryModulePromise = ownerModule('composer-delivery.mjs');
+  const goalStatusModulePromise = ownerModule('goal-status.mjs');
   // Workspace review is an optional surface. Start loading it immediately,
   // but never let a transient asset failure block capture/history rendering.
-  const changesPanelModulePromise = import("./owner/changes-panel.mjs?v=faryo-owner-changes-1");
+  const changesPanelModulePromise = ownerModule('changes-panel.mjs');
   const [
     { createApiClient, sessionApiPath },
     { createAttachmentController },
@@ -1849,6 +1852,14 @@
     const mode = renderOptions.mode === 'streaming' ? 'streaming' : 'settled';
     const rawBlocks = rules.compactBlocks(text);
     if (!rawBlocks.length) rawBlocks.push({ kind: 'output', text: 'No output yet' });
+    const streamKey = mode === 'streaming' ? String(renderOptions.streamKey || '') : '';
+    if (streamKey) {
+      for (let index = rawBlocks.length - 1; index >= 0; index -= 1) {
+        if (String(rawBlocks[index]?.kind || '') !== 'output') continue;
+        rawBlocks[index] = { ...rawBlocks[index], keyHint: streamKey, mutable: true };
+        break;
+      }
+    }
     const models = typeof stableBlocks.plan === 'function'
       ? stableBlocks.plan(rawBlocks, { mode, revision: markdownRenderRevision, tailCount: 2 })
       : rawBlocks.map((block, index) => ({
@@ -2000,6 +2011,8 @@
     output.dataset.captureSource = String(capture.captureSource || '');
     output.dataset.agentSource = String(capture.agentSource || '');
     output.dataset.structuredEmpty = emptyStructured ? 'true' : 'false';
+    output.dataset.streaming = capture.streaming ? 'true' : 'false';
+    output.dataset.streamItemId = String(capture.streamItemId || '');
     if ($('detailsSource')) $('detailsSource').textContent = String(capture.captureSource || capture.source || 'unknown');
     syncStructuredInteraction(capture.interaction || null);
     updateStatusLineAutoExpand();
@@ -2013,6 +2026,9 @@
         try {
           renderCompactOutput(text, rules, {
             mode: isStructured && !capture.streaming ? 'settled' : 'streaming',
+            streamKey: capture.streamItemId
+              ? `${capture.sessionId || ''}:${capture.streamTurnId || ''}:${capture.streamItemId}`
+              : '',
           });
           delete output.dataset.renderFallback;
         } catch (_error) {
