@@ -87,6 +87,7 @@ const properties = new Map();
 const propertyWrites = [];
 const dockElement = { bottom: 844, getBoundingClientRect() { return { bottom: this.bottom }; } };
 const dockView = {
+  innerWidth: 390,
   innerHeight: 844,
   visualViewport: {
     height: 400,
@@ -95,7 +96,7 @@ const dockView = {
     removeEventListener(name, listener) { if (viewportListeners.get(name) === listener) viewportListeners.delete(name); },
   },
   document: {
-    documentElement: { style: { setProperty(name, value) { properties.set(name, value); propertyWrites.push([name, value]); } } },
+    documentElement: { dataset: {}, style: { setProperty(name, value) { properties.set(name, value); propertyWrites.push([name, value]); } } },
     addEventListener(name, listener) { dockListeners.set(`document:${name}`, listener); },
     removeEventListener(name, listener) { if (dockListeners.get(`document:${name}`) === listener) dockListeners.delete(`document:${name}`); },
   },
@@ -119,9 +120,19 @@ assert.deepEqual(propertyWrites.filter(([name]) => name === '--faryo-visual-view
 dockView.visualViewport.height = 844;
 dock.update();
 assert.equal(properties.get('--faryo-visual-viewport-shift-y'), '0px');
+dockView.innerHeight = 500;
+dockView.visualViewport.height = 440;
+dockView.visualViewport.offsetTop = 0;
+dockElement.bottom = 500;
+const nativeResize = dock.update();
+assert.equal(nativeResize.viewportMode, 'layout-resized');
+assert.equal(nativeResize.shift, 0);
+assert.equal(nativeResize.obscuredBottom, 0);
+assert.equal(dockView.document.documentElement.dataset.faryoViewportMode, 'layout-resized');
 dock.destroy();
 assert.equal(properties.get('--faryo-visual-viewport-shift-y'), '0px');
 assert.equal(properties.get('--faryo-visual-viewport-obscured-bottom'), '0px');
+assert.equal('faryoViewportMode' in dockView.document.documentElement.dataset, false);
 assert.equal(viewportListeners.size, 0);
 
 console.log('scroll surface tests passed');

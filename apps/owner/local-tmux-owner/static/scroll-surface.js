@@ -101,19 +101,32 @@
     const enabled = options.enabled !== false;
     const viewport = view.visualViewport;
     let frame = 0, destroyed = false;
+    let baselineWidth = Math.max(0, Number(view.innerWidth) || 0);
+    let maximumLayoutHeight = Math.max(0, Number(view.innerHeight) || 0);
     const settleTimers = new Set();
     let currentSnapshot = visualViewportSnapshot();
     const apply = () => {
       if (destroyed) return currentSnapshot;
+      const layoutWidth = Math.max(0, Number(view.innerWidth) || 0);
+      const layoutHeight = Math.max(0, Number(view.innerHeight) || 0);
+      if (baselineWidth && layoutWidth && Math.abs(layoutWidth - baselineWidth) > 48) {
+        baselineWidth = layoutWidth;
+        maximumLayoutHeight = layoutHeight;
+      } else {
+        if (!baselineWidth) baselineWidth = layoutWidth;
+        maximumLayoutHeight = Math.max(maximumLayoutHeight, layoutHeight);
+      }
+      const layoutResizeThreshold = Math.max(110, maximumLayoutHeight * 0.16);
+      const layoutViewportResized = maximumLayoutHeight - layoutHeight > layoutResizeThreshold;
       const dock = enabled ? dockElement() : null;
       // Mobile Chromium may already anchor fixed elements to the visual
       // viewport. Measure the dock with our previous correction removed so a
       // keyboard inset is never applied twice.
       if (dock) rootElement?.style?.setProperty('--faryo-visual-viewport-shift-y', '0px');
       const dockBottom = dock?.getBoundingClientRect?.().bottom;
-      const next = enabled && viewport
+      const measured = enabled && viewport
         ? visualViewportSnapshot({
-          layoutHeight: view.innerHeight,
+          layoutHeight,
           visualHeight: viewport.height,
           offsetTop: viewport.offsetTop,
           dockBottom: Number.isFinite(Number(dockBottom)) && Number(dockBottom) > 0
@@ -121,14 +134,25 @@
             : null,
         })
         : visualViewportSnapshot();
+      const viewportMode = layoutViewportResized ? 'layout-resized'
+        : measured.obscuredBottom ? 'visual-fallback'
+          : 'layout-stable';
+      const next = layoutViewportResized
+        ? { ...measured, obscuredBottom: 0, shift: 0, viewportMode }
+        : { ...measured, viewportMode };
       const changed = next.shift !== currentSnapshot.shift
         || next.obscuredBottom !== currentSnapshot.obscuredBottom
         || next.visualHeight !== currentSnapshot.visualHeight
-        || next.visualTop !== currentSnapshot.visualTop;
+        || next.visualTop !== currentSnapshot.visualTop
+        || next.viewportMode !== currentSnapshot.viewportMode;
       currentSnapshot = { ...next, changed };
       rootElement?.style?.setProperty('--faryo-visual-viewport-shift-y', `${next.shift}px`);
       rootElement?.style?.setProperty('--faryo-visual-viewport-obscured-bottom', `${next.obscuredBottom}px`);
       rootElement?.style?.setProperty('--faryo-visual-viewport-height', `${next.visualHeight}px`);
+      if (rootElement?.dataset) {
+        rootElement.dataset.faryoViewportMode = viewportMode;
+        rootElement.dataset.faryoViewportShift = String(next.shift);
+      }
       options.onChange?.(currentSnapshot);
       return currentSnapshot;
     };
@@ -178,6 +202,10 @@
         rootElement?.style?.setProperty('--faryo-visual-viewport-shift-y', '0px');
         rootElement?.style?.setProperty('--faryo-visual-viewport-obscured-bottom', '0px');
         rootElement?.style?.setProperty('--faryo-visual-viewport-height', '0px');
+        if (rootElement?.dataset) {
+          delete rootElement.dataset.faryoViewportMode;
+          delete rootElement.dataset.faryoViewportShift;
+        }
       },
     };
   }
