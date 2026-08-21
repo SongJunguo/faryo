@@ -306,6 +306,8 @@ class AsgiReadContractTest(unittest.TestCase):
             ("/lab/", True): HTTPStatus.OK,
             ("/lab/", False): HTTPStatus.SEE_OTHER,
             ("/lab/app.js", True): HTTPStatus.OK,
+            ("/lab/owner-ui.js", True): HTTPStatus.OK,
+            ("/lab/owner-ui.LICENSE.txt", True): HTTPStatus.OK,
             ("/lab/owner/changes-panel.mjs", True): HTTPStatus.OK,
         }[(clean_path, authenticated)]
         status, headers, body = self.request(self.asgi_base, path, authenticated=authenticated)
@@ -552,7 +554,13 @@ class AsgiReadContractTest(unittest.TestCase):
         self.assert_contract("/lab/api/status")
 
     def test_owner_page_and_static_resource_contracts_match(self) -> None:
-        for path in ("/lab/?session=fixture", "/lab/app.js", "/lab/owner/changes-panel.mjs"):
+        for path in (
+            "/lab/?session=fixture",
+            "/lab/app.js",
+            "/lab/owner-ui.js",
+            "/lab/owner-ui.LICENSE.txt",
+            "/lab/owner/changes-panel.mjs",
+        ):
             with self.subTest(path=path):
                 self.assert_contract(path, authenticated=True)
 

@@ -418,6 +418,12 @@ assert "data-faryo-fetch-href" in app, "protected file links must use deferred a
 assert "data-faryo-fetch-src" in app, "protected images must use deferred authenticated fetches"
 assert "target.searchParams.delete('token')" in app, "protected resource fetches must strip query tokens"
 assert 'id="statusShellRoot"' in index and 'id="quotaText"' in owner_status_source and 'id="detailsQuota"' in index, "Owner must expose Preact weekly quota and details"
+owner_static_match = re.search(r"OWNER_STATIC_FILES\s*=\s*\{([^}]*)\}", gateway)
+assert owner_static_match, "Gateway Owner static allowlist is unavailable"
+owner_static_files = set(re.findall(r'"([A-Za-z0-9._-]+)"', owner_static_match.group(1)))
+owner_static_prefixes = ("owner/", "vendor/", "icons/", "pet/")
+for source in re.findall(r'<script(?:\s+type="[^"]+")?\s+src="([^"?]+)', index):
+    assert source in owner_static_files or source.startswith(owner_static_prefixes), f"Gateway cannot proxy Owner script: {source}"
 assert "Week ${remaining}% left" in app, "Owner must label weekly quota as remaining allowance"
 assert "contextWindowSource === 'agent-reported'" in app, "Owner must distinguish reported context windows from fallbacks"
 assert "usedTokens" in app and "contextWindow" in app, "Owner must show actual context token counts"

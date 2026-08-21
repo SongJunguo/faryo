@@ -66,6 +66,7 @@ class SelectRecentAgentCwdTest(unittest.TestCase):
         self.assertIsNone(gateway.clean_client_launch_id("bad launch id"))
         self.assertIn("codex-commands.js", gateway.OWNER_STATIC_FILES)
         self.assertIn("copy-fidelity.js", gateway.OWNER_STATIC_FILES)
+        self.assertIn("owner-ui.js", gateway.OWNER_STATIC_FILES)
 
     def test_skips_exact_workspace_root(self) -> None:
         sessions = [session("/srv/brain", 20), session("/srv/brain/projects/faryo", 10)]
