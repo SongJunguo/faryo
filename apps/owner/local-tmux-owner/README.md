@@ -1,9 +1,9 @@
 # Faryo Local Tmux Owner
 
-Minimal local web control surface for a tmux-backed Faryo endpoint. Faryo
+Local structured Web control surface for a tmux-backed Faryo endpoint. Faryo
 Gateway reaches this service through path routing or a reverse tunnel. This
-service exposes only controlled tmux operations such as `status`, `capture`,
-`send`, and `approve`.
+service exposes bounded status/capture/send operations and versioned Codex TUI
+interactions; it does not expose arbitrary terminal key or shell endpoints.
 
 ## Start
 
@@ -330,9 +330,11 @@ consumed as private runtime input and is never printed.
 
 Codex status reading is optional metadata for model, context, Goal, and
 rate-limit display. The Owner header shows the remaining weekly percentage and
-a compact Goal state; Session Details adds the used/reset quota and Goal elapsed
-time. Goal objective/thread identity are never returned. Context used/window
-values come from the agent's rollout rather than a configured model maximum.
+a compact Goal state; Session Details adds used/reset quota and can fetch the
+current Goal objective from authenticated `/api/goal` only after a click. The
+objective is excluded from routine status, diagnostics, logs and browser
+storage, and the details DOM is cleared on close. Context used/window values
+come from the agent's rollout rather than a configured model maximum.
 Rate limits use one non-blocking, single-flight cache; an NVM-installed
 `codex.js` is paired with its sibling Node runtime even when a systemd service
 has no NVM directory in `PATH`. Without this metadata, the service still works
@@ -346,12 +348,22 @@ unavailable.
 - `GET /api/events?lines=320` (SSE structured capture plus transient live tail)
 - `GET /api/capabilities` (versioned feature/protocol flags)
 - `GET /api/diagnostics` (redacted feature/protocol flags and counts)
+- `GET /api/interaction?session=...` (current opaque pending interaction)
+- `GET /api/goal?session=...` (on-demand, no-store current Goal details)
+- `GET /api/command-catalog` (versioned fallback/runtime slash inventory)
 - `GET /api/workspace-changes?session=...` (bounded, workspace-scoped read-only Git status/diff)
 - `GET /api/agent-sessions` (active and paginated Current/Archived metadata)
 - `POST /api/agent-session/archive` (inactive Codex thread only)
 - `POST /api/agent-session/unarchive`
 - `POST /api/send` with `text`, `session`, and optional `clientMessageId`
-- `POST /api/approve`
+- `POST /api/interaction/start` with a catalog command and client request ID
+- `POST /api/interaction/respond` with an opaque interaction/action or option ID
+
+Interaction start/respond re-captures the real Codex TUI under a per-session
+lock. A stale generation returns `409` without sending a key, duplicate request
+IDs return the original receipt, and browsers never submit line numbers,
+arbitrary paths, or raw keys. The removed `/api/up`, `/api/down`, and
+`/api/approve` compatibility endpoints are not part of the maintained API.
 
 Archive and unarchive use Codex App Server thread lifecycle RPC, verify the
 resulting metadata state, reject active threads, and honor the Gateway-provided

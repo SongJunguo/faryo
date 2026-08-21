@@ -68,6 +68,29 @@ class AgentSessionTest(unittest.TestCase):
         with mock.patch.object(server, "tmux_sessions", return_value=["codex", "faryo1", "faryo3", "faryo-legacy"]):
             self.assertEqual(server.next_faryo_session_name(self.config), "faryo2")
 
+    def test_active_codex_thread_id_resolves_to_its_tmux_session(self):
+        with (
+            mock.patch.object(server, "tmux_sessions", return_value=["faryo2"]),
+            mock.patch.object(
+                server,
+                "active_codex_thread_map",
+                return_value={"thread-active": "faryo2"},
+            ),
+        ):
+            target = server.target_config(self.config, "thread-active")
+
+        self.assertEqual(target.session, "faryo2")
+
+    def test_inactive_thread_id_is_not_opened_without_resume(self):
+        with (
+            mock.patch.object(server, "tmux_sessions", return_value=["faryo2"]),
+            mock.patch.object(server, "active_codex_thread_map", return_value={}),
+        ):
+            with self.assertRaises(server.OwnerError) as raised:
+                server.target_config(self.config, "thread-inactive")
+
+        self.assertEqual(raised.exception.status, server.HTTPStatus.NOT_FOUND)
+
     def test_codex_session_index_cache_reloads_after_rename_append(self):
         with tempfile.TemporaryDirectory() as root:
             index = Path(root) / "session_index.jsonl"

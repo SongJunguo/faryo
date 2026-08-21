@@ -1,5 +1,5 @@
 import { h } from "preact";
-import { useEffect, useMemo, useState } from "preact/hooks";
+import { useEffect, useLayoutEffect, useRef, useState } from "preact/hooks";
 
 import type {
   InteractionAction,
@@ -18,12 +18,6 @@ const KIND_LABELS: Record<string, string> = {
   usage_select: "Usage",
   workspace_trust: "Workspace trust",
 };
-
-function requestId(): string {
-  return globalThis.crypto?.randomUUID
-    ? `ixr-${globalThis.crypto.randomUUID()}`
-    : `ixr-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 14)}`;
-}
 
 function OptionRow({
   option,
@@ -69,16 +63,15 @@ export function InteractionHost({
 }) {
   const [pending, setPending] = useState(false);
   const [localInteraction, setLocalInteraction] = useState(interaction);
+  const activeInteractionId = useRef(interaction?.id || "");
 
-  useEffect(() => {
+  useLayoutEffect(() => {
+    activeInteractionId.current = interaction?.id || "";
     setLocalInteraction(interaction);
     setPending(false);
-  }, [interaction?.id]);
+  }, [interaction]);
 
-  const actions = useMemo(
-    () => new Set(localInteraction?.actions || []),
-    [localInteraction?.id],
-  );
+  const actions = new Set(localInteraction?.actions || []);
 
   async function respond(request: {
     action?: InteractionAction;
@@ -92,7 +85,11 @@ export function InteractionHost({
         interactionId: activeId,
         ...request,
       });
-      setLocalInteraction(response.interaction || null);
+      if (!response.ignored && activeInteractionId.current === activeId) {
+        const nextInteraction = response.interaction || null;
+        activeInteractionId.current = nextInteraction?.id || "";
+        setLocalInteraction(nextInteraction);
+      }
     } catch (error) {
       options.onError?.(error);
     } finally {
@@ -221,6 +218,18 @@ export function InteractionHost({
                 ↓ Next
               </button>
             )}
+            {actions.has("choose") && (
+              <button
+                class="interaction-choose"
+                type="button"
+                disabled={pending}
+                aria-label="Choose the highlighted Codex option"
+                title="Press Enter to choose the highlighted Codex option"
+                onClick={() => void respond({ action: "choose" })}
+              >
+                Choose highlighted
+              </button>
+            )}
           </div>
           {actions.has("cancel") && (
             <button
@@ -242,5 +251,3 @@ export function InteractionHost({
     </div>
   );
 }
-
-export { requestId };

@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Local Tmux Owner: tiny HTTP bridge from mobile browser to a fixed tmux pane.
+"""Local Tmux Owner HTTP bridge for one or more tmux-backed Codex sessions.
 
-This server intentionally exposes only fixed tmux operations:
-status, capture, send text, interrupt, approve, and navigation keys.
+This server intentionally exposes only bounded status/capture, reliable text
+delivery, interrupt, and versioned Codex interactions. It does not expose
+arbitrary terminal navigation keys.
 """
 
 from __future__ import annotations
@@ -1094,9 +1095,17 @@ def resume_agent_session(
 def target_config(config: Config, session: str | None) -> Config:
     if not session or session == config.session:
         return config
-    if session not in tmux_sessions(config):
-        raise OwnerError(f"tmux session not found: {session}", HTTPStatus.NOT_FOUND)
-    return Config(session, config.token, config.pane_width)
+    sessions = tmux_sessions(config)
+    if session in sessions:
+        return Config(session, config.token, config.pane_width)
+    # A cached Gateway card or old bookmark may still carry the durable Codex
+    # thread id after that thread has been attached to a tmux session. Resolve
+    # only currently active top-level threads; inactive history must still pass
+    # through the authenticated resume flow and its cwd policy.
+    active_session = active_codex_thread_map(config).get(session, "")
+    if active_session in sessions:
+        return Config(active_session, config.token, config.pane_width)
+    raise OwnerError(f"tmux session not found: {session}", HTTPStatus.NOT_FOUND)
 
 
 

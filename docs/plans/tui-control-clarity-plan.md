@@ -1,7 +1,12 @@
 # Faryo Codex TUI Control Clarity Plan
 
 更新时间：2026-08-20
-状态：完成并通过隔离浏览器验证
+状态：历史方案，已由 v1.6 结构化交互取代
+
+> 本文保留 v1.2 当时的设计与证据，不代表当前 API。当前实现见
+> [`v1.6-structured-interactions-and-owner-ui-plan.md`](v1.6-structured-interactions-and-owner-ui-plan.md)：
+> 浏览器不再调用 raw key 端点，而是提交不透明 interaction/action/option ID，服务端重新
+> 验证 generation 后才映射到 TUI 按键。
 
 ## 问题
 

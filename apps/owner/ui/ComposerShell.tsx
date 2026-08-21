@@ -1,14 +1,10 @@
 import { h, render } from "preact";
+import type { JSX } from "preact";
 import { useLayoutEffect, useState } from "preact/hooks";
 
-export interface CommandSuggestion {
-  label: string;
-  hint: string;
-  description: string;
-  category: string;
-  aliases: string;
-  risk: string;
-}
+import { CommandPalette } from "./CommandPalette";
+import type { CommandSuggestion } from "./CommandPalette";
+import { Composer } from "./Composer";
 
 interface ComposerView {
   suggestions: CommandSuggestion[];
@@ -23,11 +19,7 @@ export interface ComposerShellOptions {
 }
 
 export interface ComposerShellController {
-  updateSuggestions(
-    suggestions: CommandSuggestion[],
-    selectedIndex: number,
-    summary?: string,
-  ): void;
+  updateSuggestions(suggestions: CommandSuggestion[], summary?: string): void;
   updateControls(values: { sendVisible: boolean; plusVisible: boolean }): void;
   destroy(): void;
 }
@@ -40,12 +32,34 @@ function createComposerStore() {
     sendVisible: false,
     plusVisible: true,
   };
+  let suggestionSignature = "";
   const listeners = new Set<(value: ComposerView) => void>();
+  const publish = (next: ComposerView) => {
+    value = next;
+    for (const listener of listeners) listener(value);
+  };
   return {
     get: () => value,
-    set(next: Partial<ComposerView>) {
-      value = { ...value, ...next };
-      for (const listener of listeners) listener(value);
+    setControls(next: Pick<ComposerView, "sendVisible" | "plusVisible">) {
+      publish({ ...value, ...next });
+    },
+    setSuggestions(suggestions: CommandSuggestion[], summary = "") {
+      const nextSignature = suggestions
+        .map((item) => `${item.label}\0${item.hint}`)
+        .join("\n");
+      const selectedIndex =
+        nextSignature === suggestionSignature
+          ? Math.min(value.selectedIndex, Math.max(0, suggestions.length - 1))
+          : 0;
+      suggestionSignature = nextSignature;
+      publish({ ...value, suggestions, selectedIndex, summary });
+    },
+    moveSelection(delta: number) {
+      if (!value.suggestions.length) return;
+      const selectedIndex =
+        (value.selectedIndex + delta + value.suggestions.length) %
+        value.suggestions.length;
+      publish({ ...value, selectedIndex });
     },
     subscribe(listener: (value: ComposerView) => void) {
       listeners.add(listener);
@@ -65,80 +79,49 @@ function ComposerShell({
 }) {
   const [view, setView] = useState(store.get());
   useLayoutEffect(() => store.subscribe(setView), [store]);
-  const hasSuggestions = view.suggestions.length > 0;
+  function handleKeyDown(
+    event: JSX.TargetedKeyboardEvent<HTMLTextAreaElement>,
+  ) {
+    const current = store.get();
+    if (
+      (event.key === "ArrowDown" || event.key === "ArrowUp") &&
+      current.suggestions.length
+    ) {
+      event.preventDefault();
+      store.moveSelection(event.key === "ArrowDown" ? 1 : -1);
+      return;
+    }
+    if (
+      (event.key === "Tab" || event.key === "Enter") &&
+      current.suggestions.length
+    ) {
+      event.preventDefault();
+      options.onSuggestionSelect(current.selectedIndex);
+      return;
+    }
+    if (event.key === "Escape" && current.suggestions.length) {
+      event.preventDefault();
+      store.setSuggestions([]);
+    }
+  }
   return (
     <div class="command-dock">
-      <div
-        id="commandSuggest"
-        class={`command-suggest${hasSuggestions ? "" : " hidden"}`}
-        role="listbox"
-        aria-label="Command suggestions"
-        aria-activedescendant={
-          hasSuggestions ? `command-option-${view.selectedIndex}` : ""
-        }
-        onMouseDown={(event) => event.preventDefault()}
-      >
-        {view.summary && (
-          <div class="command-suggest-summary">{view.summary}</div>
-        )}
-        {view.suggestions.map((item, index) => {
-          const selected = index === view.selectedIndex;
-          return (
-            <button
-              id={`command-option-${index}`}
-              key={`${item.label}-${index}`}
-              type="button"
-              role="option"
-              aria-selected={selected}
-              data-index={index}
-              class={selected ? "selected" : ""}
-              onClick={() => options.onSuggestionSelect(index)}
-            >
-              <span class="command-suggest-main">
-                <strong>
-                  {item.label}
-                  {item.hint}
-                </strong>
-                <small>{item.description}</small>
-              </span>
-              <span class="command-suggest-meta">
-                {item.category}
-                {item.aliases}
-                {item.risk && <span class="command-risk">{item.risk}</span>}
-              </span>
-            </button>
-          );
-        })}
-      </div>
-      <div class="prompt-shell">
-        <div
-          id="petControl"
-          class="pet-control pet-offline"
-          aria-label="Faryo offline; tap to interrupt"
-        />
-        <textarea id="promptInput" placeholder="Ask Faryo" rows={1} />
-        <button
-          id="dockPlusBtn"
-          class={`dock-plus${view.plusVisible ? "" : " hidden"}`}
-          type="button"
-          aria-label="Open input tools"
-          aria-expanded="false"
-          aria-controls="dockMenu"
-        >
-          +
-        </button>
-        <button
-          id="sendBtn"
-          class={`dock-send${view.sendVisible ? "" : " hidden"}`}
-          type="button"
-          aria-label="Send"
-        >
-          ↑
-        </button>
-      </div>
+      <CommandPalette
+        suggestions={view.suggestions}
+        selectedIndex={view.selectedIndex}
+        summary={view.summary}
+        onSelect={options.onSuggestionSelect}
+      />
+      <Composer
+        sendVisible={view.sendVisible}
+        plusVisible={view.plusVisible}
+        onKeyDown={handleKeyDown}
+      />
     </div>
   );
 }
+
+export type { CommandSuggestion };
 
 export function mountComposerShell(
   container: HTMLElement,
@@ -147,11 +130,11 @@ export function mountComposerShell(
   const store = createComposerStore();
   renderComposer(container, store, options);
   return {
-    updateSuggestions(suggestions, selectedIndex, summary = "") {
-      store.set({ suggestions, selectedIndex, summary });
+    updateSuggestions(suggestions, summary = "") {
+      store.setSuggestions(suggestions, summary);
     },
     updateControls(values) {
-      store.set(values);
+      store.setControls(values);
     },
     destroy() {
       render(null, container);

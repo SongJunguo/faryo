@@ -58,7 +58,6 @@
   const detailsPanel = $('detailsPanel');
   const changesPanel = $('changesPanel');
   const panelBackdrop = $('panelBackdrop');
-  const commandSuggest = $('commandSuggest');
   const promptShell = document.querySelector('.prompt-shell');
   const metaLineRe = /^\s*(gpt|o\d)[\w.\- ]*·\s+/;
   const codexCompactRules = window.FaryoCodexCompactRules || {};
@@ -173,10 +172,12 @@
   const interactionHost = typeof ownerUiApi.mountInteractionHost === 'function'
     ? ownerUiApi.mountInteractionHost($('interactionRoot'), {
       onRespond: async (request) => {
+        const requestedSession = selectedSession;
         const response = await postAction('/api/interaction/respond', {
           ...request,
           clientRequestId: newInteractionRequestId(),
         });
+        if (selectedSession !== requestedSession) return { interaction: null, ignored: true };
         syncStructuredInteraction(response.interaction || null);
         refreshStatus({ silent: true }).catch(handleBackgroundError);
         refreshCapture(currentCaptureLines(), { silent: true }).catch(handleBackgroundError);
@@ -196,7 +197,6 @@
   let immersiveController = null;
   const restoringLivePanels = new WeakSet();
   let questionNavigatorController = null;
-  let commandSuggestionIndex = 0, commandSuggestionSignature = '';
   if (typeof questionNavigatorApi.createController === 'function') {
     try {
       questionNavigatorController = questionNavigatorApi.createController({
@@ -394,8 +394,6 @@
     promptInput.value = value;
     promptInput.focus();
     promptInput.setSelectionRange(value.length, value.length);
-    commandSuggestionIndex = 0;
-    commandSuggestionSignature = '';
     persistPromptDraft();
     autosize();
     updateSendVisibility();
@@ -404,12 +402,6 @@
   }
   function renderCommandSuggestions() {
     const items = commandMatches();
-    const signature = `${promptInput.value}\n${items.map((item) => item.value).join('\n')}`;
-    if (signature !== commandSuggestionSignature) {
-      commandSuggestionSignature = signature;
-      commandSuggestionIndex = 0;
-    }
-    commandSuggestionIndex = Math.min(commandSuggestionIndex, Math.max(0, items.length - 1));
     const suggestions = items.map((item) => {
       const label = item.matchedAlias || item.command || item.value;
       const aliases = !item.matchedAlias && item.aliases?.length ? ` · ${item.aliases.join(', ')}` : '';
@@ -426,31 +418,10 @@
     const summary = promptInput.value.trimStart() === '/'
       ? `${items.length} Codex commands · ↑↓ to explore`
       : '';
-    composerShellController.updateSuggestions(suggestions, commandSuggestionIndex, summary);
+    composerShellController.updateSuggestions(suggestions, summary);
   }
   function hideCommandSuggestions() {
-    composerShellController.updateSuggestions([], 0, '');
-  }
-  function handleCommandSuggestionKey(event) {
-    const items = commandMatches();
-    if ((event.key === 'ArrowDown' || event.key === 'ArrowUp') && items.length) {
-      event.preventDefault();
-      const delta = event.key === 'ArrowDown' ? 1 : -1;
-      commandSuggestionIndex = (commandSuggestionIndex + delta + items.length) % items.length;
-      renderCommandSuggestions();
-      requestAnimationFrame(() => commandSuggest?.querySelector('.selected')?.scrollIntoView({ block: 'nearest' }));
-      return true;
-    }
-    const item = items[commandSuggestionIndex] || items[0];
-    if ((event.key === 'Tab' || event.key === 'Enter') && item) {
-      event.preventDefault();
-      return applyCommandSuggestion(item);
-    }
-    if (event.key === 'Escape') {
-      hideCommandSuggestions();
-      commandSuggestionSignature = '';
-    }
-    return false;
+    composerShellController.updateSuggestions([], '');
   }
   for (const id of ['petControl', 'dockPlusBtn']) $(id)?.addEventListener('pointerdown', (event) => event.preventDefault());
 
@@ -1357,6 +1328,13 @@
     const sessionLabel = data.sessionTitle || data.sessionId || 'session unknown';
     const modelLabel = compactModelLabel(model, data.fastStatus);
     selectedSession = data.session || selectedSession;
+    if (data.session) {
+      const currentUrl = new URL(location.href);
+      if (currentUrl.searchParams.get('session') !== data.session) {
+        currentUrl.searchParams.set('session', data.session);
+        history.replaceState(null, '', `${currentUrl.pathname}${currentUrl.search}${currentUrl.hash}`);
+      }
+    }
     $('ownerText').textContent = ownerLabel;
     renderSessionLabel(sessionLabel);
     const quota = quotaStatusModel(weeklyRateLimit);
@@ -1402,6 +1380,7 @@
     persistPromptDraft();
     persistPendingSubmission();
     selectedSession = session;
+    syncStructuredInteraction(null);
     clearGoalDetails();
     beginInitialLatestScroll();
     closeSurfacePanels({ restoreFocus: false });
@@ -2152,7 +2131,7 @@
       autosize();
       updateSendVisibility();
     }
-    syncStructuredInteraction(response.interaction || null);
+    if (selectedSession === session) syncStructuredInteraction(response.interaction || null);
     refreshStatus({ silent: true }).catch(handleBackgroundError);
     refreshCapture(currentCaptureLines(), { silent: true }).catch(handleBackgroundError);
     return true;
@@ -2302,7 +2281,7 @@
 
   $('sendBtn').addEventListener('click', submitPrompt);
   promptInput.addEventListener('keydown', (event) => {
-    if (handleCommandSuggestionKey(event)) return;
+    if (event.defaultPrevented) return;
     if (event.key !== 'Enter' || !(event.ctrlKey || event.metaKey)) return;
     event.preventDefault();
     submitPrompt();

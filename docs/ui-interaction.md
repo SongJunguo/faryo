@@ -70,19 +70,36 @@ The Owner page contains:
 - a Faryo logo link back to the Gateway home page;
 - workstation/session title and session switcher;
 - agent-reported context used/window and weekly quota when available;
-- a privacy-safe Goal status pill, with the same state and elapsed time in
-  Details but no objective text;
+- a privacy-safe Goal status pill whose authenticated, no-store details request
+  loads the current objective only after an explicit click and clears it on
+  close;
 - git status and structured-source/connection details;
 - Compact Chat and Raw output modes;
 - attachments and a stable multiline composer;
-- approve, interrupt, terminal navigation, refresh, and return-to-latest
+- structured Codex interactions, interrupt, refresh, and return-to-latest
   controls.
 
-The contextual terminal strip reads `Codex menu / ↑ Previous / ↓ Next / Enter
-Choose`. It sends those exact keys to the current TUI; Enter chooses the
-currently highlighted option and must not imply unconditional approval. The
-strip is hidden during ordinary chat and attachment-only states, appears only
-for a detected TUI menu/confirmation, and hides immediately after Enter.
+Codex menus are not inferred by the browser. Owner parses the current terminal
+through dedicated model, reasoning, usage, permissions, resume-directory,
+workspace-trust and approval detectors, then publishes an opaque interaction
+snapshot. The Preact sheet renders the actual options plus only the actions the
+snapshot permits: Previous, Next, `Choose highlighted`, and Cancel. Clicking an
+option or action revalidates the interaction generation before any key is sent.
+Unknown blocking menus use the same explicit generic fallback instead of a
+hidden raw key strip.
+
+Exact slash commands use the structured command entry point rather than normal
+message delivery. `/model` and the model status affordance share the real Codex
+model/reasoning menu; `/usage` opens and closes as a local interaction without
+creating a fake chat turn. The command catalog is refreshed from a private
+read-only TUI inventory when the Codex version changes. A newly discovered
+command is visibly unclassified and requires one explicit confirmation; Faryo
+never retries Enter blindly.
+
+Pending interaction identity includes the selected session and generation.
+Reload/SSE reconnect rebuilds it from the real TUI, session switches clear the
+old sheet immediately, and late responses are ignored rather than rendered over
+the newly selected session.
 
 Opening menus, details, Raw mode, or the question rail must never resize tmux or
 the Codex TUI.
@@ -287,6 +304,8 @@ The maintained matrix includes:
   `faryoN` naming and exact test-session cleanup;
 - offline/background recovery and 20-message exact delivery;
 - cross-session retry/delayed-response isolation;
+- structured `/model` and `/usage`, generic-menu `Choose highlighted`, pending
+  interaction reload, and late-response/session-switch isolation;
 - protected files/images, CSP, and safe render fallback;
 - unchanged Codex tmux dimensions before and after browser/deployment tests.
 - user-activated full-screen enter/exit through header and Details, folded-header

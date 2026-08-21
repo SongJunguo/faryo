@@ -1439,7 +1439,7 @@ html[data-faryo-ui="workbench-v2"] .goal-details-list { margin-bottom: 8px; }
   text-transform: uppercase;
 }
 .interaction-actions { position: static; display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 0; border: 0; background: none; }
-.interaction-nav-actions { display: flex; gap: 6px; }
+.interaction-nav-actions { display: flex; flex-wrap: wrap; gap: 6px; }
 .interaction-actions button {
   min-height: 40px;
   padding: 0 12px;

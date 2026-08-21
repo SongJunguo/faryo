@@ -35,8 +35,8 @@
   运行时发现和已发布的 `v1.2.0` 发布链。
 - [`control-audit-session-state-plan.md`](control-audit-session-state-plan.md)：不记录正文的控制
   审计、明确会话状态和准确的 TUI Enter 文案。
-- [`tui-control-clarity-plan.md`](tui-control-clarity-plan.md)：方向键和 Enter 明确标为同一
-  Codex TUI 的 Previous/Next/Choose 后备控制，并按需自动显示。
+- [`tui-control-clarity-plan.md`](tui-control-clarity-plan.md)：v1.2 的历史 raw-key 控制设计；
+  已由 v1.6 的结构化 InteractionHost 和不透明 action/option 协议取代。
 - [`live-tmux-reading-copy-plan.md`](live-tmux-reading-copy-plan.md)：当前轮次 180 行 Live 尾部、
   稳定 DOM/滚动/文字选择和显式复制。
 - [`chat-raw-mode-switch-plan.md`](chat-raw-mode-switch-plan.md)：隔离 Chat/Raw capture cache，

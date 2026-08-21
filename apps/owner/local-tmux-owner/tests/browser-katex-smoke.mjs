@@ -63,6 +63,7 @@ const uiScreenshotFocus = process.env.FARYO_SMOKE_UI_FOCUS || '';
 const expectedTex = JSON.parse(process.env.FARYO_SMOKE_EXPECT_TEX || '[]');
 const expectedOutput = process.env.FARYO_SMOKE_EXPECT_OUTPUT || '';
 const expectedSessionTitle = process.env.FARYO_SMOKE_EXPECT_SESSION_TITLE || '';
+const expectedCanonicalSession = process.env.FARYO_SMOKE_EXPECT_CANONICAL_SESSION || '';
 const expectedGoalStatus = process.env.FARYO_SMOKE_EXPECT_GOAL_STATUS || '';
 const minMatrixRows = Number(process.env.FARYO_SMOKE_MIN_MATRIX_ROWS || 0);
 const minKatex = Number(process.env.FARYO_SMOKE_MIN_KATEX ?? 2);
@@ -620,6 +621,7 @@ try {
               String(document.getElementById('detailsSession')?.textContent || '').trim() === ${JSON.stringify(expectedSessionTitle)}
               && String(document.getElementById('sessionTitle')?.title || '').includes(${JSON.stringify(expectedSessionTitle)})
             ),
+            canonicalSession: new URLSearchParams(location.search).get('session') || '',
           },
           katexStylesheetLoaded: [...document.styleSheets].some((sheet) => String(sheet.href || '').includes('/katex')),
           katexAssetUrls: ${JSON.stringify(privacySafe)}
@@ -667,6 +669,9 @@ try {
   }
   if (expectedSessionTitle && !state.ownerLayout?.sessionTitleMatches) {
     throw new Error('Owner session title did not match the expected Codex thread name');
+  }
+  if (expectedCanonicalSession && state.ownerLayout?.canonicalSession !== expectedCanonicalSession) {
+    throw new Error('Owner did not canonicalize the active Codex thread URL');
   }
   if (state.ownerTokenInLocation || state.ownerTokenEventUrlCount) {
     throw new Error(`Owner token remained in browser navigation or event-stream URLs: ${JSON.stringify({ location: state.ownerTokenInLocation, eventUrls: state.ownerTokenEventUrlCount })}`);

@@ -35,6 +35,7 @@ export interface InteractionResponse {
   interaction: PendingInteraction | null;
   changed?: boolean;
   resolved?: boolean;
+  ignored?: boolean;
 }
 
 export interface InteractionHostOptions {

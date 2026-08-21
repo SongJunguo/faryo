@@ -177,28 +177,37 @@ micromark -> mdast -> CommonMark/GFM/math nodes -> safe HTML -> KaTeX
   preview strip, with at most four compression/upload workers active at once
   and a 25 MiB server-side limit for each file.
 - Shows agent-reported context used/window and weekly quota when available.
-- Shows the current Codex Goal state as a compact header pill and in Session
-  Details. Only status and elapsed metadata are exposed; the goal objective and
-  thread identifier never enter the Owner API or browser DOM.
+- Shows the current Codex Goal state as a compact header pill. Clicking it loads
+  the current objective, status, elapsed time, and available budget fields from
+  an authenticated, no-store endpoint; closing the panel clears that text from
+  the DOM. Objective text never enters routine status, diagnostics, history,
+  audit, logs, or browser storage.
 - Opens fresh, reloaded, and newly selected conversations at the latest output.
 - Preserves the main reading position during structured refreshes.
 - Keeps up to 180 lines from the current turn in an expanded Live tmux panel,
   preserves the same DOM node and manual scroll position, pauses updates while
   its text is selected, and offers one-click copy of the visible terminal text.
-- Mirrors all 46 slash commands visible in the validated Codex CLI, with
-  descriptions, categories, risk cues, fuzzy lookup, keyboard navigation, and
-  a repeatable isolated-PTY drift check.
+- Uses a versioned slash-command catalog populated by a private, read-only TUI
+  inventory probe. The bundled Codex 0.148.0 fallback contains 46 classified
+  commands; future additions appear as unclassified instead of being silently
+  submitted or hard-coded forever.
+- Routes `/model`, `/usage`, permissions, approvals, resume questions, and
+  unknown blocking menus through one structured interaction service. Model and
+  reasoning choices, Previous/Next, explicit `Choose highlighted`, and Cancel
+  are bound to an opaque interaction generation, so refreshes can rebuild the
+  menu and stale tabs cannot send keys into a newer state.
 - Reflects Codex `/rename` changes in the page title and session cards without
   renaming the underlying tmux session or requiring a reload.
 - Copies full answers and multi-message selections from in-memory original
   Markdown, and copies a selected formula as one original TeX expression
   instead of KaTeX's visual/MathML layers. Safe rich HTML is included when the
   browser supports it; Raw, code, and input selections keep native behavior.
-- Provides Chat/Raw views, attachments, interrupt, TUI navigation, page
+- Provides Chat/Raw views, attachments, interrupt, structured Codex menus, page
   navigation, session switching, and a return-to-latest control.
-- Shows contextual `Codex menu` controls as `Previous`, `Next`, and `Enter
-  Choose` only while a TUI choice is pending; these send exact keys, auto-hide
-  after Enter, and never claim unconditional approval.
+- Uses a small local Preact + TypeScript + Vite bundle for the composer, command
+  palette, interaction sheet, and dynamic status shell. The transcript,
+  Markdown/TeX renderer, Raw view, and Live tmux remain isolated rendering
+  surfaces; production requires neither Node nor a CDN.
 - Keeps independent Chat and Raw capture caches, so returning from the full
   terminal view synchronously restores rendered Markdown/TeX and its separate
   `Live from tmux` panel instead of replaying terminal code in the conversation.
@@ -260,11 +269,12 @@ and Codex-specific delivery state machine. The browser is a thin authenticated
 control surface; the durable work remains in tmux and Codex's own history.
 
 Gateway portal CSS and JavaScript are separate versioned static assets; dynamic
-route labels enter through a nonce-protected JSON bootstrap. A focused local
-Preact bundle owns only keyed package/launcher/session-card lists, while the
-Owner transcript and Markdown/TeX pipeline remain framework-free. Development
-uses locked Playwright/Ruff tooling, and every production runtime dependency or
-lazy bundled UI asset remains local and independently documented.
+route labels enter through a nonce-protected JSON bootstrap. Focused local
+Preact bundles own Gateway keyed session lists and the Owner's dynamic
+interaction shell, while the Owner transcript and Markdown/TeX renderer remain
+an imperative island behind narrow adapters. Development uses locked
+Playwright/Ruff tooling, and every production runtime dependency or lazy bundled
+UI asset remains local and independently documented.
 
 ## Installation
 

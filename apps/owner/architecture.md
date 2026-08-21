@@ -26,7 +26,9 @@ Gateway or used only for local smoke/status checks.
 - `local-tmux-owner`: historical source-directory name for the local execution
   backend, bound to `127.0.0.1`; it no longer implies a service tmux session.
 - `faryo-owner.service`: direct systemd user supervision for the Owner Python
-  process; it does not run in a service tmux.
+  process; it does not run in a service tmux. Its `KillMode=process` contract is
+  mandatory: restarting or updating the Web bridge must not signal tmux/Codex
+  descendants that were originally launched from Owner.
 - An optional SSH reverse tunnel from a local endpoint to the Gateway host, run
   as a user service on that endpoint. When enabled, verify from the Gateway side
   with the owner token and expected endpoint identity.
@@ -98,8 +100,22 @@ but the default upload destination should come from the Faryo data directory.
   message identity, success-only clearing, failed-draft restoration and one
   same-ID retry for ambiguous network/502/504 outcomes. DOM/animation stay out.
 - `static/owner/goal-status.mjs` maps structured Codex goal states to the header
-  pill and Details row. It receives only status/timing metadata; objective and
-  thread identity are discarded by the rollout parser before the API boundary.
+  pill and Details row. Routine status receives only status/timing metadata;
+  objective text is fetched separately through authenticated `/api/goal`, is
+  marked no-store, and is cleared from the DOM when Details closes.
+- `codex_tui_interactions.py` contains pure, side-effect-free detectors for the
+  current model, reasoning, usage, permissions, resume-directory, trust,
+  approval and generic blocking-menu shapes. It never calls tmux or HTTP.
+- `interaction_service.py` owns per-session serialization, opaque interaction
+  and option IDs, monotonic generations, stale-response rejection, idempotent
+  command/action receipts, and the only conversion from validated actions to
+  TUI keys. `/model`, `/usage`, and future catalog commands do not pass through
+  ordinary message delivery.
+- `apps/owner/ui/` is the readable Preact + strict TypeScript source for the
+  composer, command palette, structured interaction sheet, error boundary and
+  dynamic Context/Week/Model/Goal/Git shell. Vite produces one checked-in local
+  bundle; `app.js` is the composition adapter for the existing transcript,
+  Markdown/TeX, Raw and Live tmux islands rather than a second renderer.
 - `owner_http.py` owns browser security headers, query-redacted log paths,
   Owner-token validation, bounded JSON/multipart parsing, gzip JSON and file
   byte responses. The Handler delegates these primitives and keeps routing.

@@ -1,6 +1,7 @@
 import { h, render } from "preact";
 
 import { mountComposerShell } from "./ComposerShell";
+import { ErrorBoundary } from "./ErrorBoundary";
 import { InteractionHost } from "./InteractionHost";
 import { mountStatusShell } from "./StatusShell";
 import type {
@@ -27,16 +28,49 @@ export function mountInteractionHost(
     draw();
     resolve?.(confirmed);
   };
-  const draw = () =>
+  const draw = () => {
+    const boundaryKey =
+      current?.id || (confirmation ? "command-confirm" : "empty");
     render(
-      <InteractionHost
-        interaction={current}
-        options={options}
-        confirmation={confirmation}
-        onConfirmCommand={settleConfirmation}
-      />,
+      <ErrorBoundary
+        key={boundaryKey}
+        surface="interaction"
+        fallback={
+          <div
+            class="interaction-backdrop"
+            data-interaction-kind="render_error"
+          >
+            <section
+              class="interaction-sheet interaction-confirm-sheet"
+              role="alert"
+            >
+              <div class="interaction-heading">
+                <span>Codex interaction</span>
+                <strong>Interaction view unavailable</strong>
+                <p>
+                  Reload this session to rebuild the current menu from the real
+                  Codex TUI. The transcript remains available behind this panel.
+                </p>
+              </div>
+              <div class="interaction-actions">
+                <button type="button" onClick={() => window.location.reload()}>
+                  Reload session
+                </button>
+              </div>
+            </section>
+          </div>
+        }
+      >
+        <InteractionHost
+          interaction={current}
+          options={options}
+          confirmation={confirmation}
+          onConfirmCommand={settleConfirmation}
+        />
+      </ErrorBoundary>,
       container,
     );
+  };
   draw();
   return {
     update(interaction) {

@@ -58,22 +58,38 @@ for (const viewport of [
           { onSuggestionSelect(index) { window.__composerClicks.push(index); } },
         );
         window.__composerController.updateControls({ sendVisible: true, plusVisible: false });
-        window.__composerController.updateSuggestions([
-          {
-            label: "<img src=x onerror=alert(1)>",
-            hint: "",
-            description: "Synthetic command",
-            category: "Test",
-            aliases: "",
-            risk: "unclassified",
-          },
-        ], 0, "1 command");
+        window.__composerController.updateSuggestions(
+          [
+            {
+              label: "<img src=x onerror=alert(1)>",
+              hint: "",
+              description: "Synthetic command",
+              category: "Test",
+              aliases: "",
+              risk: "unclassified",
+            },
+            {
+              label: "/second",
+              hint: "",
+              description: "Second synthetic command",
+              category: "Test",
+              aliases: "",
+              risk: "",
+            },
+          ],
+          "2 commands",
+        );
         window.__interactionRequests = [];
         window.__interactionController = window.FaryoOwnerUI.mountInteractionHost(
           document.getElementById("root"),
           {
             async onRespond(request) {
               window.__interactionRequests.push(request);
+              if (request.optionId === "opt-slow") {
+                return await new Promise((resolve) => {
+                  window.__resolveSlowInteraction = resolve;
+                });
+              }
               if (request.optionId === "opt-model-b") {
                 return {
                   interaction: {
@@ -102,7 +118,7 @@ for (const viewport of [
             },
           },
         );
-        window.__interactionController.update({
+        window.__modelInteraction = {
           id: "ix-model",
           generation: 1,
           kind: "model_select",
@@ -129,9 +145,12 @@ for (const viewport of [
           actions: ["previous", "next", "choose", "cancel"],
           source: "codex-tui",
           status: "pending",
-        });
+        };
+        window.__interactionController.update(window.__modelInteraction);
       });
       await page.locator('.interaction-backdrop[data-interaction-kind="model_select"]').waitFor();
+      await page.evaluate(() => window.__interactionController.update(null));
+      await page.locator(".interaction-backdrop").waitFor({ state: "detached" });
       const composer = await page.evaluate(() => ({
         prompt: Boolean(document.getElementById("promptInput")),
         sendVisible: !document.getElementById("sendBtn").classList.contains("hidden"),
@@ -145,7 +164,7 @@ for (const viewport of [
         },
       }));
       if (!composer.prompt || !composer.sendVisible || !composer.plusHidden
-        || composer.suggestionCount !== 1 || composer.injectedImage
+        || composer.suggestionCount !== 2 || composer.injectedImage
         || composer.status.context !== "Ctx 42% · 108k/258k"
         || composer.status.goal !== "Goal Active" || composer.status.git !== "🌿 main") {
         throw new Error(`Owner composer shell failed: ${JSON.stringify({ viewport, composer })}`);
@@ -156,6 +175,22 @@ for (const viewport of [
       await page.evaluate(() => document.querySelector("#commandSuggest [role=option]").click());
       if ((await page.evaluate(() => window.__composerClicks[0])) !== 0)
         throw new Error("Composer suggestion callback failed");
+      await page.locator("#promptInput").focus();
+      await page.keyboard.press("ArrowDown");
+      const selectedCommand = await page
+        .locator('#commandSuggest [aria-selected="true"]')
+        .getAttribute("id");
+      if (selectedCommand !== "command-option-1")
+        throw new Error(`Composer keyboard selection failed: ${selectedCommand}`);
+      await page.keyboard.press("Enter");
+      if ((await page.evaluate(() => window.__composerClicks[1])) !== 1)
+        throw new Error("Composer keyboard activation failed");
+      await page.evaluate(() =>
+        window.__interactionController.update(window.__modelInteraction),
+      );
+      await page
+        .locator('.interaction-backdrop[data-interaction-kind="model_select"]')
+        .waitFor();
       const first = await page.evaluate(() => {
         const sheet = document.querySelector(".interaction-sheet");
         const rect = sheet.getBoundingClientRect();
@@ -221,8 +256,72 @@ for (const viewport of [
       await page.locator(".interaction-confirm-sheet button").first().click();
       if (await page.evaluate(async () => await window.__confirmResult))
         throw new Error("Cancelled command confirmation resolved true");
+
+      await page.evaluate(() => {
+        window.__interactionController.update({
+          id: "ix-old",
+          generation: 3,
+          kind: "generic_tui",
+          title: "Old menu",
+          prompt: "Synthetic delayed interaction.",
+          options: [
+            {
+              id: "opt-slow",
+              label: "Slow option",
+              description: "Delayed synthetic response",
+              selected: true,
+              current: false,
+              disabled: false,
+            },
+          ],
+          actions: ["choose", "cancel"],
+          source: "codex-tui",
+          status: "pending",
+        });
+      });
+      await page.locator(".interaction-option").click();
+      await page.waitForFunction(() => Boolean(window.__resolveSlowInteraction));
+      await page.evaluate(() => {
+        window.__interactionController.update({
+          id: "ix-new",
+          generation: 4,
+          kind: "generic_tui",
+          title: "New menu",
+          prompt: "This interaction must survive the old response.",
+          options: [],
+          actions: ["choose", "cancel"],
+          source: "codex-tui",
+          status: "pending",
+        });
+        window.__resolveSlowInteraction({ interaction: null, resolved: true });
+      });
+      await page.waitForTimeout(60);
+      const lateResponseState = await page.evaluate(() => ({
+        title: document.getElementById("interactionTitle")?.textContent || "",
+        chooseVisible: Boolean(
+          document.querySelector(".interaction-choose")?.getClientRects().length,
+        ),
+      }));
+      if (lateResponseState.title !== "New menu" || !lateResponseState.chooseVisible) {
+        throw new Error(
+          `Late interaction response replaced current state: ${JSON.stringify(lateResponseState)}`,
+        );
+      }
+      await page.locator(".interaction-choose").click();
+      await page.locator(".interaction-backdrop").waitFor({ state: "detached" });
+      const chooseRequest = await page.evaluate(
+        () => window.__interactionRequests.at(-1),
+      );
+      if (
+        chooseRequest.interactionId !== "ix-new" ||
+        chooseRequest.action !== "choose"
+      ) {
+        throw new Error(
+          `Choose action mismatch: ${JSON.stringify(chooseRequest)}`,
+        );
+      }
     },
   );
 }
 
-console.log("faryo-owner-interaction-ui=PASS mobile=yes desktop=yes injection=text");
+console.log("faryo-owner-interaction-ui=PASS mobile=yes desktop=yes injection=text stale-response=isolated choose=explicit");
