@@ -2287,10 +2287,13 @@ def codex_structured_capture(config: Config, lines: int) -> tuple[str, str, str]
     # Older/imported sessions may not expose a rollout path; retain the Codex
     # app-server as a structured compatibility fallback.
     stored = cached_codex_thread(thread_id)
-    if not stored:
+    if stored is None:
         return None
     text = codex_thread_transcript(stored, lines)
-    return (text, thread_id, "codex-app-server") if text else None
+    # A newly created thread legitimately has zero turns until the first user
+    # message.  An empty, successfully read thread is still structured state;
+    # only a failed read should expose the lossy terminal fallback.
+    return text, thread_id, "codex-app-server"
 
 
 def rate_limit_from_response(result: dict[str, Any]) -> dict[str, Any] | None:

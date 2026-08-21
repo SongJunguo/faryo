@@ -17,6 +17,13 @@ The browser is a thin control surface. Durable conversation history belongs to
 Codex, live terminal state belongs to tmux, and runtime secrets stay below
 `~/.faryo/`.
 
+A newly created Codex thread with zero turns is a valid structured conversation,
+not an unavailable history source. Chat renders a quiet `No messages yet` state
+until the first prompt creates a durable turn. TUI startup redraws remain terminal
+evidence and may appear in Raw or the transient Live panel, but never masquerade
+as chat history. The warning fallback is reserved for an actual failure of both
+durable rollout and App Server reads.
+
 ## Gateway Workbench
 
 The authenticated Gateway home page keeps two session regions separate:

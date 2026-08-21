@@ -588,6 +588,25 @@ class CodexTranscriptTest(unittest.TestCase):
         self.assertEqual(capture, ("• structured answer", "thread-id", "codex-jsonl"))
         app_server_read.assert_not_called()
 
+    def test_structured_capture_preserves_a_valid_empty_thread(self):
+        thread = {"id": "thread-id", "rollout_path": ""}
+        stored = {"id": "thread-id", "turns": []}
+        with mock.patch.object(server, "get_pane_cwd", return_value="/workspace"), \
+             mock.patch.object(server, "active_agent_thread", return_value=thread), \
+             mock.patch.object(server, "cached_codex_thread", return_value=stored):
+            capture = server.codex_structured_capture(mock.sentinel.config, 320)
+
+        self.assertEqual(capture, ("", "thread-id", "codex-app-server"))
+
+    def test_structured_capture_uses_terminal_only_when_structured_reads_fail(self):
+        thread = {"id": "thread-id", "rollout_path": ""}
+        with mock.patch.object(server, "get_pane_cwd", return_value="/workspace"), \
+             mock.patch.object(server, "active_agent_thread", return_value=thread), \
+             mock.patch.object(server, "cached_codex_thread", return_value=None):
+            capture = server.codex_structured_capture(mock.sentinel.config, 320)
+
+        self.assertIsNone(capture)
+
     def test_stale_app_server_thread_survives_a_transient_read_failure(self):
         thread = {"turns": [{"items": [{"type": "agentMessage", "text": "cached"}]}]}
         with server._codex_thread_cache_lock:

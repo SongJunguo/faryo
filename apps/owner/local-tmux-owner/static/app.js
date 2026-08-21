@@ -1855,15 +1855,20 @@
     else lastFullCapture = capture;
     scheduleConversationHistoryRefresh(capture);
     capture = mergedConversationCapture(capture);
-    const text = capture.text || 'No output yet';
+    const isStructured = structuredCapture(capture);
+    const sourceText = String(capture.text || '');
+    const emptyStructured = isStructured && !sourceText.trim();
+    const text = emptyStructured
+      ? 'No messages yet. Ask Codex to start this conversation.'
+      : sourceText || 'No output yet';
     const rules = compactRulesForCapture(capture);
     output.dataset.captureSource = String(capture.captureSource || '');
     output.dataset.agentSource = String(capture.agentSource || '');
+    output.dataset.structuredEmpty = emptyStructured ? 'true' : 'false';
     if ($('detailsSource')) $('detailsSource').textContent = String(capture.captureSource || capture.source || 'unknown');
     syncStructuredInteraction(capture.interaction || null);
     updateStatusLineAutoExpand();
     output.classList.toggle('compact-blocks', outputMode === 'compact');
-    const isStructured = structuredCapture(capture);
     if (outputMode === 'compact') {
       try {
         renderCompactOutput(text, rules, {
