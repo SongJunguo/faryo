@@ -648,9 +648,11 @@ try {
       && state.memoryReferenceCount >= minMemoryReferences
       && state.renderFallbackCount >= minRenderFallbacks;
     const questionNavigationReady = state.questionNavigation?.markerCount >= minQuestionMarkers;
+    const canonicalSessionReady = !expectedCanonicalSession
+      || state.ownerLayout?.canonicalSession === expectedCanonicalSession;
     if (skipRenderChecks
-      ? state.domReady && (!checkOwnerLayout || state.stableBlockState?.keyedCount >= 1) && protectedResourcesReady && questionNavigationReady
-      : state.ready && protectedResourcesReady && questionNavigationReady) break;
+      ? state.domReady && (!checkOwnerLayout || state.stableBlockState?.keyedCount >= 1) && protectedResourcesReady && questionNavigationReady && canonicalSessionReady
+      : state.ready && protectedResourcesReady && questionNavigationReady && canonicalSessionReady) break;
   }
 
   const protectedResourcesReady = state.protectedLinkCount >= minProtectedLinks
@@ -659,9 +661,11 @@ try {
     && state.memoryReferenceCount >= minMemoryReferences
     && state.renderFallbackCount >= minRenderFallbacks;
   const questionNavigationReady = state.questionNavigation?.markerCount >= minQuestionMarkers;
+  const canonicalSessionReady = !expectedCanonicalSession
+    || state.ownerLayout?.canonicalSession === expectedCanonicalSession;
   if (!(skipRenderChecks
-    ? state.domReady && (!checkOwnerLayout || state.stableBlockState?.keyedCount >= 1) && protectedResourcesReady && questionNavigationReady
-    : state.ready && protectedResourcesReady && questionNavigationReady)) {
+    ? state.domReady && (!checkOwnerLayout || state.stableBlockState?.keyedCount >= 1) && protectedResourcesReady && questionNavigationReady && canonicalSessionReady
+    : state.ready && protectedResourcesReady && questionNavigationReady && canonicalSessionReady)) {
     throw new Error(`KaTeX did not appear in the live Faryo DOM: ${JSON.stringify(state)}`);
   }
   if (state.ownerTokenDomCount) {
