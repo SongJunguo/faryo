@@ -282,6 +282,10 @@ release_metadata = dict(
 release_version = release_metadata.get("version", "")
 assert re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+", release_version), "Owner release version must be semantic"
 assert (root / "docs/releases" / f"{release_version}.md").is_file(), "current source version needs release notes"
+package_version = str(project.get("version") or "")
+cli_init = (root / "src/faryo_cli/__init__.py").read_text(encoding="utf-8")
+assert release_version == f"v{package_version}", "Owner release and Python package versions must match"
+assert f'__version__ = "{package_version}"' in cli_init, "CLI runtime and package versions must match"
 assert (root / "requirements-dev.txt").is_file(), "development Python dependencies must be pinned"
 assert "faryo_resolve_python" in check_script and "faryo_resolve_node" in check_script, "canonical checks must resolve runtimes"
 python_runtime_tests = (

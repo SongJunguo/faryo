@@ -169,7 +169,7 @@ then verifies online, BFCache `pageshow`, and ordinary-reload recovery:
 
 ```bash
 FARYO_SMOKE_URL='http://127.0.0.1:8765/?token=<token>&session=<session>' \
-FARYO_SMOKE_EXPECT_RELEASE=v1.8.3 \
+FARYO_SMOKE_EXPECT_RELEASE=v1.8.4 \
 FARYO_SMOKE_EXPECT_CAPTURE_REVISION=faryo-owner-capture-3 \
   node apps/owner/local-tmux-owner/tests/browser-live-resilience.mjs
 ```
