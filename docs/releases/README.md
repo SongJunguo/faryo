@@ -9,7 +9,7 @@ fork's source-only GitHub Release notes.
 The maintained fork is source-only and Codex-focused. Use the repository root
 [`README.md`](../../README.md) for current scope, deployment, and validation.
 The current maintained release is [`v1.6.7`](v1.6.7.md). The
-[`v1.8.3`](v1.8.3.md) notes describe the next source candidate; it replaces the
-v1.7 fixed/VisualViewport keyboard heuristics with a normal-flow app shell and
-one conversation scrollport, then uses the native viewport-resize contract
-selected by an Android Edge real-device A/B.
+[`v1.8.4`](v1.8.4.md) notes describe the next source candidate. It keeps the
+native viewport-resize contract selected by an Android Edge real-device A/B,
+uses one conversation scrollport, and restores a transparent layout-managed
+composer surface with a measured dynamic tail reserve.

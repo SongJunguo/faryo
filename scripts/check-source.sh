@@ -139,6 +139,7 @@ release_checks() {
     "$ROOT/apps/owner/local-tmux-owner/static/clipboard-images.js" \
     "$ROOT/apps/owner/local-tmux-owner/static/immersive-mode.js" \
     "$ROOT/apps/owner/local-tmux-owner/static/keyboard-layout.js" \
+    "$ROOT/apps/owner/local-tmux-owner/static/composer-layout.js" \
     "$ROOT/apps/owner/local-tmux-owner/static/owner/changes-panel.mjs" \
     "$ROOT/apps/owner/local-tmux-owner/static/owner/api-client.mjs" \
     "$ROOT/apps/owner/local-tmux-owner/static/owner/attachment-controller.mjs" \
@@ -186,6 +187,7 @@ release_checks() {
   "$NODE_BIN" "$ROOT/apps/owner/local-tmux-owner/tests/clipboard-images.test.js"
   "$NODE_BIN" "$ROOT/apps/owner/local-tmux-owner/tests/immersive-mode.test.js"
   "$NODE_BIN" "$ROOT/apps/owner/local-tmux-owner/tests/keyboard-layout.test.js"
+  "$NODE_BIN" "$ROOT/apps/owner/local-tmux-owner/tests/composer-layout.test.js"
   "$NODE_BIN" --test "$ROOT/apps/owner/local-tmux-owner/tests/changes-panel.test.mjs"
   "$NODE_BIN" --test "$ROOT/apps/owner/local-tmux-owner/tests/api-client.test.mjs"
   "$NODE_BIN" --test "$ROOT/apps/owner/local-tmux-owner/tests/attachment-controller.test.mjs"
@@ -226,6 +228,7 @@ json.loads(
 )
 index = (root / "apps/owner/local-tmux-owner/static/index.html").read_text(encoding="utf-8")
 keyboard_layout_source = (root / "apps/owner/local-tmux-owner/static/keyboard-layout.js").read_text(encoding="utf-8")
+composer_layout_source = (root / "apps/owner/local-tmux-owner/static/composer-layout.js").read_text(encoding="utf-8")
 owner_style = (root / "apps/owner/local-tmux-owner/static/style.css").read_text(encoding="utf-8")
 owner_server = (root / "apps/owner/local-tmux-owner/server.py").read_text(encoding="utf-8")
 workspace_changes_source = (root / "apps/owner/local-tmux-owner/workspace_changes.py").read_text(encoding="utf-8")
@@ -360,6 +363,9 @@ assert "immersive-mode.js" in index and "immersive-mode.js" in gateway, "immersi
 assert "keyboard-layout.js?v=faryo-keyboard-layout-3" in index and "keyboard-layout.js" in gateway, "current keyboard layout controller must be loaded and proxied"
 assert "withInteractiveWidget" in keyboard_layout_source and "keyboard.overlaysContent = false" in keyboard_layout_source and "'resizes-content'" in keyboard_layout_source, "keyboard layout must enforce native viewport resizing"
 assert "overlaysContent = true" not in keyboard_layout_source and "keyboard-inset-height" not in owner_style, "retired VirtualKeyboard overlay reserve must not return"
+assert "composer-layout.js?v=__FARYO_RELEASE_VERSION__" in index and "composer-layout.js" in gateway, "transparent composer layout must be cache-busted and proxied"
+assert "ResizeObserver" in composer_layout_source and "--faryo-composer-reserve" in composer_layout_source, "composer reserve must follow measured content instead of fixed pixels"
+assert "background: transparent" in owner_style and "grid-row: 2 / 4" in owner_style, "conversation must extend behind the transparent composer"
 assert "scroll-surface.js" not in index and "scroll-surface.js" not in gateway, "retired document scroll adapter must not return"
 assert 'rel="manifest" href="/manifest.json"' in index, "every maintained PWA page must reference the root manifest"
 assert 'id="immersiveExitBtn"' in index and 'id="detailsFullscreenBtn"' in index, "fullscreen must expose explicit enter and exit controls"

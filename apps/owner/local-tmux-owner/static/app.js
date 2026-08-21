@@ -91,6 +91,7 @@
   const clipboardImageApi = window.FaryoClipboardImages || {};
   const immersiveModeApi = window.FaryoImmersiveMode || {};
   const keyboardLayoutApi = window.FaryoKeyboardLayout || {};
+  const composerLayoutApi = window.FaryoComposerLayout || {};
   document.documentElement.dataset.faryoClipboardPaste = (
     typeof clipboardImageApi.filesFromClipboard === 'function'
     && typeof clipboardImageApi.insertText === 'function'
@@ -149,7 +150,7 @@
   const isStandalone = window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone;
   const conversationScroller = outputWrap;
   document.documentElement.dataset.faryoScrollSurface = 'conversation';
-  let keyboardLayoutController = null;
+  let keyboardLayoutController = null, composerLayoutController = null;
   const OWNER_TOKEN_STORAGE_KEY = 'faryoOwnerToken:v1';
   const queryOwnerToken = params.get('token') || '';
   let ownerToken = queryOwnerToken;
@@ -338,6 +339,17 @@
     keyboardLayoutController = keyboardLayoutApi.createKeyboardLayout(window, {
       root: document.documentElement,
       onChange: (snapshot) => requestAnimationFrame(() => syncKeyboardState(snapshot)),
+    });
+  }
+  if (typeof composerLayoutApi.createComposerLayout === 'function') {
+    composerLayoutController = composerLayoutApi.createComposerLayout(window, {
+      root: document.documentElement,
+      footer: document.querySelector('footer'),
+      isTailPinned: () => viewportTailPinned || isNearBottom(),
+      onChange: ({ tailPinned }) => {
+        if (tailPinned) requestAnimationFrame(() => scrollBottom(true));
+        else updateBottomButton();
+      },
     });
   }
   restorePromptDraft();
@@ -2557,7 +2569,10 @@
     setCaptureFallback(false);
     setStatusRefresh(false);
     setFullRefresh(false);
-    if (!event.persisted) keyboardLayoutController?.destroy();
+    if (!event.persisted) {
+      keyboardLayoutController?.destroy();
+      composerLayoutController?.destroy();
+    }
   });
   document.addEventListener('visibilitychange', () => {
     setStatusRefresh(!document.hidden && headerStatusVisible());

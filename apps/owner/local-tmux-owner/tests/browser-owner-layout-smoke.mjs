@@ -12,6 +12,10 @@ const keyboardLayoutSource = await readFile(
   path.join(root, "apps/owner/local-tmux-owner/static/keyboard-layout.js"),
   "utf8",
 );
+const composerLayoutSource = await readFile(
+  path.join(root, "apps/owner/local-tmux-owner/static/composer-layout.js"),
+  "utf8",
+);
 
 await withBrowser(
   {
@@ -45,7 +49,7 @@ await withBrowser(
             </div>
           </div>
         </header>
-        <main></main>
+        <main><div id="scrollFixture" style="height: 1000px; display: flex; align-items: flex-end"><span id="lastMessage">Latest message</span></div></main>
         <footer><div class="composer"><div class="prompt-shell"></div></div></footer>
       </div>
     `);
@@ -61,6 +65,37 @@ await withBrowser(
       window.__faryoBrowserKeyboard = keyboard;
     });
     await page.addScriptTag({ content: keyboardLayoutSource });
+    await page.addScriptTag({ content: composerLayoutSource });
+
+    const composerController = await page.evaluate(() => {
+      const main = document.querySelector("main");
+      window.__faryoTailPinned = true;
+      const controller = window.FaryoComposerLayout.createComposerLayout(
+        window,
+        {
+          isTailPinned: () => window.__faryoTailPinned,
+          onChange: ({ tailPinned }) => {
+            if (tailPinned)
+              requestAnimationFrame(() => {
+                main.scrollTop = main.scrollHeight;
+              });
+          },
+        },
+      );
+      window.__faryoComposerController = controller;
+      return {
+        snapshot: controller.getSnapshot(),
+        mode: document.documentElement.dataset.faryoComposerLayout,
+      };
+    });
+    if (
+      composerController.snapshot.height <= 0 ||
+      composerController.mode !== "transparent-overlay"
+    ) {
+      throw new Error(
+        `Transparent composer controller failed: ${JSON.stringify(composerController)}`,
+      );
+    }
 
     const keyboardController = await page.evaluate(async () => {
       const keyboard = window.__faryoBrowserKeyboard;
@@ -168,18 +203,32 @@ await withBrowser(
       page.evaluate(() => {
         const app = document.querySelector(".app").getBoundingClientRect();
         const main = document.querySelector("main");
-        const footer = document.querySelector("footer").getBoundingClientRect();
+        const footerElement = document.querySelector("footer");
+        const footer = footerElement.getBoundingClientRect();
+        main.scrollTop = main.scrollHeight;
+        const lastMessage = document
+          .getElementById("lastMessage")
+          .getBoundingClientRect();
         return {
           appHeight: app.height,
           mainHeight: main.getBoundingClientRect().height,
+          mainBottom: main.getBoundingClientRect().bottom,
           mainPaddingBottom: Number.parseFloat(
             getComputedStyle(main).paddingBottom,
           ),
           mainOverflow: getComputedStyle(main).overflowY,
           mainOverflowAnchor: getComputedStyle(main).overflowAnchor,
-          footerPosition: getComputedStyle(document.querySelector("footer"))
-            .position,
+          footerPosition: getComputedStyle(footerElement).position,
+          footerBackground: getComputedStyle(footerElement).backgroundColor,
+          footerHeight: footer.height,
+          footerTop: footer.top,
           footerBottom: footer.bottom,
+          reserve: Number.parseFloat(
+            getComputedStyle(document.documentElement).getPropertyValue(
+              "--faryo-composer-reserve",
+            ),
+          ),
+          lastMessageBottom: lastMessage.bottom,
           innerHeight,
           documentOverflow:
             (document.scrollingElement || document.documentElement)
@@ -194,14 +243,27 @@ await withBrowser(
       keyboardClosed.mainOverflow !== "auto" ||
       keyboardClosed.mainOverflowAnchor !== "none" ||
       keyboardClosed.footerPosition !== "relative" ||
+      keyboardClosed.footerBackground !== "rgba(0, 0, 0, 0)" ||
       keyboardClosed.documentOverflow ||
       keyboardOpen.documentOverflow ||
-      keyboardClosed.mainPaddingBottom > 40 ||
+      Math.abs(
+        keyboardClosed.reserve - Math.ceil(keyboardClosed.footerHeight),
+      ) > 1 ||
+      Math.abs(keyboardClosed.mainPaddingBottom - keyboardClosed.reserve - 18) >
+        1 ||
+      Math.abs(keyboardOpen.mainPaddingBottom - keyboardOpen.reserve - 18) >
+        1 ||
       Math.abs(keyboardClosed.mainHeight - keyboardOpen.mainHeight - 240) > 1 ||
+      Math.abs(keyboardClosed.mainBottom - keyboardClosed.innerHeight) > 1 ||
+      Math.abs(keyboardOpen.mainBottom - keyboardOpen.innerHeight) > 1 ||
       Math.abs(keyboardClosed.footerBottom - keyboardOpen.footerBottom - 240) >
         1 ||
       Math.abs(keyboardClosed.footerBottom - keyboardClosed.innerHeight) > 1 ||
-      Math.abs(keyboardOpen.footerBottom - keyboardOpen.innerHeight) > 1
+      Math.abs(keyboardOpen.footerBottom - keyboardOpen.innerHeight) > 1 ||
+      keyboardClosed.footerTop >= keyboardClosed.mainBottom ||
+      keyboardOpen.footerTop >= keyboardOpen.mainBottom ||
+      keyboardClosed.lastMessageBottom > keyboardClosed.footerTop - 17 ||
+      keyboardOpen.lastMessageBottom > keyboardOpen.footerTop - 17
     ) {
       throw new Error(
         `Keyboard app shell violated its grid contract: ${JSON.stringify({ keyboardClosed, keyboardOpen })}`,
@@ -216,6 +278,7 @@ await withBrowser(
         getComputedStyle(document.querySelector("footer")).paddingBottom,
       );
       root.classList.add("keyboard-open");
+      window.__faryoComposerController.update(true);
       const footer = document.querySelector("footer");
       const shell = document.querySelector(".prompt-shell");
       const app = document.querySelector(".app");
@@ -226,6 +289,11 @@ await withBrowser(
         focusedPadding: Number.parseFloat(
           getComputedStyle(footer).paddingBottom,
         ),
+        transparent: getComputedStyle(footer).backgroundColor,
+        reserve: Number.parseFloat(
+          getComputedStyle(root).getPropertyValue("--faryo-composer-reserve"),
+        ),
+        footerHeight: footer.getBoundingClientRect().height,
         shellToAppBottom:
           app.getBoundingClientRect().bottom -
           shell.getBoundingClientRect().bottom,
@@ -235,15 +303,106 @@ await withBrowser(
       !focusedFooter.coarsePointer ||
       focusedFooter.idlePadding < 10 ||
       focusedFooter.focusedPadding !== 6 ||
+      focusedFooter.transparent !== "rgba(0, 0, 0, 0)" ||
+      Math.abs(focusedFooter.reserve - Math.ceil(focusedFooter.footerHeight)) >
+        1 ||
       Math.abs(focusedFooter.shellToAppBottom - 6) > 1
     ) {
       throw new Error(
         `Focused mobile composer retained an avoidable bottom gap: ${JSON.stringify(focusedFooter)}`,
       );
     }
+
+    const dynamicComposer = await page.evaluate(async () => {
+      const main = document.querySelector("main");
+      const shell = document.querySelector(".prompt-shell");
+      main.scrollTop = main.scrollHeight;
+      const before = Number.parseFloat(
+        getComputedStyle(document.documentElement).getPropertyValue(
+          "--faryo-composer-reserve",
+        ),
+      );
+      shell.style.minHeight = "132px";
+      await new Promise((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(resolve)),
+      );
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+      const after = Number.parseFloat(
+        getComputedStyle(document.documentElement).getPropertyValue(
+          "--faryo-composer-reserve",
+        ),
+      );
+      return {
+        before,
+        after,
+        footerHeight: document.querySelector("footer").getBoundingClientRect()
+          .height,
+        tailGap: main.scrollHeight - main.scrollTop - main.clientHeight,
+      };
+    });
+    if (
+      dynamicComposer.after <= dynamicComposer.before ||
+      Math.abs(
+        dynamicComposer.after - Math.ceil(dynamicComposer.footerHeight),
+      ) > 1 ||
+      dynamicComposer.tailGap > 1
+    ) {
+      throw new Error(
+        `Dynamic composer reserve lost the conversation tail: ${JSON.stringify(dynamicComposer)}`,
+      );
+    }
+
+    const historyAnchor = await page.evaluate(async () => {
+      const main = document.querySelector("main");
+      const shell = document.querySelector(".prompt-shell");
+      window.__faryoTailPinned = false;
+      main.scrollTop = 180;
+      const before = main.scrollTop;
+      shell.style.minHeight = "154px";
+      await new Promise((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(resolve)),
+      );
+      return { before, after: main.scrollTop };
+    });
+    if (Math.abs(historyAnchor.after - historyAnchor.before) > 1) {
+      throw new Error(
+        `Composer growth pulled a reader away from older history: ${JSON.stringify(historyAnchor)}`,
+      );
+    }
+
+    const expandedHeader = await page.evaluate(() => {
+      const app = document.querySelector(".app");
+      const header = document.querySelector("header");
+      const main = document.querySelector("main");
+      const footer = document.querySelector("footer");
+      app.classList.remove("header-collapsed");
+      header.classList.remove("collapsed");
+      const appRect = app.getBoundingClientRect();
+      const headerRect = header.getBoundingClientRect();
+      const mainRect = main.getBoundingClientRect();
+      const footerRect = footer.getBoundingClientRect();
+      return {
+        headerBottom: headerRect.bottom,
+        mainTop: mainRect.top,
+        mainBottom: mainRect.bottom,
+        footerBottom: footerRect.bottom,
+        appBottom: appRect.bottom,
+      };
+    });
+    if (
+      expandedHeader.mainTop < expandedHeader.headerBottom - 1 ||
+      Math.abs(expandedHeader.mainBottom - expandedHeader.appBottom) > 1 ||
+      Math.abs(expandedHeader.footerBottom - expandedHeader.appBottom) > 1
+    ) {
+      throw new Error(
+        `Expanded header broke the overlapping Grid tracks: ${JSON.stringify(expandedHeader)}`,
+      );
+    }
+
+    await page.evaluate(() => window.__faryoComposerController.destroy());
   },
 );
 
 console.log(
-  "faryo-owner-layout=PASS collapsed-label=safe keyboard-app-shell=viewport-resize",
+  "faryo-owner-layout=PASS collapsed-label=safe keyboard-app-shell=viewport-resize composer=transparent-overlay",
 );

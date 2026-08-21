@@ -170,7 +170,9 @@ the same Gateway protocol rather than create a second agent backend.
 
 Faryo v1.8 uses one `100dvh` app shell and one bounded `main` conversation
 scrollport in direct Owner, Gateway, desktop and installed PWA views. The
-composer is a normal grid row rather than a fixed overlay. The viewport uses
+composer is anchored in the bottom Grid track rather than to the viewport; the
+conversation spans behind its transparent surroundings, while a measured
+footer-height reserve keeps the latest message above the prompt shell. The viewport uses
 `interactive-widget=resizes-content`; if the VirtualKeyboard API exists, Faryo
 explicitly leaves `overlaysContent=false`. The browser therefore resizes the
 three-row app shell, and Faryo computes no keyboard height from API insets,
