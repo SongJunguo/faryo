@@ -231,10 +231,14 @@ class FaryoCliTest(unittest.TestCase):
             "FARYO_OWNER_TOKEN": "private",
             "GATEWAY_AUTH_CONFIG": "/private/auth.json",
             "PYTHONPATH": f"{root}/src:/workspace/python",
+            "PWD": root,
+            "OLDPWD": "/workspace/previous",
         })
 
         self.assertEqual(environment["HOME"], "/home/example")
         self.assertEqual(environment["PYTHONPATH"], "/workspace/python")
+        self.assertNotIn("PWD", environment)
+        self.assertEqual(environment["OLDPWD"], "/workspace/previous")
         self.assertFalse(any(name.startswith(("FARYO_", "GATEWAY_")) for name in environment))
 
     def test_legacy_start_is_idempotent_and_keeps_gateway_managed(self) -> None:

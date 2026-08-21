@@ -41,21 +41,23 @@ class AgentSessionTest(unittest.TestCase):
                 f"FARYO_INSTALL_ROOT={root}\n"
                 "FARYO_OWNER_TOKEN=private\n"
                 f"PYTHONPATH={root}/src:/workspace/python\n"
+                f"PWD={root}\n"
                 "KEEP_ME=yes\n"
             ),
             "",
         )
         updated = server.subprocess.CompletedProcess(["tmux"], 0, "", "")
-        with mock.patch.object(server, "tmux", side_effect=[shown, updated, updated, updated]) as tmux:
+        with mock.patch.object(server, "tmux", side_effect=[shown, updated, updated, updated, updated]) as tmux:
             changed = server.scrub_tmux_global_environment(self.config)
 
         self.assertEqual(
             set(changed),
-            {"FARYO_INSTALL_ROOT", "FARYO_OWNER_TOKEN", "PYTHONPATH"},
+            {"FARYO_INSTALL_ROOT", "FARYO_OWNER_TOKEN", "PWD", "PYTHONPATH"},
         )
         commands = [call.args[1] for call in tmux.call_args_list[1:]]
         self.assertIn(["set-environment", "-gu", "FARYO_INSTALL_ROOT"], commands)
         self.assertIn(["set-environment", "-gu", "FARYO_OWNER_TOKEN"], commands)
+        self.assertIn(["set-environment", "-gu", "PWD"], commands)
         self.assertIn(
             ["set-environment", "-g", "PYTHONPATH", "/workspace/python"],
             commands,

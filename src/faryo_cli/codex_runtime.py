@@ -161,11 +161,21 @@ def sanitized_agent_environment(base: Mapping[str, str] | None = None) -> dict[s
         for name in ("FARYO_INSTALL_ROOT", "FARYO_ROOT")
         if (value := str(environment.get(name) or "").strip())
     ]
+    normalized_roots = [root.resolve(strict=False) for root in roots]
+    for name in ("PWD", "OLDPWD"):
+        value = str(environment.get(name) or "").strip()
+        if not value:
+            continue
+        try:
+            path = Path(value).expanduser().resolve(strict=False)
+        except OSError:
+            continue
+        if any(path == root or root in path.parents for root in normalized_roots):
+            environment.pop(name, None)
     python_path = str(environment.get("PYTHONPATH") or "")
     if python_path and roots:
         internal_paths = {
-            str((root / "src").resolve(strict=False))
-            for root in roots
+            str((root / "src").resolve(strict=False)) for root in roots
         }
         kept = []
         for entry in python_path.split(os.pathsep):
