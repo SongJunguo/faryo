@@ -341,6 +341,9 @@ class OwnerReadRoutes:
                 "ok": True,
                 **payload,
                 "activeCount": core.active_agent_count(self.support.config) + len(web_items),
+                # Body-free runtime health lets Gateway distinguish a healthy
+                # Owner from a private App Server transport that is reconnecting.
+                "appServerRuntime": self.support.runtime.status(),
                 "updatedAt": core.now_iso(),
             }
 

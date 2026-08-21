@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "faryo"
-version = "1.8.6"
-description = "Self-hosted Codex workbench for tmux-backed Ubuntu sessions"
+version = "1.9.0"
+description = "Self-hosted Codex Web UI with App Server streaming and tmux compatibility"
 readme = "README.md"
 requires-python = ">=3.10"
 license = "MIT"

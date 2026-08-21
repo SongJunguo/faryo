@@ -1457,14 +1457,32 @@ function renderWorkbench(data) {
     pkg = packages[0],
     packageItems = pkg ? [pkg] : [],
     allowedCommands = new Set(data.newSessionCommands || ["codex"]),
+    readyEntries = entries.filter(
+      (entry) =>
+        entry.state !== "offline" &&
+        entry.state !== "error" &&
+        entry.appServerReady !== false,
+    ),
+    appServerState = readyEntries.length
+      ? readyEntries.some((entry) => entry.appServerReady === true)
+        ? "ready"
+        : "unknown"
+      : entries.find((entry) => entry.appServerState)?.appServerState ||
+        "unavailable",
     launchers = [
       {
         id: "new-codex",
         command: "codex",
         label: "Codex",
         backend: "web-managed",
-        description: "New streaming web session",
-        entries,
+        description: readyEntries.length
+          ? appServerState === "ready"
+            ? "Streaming runtime ready"
+            : "New streaming web session"
+          : "Codex runtime is reconnecting",
+        disabled: !readyEntries.length,
+        runtimeState: appServerState,
+        entries: readyEntries,
         cwdChoices,
       },
     ].filter((item) => allowedCommands.has(item.command));

@@ -8,19 +8,26 @@ ports, and helper scripts are implementation details.
 
 ```text
 systemd --user
-├── faryo-owner.service    local Codex/tmux control API on 127.0.0.1:8765
-└── faryo-gateway.service  authenticated browser UI on 127.0.0.1:8780
+├── faryo-appserver.service  official Codex App Server on a private Unix socket
+├── faryo-owner.service      Starlette/Uvicorn control API on 127.0.0.1:8765
+└── faryo-gateway.service    authenticated browser UI on 127.0.0.1:8780
 
 tmux
-└── faryo1, faryo2, ...    the real Codex CLI processes and TUI state
+└── existing sessions        terminal-managed Codex CLI/TUI compatibility mode
 ```
 
 Owner is the private workstation-side service that reads Codex history and
-controls tmux. Gateway is the browser-facing login, navigation, and reverse
-proxy layer. They use two ports so the privileged local control API never needs
-to become the public web entry. Both bind only to loopback by default.
+coordinates App Server session actors, SSE, attachments and the tmux adapter.
+Gateway is the browser-facing login, navigation, and reverse-proxy layer. The
+two Web services use separate ports so the privileged local control API never
+needs to become the public entry. Both bind only to loopback by default. App
+Server exposes no TCP port; Owner reaches its mode-`700` Unix socket locally.
 
-Stopping or restarting Owner/Gateway does not stop or resize Codex tmux sessions.
+Restarting Owner or Gateway does not stop App Server or resize Codex tmux
+sessions. `faryo restart` deliberately keeps App Server alive, so an active
+Web-managed turn can continue while the Web layers update. `faryo stop` also
+stops App Server and therefore should not be used during an active Web-managed
+turn; it still preserves rollout history, registry data and every tmux session.
 
 ## Requirements
 
@@ -118,6 +125,7 @@ Do not add a fixed NVM path unless pinning is intentional.
 └── state/
 
 ~/.config/systemd/user/
+├── faryo-appserver.service
 ├── faryo-owner.service
 └── faryo-gateway.service
 
@@ -127,9 +135,10 @@ Do not add a fixed NVM path unless pinning is intentional.
 ```
 
 Each service unit pins the exact active version directory. Update and rollback
-atomically change `current`, rewrite both units, restart them, and pass a health
-gate. This avoids a half-written symlink or package update changing a running
-service unexpectedly.
+atomically change `current`, rewrite all three units, preserve the running App
+Server where possible, restart the Web layers, and pass a health gate. This
+avoids a half-written symlink or package update changing a running service
+unexpectedly.
 
 The private venv contains the installed Faryo package, so service units do not
 export a source `PYTHONPATH`. Owner also removes service-only Faryo/Gateway
@@ -143,10 +152,11 @@ state, attachment data, delivery metadata, and other private runtime state.
 ```bash
 faryo doctor              # read-only dependency, permission, bind, and health checks
 faryo status --json       # privacy-safe machine-readable service summary
-faryo start               # start both web services and wait for health
-faryo stop                # stop web services only; preserve all tmux sessions
-faryo restart             # restart and health-check both services
+faryo start               # start App Server plus both Web services and wait for health
+faryo stop                # stop Faryo services; preserve history and all tmux sessions
+faryo restart             # keep App Server alive; restart and check both Web services
 faryo open                # open the loopback Gateway without exposing Owner token
+faryo logs appserver      # bounded private-runtime journal
 faryo logs owner          # bounded user journal
 faryo logs gateway
 ```

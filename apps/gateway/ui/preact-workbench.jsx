@@ -68,13 +68,15 @@ function PackageCard({ item, actions }) {
 
 function LauncherCard({ item, actions }) {
   const [starting, setStarting] = useState(false);
+  const disabled = starting || item.disabled;
   return (
     <button
       type="button"
       class="session-card launcher-card"
-      disabled={starting}
+      disabled={disabled}
+      data-runtime-state={item.runtimeState || "unknown"}
       onClick={async () => {
-        if (starting) return;
+        if (disabled) return;
         setStarting(true);
         try {
           await actions.startLauncher(item);
@@ -85,7 +87,11 @@ function LauncherCard({ item, actions }) {
     >
       <div>
         <div class="session-title">
-          {starting ? `Starting ${item.label}…` : `Start ${item.label}`}
+          {starting
+            ? `Starting ${item.label}…`
+            : item.disabled
+              ? `${item.label} unavailable`
+              : `Start ${item.label}`}
         </div>
         <div class="session-meta">
           {starting ? "Creating session" : item.description || "New session"}
@@ -253,6 +259,10 @@ export function createWorkbenchRenderer(options) {
     return container.firstElementChild;
   }
   function renderError(text) {
+    renderInto(
+      <Empty text="Codex launcher unavailable while Faryo reconnects" />,
+      containers.launchers,
+    );
     renderInto(<Empty text={text} />, containers.activeSessions);
     renderInto(<Empty text={text} />, containers.sessions);
   }

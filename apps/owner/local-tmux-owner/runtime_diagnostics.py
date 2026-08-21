@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 
 def capability_payload(release: str, app_server_configured: bool, metadata_available: bool) -> dict[str, Any]:
@@ -15,6 +15,7 @@ def capability_payload(release: str, app_server_configured: bool, metadata_avail
         "runtime": "codex",
         "features": {
             "archiveRestore": True,
+            "appServerStreaming": True,
             "bodyFreeAttention": True,
             "commandCatalog": True,
             "diagnostics": True,
@@ -33,10 +34,14 @@ def capability_payload(release: str, app_server_configured: bool, metadata_avail
         },
         "protocol": {
             "appServerConfigured": bool(app_server_configured),
+            "eventStream": "cursor-replay-v1",
+            "ownerHttp": "asgi-v1",
             "pendingQueue": "unsupported",
             "queuedSendNow": "escape-when-advertised",
             "tuiInteraction": "v1",
             "turnSteer": "not-used-for-tui-owned-turns",
+            "webManagedWriter": "codex-app-server",
+            "terminalManagedWriter": "tmux-tui",
         },
     }
 

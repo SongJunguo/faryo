@@ -1,8 +1,10 @@
 # Faryo Owner
 
-Faryo Owner is the local execution component. It exposes a loopback-only web
-control surface for tmux-backed work sessions and is reached through Faryo
-Gateway or a configured reverse tunnel.
+Faryo Owner is the local execution component. It exposes a loopback-only
+Starlette/Uvicorn control surface and is reached through Faryo Gateway or a
+configured reverse tunnel. New Web-managed sessions use the official Codex App
+Server over a private Unix WebSocket; existing tmux-backed sessions remain an
+explicit terminal-managed compatibility path.
 
 The maintained fork validates Owner against an existing Ubuntu/Linux Codex TUI.
 Other inherited terminal profiles are compatibility paths, not current support
@@ -10,8 +12,9 @@ claims.
 
 ## Runtime Boundary
 
-Owner does not own public login, domain routing, Caddy, or the gateway workbench.
-It should bind only to `127.0.0.1`.
+Owner does not own public login, domain routing, Caddy, or the Gateway
+workbench. It should bind only to `127.0.0.1`. The App Server socket is local
+filesystem state and is never routed by Gateway.
 
 Runtime configuration defaults to:
 
@@ -25,11 +28,14 @@ Runtime configuration defaults to:
 ```bash
 faryo status
 faryo restart
+faryo logs appserver
 faryo logs owner
 ```
 
-The unified installer creates and manages direct `faryo-owner.service` and
-preserves the Owner token and explicit start roots. The old
+The unified installer creates and manages `faryo-appserver.service` plus direct
+`faryo-owner.service`, and preserves the Owner token, Web-session registry and
+explicit start roots. An Owner restart leaves App Server running so an active
+turn can continue and reconnect. The old
 `local-tmux-owner` service tmux plus keepalive timer is a rollback-only v1.4
 compatibility path, not the maintained production supervisor.
 
@@ -43,6 +49,28 @@ capture; it is never applied to a running Codex TUI.
 
 Use `/health` for liveness and `/api/status` for authenticated runtime checks.
 The status payload includes the source version for deployment acceptance.
+`/api/capabilities` exposes only body-free protocol/runtime health; it never
+includes a prompt, answer, cwd, token or private socket path.
+
+## Internal architecture
+
+Starlette routes and Uvicorn own only HTTP parsing, authentication middleware,
+SSE response lifetime, static files and process lifespan. The Codex protocol
+client, single-writer `WebSessionActor`, bounded replay journal, request broker,
+registry and history projection are framework-neutral Python modules. This
+keeps the hard state semantics independently testable and avoids binding
+conversation logic to a Web framework.
+
+Web-managed sessions receive stable `thread`/`turn`/`item` notifications from
+the persistent App Server service. Agent-message deltas update one keyed item;
+the final item replaces that same slot and later converges to Codex rollout
+JSONL. The replay journal is count- and byte-bounded and stores control metadata,
+not a second persistent copy of conversation bodies.
+
+The old `ThreadingHTTPServer` production entry has been removed. The remaining
+synchronous `codex_app_server.py` helper is intentionally restricted to
+terminal-managed compatibility operations such as reading or archiving an
+existing TUI-owned thread; it is not a second writer for Web-managed sessions.
 
 The session page participates in Gateway's root-scoped standalone PWA and also
 offers a user-activated Fullscreen API mode. Browser chrome is never hidden

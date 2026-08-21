@@ -77,6 +77,7 @@ class WorkbenchService:
         limit_reached = active_count >= max_running
         raw_active = result.get("activeSessions", []) if result.get("ok") and isinstance(result.get("activeSessions"), list) else []
         raw_history = result.get("sessions", []) if result.get("ok") and isinstance(result.get("sessions"), list) else []
+        runtime = result.get("appServerRuntime") if isinstance(result.get("appServerRuntime"), dict) else {}
         active_sessions = [self.session_item(item, route, result, limit_reached) for item in raw_active if isinstance(item, dict)]
         sessions = [self.session_item(item, route, result, limit_reached) for item in raw_history if isinstance(item, dict)]
         return {
@@ -86,6 +87,8 @@ class WorkbenchService:
             "activeCount": active_count,
             "maxRunning": max_running,
             "canCreate": not limit_reached,
+            "appServerReady": bool(runtime.get("ready")) if runtime else None,
+            "appServerState": str(runtime.get("state") or "unknown") if runtime else "unknown",
         }
 
     def payload(self, username: str, history_page: int = 1, history_filters: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -113,7 +116,16 @@ class WorkbenchService:
         start = (page - 1) * self.legacy.HISTORY_PAGE_SIZE
         entries = []
         for item in [self.backend_status_callback(route) for route in routes]:
-            item.update({key: route_payloads[item["id"]][key] for key in ("activeCount", "maxRunning", "canCreate")})
+            route_payload = route_payloads[item["id"]]
+            item.update({
+                "activeCount": route_payload["activeCount"],
+                "maxRunning": route_payload["maxRunning"],
+                "canCreate": route_payload["canCreate"],
+                # An older Owner does not publish runtime health.  Keep that
+                # rolling-upgrade case usable instead of treating unknown as down.
+                "appServerReady": route_payload.get("appServerReady"),
+                "appServerState": str(route_payload.get("appServerState") or "unknown"),
+            })
             entries.append(item)
         cwd_choices = {}
         for route in routes:

@@ -24,7 +24,7 @@ from faryo_cli.updates import update_application
 
 
 def parser() -> argparse.ArgumentParser:
-    root = argparse.ArgumentParser(prog="faryo", description="Manage the local Faryo Owner and Gateway")
+    root = argparse.ArgumentParser(prog="faryo", description="Manage the local Faryo App Server, Owner, and Gateway")
     root.add_argument("--version", action="version", version=f"Faryo {__version__}")
     commands = root.add_subparsers(dest="command", required=True, metavar="COMMAND")
     for name, help_text in (
@@ -34,9 +34,9 @@ def parser() -> argparse.ArgumentParser:
         command = commands.add_parser(name, help=help_text)
         command.add_argument("--json", action="store_true", help="Print privacy-safe machine-readable JSON")
     for name, help_text in (
-        ("start", "Start Owner and Gateway"),
-        ("stop", "Stop Owner and Gateway without stopping Codex tmux sessions"),
-        ("restart", "Restart Owner and Gateway, then wait for health"),
+        ("start", "Start App Server, Owner, and Gateway"),
+        ("stop", "Stop Faryo services without stopping Codex tmux sessions"),
+        ("restart", "Keep App Server alive; restart Owner and Gateway, then wait for health"),
     ):
         commands.add_parser(name, help=help_text)
     open_command = commands.add_parser("open", help="Open the local Gateway")

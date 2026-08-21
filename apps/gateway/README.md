@@ -10,13 +10,16 @@ part of the current acceptance matrix.
 
 ## Runtime Boundary
 
-Gateway does not own the local tmux execution surface. It only routes to owner
-components through configured loopback ports or reverse tunnels.
+Gateway does not own the local Codex/App Server or tmux execution surface. It
+only routes to Owner components through configured loopback ports or reverse
+tunnels.
 
-For a single-machine deployment, both services stay on loopback:
+For a single-machine deployment, both HTTP services stay on loopback:
 
 ```text
 public HTTPS edge -> 127.0.0.1:8780 Gateway -> 127.0.0.1:8765 Owner
+                                                    |
+                                                    `-> private App Server Unix socket
 ```
 
 Gateway performs browser login and injects the Owner token while proxying. The
@@ -144,12 +147,19 @@ uses `..` as the first Folders row for parent navigation, collapses long
 breadcrumbs, filters the current page without recursive search, and keeps
 `Start Codex here` fixed outside the scrolling list. Directory choices
 still come from Owner, carry its HMAC selection token, and are revalidated by
-Owner before tmux starts. The same sheet offers Default, 272K, 1M and a bounded
+Owner before the Web-managed session starts. The same sheet offers Default,
+272K, 1M and a bounded
 custom K-token context window. Default sends no override. Custom values are
 validated independently by Gateway and Owner, then become one-off Codex
 `model_context_window` and 90% auto-compaction overrides. History-card body
 clicks remain the zero-dialog default resume path; `Options` exposes the same
 folder/context controls for an explicit resume.
+
+The launcher is health-aware. Owner returns only a body-free App Server state,
+and Gateway shows the launcher as ready, reconnecting or unavailable instead of
+leaving the server-rendered `Loading launchers…` placeholder indefinitely. An
+older Owner that does not yet publish this field remains usable during a rolling
+upgrade; explicit `false` is the only value that disables Web-managed launch.
 
 See [runbook.md](runbook.md) for Cloudflare Tunnel, first login, verification,
 and rollback instructions. Internet-facing deployments that can steer agents

@@ -6,15 +6,14 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
 **Faryo is an open-source, self-hosted Codex CLI Web UI and mobile agent
-workbench for the same live `tmux`-backed coding-agent session on an
-Ubuntu/Linux workstation.**
+workbench for an Ubuntu/Linux workstation.**
 
-Use it from a phone or desktop to read structured Codex history, render
-Markdown and LaTeX with local KaTeX, inspect live terminal activity, send
-reliable follow-ups, attach files, manage sessions, approve or interrupt work,
-and return to the same TUI. Faryo is a lightweight Codex agent UI and session
-harness over your existing terminal—not remote desktop, a hosted IDE, a generic
-browser terminal, or a second AI chat history.
+Use it from a phone or desktop to stream structured Codex answers, render
+Markdown and LaTeX with local KaTeX, send reliable follow-ups, attach files,
+manage sessions, approve or interrupt work, and keep existing tmux/TUI sessions
+available through a compatibility view. Faryo is a lightweight Codex agent UI
+and session harness—not remote desktop, a hosted IDE, or a generic browser
+terminal.
 
 [Install](#installation) · [Screenshots](#real-ui-screenshots) ·
 [Features](#current-functionality) · [Security](#security-boundary) ·
@@ -36,15 +35,20 @@ Codex CLI. Faryo uses its own name and logo and includes no OpenAI brand assets.
 
 ## Why Faryo
 
-Most lightweight tmux web bridges can only reproduce terminal text. This project
-uses Codex's structured rollout history for the reading experience while keeping
-the existing tmux TUI as the execution surface.
+Most lightweight tmux web bridges can only reproduce terminal text. Faryo uses
+the official Codex App Server for new Web-managed sessions and Codex's rollout
+history for durable convergence, while preserving existing terminal-managed
+tmux sessions as an explicit compatibility mode.
 
 - **Formula-first reading:** original Markdown and TeX render through a safe AST
   pipeline and local KaTeX, including tables, cases, matrices, indexed operators,
   and wide display equations.
-- **One real session:** phone, desktop browser, and terminal all control the same
-  live Codex/tmux session instead of creating a detached web chat.
+- **Explicit session ownership:** new Web sessions stream through one persistent
+  Codex App Server writer; existing terminal sessions keep their tmux/TUI writer
+  and are never silently taken over by the browser.
+- **Real answer streaming:** stable item identities, bounded delta batching,
+  cursor replay and snapshot recovery show the answer while Codex is producing
+  it, then converge in place to the durable rollout without duplicate blocks.
 - **Long-conversation navigation:** structured history stays bounded, and a
   fast-scroll question rail jumps between prior user turns.
 - **Mobile immersive reading:** installable standalone PWA plus an explicit,
@@ -88,12 +92,14 @@ acceptance path is:
 
 ```text
 Ubuntu/Linux workstation
-  -> tmux
-  -> Codex CLI
-  -> Faryo Owner on loopback
+  -> Faryo Codex App Server on a private Unix socket
+  -> Faryo Owner ASGI on loopback
   -> Faryo Gateway on loopback
   -> Cloudflare Tunnel + Access (or another hardened HTTPS edge)
   -> current Chrome or Microsoft Edge on phone/desktop
+
+Existing terminal-managed compatibility path:
+  tmux -> Codex CLI/TUI -> Faryo Owner
 ```
 
 This standalone project does **not** currently publish or maintain binary
@@ -102,15 +108,20 @@ Historical distribution and non-Codex platform paths may remain in the tree for
 upstream compatibility, but they are not part of this project's current validation
 or support claims.
 
-Current release: [Faryo 1.6.7](https://github.com/SongJunguo/faryo-codex-web-ui/releases/tag/v1.6.7).
+Current source line: **Faryo 1.9.0**. Latest tagged source release:
+[Faryo 1.6.7](https://github.com/SongJunguo/faryo-codex-web-ui/releases/tag/v1.6.7).
 
 ## Current Functionality
 
 ### Structured Codex conversation
 
-- Reads finalized user/assistant messages incrementally from Codex rollout JSONL.
-- Uses Codex App Server for thread lifecycle operations and as a structured
-  compatibility fallback; tmux capture remains conservative terminal evidence.
+- Streams new Web-managed threads through Codex App Server `thread`, `turn`, and
+  `item` lifecycle events, including agent-message deltas and final items.
+- Treats Codex rollout JSONL as the durable final source. An Owner restart can
+  reconnect to the independent App Server service and recover the active turn
+  without inventing a second message database.
+- Keeps existing tmux/TUI threads terminal-managed; tmux capture remains
+  conservative live evidence and never becomes a competing writer.
 - Keeps the initial payload to at most 12 recent complete turns, then exposes
   older turns through a revision-bound cursor API. Formula-heavy answers cannot
   silently erase the complete question index.
@@ -161,9 +172,13 @@ micromark -> mdast -> CommonMark/GFM/math nodes -> safe HTML -> KaTeX
 
 - Keeps an immutable session, message ID, text, and attachment snapshot across
   retries.
-- Serializes one tmux composer per session without blocking unrelated sessions.
-- Confirms Codex submission from exact rollout, new queue, or safe idle-composer
-  evidence instead of treating every cleared input as success.
+- Sends a Web-managed message once through App Server `turn/start`, returns a
+  fast idempotent acknowledgement even when the protocol response is slow, and
+  converges from official item events.
+- Serializes one tmux composer per terminal-managed session without blocking
+  unrelated sessions. That compatibility path still confirms submission from
+  exact rollout, new queue, or safe idle-composer evidence instead of treating
+  every cleared input as success.
 - Persists minimal `pasted`/`accepted` idempotency state with mode-`600` files;
   message bodies and rollout paths are not stored.
 - Returns an explicit ambiguous failure when evidence is insufficient, without
@@ -198,9 +213,10 @@ micromark -> mdast -> CommonMark/GFM/math nodes -> safe HTML -> KaTeX
   and a 25 MiB server-side limit for each file.
 - Shows agent-reported context used/window and weekly quota when available.
 - Shows a session-scoped `Default`/`Fast` speed button beside the model. It
-  submits Codex's exact `/fast` local command once, preserves any unsent browser
-  draft, disables itself while Codex is busy or waiting on another interaction,
-  and never changes another tmux conversation or the global default.
+  submits the matching structured App Server command or Codex's exact `/fast`
+  TUI command once, preserves any unsent browser draft, disables itself while
+  Codex is busy or waiting on another interaction, and never changes another
+  conversation or the global default.
 - Shows the current Codex Goal state as a compact header pill. Clicking it loads
   the current objective, status, elapsed time, and available budget fields from
   an authenticated, no-store endpoint; closing the panel clears that text from
@@ -208,7 +224,8 @@ micromark -> mdast -> CommonMark/GFM/math nodes -> safe HTML -> KaTeX
   audit, logs, or browser storage.
 - Opens fresh, reloaded, and newly selected conversations at the latest output.
 - Preserves the main reading position during structured refreshes.
-- Keeps up to 180 lines from the current turn in an expanded Live tmux panel,
+- Keeps up to 180 lines from the current turn in an expanded Live tmux panel for
+  terminal-managed sessions,
   preserves the same DOM node and manual scroll position, pauses updates while
   its text is selected, and offers one-click copy of the visible terminal text.
 - Uses a versioned slash-command catalog populated by a private, read-only TUI
@@ -304,15 +321,18 @@ micromark -> mdast -> CommonMark/GFM/math nodes -> safe HTML -> KaTeX
 phone / desktop browser
   -> identity-aware HTTPS edge
   -> Faryo Gateway (127.0.0.1:8780)
-  -> Faryo Owner   (127.0.0.1:8765)
-  -> existing tmux pane
-  -> Codex CLI
+  -> Faryo Owner ASGI (127.0.0.1:8765)
+       |-> private Unix WebSocket -> persistent Codex App Server
+       `-> existing tmux pane -> Codex CLI/TUI compatibility mode
 ```
 
 Gateway owns public login, route authorization, session/history navigation, and
-proxying. Owner owns the local structured capture, tmux controls, attachments,
-and Codex-specific delivery state machine. The browser is a thin authenticated
-control surface; the durable work remains in tmux and Codex's own history.
+proxying. Owner uses Starlette/Uvicorn for authenticated HTTP, SSE and lifecycle
+handling; framework-neutral Python modules own the session actors, bounded event
+journal, App Server protocol, attachments and tmux compatibility adapter. The
+App Server is a separate user service with no TCP listener, so an Owner-only
+restart does not interrupt an active Web-managed turn. Codex rollout history
+remains the durable conversation source.
 
 Gateway portal CSS and JavaScript are separate versioned static assets; dynamic
 route labels enter through a nonce-protected JSON bootstrap. Focused local
@@ -354,9 +374,10 @@ supervisor requires the explicit `--migrate-owner` flag; normal Codex tmux
 sessions are preserved and geometry-checked.
 
 The installer verifies a versioned source archive and SHA-256 manifest, creates
-the private venv, initializes missing mode-`600` configuration, and installs two
-loopback-only user services. Existing config, tokens, attachments, Codex history,
-and tmux sessions are preserved.
+the private venv, initializes missing mode-`600` configuration, and installs
+three user services: private App Server, loopback Owner, and loopback Gateway.
+Only Owner and Gateway listen on TCP. Existing config, tokens, attachments,
+Codex history, and tmux sessions are preserved.
 
 Developers can install a clean checkout through the same application path:
 
@@ -373,6 +394,7 @@ faryo doctor
 faryo status
 faryo start
 faryo open
+faryo logs appserver
 faryo logs owner
 faryo logs gateway
 faryo restart
@@ -391,10 +413,12 @@ assets use an automatic content hash, and rejected assets are `no-store`. A
 normal reload or newly opened tab is sufficient after an update; users should
 never need a browser-specific hard-refresh gesture.
 
-`faryo stop` stops only the two Web services, not Codex or tmux. `faryo
-uninstall` removes services and versioned program files but preserves
-`~/.faryo`; irreversible private-data removal requires both `--purge-data` and
-`--yes`.
+`faryo restart` leaves the independent App Server process running while Owner
+and Gateway restart, preserving an active Web-managed turn. `faryo stop` stops
+all three Faryo services; it preserves tmux and Codex history but should not be
+used during an active Web-managed turn. `faryo uninstall` removes services and
+versioned program files but preserves `~/.faryo`; irreversible private-data
+removal requires both `--purge-data` and `--yes`.
 
 Fresh installation stores the initial local login password at
 `~/.faryo/gateway/config/initial-password`. Change it from the password page and
@@ -411,8 +435,11 @@ layer while keeping Faryo's inner login enabled.
 
 The `main` branch was revalidated on 2026-08-22 with privacy-safe fixtures:
 
-- canonical source gate: 199 Owner, 117 Gateway, and 57 unified-CLI Python tests,
+- canonical source gate: 219 Owner, 118 Gateway, and 60 unified-CLI Python tests,
   plus Ruff, ESLint, Prettier, TypeScript and reproducible local browser bundles;
+- isolated real Codex App Server: initialize/capability fallback, body-delta
+  streaming, keyed final convergence, Markdown/KaTeX/code, body-free replay
+  journal, JSONL recovery, ordinary reload, and active-turn Owner restart;
 - real authenticated Gateway at 390x844: `/model`, pending-menu reload, Cancel,
   `/usage`, Preact composer geometry and no fake chat turn;
 - stale interaction/session responses, duplicate request IDs, generation 409,
@@ -483,11 +510,11 @@ See [SECURITY.md](SECURITY.md) and
 ## Repository Layout
 
 ```text
-apps/owner/         Loopback tmux/Codex execution endpoint
+apps/owner/         Loopback ASGI endpoint, App Server actors and tmux adapter
 apps/gateway/       Authenticated routing and session/history workbench
 apps/shared/        Shared state and browser appearance helpers
 docs/               Security, deployment, and implementation plans
-deploy/             Runtime unit templates
+deploy/             App Server, Owner and Gateway user-service templates
 scripts/            Source checks and maintenance scripts
 tools/              Browser harness and reproducible frontend bundle builders
 ```

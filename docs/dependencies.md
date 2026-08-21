@@ -1,6 +1,6 @@
 # Faryo Dependency Ledger
 
-Updated: 2026-08-21
+Updated: 2026-08-22
 
 Faryo keeps production dependencies deliberate, not artificially zero. Every
 entry below is pinned, locally resolved and covered by the canonical source
@@ -114,8 +114,8 @@ check. Production never loads these assets from a CDN.
   Markdown/TeX bodies, Raw formatting, Live tmux and paged history remain
   isolated adapters.
 - Production transitive dependencies: none
-- Gateway bundle: 18,240 bytes raw / 7,370 gzip; SHA-256
-  `06ba10825a65c2a26e0a774c7ebfefa237c2625a62283925600b1a99b2a12a72`;
+- Gateway bundle: 18,429 bytes raw / 7,438 gzip; SHA-256
+  `b5d545f4078df73d70036196c861077cbc4443a144674411466a1bcaa90c7d05`;
   12 KiB gzip limit.
 - Owner bundle: 28,053 bytes raw / 10,245 gzip; SHA-256
   `c89831e0fc63b2b74f9f9ddf3ef4ed6ed314c907156bf673906522eb8fc2d429`;
@@ -140,22 +140,23 @@ check. Production never loads these assets from a CDN.
   Codex runtime. The only accepted package target is `@openai/codex`; update
   state is mode 600 and contains versions, timestamps and a bounded result only.
 
-- Gateway runtime Python dependencies are exact-pinned in
-  `apps/gateway/requirements.txt`. v1.4 adopts Starlette 1.6.0 and Uvicorn
-  0.52.4 under BSD-3-Clause, with base-only transitive pins AnyIO 4.14.2
+- Owner and Gateway runtime Python dependencies are exact-pinned in
+  `pyproject.toml` and the source-installer requirements mirror. Starlette 1.6.0
+  and Uvicorn 0.52.4 are BSD-3-Clause; the shared base pins are AnyIO 4.14.2
   (MIT), Click 8.4.2 (BSD-3-Clause), h11 0.16.0 (MIT), and idna 3.19
   (BSD-3-Clause). Python 3.10 additionally installs the exact MIT-licensed
   `tomli` 2.4.1 backport; Python 3.11+ uses standard-library `tomllib`.
-  No `full`/`standard` extras, multipart parser, uvloop,
-  watchfiles or WebSocket package is installed. bcrypt is now exact-pinned at
-  5.0.0 under Apache-2.0.
-- The six pure-Python ASGI/base wheels total about 507 KB; bcrypt's platform
-  wheel is about 482 KB. These are Gateway runtime dependencies and add no
-  browser bytes or background process beyond the Uvicorn process replacing the
-  legacy server.
-- Removal path before cutover: remove Starlette/Uvicorn and their five base
-  transitive pins, then retain the legacy entrypoint. After cutover, formal
-  rollback uses the `v1.3.0` requirements and service scripts.
+  `websockets` 16.1.1 (BSD-3-Clause) provides the Owner-to-App-Server Unix
+  WebSocket transport. No `full`/`standard` extras, multipart parser, uvloop or
+  watchfiles package is installed. bcrypt remains exact-pinned at 5.0.0 under
+  Apache-2.0.
+- Starlette/Uvicorn now serve both Web processes; the separate App Server user
+  service is the official Codex executable, not another Python Web server.
+  These packages add no browser bytes and production still requires no Node
+  process beyond the Node runtime already required by an npm-installed Codex.
+- Removal path is a formal release rollback. The old Owner
+  `ThreadingHTTPServer` entry has been deleted after ASGI contract and browser
+  cutover, so current releases do not carry two same-purpose HTTP stacks.
 - KaTeX and the Markdown/Shiki bundle remain local, versioned vendor assets with
   their own notices under the Owner static tree.
 - Floating UI was evaluated but not adopted: the tested `placeSheet` function is

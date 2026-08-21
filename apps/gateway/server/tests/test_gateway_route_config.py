@@ -119,6 +119,39 @@ class GatewayRouteConfigTest(unittest.TestCase):
             "/api/agent-sessions?view=split&limit=10&offset=390",
         )
 
+    def test_workbench_projects_body_free_app_server_launcher_health(self) -> None:
+        gateway.BACKENDS.clear()
+        gateway.BACKENDS["txy"] = ("127.0.0.1", 8765, "Workstation")
+        owner_request = mock.Mock(return_value={
+            "ok": True,
+            "activeCount": 0,
+            "activeSessions": [],
+            "sessions": [],
+            "historyTotal": 0,
+            "appServerRuntime": {
+                "state": "reconnecting",
+                "ready": False,
+                "lastError": "ConnectionRefusedError",
+            },
+        })
+        config = mock.Mock()
+        config.user_routes.return_value = ["txy"]
+        config.max_running.return_value = 8
+        config.list_bridge_packages.return_value = []
+        service = workbench_service.WorkbenchService(
+            gateway.WorkbenchRuntime,
+            config,
+            mock.Mock(),
+            owner_json_request_callback=owner_request,
+            backend_status_callback=lambda route: {"id": route, "state": "online"},
+        )
+
+        result = service.payload("tester")
+
+        self.assertFalse(result["entries"][0]["appServerReady"])
+        self.assertEqual(result["entries"][0]["appServerState"], "reconnecting")
+        self.assertNotIn("lastError", result["entries"][0])
+
     def test_workbench_keeps_active_sessions_above_ten_item_history_pages(self) -> None:
         gateway.BACKENDS.clear()
         gateway.BACKENDS.update({
@@ -234,6 +267,9 @@ class GatewayRouteConfigTest(unittest.TestCase):
         self.assertIn('class="mini-btn restore-session"', PREACT_WORKBENCH)
         self.assertNotIn('/api/session-history/delete', WORKBENCH_JS)
         self.assertIn("view.active && item.managed", PREACT_WORKBENCH)
+        self.assertIn("containers.launchers", PREACT_WORKBENCH)
+        self.assertIn("item.disabled", PREACT_WORKBENCH)
+        self.assertIn("entry.appServerReady !== false", WORKBENCH_JS)
 
     def test_history_filters_are_bounded_encoded_and_forwarded(self) -> None:
         filters = gateway.history_filters_from_query({
