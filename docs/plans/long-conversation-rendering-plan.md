@@ -1,6 +1,6 @@
 # Long Conversation Rendering Plan
 
-状态：实施中
+状态：已完成并部署为本机 v1.6.8 source candidate
 
 范围：Owner Compact Chat 的单会话历史、Markdown/KaTeX 富内容和问题导航
 
@@ -54,4 +54,16 @@ Faryo 不复制 Harness 的 React/Cordis 应用壳，也不直接把
 
 ## 当前证据
 
-- 2026-08-21：根因复现完成；实施和回归验证进行中。
+- 2026-08-21：匿名 40-turn 长 Markdown/公式 fixture 在加载完整逻辑历史后只挂载
+  5 个富正文、保留 75 个轻量占位；对话区约 2,580 个后代节点。24 次宽度/DPI
+  变化的最长主线程任务为 0 ms，完整问题索引、首题公式恢复、3 px 前插锚点、
+  Raw/Chat 和 tmux 几何均通过。
+- 隐私安全的真实长会话探针在 4 倍 CPU 降速下，把完整遍历后的页面元素从约
+  43,034 降到约 4,762，把同时挂载的 KaTeX 节点从 852 降到 97；连续跨屏尺寸
+  变化的最长任务从约 1,330 ms 降到 98 ms。旧页载入最长任务为 312 ms，且加载
+  完成后继续释放离屏富 DOM。
+- Canonical source gate：Owner 199、Gateway 117、CLI 57 个 Python 测试通过，所有
+  JavaScript、lint、格式、依赖、bundle 和浏览器模块检查通过。
+- 版本化安装器已切换本机 v1.6.8；`faryo doctor` 为 22 OK、0 warning、0 failed，
+  Owner/Gateway 活跃，所有既有 tmux 会话及窗口尺寸保持不变。经本机 Gateway 普通
+  新标签页验证，v1.6.8 结构化历史、KaTeX 和桌面布局通过。
