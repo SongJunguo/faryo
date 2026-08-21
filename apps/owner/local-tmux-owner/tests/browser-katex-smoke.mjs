@@ -1026,7 +1026,7 @@ try {
 
     if (checkCommandSuggestions) {
       const commandResult = await send('Runtime.evaluate', {
-        expression: `(() => {
+        expression: `(async () => {
           const input = document.getElementById('promptInput');
           const popup = document.getElementById('commandSuggest');
           const shell = document.querySelector('.prompt-shell');
@@ -1035,17 +1035,21 @@ try {
           const shellBefore = shell.getBoundingClientRect();
           input.value = '/';
           input.dispatchEvent(new Event('input', { bubbles: true }));
+          await new Promise((resolve) => setTimeout(resolve, 40));
           const buttons = [...popup.querySelectorAll('button')];
           const popupRect = popup.getBoundingClientRect();
           const firstSelected = popup.querySelector('button.selected')?.dataset.index || '';
           input.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }));
+          await new Promise((resolve) => setTimeout(resolve, 20));
           const secondSelected = popup.querySelector('button.selected')?.dataset.index || '';
           input.value = '/ren';
           input.dispatchEvent(new Event('input', { bubbles: true }));
+          await new Promise((resolve) => setTimeout(resolve, 20));
           input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
           const renameValue = input.value;
           input.value = original;
           input.dispatchEvent(new Event('input', { bubbles: true }));
+          await new Promise((resolve) => setTimeout(resolve, 20));
           const shellAfter = shell.getBoundingClientRect();
           return {
             ready: true,
@@ -1061,6 +1065,7 @@ try {
             shellStable: Math.abs(shellBefore.width - shellAfter.width) <= 1 && Math.abs(shellBefore.height - shellAfter.height) <= 1,
           };
         })()`,
+        awaitPromise: true,
         returnByValue: true,
       });
       const commandState = commandResult.result?.value || {};
