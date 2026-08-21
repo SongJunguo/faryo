@@ -439,7 +439,8 @@ The `main` branch was revalidated on 2026-08-22 with privacy-safe fixtures:
   plus Ruff, ESLint, Prettier, TypeScript and reproducible local browser bundles;
 - isolated real Codex App Server: initialize/capability fallback, body-delta
   streaming, keyed final convergence, Markdown/KaTeX/code, body-free replay
-  journal, JSONL recovery, ordinary reload, and active-turn Owner restart;
+  journal, JSONL recovery, ordinary reload, active-turn Owner restart, a real
+  sandbox approval, and a real plan-mode `request_user_input` round trip;
 - real authenticated Gateway at 390x844: `/model`, pending-menu reload, Cancel,
   `/usage`, Preact composer geometry and no fake chat turn;
 - stale interaction/session responses, duplicate request IDs, generation 409,

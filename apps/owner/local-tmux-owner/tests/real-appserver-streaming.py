@@ -42,6 +42,13 @@ End with the literal word STREAM_DONE.
 RESTART_PROMPT = """Reply without tools. Write 40 short numbered Chinese lines about restart-safe streaming,
 then end with the literal word OWNER_RESTART_DONE.
 """
+APPROVAL_PROMPT = """Create a file named approval-probe.txt in the current workspace containing exactly
+FARYO_APPROVAL_COMMAND_OK, then read it back. This isolated workspace starts read-only, so request approval
+for the required write. After it completes, briefly report the content and end with APPROVAL_DONE.
+"""
+USER_INPUT_PROMPT = """Use the request_user_input tool exactly once. Ask me to choose between Alpha and Beta,
+with header Choice. After I answer, state the selected value and end with USER_INPUT_DONE. Do not use other tools.
+"""
 
 
 def parse_args() -> argparse.Namespace:
@@ -51,6 +58,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--timeout", type=float, default=180.0)
     parser.add_argument("--browser", action="store_true")
     parser.add_argument("--restart", action="store_true")
+    parser.add_argument("--interactions", action="store_true")
     return parser.parse_args()
 
 
@@ -88,6 +96,59 @@ def free_port() -> int:
         return int(handle.getsockname()[1])
 
 
+def wait_for_interaction(runtime: AppServerRuntime, session: str, kind: str, timeout: float) -> dict:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        interaction = (runtime.capture(session).get("snapshot") or {}).get("interaction")
+        if isinstance(interaction, dict) and interaction.get("kind") == kind:
+            return interaction
+        time.sleep(0.05)
+    raise RuntimeError(f"real Codex {kind} request did not arrive")
+
+
+def wait_for_final_marker(runtime: AppServerRuntime, session: str, marker: str, timeout: float) -> str:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        capture = runtime.capture(session)
+        assistants = [text for role, text in capture["messages"] if role == "assistant"]
+        final = assistants[-1] if assistants else ""
+        if capture["snapshot"].get("lifecycle") == "idle" and marker in final:
+            return final
+        time.sleep(0.05)
+    raise RuntimeError(f"real Codex response did not finish with {marker}")
+
+
+def start_plan_turn(runtime: AppServerRuntime, session: str, prompt: str, client_message_id: str) -> None:
+    """Start one isolated plan-mode turn so real request_user_input is available."""
+
+    record = runtime.registry.get(session)
+    if record is None:
+        raise RuntimeError("real Codex session registry entry is unavailable")
+    capture = runtime.capture(session)
+    thread = capture.get("snapshot", {}).get("thread") or {}
+    model = str(thread.get("model") or record.model or "")
+    client = runtime._require_client()  # Test-only access to the versioned protocol client.
+    if not model:
+        result = runtime._submit(client.rpc("model/list", {"includeHidden": False, "limit": 100}), 15)
+        models = result.get("data") if isinstance(result, dict) else None
+        first = models[0] if isinstance(models, list) and models else None
+        model = str((first or {}).get("model") or (first or {}).get("id") or "")
+    if not model:
+        raise RuntimeError("real Codex model catalog is empty")
+    runtime._submit(
+        client.rpc(
+            "turn/start",
+            {
+                "threadId": record.thread_id,
+                "input": [{"type": "text", "text": prompt}],
+                "clientUserMessageId": client_message_id,
+                "collaborationMode": {"mode": "plan", "settings": {"model": model}},
+            },
+        ),
+        15,
+    )
+
+
 def main() -> int:
     args = parse_args()
     source_home = Path.home()
@@ -108,6 +169,13 @@ def main() -> int:
         copied_auth = codex_home / "auth.json"
         shutil.copyfile(auth_file, copied_auth)
         copied_auth.chmod(0o600)
+        if args.interactions:
+            config_file = codex_home / "config.toml"
+            config_file.write_text(
+                'approval_policy = "on-request"\nsandbox_mode = "read-only"\n',
+                encoding="utf-8",
+            )
+            config_file.chmod(0o600)
         socket_path = runtime_root / "codex-app-server.sock"
         registry_path = runtime_root / "sessions.json"
         argv = codex_runtime.codex_argv(
@@ -208,6 +276,79 @@ def main() -> int:
                     f"observed_lengths={len(set(partial_lengths))} "
                     "markdown=yes tex=yes jsonl=yes body_free_journal=yes"
                 )
+                if args.interactions:
+                    runtime.send(
+                        session,
+                        APPROVAL_PROMPT,
+                        "real_appserver_approval_message",
+                    )
+                    approval = wait_for_interaction(runtime, session, "approval", max(30.0, args.timeout))
+                    allow = next(
+                        (option for option in approval.get("options") or [] if option.get("label") == "Allow once"),
+                        None,
+                    )
+                    details = approval.get("details") or {}
+                    if not isinstance(allow, dict) or not (
+                        str(details.get("command") or "") or str(details.get("path") or "")
+                    ):
+                        raise RuntimeError("real Codex approval request lost its safe action projection")
+                    runtime.respond_interaction(
+                        session,
+                        interaction_id=str(approval["id"]),
+                        option_id=str(allow["id"]),
+                        client_request_id="real_approval_response_1",
+                    )
+                    approval_final = wait_for_final_marker(
+                        runtime,
+                        session,
+                        "APPROVAL_DONE",
+                        max(30.0, args.timeout),
+                    )
+                    if "FARYO_APPROVAL_COMMAND_OK" not in approval_final:
+                        raise RuntimeError("approved real command output did not reach the final response")
+                    print("real-appserver-approval=PASS request=received decision=accepted command=executed")
+
+                    start_plan_turn(
+                        runtime,
+                        session,
+                        USER_INPUT_PROMPT,
+                        "real_appserver_user_input_message",
+                    )
+                    question = wait_for_interaction(runtime, session, "user_input", max(30.0, args.timeout))
+                    questions = question.get("questions") or []
+                    if not questions or not isinstance(questions[0], dict):
+                        raise RuntimeError("real Codex user-input request lost its question")
+                    question_id = str(questions[0].get("id") or "")
+                    option_labels = {
+                        str(option.get("label") or "")
+                        for option in questions[0].get("options") or []
+                        if isinstance(option, dict)
+                    }
+                    if not question_id or len(option_labels) < 2:
+                        raise RuntimeError("real Codex user-input options were incomplete")
+                    selected_answer = next(
+                        (label for label in option_labels if "alpha" in label.lower()),
+                        sorted(option_labels)[0],
+                    )
+                    runtime.respond_interaction(
+                        session,
+                        interaction_id=str(question["id"]),
+                        answers={question_id: [selected_answer]},
+                        client_request_id="real_user_input_response_1",
+                    )
+                    input_final = wait_for_final_marker(
+                        runtime,
+                        session,
+                        "USER_INPUT_DONE",
+                        max(30.0, args.timeout),
+                    )
+                    expected_answer = "Alpha" if "alpha" in selected_answer.lower() else selected_answer
+                    if expected_answer not in input_final:
+                        raise RuntimeError("real user-input answer did not reach the final response")
+                    print(
+                        "real-appserver-interactions=PASS "
+                        f"approval=resolved command=executed user_input=resolved options={len(option_labels)} answer=applied"
+                    )
                 if args.browser:
                     browser_cursor = runtime.replay(None).latest.render()
                     port = free_port()
