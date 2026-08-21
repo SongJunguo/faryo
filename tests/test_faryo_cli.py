@@ -8,6 +8,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import stat
 import sys
 import tarfile
 import tempfile
@@ -582,7 +583,15 @@ class FaryoCliTest(unittest.TestCase):
                 mock.patch.object(application, "create_private_venv", side_effect=fake_venv) as create,
                 mock.patch.object(application, "private_venv_version", return_value="3.10.12"),
                 mock.patch.object(application, "select_bootstrap_python", return_value=sys.executable),
-                mock.patch.object(application, "run_binary", return_value=subprocess.CompletedProcess([], 0)),
+                mock.patch.object(
+                    application,
+                    "run_binary",
+                    return_value=subprocess.CompletedProcess(
+                        [],
+                        0,
+                        stdout=f"Faryo {application.__version__}\n".encode(),
+                    ),
+                ),
             ):
                 prepared = application.prepare_version(layout, bootstrap_python=sys.executable)
 
@@ -590,6 +599,52 @@ class FaryoCliTest(unittest.TestCase):
             create.assert_called_once_with(prepared, sys.executable)
             self.assertFalse((prepared / ".installing").exists())
             self.assertEqual(list(program.versions.glob(".stage-*")), [])
+
+    def test_hardened_cli_ignores_ambient_pythonpath(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            version = Path(temp) / "versions/v1.6.0"
+            cli = application.venv_cli(version)
+            cli.parent.mkdir(parents=True)
+            cli.write_text(
+                "#!/old/python\nfrom faryo_cli.cli import main\n",
+                encoding="utf-8",
+            )
+
+            application.harden_venv_cli(version)
+
+            lines = cli.read_text(encoding="utf-8").splitlines()
+            self.assertEqual(
+                lines[0],
+                f"#!{application.venv_python(version)} -I",
+            )
+            self.assertTrue(cli.stat().st_mode & stat.S_IXUSR)
+
+    def test_cli_health_uses_isolated_python_and_exact_version(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            version = Path(temp) / "versions/v1.6.0"
+            cli = application.venv_cli(version)
+            cli.parent.mkdir(parents=True)
+            cli.write_text("cli", encoding="utf-8")
+            with mock.patch.object(
+                application,
+                "run_binary",
+                return_value=subprocess.CompletedProcess(
+                    [],
+                    0,
+                    stdout=b"Faryo 1.6.0\n",
+                ),
+            ) as run:
+                self.assertTrue(application.installed_cli_matches_version(version))
+
+            self.assertEqual(
+                run.call_args.args[0],
+                [
+                    str(application.venv_python(version)),
+                    "-I",
+                    str(cli),
+                    "--version",
+                ],
+            )
 
     def test_prepare_version_cleans_failed_bounded_version(self) -> None:
         with tempfile.TemporaryDirectory() as temp, mock.patch.dict(

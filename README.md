@@ -368,7 +368,7 @@ layer while keeping Faryo's inner login enabled.
 
 The `main` branch was revalidated on 2026-08-21 with privacy-safe fixtures:
 
-- canonical source gate: 176 Owner, 114 Gateway, and 53 unified-CLI Python tests,
+- canonical source gate: 176 Owner, 114 Gateway, and 55 unified-CLI Python tests,
   plus Ruff, ESLint, Prettier, TypeScript and reproducible local browser bundles;
 - real authenticated Gateway at 390x844: `/model`, pending-menu reload, Cancel,
   `/usage`, Preact composer geometry and no fake chat turn;

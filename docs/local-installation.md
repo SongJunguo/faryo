@@ -54,6 +54,10 @@ bounded single-root regular-file archive, and invokes the same `faryo install`
 path used by source developers. It does not execute sudo, install apt packages,
 create a tunnel, or change Cloudflare settings.
 
+The generated `~/.local/bin/faryo` entry uses the selected private Python in
+isolated mode. It ignores ambient `PYTHONPATH`/`PYTHONHOME`, and installation
+health requires the CLI to report the exact version being prepared.
+
 When upgrading a pre-v1.5 deployment that still has the dedicated
 `local-tmux-owner` service session/keepalive timer, explicitly approve only that
 supervisor migration:

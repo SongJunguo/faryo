@@ -230,6 +230,7 @@ gateway_workbench = (root / "apps/gateway/server/static/workbench.js").read_text
 gateway_preact_source = (root / "apps/gateway/ui/preact-workbench.jsx").read_text(encoding="utf-8")
 owner_status_source = (root / "apps/owner/ui/StatusShell.tsx").read_text(encoding="utf-8")
 owner_interaction_source = (root / "apps/owner/ui/InteractionHost.tsx").read_text(encoding="utf-8")
+application_source = (root / "src/faryo_cli/application.py").read_text(encoding="utf-8")
 gateway_ui = gateway + "\n" + gateway_workbench
 assert "firstAvailableDirectoryPage" in gateway_workbench and "for (const candidate of candidates)" in gateway_workbench, "directory picker must try every recent cwd before root fallback"
 ci_workflow = (root / ".github/workflows/ci.yml").read_text(encoding="utf-8")
@@ -250,6 +251,7 @@ pyproject = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
 project = pyproject.get("project") or {}
 assert project.get("name") == "faryo" and project.get("scripts", {}).get("faryo") == "faryo_cli.cli:main", "Faryo CLI package metadata is incomplete"
 assert pyproject.get("build-system", {}).get("requires") == ["setuptools==83.0.0"], "Faryo CLI build backend must remain exact-pinned"
+assert "harden_venv_cli" in application_source and '"-I"' in application_source and "installed_cli_matches_version" in application_source, "Faryo CLI must ignore ambient Python paths and verify its exact installed version"
 runtime_requirements = {
     line.strip() for line in (root / "apps/gateway/requirements.txt").read_text(encoding="utf-8").splitlines()
     if line.strip() and not line.lstrip().startswith("#")

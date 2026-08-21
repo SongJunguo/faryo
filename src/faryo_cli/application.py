@@ -59,6 +59,7 @@ def usable_bootstrap_python(executable: str) -> bool:
     result = run_binary(
         [
             executable,
+            "-I",
             "-c",
             "import sys,venv; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)",
         ],
@@ -171,21 +172,48 @@ def venv_cli(version_dir: Path) -> Path:
     return version_dir / ".venv/bin/faryo"
 
 
+def harden_venv_cli(version_dir: Path) -> None:
+    cli = venv_cli(version_dir)
+    try:
+        lines = cli.read_text(encoding="utf-8").splitlines()
+    except OSError as exc:
+        raise OperationError("installed Faryo CLI launcher is unavailable") from exc
+    if not lines or not lines[0].startswith("#!"):
+        raise OperationError("installed Faryo CLI launcher is invalid")
+    lines[0] = f"#!{venv_python(version_dir)} -I"
+    atomic_write(cli, "\n".join(lines) + "\n", 0o755)
+
+
+def installed_cli_matches_version(version_dir: Path) -> bool:
+    expected = f"Faryo {version_dir.name.removeprefix('v')}"
+    result = run_binary(
+        [
+            str(venv_python(version_dir)),
+            "-I",
+            str(venv_cli(version_dir)),
+            "--version",
+        ],
+        timeout=15,
+    )
+    value = (result.stdout or b"").decode("utf-8", errors="replace").strip()
+    return result.returncode == 0 and value == expected
+
+
 def create_private_venv(version_dir: Path, bootstrap_python: str) -> None:
     result = run_binary([bootstrap_python, "-m", "venv", str(version_dir / ".venv")], timeout=120)
     if result.returncode != 0:
         raise OperationError("private venv creation failed")
     python = venv_python(version_dir)
     for command in (
-        [str(python), "-m", "pip", "install", "--disable-pip-version-check", *BUILD_REQUIREMENTS],
-        [str(python), "-m", "pip", "install", "--disable-pip-version-check", "-r", str(version_dir / "app/apps/gateway/requirements.txt")],
-        [str(python), "-m", "pip", "install", "--disable-pip-version-check", "--no-deps", "--no-build-isolation", str(version_dir / "app")],
+        [str(python), "-I", "-m", "pip", "install", "--disable-pip-version-check", *BUILD_REQUIREMENTS],
+        [str(python), "-I", "-m", "pip", "install", "--disable-pip-version-check", "-r", str(version_dir / "app/apps/gateway/requirements.txt")],
+        [str(python), "-I", "-m", "pip", "install", "--disable-pip-version-check", "--no-deps", "--no-build-isolation", str(version_dir / "app")],
     ):
         result = run_binary(command, timeout=300)
         if result.returncode != 0:
             raise OperationError("private venv dependency installation failed")
-    result = run_binary([str(venv_cli(version_dir)), "--version"], timeout=15)
-    if result.returncode != 0:
+    harden_venv_cli(version_dir)
+    if not installed_cli_matches_version(version_dir):
         raise OperationError("installed Faryo CLI failed its version check")
 
 
@@ -193,6 +221,7 @@ def private_venv_version(version_dir: Path) -> str:
     result = run_binary(
         [
             str(venv_python(version_dir)),
+            "-I",
             "-c",
             "import platform; print(platform.python_version())",
         ],
@@ -221,7 +250,7 @@ def prepared_version_is_healthy(path: Path) -> bool:
     cli = venv_cli(path)
     if not cli.is_file():
         return False
-    return run_binary([str(cli), "--version"], timeout=15).returncode == 0
+    return installed_cli_matches_version(path)
 
 
 def prepare_version(
