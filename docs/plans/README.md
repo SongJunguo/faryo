@@ -5,13 +5,15 @@
 
 ## Active
 
-- [`v1.9-appserver-streaming-plan.md`](v1.9-appserver-streaming-plan.md)：在独立开发分支以
-  官方 Codex App Server 建立正文 delta、双向 RPC、单写者会话状态机、有界 SSE
-  replay/gap 和 JSONL 最终收敛；渐进接入现有 Preact 富文本尾部，保留 tmux/TUI 兼容、
-  认证、可靠发送、长历史和移动端几何。参考与许可证边界见
-  [`../appserver-streaming-reference-audit.md`](../appserver-streaming-reference-audit.md)。
+当前没有尚未完成的实施计划。
 
 ## Completed or maintenance mode
+
+- [`v1.9-appserver-streaming-plan.md`](v1.9-appserver-streaming-plan.md)：以官方 Codex App
+  Server 建立正文 delta、双向 RPC、单写者会话状态机、有界 SSE replay/gap 和 JSONL
+  最终收敛；Owner Web 层已迁移到 Starlette/Uvicorn，同时保留 tmux/TUI 兼容、认证、可靠
+  发送、长历史和移动端几何。参考与许可证边界见
+  [`../appserver-streaming-reference-audit.md`](../appserver-streaming-reference-audit.md)。
 
 - [`v1.8-mobile-keyboard-app-shell-plan.md`](v1.8-mobile-keyboard-app-shell-plan.md)：
   以单一会话滚动区、Grid 锚定的透明 composer 和浏览器原生
