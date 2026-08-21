@@ -127,4 +127,3 @@ HAPI 当前 Codex converter 会在正文 delta 到达时只更新“正在输出
 5. `item/agentMessage/delta` 与 `item/completed` 的 stable identity 收敛仍成立；
 6. 断开 Owner 后 turn 继续，重连后最终历史可恢复；
 7. App Server 与 TUI 双写尝试被明确拒绝，而不是静默覆盖。
-

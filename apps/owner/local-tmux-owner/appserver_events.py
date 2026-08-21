@@ -151,4 +151,3 @@ class EventJournal:
 
     def __iter__(self) -> Iterable[JournalEvent]:
         return iter(tuple(self.events))
-

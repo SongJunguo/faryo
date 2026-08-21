@@ -138,4 +138,3 @@ def item_identity(params: Mapping[str, Any]) -> tuple[str, str, str] | None:
 
 def agent_message_text(item: Mapping[str, Any]) -> str:
     return str(item.get("text") or "") if item.get("type") == "agentMessage" else ""
-
