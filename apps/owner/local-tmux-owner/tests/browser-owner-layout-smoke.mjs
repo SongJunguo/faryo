@@ -16,7 +16,7 @@ await withBrowser(
   },
   async ({ page }) => {
     await page.setContent(`
-      <meta name="viewport" content="width=device-width, initial-scale=1" />
+      <meta name="viewport" content="width=device-width, initial-scale=1, interactive-widget=resizes-content" />
       <style>
         :root {
           --font-step: 0px;
@@ -46,6 +46,11 @@ await withBrowser(
       </div>
     `);
     await page.addStyleTag({ content: styles });
+
+    const viewportContract = await page.locator('meta[name="viewport"]').getAttribute('content');
+    if (!viewportContract?.includes('interactive-widget=resizes-content')) {
+      throw new Error(`Mobile keyboard viewport contract is missing: ${viewportContract || ''}`);
+    }
 
     for (const fixture of [
       { label: "NODE5", fontStep: "0px" },
