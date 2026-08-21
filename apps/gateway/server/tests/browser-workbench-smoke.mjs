@@ -162,7 +162,13 @@ await withBrowser({
     const identity = [card.dataset.route || '', card.dataset.session || '', card.dataset.agentSessionId || ''].join('|');
     card.tabIndex = 0;
     card.dataset.preactTransient = 'preserved';
-    card.focus();
+    card.focus({ preventScroll: true });
+    await new Promise((resolve) => requestAnimationFrame(resolve));
+    if (document.activeElement !== card) {
+      card.focus({ preventScroll: true });
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+    }
+    const focusEstablished = document.activeElement === card;
     await refreshWorkbench();
     const current = [...container.querySelectorAll('.session-card')].find((item) =>
       [item.dataset.route || '', item.dataset.session || '', item.dataset.agentSessionId || ''].join('|') === identity
@@ -170,11 +176,12 @@ await withBrowser({
     return {
       ready: true,
       sameNode: current === card,
+      focusEstablished,
       focusPreserved: document.activeElement === card,
       transientPreserved: current?.dataset.preactTransient === 'preserved',
     };
   })()`);
-  if (!keyedCardState.ready || !keyedCardState.sameNode || !keyedCardState.focusPreserved || !keyedCardState.transientPreserved) {
+  if (!keyedCardState.ready || !keyedCardState.sameNode || !keyedCardState.focusEstablished || !keyedCardState.focusPreserved || !keyedCardState.transientPreserved) {
     throw new Error(`Keyed Preact reconciliation replaced live card state: ${JSON.stringify(keyedCardState)}`);
   }
 
@@ -195,10 +202,103 @@ await withBrowser({
     throw new Error(`Preact card text escaped the component boundary: ${JSON.stringify(safeTextFixture)}`);
   }
 
-  const lifecycleFixture = await evaluate(`(() => {const states=['starting','running','waiting','exited','desktop','resumable','archived'],labels={starting:'Starting',running:'Running',waiting:'Waiting',exited:'Exited',desktop:'Desktop',resumable:'Resume',archived:'Archived'};return states.map(state=>{const active=!['resumable','archived'].includes(state),container=document.createElement('div'),card=window.__faryoRenderSessionFixture({id:'anonymous-thread',title:'Anonymous session',route:'txy',routeLabel:'Workstation',source:'codex-cli',tmuxSession:active?'anonymous-tmux':'',managed:active&&state!=='desktop',agentRunning:state==='running',archived:state==='archived',state,updatedTs:1},container);return{state:card.dataset.state,label:card.querySelector('.session-meta')?.textContent.includes(labels[state])||false,close:Boolean(card.querySelector('.close-session')),archive:Boolean(card.querySelector('.archive-session')),restore:Boolean(card.querySelector('.restore-session'))};});})()`);
-  if (!Array.isArray(lifecycleFixture) || lifecycleFixture.some((item) => !item.label || item.state === 'desktop' && item.close || ['starting','running','waiting','exited'].includes(item.state) && !item.close || item.state==='resumable'&&!item.archive || item.state==='archived'&&!item.restore || !['resumable'].includes(item.state)&&item.archive || item.state!=='archived'&&item.restore)) {
+  const lifecycleFixture = await evaluate(`(() => {const states=['starting','running','waiting','exited','desktop','resumable','archived'],labels={starting:'Starting',running:'Running',waiting:'Waiting',exited:'Exited',desktop:'Desktop',resumable:'Resume',archived:'Archived'};return states.map(state=>{const active=!['resumable','archived'].includes(state),container=document.createElement('div'),card=window.__faryoRenderSessionFixture({id:'anonymous-thread',title:'Anonymous session',route:'txy',routeLabel:'Workstation',source:'codex-cli',tmuxSession:active?'anonymous-tmux':'',managed:active&&state!=='desktop',agentRunning:state==='running',archived:state==='archived',state,updatedTs:1},container),choose=card.querySelector('.choose-folder-session');return{state:card.dataset.state,label:card.querySelector('.session-meta')?.textContent.includes(labels[state])||false,close:Boolean(card.querySelector('.close-session')),archive:Boolean(card.querySelector('.archive-session')),restore:Boolean(card.querySelector('.restore-session')),choose:Boolean(choose),chooseLabel:choose?.getAttribute('aria-label')||''};});})()`);
+  if (!Array.isArray(lifecycleFixture) || lifecycleFixture.some((item) => !item.label || item.state === 'desktop' && item.close || ['starting','running','waiting','exited'].includes(item.state) && !item.close || item.state==='resumable'&&(!item.archive||!item.choose||item.chooseLabel!=='Choose folder and resume') || item.state==='archived'&&!item.restore || item.state!=='resumable'&&(item.archive||item.choose) || item.state!=='archived'&&item.restore)) {
     throw new Error(`Session lifecycle cards are inconsistent: ${JSON.stringify(lifecycleFixture)}`);
   }
+
+  const blockedFolderChoice = await evaluate(`(() => {const container=document.createElement('div'),card=window.__faryoRenderSessionFixture({id:'anonymous-blocked-thread',title:'Anonymous blocked session',route:'txy',routeLabel:'Workstation',source:'codex-cli',state:'resumable',limitReached:true,updatedTs:1},container),button=card.querySelector('.choose-folder-session');return{present:Boolean(button),disabled:Boolean(button?.disabled),archiveEnabled:!card.querySelector('.archive-session')?.disabled};})()`);
+  if (!blockedFolderChoice.present || !blockedFolderChoice.disabled || !blockedFolderChoice.archiveEnabled) {
+    throw new Error(`Blocked folder choice is unsafe: ${JSON.stringify(blockedFolderChoice)}`);
+  }
+
+  const fastResumeRequests = [];
+  await page.route('**/api/agent/resume', async (route) => {
+    fastResumeRequests.push(route.request().postDataJSON());
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ ok: true, redirect: '#faryo-fast-resume-fixture', session: 'anonymous-fast' }),
+    });
+  });
+  await evaluate(`(() => {const fixture=document.createElement('div');fixture.id='faryoFastResumeFixture';fixture.hidden=true;document.body.appendChild(fixture);const card=window.__faryoRenderSessionFixture({id:'anonymous-fast-thread',title:'Anonymous fast resume',route:'txy',routeLabel:'Workstation',source:'codex-cli',state:'resumable',cwd:'/workspace/recorded',updatedTs:1},fixture);card.querySelector('.session-title')?.click();})()`);
+  let fastResumeNavigated = false;
+  for (let attempt = 0; attempt < 80; attempt += 1) {
+    await delay(50);
+    fastResumeNavigated = await evaluate("location.hash==='#faryo-fast-resume-fixture'");
+    if (fastResumeRequests.length === 1 && fastResumeNavigated) break;
+  }
+  await page.unroute('**/api/agent/resume');
+  if (!fastResumeNavigated || fastResumeRequests.length !== 1 || fastResumeRequests[0]?.cwd || fastResumeRequests[0]?.cwd_token
+    || fastResumeRequests[0]?.agent_session_id !== 'anonymous-fast-thread') {
+    throw new Error(`Default history click no longer performs a fast resume: ${JSON.stringify(fastResumeRequests)}`);
+  }
+  await evaluate(`(() => {history.replaceState(null,'',location.pathname+location.search);document.getElementById('faryoFastResumeFixture')?.remove();})()`);
+
+  const explicitResumeRequests = [];
+  await page.route('**/txy/api/directories**', async (route) => {
+    const url = new URL(route.request().url());
+    const selectedPath = url.searchParams.get('path') || '/workspace';
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        ok: true,
+        path: selectedPath,
+        displayPath: selectedPath,
+        parent: selectedPath === '/workspace' ? '' : '/workspace',
+        selectionToken: selectedPath === '/workspace/selected' ? 'signed-selected-folder' : 'signed-recorded-folder',
+        roots: [{ path: '/workspace', displayPath: '/workspace' }],
+        directories: selectedPath === '/workspace/recorded'
+          ? [{ name: 'selected', path: '/workspace/selected' }]
+          : [],
+        showHidden: false,
+        truncated: false,
+      }),
+    });
+  });
+  await page.route('**/api/agent/resume', async (route) => {
+    explicitResumeRequests.push(route.request().postDataJSON());
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ ok: true, redirect: '#faryo-explicit-resume-fixture', session: 'anonymous-explicit' }),
+    });
+  });
+  await evaluate(`(() => {const fixture=document.createElement('div');fixture.id='faryoExplicitResumeFixture';fixture.hidden=true;document.body.appendChild(fixture);const card=window.__faryoRenderSessionFixture({id:'anonymous-explicit-thread',title:'Anonymous explicit resume',route:'txy',routeLabel:'Workstation',source:'codex-cli',state:'resumable',cwd:'/workspace/recorded',cwdLabel:'recorded',updatedTs:1},fixture);card.querySelector('.choose-folder-session')?.click();})()`);
+  let explicitFolderSheet = {};
+  for (let attempt = 0; attempt < 80; attempt += 1) {
+    await delay(50);
+    explicitFolderSheet = await evaluate(`(() => ({open:document.getElementById('modal')?.classList.contains('open')||false,title:document.getElementById('modalTitle')?.textContent||'',body:document.getElementById('modalBody')?.textContent||'',folder:Boolean(document.querySelector('#modalChoices .directory-row-folder')),primary:[...document.querySelectorAll('#modalActions button')].some(item=>item.textContent==='Start resumed Codex here')}))()`);
+    if (explicitFolderSheet.open && explicitFolderSheet.primary) break;
+  }
+  if (!explicitFolderSheet.open || explicitFolderSheet.title !== 'Choose working directory'
+    || !explicitFolderSheet.body.includes('saved Codex conversation') || !explicitFolderSheet.folder || !explicitFolderSheet.primary) {
+    throw new Error(`Explicit resume folder picker did not open: ${JSON.stringify(explicitFolderSheet)}`);
+  }
+  await evaluate("document.querySelector('#modalChoices .directory-row-folder')?.click()");
+  for (let attempt = 0; attempt < 80; attempt += 1) {
+    await delay(50);
+    const selected = await evaluate("document.querySelector('#directoryBreadcrumb .directory-crumb[aria-current=\"location\"]')?.textContent||''");
+    if (selected === 'selected') break;
+    if (attempt === 79) throw new Error('Explicit resume folder navigation did not select the requested folder');
+  }
+  await evaluate("[...document.querySelectorAll('#modalActions button')].find(item=>item.textContent==='Start resumed Codex here')?.click()");
+  let explicitResumeNavigated = false;
+  for (let attempt = 0; attempt < 80; attempt += 1) {
+    await delay(50);
+    explicitResumeNavigated = await evaluate("location.hash==='#faryo-explicit-resume-fixture'");
+    if (explicitResumeRequests.length === 1 && explicitResumeNavigated) break;
+  }
+  await page.unroute('**/api/agent/resume');
+  await page.unroute('**/txy/api/directories**');
+  if (!explicitResumeNavigated || explicitResumeRequests.length !== 1
+    || explicitResumeRequests[0]?.agent_session_id !== 'anonymous-explicit-thread'
+    || explicitResumeRequests[0]?.cwd !== '/workspace/selected'
+    || explicitResumeRequests[0]?.cwd_token !== 'signed-selected-folder') {
+    throw new Error(`Explicit folder resume request is incorrect: ${JSON.stringify(explicitResumeRequests)}`);
+  }
+  await evaluate(`(() => {history.replaceState(null,'',location.pathname+location.search);document.getElementById('faryoExplicitResumeFixture')?.remove();})()`);
 
   await evaluate(`(() => {const fixture=document.createElement('div');fixture.id='faryoArchiveFixtureCard';fixture.hidden=true;document.body.appendChild(fixture);const card=window.__faryoRenderSessionFixture({id:'anonymous-archive-thread',title:'Anonymous archive fixture',route:'txy',routeLabel:'Workstation',source:'codex-cli',state:'resumable',updatedTs:1},fixture);card.querySelector('.archive-session')?.click();})()`);
   let archiveSheet = {};
@@ -226,9 +326,11 @@ await withBrowser({
   await evaluate("[...document.querySelectorAll('#modalActions button')].find((item)=>item.textContent==='Cancel')?.click()");
 
   const attentionTransition = await evaluate(`(async()=>{
-    const response=await fetch('/api/workbench?page=1',{cache:'no-store'}),data=await response.json(),route=data.entries?.[0]?.id||'txy',routeLabel=data.entries?.[0]?.label||'Workstation',before=Number(document.getElementById('attentionCount')?.textContent||0),original=window.Notification;
+    const response=await fetch('/api/workbench?page=1',{cache:'no-store'}),data=await response.json(),route=data.entries?.[0]?.id||'txy',routeLabel=data.entries?.[0]?.label||'Workstation',original=window.Notification;
     class FakeNotification{static permission='granted';constructor(title,options){window.__faryoAttentionNotice={title,body:String(options?.body||''),tag:String(options?.tag||''),data:options?.data};}close(){}}
     Object.defineProperty(window,'Notification',{configurable:true,value:FakeNotification});localStorage.setItem('faryoAttentionNotificationsV1','1');
+    renderWorkbench(data);
+    const before=Number(document.getElementById('attentionCount')?.textContent||0);
     const fixture={id:'anonymous-attention-thread',tmuxSession:'anonymous-attention',route,routeLabel,title:'Private fixture title',cwd:'/private/fixture',state:'running',managed:true,source:'codex-cli',updatedTs:1};
     renderWorkbench({...data,activeSessions:[...(data.activeSessions||[]),fixture]});
     renderWorkbench({...data,activeSessions:[...(data.activeSessions||[]),{...fixture,state:'waiting'}]});

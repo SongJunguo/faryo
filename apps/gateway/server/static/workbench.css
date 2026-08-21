@@ -404,6 +404,17 @@ main {
   color: var(--muted);
   font-size: 20px;
 }
+.session-card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 5px;
+}
+.choose-folder-session {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--line));
+  background: color-mix(in srgb, var(--accent) 8%, var(--panel));
+  color: var(--accent);
+}
 .modal {
   position: fixed;
   inset: 0;

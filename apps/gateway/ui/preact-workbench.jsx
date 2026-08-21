@@ -105,9 +105,22 @@ function SessionCard({ item, routeLabels, actions }) {
         Close
       </button>
     ) : view.lifecycle === "resumable" ? (
-      <button class="mini-btn archive-session" type="button">
-        Archive
-      </button>
+      <div class="session-card-actions">
+        {view.canChooseFolder && (
+          <button
+            class="mini-btn choose-folder-session"
+            type="button"
+            disabled={view.chooseFolderDisabled}
+            title="Choose folder and resume"
+            aria-label="Choose folder and resume"
+          >
+            Choose folder
+          </button>
+        )}
+        <button class="mini-btn archive-session" type="button">
+          Archive
+        </button>
+      </div>
     ) : view.lifecycle === "archived" ? (
       <button class="mini-btn restore-session" type="button">
         Restore
@@ -130,6 +143,8 @@ function SessionCard({ item, routeLabels, actions }) {
         const target = event.target;
         if (target.closest(".close-session"))
           actions.sessionAction(item, "close", event);
+        else if (target.closest(".choose-folder-session"))
+          actions.sessionAction(item, "choose-folder", event);
         else if (target.closest(".archive-session"))
           actions.sessionAction(item, "archive", event);
         else if (target.closest(".restore-session"))

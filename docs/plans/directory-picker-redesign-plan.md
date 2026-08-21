@@ -102,3 +102,14 @@ Cancel                         Start Codex in this folder
   Close”，测试前后桌面 Codex 几何与既有会话集合一致；
 - Owner 68 项、Gateway 50 项 Python 测试和 `scripts/check-source.sh` 全部通过；历史、发送、
   Markdown/KaTeX、命令提示、复制和启动幂等边界无回归。
+
+## v1.6.2 历史会话显式目录恢复
+
+- Session History 的 Codex `resumable` 卡片增加 `Choose folder`；卡片主体点击仍保持原有
+  快速恢复，不强迫每次多走一步；
+- 显式路径复用同一个目录浏览器、Hidden 偏好、路径策略和 Owner 签名令牌，并在第一次
+  resume 请求中携带所选 cwd，不先创建错误目录的临时 tmux；
+- 活动会话不显示该动作，归档会话必须先 Restore，达到并发上限时按钮禁用但 Archive
+  保持可用；
+- 匿名浏览器回归分别断言普通点击不携带 cwd、显式选择只提交一次且携带签名 cwd，并覆盖
+  手机宽度下无水平溢出。

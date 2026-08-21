@@ -197,6 +197,57 @@ const workbenchRenderer = preactFactory({
           await changeSessionArchived(item, action === "archive");
           return;
         }
+        if (action === "choose-folder") {
+          event.preventDefault();
+          event.stopPropagation();
+          if (!item.id) return;
+          if (item.limitReached) {
+            await notice(
+              "Agent limit reached",
+              "Close a running session first.",
+            );
+            return;
+          }
+          const recorded = String(item.cwd || "").trim(),
+            recent = Array.isArray(latestAgentCwdChoices?.[item.route])
+              ? latestAgentCwdChoices[item.route]
+              : [],
+            explicitChoices = {
+              ...latestAgentCwdChoices,
+              [item.route]: [
+                ...(recorded
+                  ? [
+                      {
+                        value: recorded,
+                        path: recorded,
+                        label: item.cwdLabel || directoryName(recorded),
+                        kind: "recorded",
+                      },
+                    ]
+                  : []),
+                ...recent.filter(
+                  (choice) =>
+                    trimDirectoryPath(choice?.value || choice?.path) !==
+                    trimDirectoryPath(recorded),
+                ),
+              ],
+            },
+            directory = await selectNewCwd(
+              item.route,
+              "resumed Codex",
+              explicitChoices,
+              "Choose the working directory for this saved Codex conversation.",
+            );
+          if (directory === null) return;
+          markAttentionRead(item);
+          await resumeSession(
+            item.route,
+            item.id,
+            item.source || "",
+            directory,
+          );
+          return;
+        }
         markAttentionRead(item);
         const lifecycle = String(item.state || "");
         if (lifecycle === "exited") {
@@ -1165,8 +1216,17 @@ async function agentNew(route, command, directory) {
   }
   location.href = data.redirect;
 }
-async function resumeSession(route, agentSessionId, source) {
+async function resumeSession(
+  route,
+  agentSessionId,
+  source,
+  selectedDirectory = null,
+) {
   const payload = { route, agent_session_id: agentSessionId, source };
+  if (selectedDirectory?.cwd) {
+    payload.cwd = selectedDirectory.cwd;
+    payload.cwd_token = selectedDirectory.cwdToken || "";
+  }
   const request = async () =>
     fetchJson(
       "/api/agent/resume",
@@ -1182,6 +1242,8 @@ async function resumeSession(route, agentSessionId, source) {
     );
   let data = await request();
   if (data.requiresWorkingDirectory) {
+    if (selectedDirectory?.cwd)
+      throw new Error("The selected working directory was not accepted.");
     const recorded = String(data.recordedDisplayCwd || "the recorded folder"),
       directory = await selectNewCwd(
         route,

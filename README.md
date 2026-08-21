@@ -94,7 +94,7 @@ Historical distribution and non-Codex platform paths may remain in the tree for
 upstream compatibility, but they are not part of this project's current validation
 or support claims.
 
-Current release: [Faryo 1.6.1](https://github.com/SongJunguo/faryo-codex-web-ui/releases/tag/v1.6.1).
+Current release: [Faryo 1.6.2](https://github.com/SongJunguo/faryo-codex-web-ui/releases/tag/v1.6.2).
 
 ## Current Functionality
 
@@ -236,6 +236,11 @@ micromark -> mdast -> CommonMark/GFM/math nodes -> safe HTML -> KaTeX
 - Archives resumable history and restores archived history through Codex App
   Server `thread/archive` and `thread/unarchive`. Faryo never edits Codex's
   SQLite/rollout files directly and deliberately exposes no hard-delete action.
+- Keeps card-body clicks as the fast resume path using the thread's recorded
+  working directory, while `Choose folder` opens the authenticated directory
+  browser and resumes that same thread in an explicitly selected, signed cwd.
+  Active sessions do not expose this action; archived sessions must be restored
+  first.
 - Allows remote Close only for sessions that Faryo created and stamped.
 - `Start Codex` resolves the configured CLI with its matching Node runtime,
   selects an available login shell, creates the managed tmux, and immediately
@@ -307,7 +312,7 @@ initial allowed workspace:
 
 ```bash
 sha256sum --check install-faryo.sh.sha256
-bash install-faryo.sh --version v1.6.1 --workspace "$PWD"
+bash install-faryo.sh --version v1.6.2 --workspace "$PWD"
 ```
 
 Upgrading a pre-v1.5 checkout that still uses the dedicated Owner keepalive

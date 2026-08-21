@@ -30,11 +30,15 @@ The authenticated Gateway home page keeps two session regions separate:
   search title/folder metadata with date and archive filter chips. Search never
   scans conversation content and never hides Active Sessions.
 
-Resumable cards offer `Archive`; archived cards offer `Restore`. Archive uses a
-clear confirmation because it moves the thread out of Current results, while
-Restore is immediate. Both actions preserve the current search, filter, and
-page query. Active, desktop, running, waiting, starting, and exited cards do not
-offer archive, and the UI has no hard-delete action.
+Resumable Codex cards offer `Choose folder` and `Archive`; archived cards offer
+`Restore`. Clicking the card body remains the fast path and lets Codex use its
+recorded cwd. `Choose folder` opens the same authenticated directory browser as
+Start Codex and sends its signed selection with the first resume request, so it
+does not create a speculative session in the old cwd. Archive uses a clear
+confirmation because it moves the thread out of Current results, while Restore
+is immediate. These actions preserve the current search, filter, and page
+query. Active, desktop, running, waiting, starting, exited, and archived cards
+do not offer folder selection; the UI has no hard-delete action.
 
 Only sessions created and stamped by Faryo expose remote Close. Desktop-created
 tmux sessions can be opened but are not remotely destroyed.
