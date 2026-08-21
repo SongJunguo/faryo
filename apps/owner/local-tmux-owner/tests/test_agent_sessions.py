@@ -175,6 +175,7 @@ class AgentSessionTest(unittest.TestCase):
             mock.patch.object(server, "has_session", return_value=True),
             mock.patch.object(server, "codex_cli_in_pane", side_effect=[False, True]),
             mock.patch.object(server, "agent_ready_for_input", return_value=True),
+            mock.patch.object(server, "AGENT_START_READY_STABLE_SECONDS", 0),
             mock.patch.object(server, "ensure_pane_width") as ensure_width,
             mock.patch.object(server.time, "sleep"),
         ):
@@ -189,6 +190,46 @@ class AgentSessionTest(unittest.TestCase):
         session_option.assert_any_call(self.config, name, "@faryo_git_root", "/workspace")
         self.assertTrue(any(call.args[2] == "@faryo_starting_at" and call.args[3] for call in session_option.call_args_list))
         session_option.assert_any_call(self.config, name, "@faryo_starting_at", "")
+        ensure_width.assert_called_once()
+
+    def test_new_agent_ready_window_must_remain_stable(self):
+        completed = server.subprocess.CompletedProcess(["tmux"], 0, "", "")
+        clock = [0.0]
+
+        def sleep(seconds):
+            clock[0] += seconds
+
+        with (
+            mock.patch.object(server, "AGENT_START_READY_TIMEOUT", 5),
+            mock.patch.object(server, "AGENT_START_READY_STABLE_SECONDS", 0.3),
+            mock.patch.object(server, "active_agent_count", return_value=0),
+            mock.patch.object(server, "agent_login_shell", return_value="/bin/bash"),
+            mock.patch.object(server, "codex_cli_argv", return_value=["/runtime/codex"]),
+            mock.patch.object(server, "tmux", return_value=completed),
+            mock.patch.object(server, "tmux_session_option"),
+            mock.patch.object(server, "managed_launch_session", return_value=""),
+            mock.patch.object(server, "has_session", return_value=True),
+            mock.patch.object(server, "codex_cli_in_pane", return_value=True),
+            mock.patch.object(server, "tmux_current_capture", return_value="› Ask Codex"),
+            mock.patch.object(
+                server,
+                "agent_ready_for_input",
+                side_effect=[True, False, True, True, True],
+            ) as ready,
+            mock.patch.object(server, "ensure_pane_width") as ensure_width,
+            mock.patch.object(server.time, "monotonic", side_effect=lambda: clock[0]),
+            mock.patch.object(server.time, "sleep", side_effect=sleep),
+        ):
+            name = server.start_agent_runtime(
+                self.config,
+                Path("/workspace"),
+                "codex",
+                [],
+            )
+
+        self.assertTrue(name.startswith("faryo"))
+        self.assertGreaterEqual(ready.call_count, 5)
+        self.assertGreaterEqual(clock[0], 0.8)
         ensure_width.assert_called_once()
 
     def test_duplicate_launch_id_reuses_the_same_managed_session(self):

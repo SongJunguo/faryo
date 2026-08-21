@@ -135,6 +135,7 @@ AGENT_HISTORY_ARCHIVE_FILTERS = {"active", "archived", "all"}
 EMPTY_MANAGED_SESSION_TTL_SECONDS = 60
 MAX_MANAGED_AGENT_IDLE_SECONDS = 24 * 60 * 60
 AGENT_START_READY_TIMEOUT = 15.0
+AGENT_START_READY_STABLE_SECONDS = 0.75
 AGENT_START_STATE_GRACE_SECONDS = 5.0
 AGENT_ARCHIVE_VERIFY_TIMEOUT = 3.0
 START_DIRECTORY_MAX_ENTRIES = 160
@@ -1010,6 +1011,7 @@ def start_agent_runtime(config: Config, cwd: Path, command: str, args: list[str]
     if not wait_ready:
         return name
     target = Config(name, config.token, config.pane_width); deadline = time.monotonic() + AGENT_START_READY_TIMEOUT
+    ready_since: float | None = None
     while time.monotonic() < deadline:
         if has_session(target) and codex_cli_in_pane(target):
             # A process can exist while Codex is still loading or waiting on a
@@ -1017,10 +1019,22 @@ def start_agent_runtime(config: Config, cwd: Path, command: str, args: list[str]
             # a structured pending interaction; an idempotent existing launch
             # remains immediately reusable even while its turn is running.
             pending = codex_tui_interactions.detect_interaction(tmux_current_capture(target))
-            if not created_here or pending is not None or agent_ready_for_input(target, CODEX_PROFILE):
+            if not created_here or pending is not None:
                 tmux_session_option(config, name, "@faryo_starting_at", "")
                 ensure_pane_width(target)
                 return name
+            ready = agent_ready_for_input(target, CODEX_PROFILE)
+            now = time.monotonic()
+            if ready:
+                ready_since = now if ready_since is None else ready_since
+                if now - ready_since >= AGENT_START_READY_STABLE_SECONDS:
+                    tmux_session_option(config, name, "@faryo_starting_at", "")
+                    ensure_pane_width(target)
+                    return name
+            else:
+                ready_since = None
+        else:
+            ready_since = None
         time.sleep(0.2)
     if created_here:
         tmux(config, ["kill-session", "-t", name], timeout=3)

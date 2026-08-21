@@ -27,7 +27,20 @@ await withBrowser(
     await page.waitForFunction(
       () => {
         const model = document.getElementById("modelText")?.textContent || "";
-        return Boolean(model) && !/(connecting|loading)/i.test(model);
+        const pet = document.getElementById("petControl");
+        if (!model || /(connecting|loading)/i.test(model) || pet?.classList.contains("pet-running")) {
+          document.documentElement.dataset.faryoTestReadySince = "";
+          return false;
+        }
+        const now = Date.now();
+        const readySince = Number(
+          document.documentElement.dataset.faryoTestReadySince || 0,
+        );
+        if (!readySince) {
+          document.documentElement.dataset.faryoTestReadySince = String(now);
+          return false;
+        }
+        return now - readySince >= 3_500;
       },
       null,
       { timeout: 20_000 },

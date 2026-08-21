@@ -29,6 +29,11 @@ Gateway or used only for local smoke/status checks.
   process; it does not run in a service tmux. Its `KillMode=process` contract is
   mandatory: restarting or updating the Web bridge must not signal tmux/Codex
   descendants that were originally launched from Owner.
+- A newly created Codex is not declared ready on its first transient composer
+  frame. Owner requires a continuous ready interval so the later MCP-startup
+  phase can reset the gate; a recognized startup interaction remains available
+  immediately. Existing idempotent launch IDs keep their non-blocking reuse
+  contract.
 - An optional SSH reverse tunnel from a local endpoint to the Gateway host, run
   as a user service on that endpoint. When enabled, verify from the Gateway side
   with the owner token and expected endpoint identity.

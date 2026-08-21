@@ -338,6 +338,10 @@ faryo update
 faryo rollback
 ```
 
+Mutable Owner assets use the active Faryo release as their cache key, and
+rejected assets are `no-store`. A normal reload or newly opened tab is sufficient
+after an update; users should never need a browser-specific hard-refresh gesture.
+
 `faryo stop` stops only the two Web services, not Codex or tmux. `faryo
 uninstall` removes services and versioned program files but preserves
 `~/.faryo`; irreversible private-data removal requires both `--purge-data` and
