@@ -136,7 +136,10 @@ not recorded.
 
 `Start Codex` opens a dedicated working-directory picker. The picker defaults to
 the latest eligible cwd, deduplicates shortcuts within Recent while keeping the
-complete canonical child list in Folders,
+complete canonical child list in Folders. A real child remains in Folders even
+when the same canonical path is also a configured Root/Location/Recent entry;
+there is no automatic child-count cap. The remembered Hidden toggle is the only
+automatic dot-directory visibility rule. The picker
 uses `..` as the first Folders row for parent navigation, collapses long
 breadcrumbs, filters the current page without recursive search, and keeps
 `Start Codex here` fixed outside the scrolling list. Directory choices

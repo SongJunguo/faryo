@@ -77,7 +77,7 @@ def resolve_start_directory(path_value: str | None, roots: list[Path]) -> Path:
 def list_start_directories(
     path: Path,
     roots: list[Path],
-    limit: int,
+    limit: int | None = None,
     *,
     show_hidden: bool = False,
 ) -> tuple[Path | None, list[Path], bool]:
@@ -98,7 +98,7 @@ def list_start_directories(
         if not resolved.is_dir() or not any(inside(resolved, root) for root in roots):
             continue
         directories.append(resolved)
-        if len(directories) >= limit:
+        if limit is not None and limit > 0 and len(directories) >= limit:
             truncated = True
             break
     return parent, directories, truncated

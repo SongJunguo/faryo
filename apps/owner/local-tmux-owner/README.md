@@ -257,9 +257,10 @@ FARYO_SMOKE_CHECK_COPY_FIDELITY=1 \
 
 `FARYO_START_DIRECTORY_ROOTS` is an `os.pathsep`/colon-separated list used only
 by the authenticated directory picker and start validation. Owner canonicalizes
-each selected path, lists directories only, hides dot-directories, rejects
-symlink escapes, and signs the selected absolute path. Gateway verifies that
-signature before forwarding the launch; Owner validates the root again.
+each selected path, lists every child directory without an entry cap, hides
+dot-directories only while the explicit Hidden toggle is off, rejects symlink
+escapes, and signs the selected absolute path. Gateway verifies that signature
+before forwarding the launch; Owner validates the root again.
 
 Persistent send receipts can be verified across a real Owner process restart
 without writing to an existing conversation:

@@ -138,7 +138,6 @@ AGENT_START_READY_TIMEOUT = 15.0
 AGENT_START_READY_STABLE_SECONDS = 0.75
 AGENT_START_STATE_GRACE_SECONDS = 5.0
 AGENT_ARCHIVE_VERIFY_TIMEOUT = 3.0
-START_DIRECTORY_MAX_ENTRIES = 160
 RUNTIME_LOCK = threading.RLock()
 AGENT_START_MONITOR_LOCK = threading.Lock()
 AGENT_START_MONITORS: dict[str, int] = {}
@@ -2959,7 +2958,6 @@ def directory_browser_payload(
         parent, child_paths, truncated = path_policy.list_start_directories(
             path,
             roots,
-            START_DIRECTORY_MAX_ENTRIES,
             show_hidden=show_hidden,
         )
     except path_policy.PathPolicyError as exc:

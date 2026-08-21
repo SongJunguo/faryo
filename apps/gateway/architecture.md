@@ -120,6 +120,9 @@ Gateway host: the machine reached by the public HTTPS edge.
 - Owner HTML script references are source-checked against the Gateway allowlist.
   Mutable Owner entry assets use the release version as a cache key; rejected
   resources are `no-store`, so ordinary reload/new-tab update is sufficient.
+- Gateway home/auth/PWA scripts, styles and icons share a SHA-256-derived content
+  revision computed from the shipped bytes. Any asset change automatically gets
+  a new URL without a manually maintained cache-counter.
 - Start/Resume returns a fast accepted Starting receipt after tmux creation.
   Owner's restart-safe, pane-identity monitor owns readiness and failure; Gateway
   does not hold the browser request open while Codex starts MCP servers.

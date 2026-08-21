@@ -54,18 +54,47 @@ class PathPolicyTest(unittest.TestCase):
             with self.assertRaisesRegex(path_policy.PathPolicyError, "unavailable"):
                 path_policy.resolve_start_directory(str(root / "missing"), [root])
 
-    def test_directory_listing_hides_dot_entries_rejects_symlink_escape_and_reports_truncation(self) -> None:
+    def test_directory_listing_keeps_all_children_except_hidden_toggle_and_symlink_escape(self) -> None:
         with tempfile.TemporaryDirectory() as temp, tempfile.TemporaryDirectory() as outside_temp:
             root = Path(temp).resolve()
             for name in ("alpha", "beta", ".hidden"):
                 (root / name).mkdir()
             (root / "escape").symlink_to(Path(outside_temp), target_is_directory=True)
 
-            parent, directories, truncated = path_policy.list_start_directories(root, [root], 1)
+            parent, directories, truncated = path_policy.list_start_directories(
+                root,
+                [root],
+            )
+            _hidden_parent, hidden_directories, hidden_truncated = (
+                path_policy.list_start_directories(
+                    root,
+                    [root],
+                    show_hidden=True,
+                )
+            )
 
             self.assertIsNone(parent)
-            self.assertEqual([item.name for item in directories], ["alpha"])
-            self.assertTrue(truncated)
+            self.assertEqual([item.name for item in directories], ["alpha", "beta"])
+            self.assertFalse(truncated)
+            self.assertEqual(
+                [item.name for item in hidden_directories],
+                [".hidden", "alpha", "beta"],
+            )
+            self.assertFalse(hidden_truncated)
+
+    def test_directory_listing_has_no_automatic_entry_cap(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp).resolve()
+            for index in range(200):
+                (root / f"folder-{index:03d}").mkdir()
+
+            _parent, directories, truncated = path_policy.list_start_directories(
+                root,
+                [root],
+            )
+
+        self.assertEqual(len(directories), 200)
+        self.assertFalse(truncated)
 
     def test_directory_selection_token_is_path_bound(self) -> None:
         first = path_policy.directory_selection_token("secret", Path("/workspace/a"))

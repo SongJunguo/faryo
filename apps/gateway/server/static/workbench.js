@@ -875,18 +875,13 @@ function directoryPickerModel(data, recent, query, expanded) {
         meta: "Configured location",
         path: item.path,
       })),
-    folders = (data.directories || [])
-      .filter((item) => {
-        const canonical = directoryCanonical(item.path, data);
-        return canonical && !reserved.has(canonical);
-      })
-      .map((item) => ({
-        kind: "folder",
-        icon: "📁",
-        label: item.name || directoryName(item.path),
-        meta: "",
-        path: item.path,
-      }));
+    folders = (data.directories || []).map((item) => ({
+      kind: "folder",
+      icon: "📁",
+      label: item.name || directoryName(item.path),
+      meta: "",
+      path: item.path,
+    }));
   const matches = (item) =>
       !search || `${item.label} ${item.meta}`.toLowerCase().includes(search),
     recentMatches = allRecent.filter(matches),

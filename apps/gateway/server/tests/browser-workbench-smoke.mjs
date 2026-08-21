@@ -315,8 +315,10 @@ await withBrowser({
       directories: [
         { name: 'shared-project', path: '/workspace/parent/shared-project' },
         { name: 'other-project', path: '/workspace/parent/other-project' },
+        { name: 'configured-root', path: '/workspace/parent/configured-root' },
       ],
     };
+    data.roots.push({ path: '/workspace/parent/configured-root', displayPath: '/workspace/parent/configured-root' });
     const recent = [
       { label: 'shared-project', value: '/workspace/parent/shared-project', path: '/workspace/parent/shared-project' },
       { label: 'shared-project duplicate', value: '/workspace/parent/shared-project', path: '/workspace/parent/shared-project' },
@@ -326,6 +328,7 @@ await withBrowser({
     return {
       recentCopies: model.recent.filter((item) => item.path === '/workspace/parent/shared-project').length,
       folderCopies: model.folders.filter((item) => item.path === '/workspace/parent/shared-project').length,
+      configuredRootFolderCopies: model.folders.filter((item) => item.path === '/workspace/parent/configured-root').length,
       parentFirst: model.folders[0]?.label === '..',
       filteredRecent: filtered.recent.some((item) => item.label === 'shared-project'),
       filteredFolder: filtered.folders.some((item) => item.label === 'shared-project'),
@@ -333,6 +336,7 @@ await withBrowser({
     };
   })()`);
   if (directoryOverlap?.recentCopies !== 1 || directoryOverlap.folderCopies !== 1
+    || directoryOverlap.configuredRootFolderCopies !== 1
     || !directoryOverlap.parentFirst || !directoryOverlap.filteredRecent
     || !directoryOverlap.filteredFolder || !directoryOverlap.filteredParent) {
     throw new Error(`Recent shortcuts hid a real child folder: ${JSON.stringify(directoryOverlap)}`);

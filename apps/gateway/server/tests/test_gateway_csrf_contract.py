@@ -257,10 +257,11 @@ class GatewayCsrfContractTest(unittest.TestCase):
             match = re.search(r"script-src 'self' 'nonce-([^']+)'", csp)
             self.assertIsNotNone(match)
             nonce = match.group(1)
+            asset_version = gateway.GATEWAY_ASSET_REVISION
             self.assertIn(f'<script id="faryoRouteLabels" type="application/json" nonce="{nonce}">', body)
-            self.assertIn('<script src="/workbench-preact.js?v=faryo-gateway-preact-1"></script>', body)
-            self.assertIn('<script src="/workbench.js?v=faryo-gateway-3"></script>', body)
-            self.assertIn('<link rel="stylesheet" href="/workbench.css?v=faryo-gateway-2">', body)
+            self.assertIn(f'<script src="/workbench-preact.js?v={asset_version}"></script>', body)
+            self.assertIn(f'<script src="/workbench.js?v={asset_version}"></script>', body)
+            self.assertIn(f'<link rel="stylesheet" href="/workbench.css?v={asset_version}">', body)
             self.assertNotIn("<style nonce=", body)
             self.assertNotIn(gateway.CSP_NONCE_PLACEHOLDER, body)
         finally:

@@ -233,6 +233,7 @@ owner_interaction_source = (root / "apps/owner/ui/InteractionHost.tsx").read_tex
 application_source = (root / "src/faryo_cli/application.py").read_text(encoding="utf-8")
 gateway_ui = gateway + "\n" + gateway_workbench
 assert "firstAvailableDirectoryPage" in gateway_workbench and "for (const candidate of candidates)" in gateway_workbench, "directory picker must try every recent cwd before root fallback"
+assert "START_DIRECTORY_MAX_ENTRIES" not in owner_server and "folders = (data.directories || []).map" in gateway_workbench, "directory picker must not cap or cross-section-filter real child folders"
 ci_workflow = (root / ".github/workflows/ci.yml").read_text(encoding="utf-8")
 release_workflow = (root / ".github/workflows/release.yml").read_text(encoding="utf-8")
 check_script = (root / "scripts/check-source.sh").read_text(encoding="utf-8")
@@ -319,13 +320,14 @@ assert 'class="brand" href="/" aria-label="Faryo home"' in gateway, "Gateway bra
 for retired_marker in ("/projects", "/api/project-workbench", "/api/faryo/start", "/api/faryo/dispatch", "/api/workorder"):
     assert retired_marker not in gateway_ui and retired_marker not in owner_server, f"retired project orchestration route returned: {retired_marker}"
 assert "PORTAL_CSS" not in gateway and "PORTAL_JS_TEMPLATE" not in gateway, "Gateway portal assets must stay external"
-assert 'href="/workbench.css?v=faryo-gateway-2"' in gateway and 'src="/workbench.js?v=faryo-gateway-3"' in gateway, "Gateway must load versioned external workbench assets"
+assert "def gateway_asset_revision" in gateway and "GATEWAY_ASSET_REVISION = gateway_asset_revision()" in gateway, "Gateway mutable assets must use automatic content revisions"
+assert "GATEWAY_ASSET_REVISION = gateway_asset_revision()" in gateway and 'href="/workbench.css?v={asset_version}"' in gateway and 'src="/workbench.js?v={asset_version}"' in gateway, "Gateway must content-version external workbench assets"
 assert 'id="faryoRouteLabels" type="application/json"' in gateway, "Gateway route labels must use the nonce-protected JSON bootstrap"
 assert 'id="attentionCenter"' in gateway and 'id="notificationControl"' in gateway, "Gateway must expose body-free attention controls"
 assert "processAttention" in gateway_workbench and "A session completed or needs input." in gateway_workbench, "Gateway attention must use generic notification text"
 assert "syncChildren" not in gateway_workbench and "FaryoPreactWorkbench" in gateway_workbench, "Gateway card lists must remain Preact keyed components"
 assert "dangerouslySetInnerHTML" not in gateway_preact_source and "innerHTML" not in gateway_preact_source, "Gateway card components must render server strings as text"
-assert "workbench-preact.js?v=faryo-gateway-preact-1" in gateway and "workbench-preact.LICENSE.txt" in gateway, "Gateway Preact bundle and notice must remain local"
+assert 'workbench-preact.js?v={asset_version}' in gateway and "workbench-preact.LICENSE.txt" in gateway, "Gateway Preact bundle and notice must remain local and content-versioned"
 assert '"starting", "running", "waiting", "exited", "desktop", "resumable"' in gateway, "Gateway must expose explicit session lifecycle states"
 assert "compact-rules-codex.js" in index, "index.html must load compact-rules-codex.js"
 assert "compact-rules-codex.js" in gateway, "gateway must allow compact-rules-codex.js"

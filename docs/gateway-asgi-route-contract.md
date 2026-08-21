@@ -45,6 +45,9 @@ and requires either an exact Gateway asset allowlist entry or an allowed local
 prefix. Unknown Owner resources return `Cache-Control: no-store`; the mutable
 style, Preact and app entries use the rendered Faryo release version as their
 query key. This prevents a previously cached 404 from requiring hard refresh.
+Gateway-owned home/auth/PWA JavaScript, CSS and icon URLs use one SHA-256-derived
+revision of the shipped asset bytes, so a changed workbench cannot retain an old
+manual query version.
 
 `apps/gateway/server/tests/test_asgi_shutdown.py` keeps a real Owner SSE response
 open, requests Gateway shutdown and requires the server to exit before the

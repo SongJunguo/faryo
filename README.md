@@ -94,7 +94,7 @@ Historical distribution and non-Codex platform paths may remain in the tree for
 upstream compatibility, but they are not part of this project's current validation
 or support claims.
 
-Current release: [Faryo 1.6.0](https://github.com/SongJunguo/faryo-codex-web-ui/releases/tag/v1.6.0).
+Current release: [Faryo 1.6.1](https://github.com/SongJunguo/faryo-codex-web-ui/releases/tag/v1.6.1).
 
 ## Current Functionality
 
@@ -238,8 +238,8 @@ micromark -> mdast -> CommonMark/GFM/math nodes -> safe HTML -> KaTeX
   SQLite/rollout files directly and deliberately exposes no hard-delete action.
 - Allows remote Close only for sessions that Faryo created and stamped.
 - `Start Codex` resolves the configured CLI with its matching Node runtime,
-  selects an available login shell, and returns success only after the Codex
-  process is present; failed starts remove their partial tmux session.
+  selects an available login shell, creates the managed tmux, and immediately
+  opens its Starting page; a pane-identity monitor owns final readiness/failure.
 - Start retries carry one stable launch ID across browser, Gateway, Owner
   restarts, and lost responses, so an ambiguous retry returns the same managed
   tmux instead of creating a duplicate. HTML login/edge errors are classified
@@ -248,7 +248,10 @@ micromark -> mdast -> CommonMark/GFM/math nodes -> safe HTML -> KaTeX
   workstation, an authenticated directory browser opens at the most recent cwd
   with a compact breadcrumb, instant filtering, internally deduplicated Recent
   shortcuts, canonical Folders/Locations groups, a conventional Folders-first
-  `..` parent entry, and a fixed `Start Codex here` action.
+  `..` parent entry, a remembered Hidden toggle, and a fixed `Start Codex here`
+  action. Folders always contains every Owner-returned child even when that path
+  is also a configured Root, Location, Parent, or Recent shortcut; there is no
+  automatic entry cap.
 - Injects Owner tokens server-side so public browser URLs do not contain them.
 - Records body-free control metadata in a private mode-600, 7-day/5000-row
   audit using HMAC-pseudonymous targets. Security activity is scoped to the
@@ -304,7 +307,7 @@ initial allowed workspace:
 
 ```bash
 sha256sum --check install-faryo.sh.sha256
-bash install-faryo.sh --version v1.6.0 --workspace "$PWD"
+bash install-faryo.sh --version v1.6.1 --workspace "$PWD"
 ```
 
 Upgrading a pre-v1.5 checkout that still uses the dedicated Owner keepalive
@@ -344,9 +347,10 @@ faryo update
 faryo rollback
 ```
 
-Mutable Owner assets use the active Faryo release as their cache key, and
-rejected assets are `no-store`. A normal reload or newly opened tab is sufficient
-after an update; users should never need a browser-specific hard-refresh gesture.
+Mutable Owner assets use the active Faryo release as their cache key; Gateway
+assets use an automatic content hash, and rejected assets are `no-store`. A
+normal reload or newly opened tab is sufficient after an update; users should
+never need a browser-specific hard-refresh gesture.
 
 `faryo stop` stops only the two Web services, not Codex or tmux. `faryo
 uninstall` removes services and versioned program files but preserves
@@ -368,7 +372,7 @@ layer while keeping Faryo's inner login enabled.
 
 The `main` branch was revalidated on 2026-08-21 with privacy-safe fixtures:
 
-- canonical source gate: 176 Owner, 114 Gateway, and 55 unified-CLI Python tests,
+- canonical source gate: 177 Owner, 115 Gateway, and 55 unified-CLI Python tests,
   plus Ruff, ESLint, Prettier, TypeScript and reproducible local browser bundles;
 - real authenticated Gateway at 390x844: `/model`, pending-menu reload, Cancel,
   `/usage`, Preact composer geometry and no fake chat turn;

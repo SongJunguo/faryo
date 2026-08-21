@@ -33,6 +33,17 @@ import workbench_service
 
 
 class GatewayRouteConfigTest(unittest.TestCase):
+    def test_gateway_asset_revision_changes_with_asset_content(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            asset = Path(temp) / "workbench.js"
+            asset.write_text("first", encoding="utf-8")
+            first = gateway.gateway_asset_revision([asset])
+            asset.write_text("second", encoding="utf-8")
+            second = gateway.gateway_asset_revision([asset])
+
+        self.assertRegex(first, r"^[0-9a-f]{12}$")
+        self.assertNotEqual(first, second)
+
     def setUp(self) -> None:
         self.original_backends = dict(gateway.BACKENDS)
 

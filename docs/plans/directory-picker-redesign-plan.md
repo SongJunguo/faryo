@@ -88,6 +88,9 @@ Cancel                         Start Codex in this folder
   始终完整保留在 Folders，即使同一路径也作为 Recent 快捷入口出现；
 - 当前页搜索可即时过滤 Recent、Locations 和 Folders，清空后恢复原分组；不发起递归
   API 或新增文件系统读取；
+- v1.6.1 维护修复取消 160 项后端截断，并禁止用 Root/Location/Parent 等跨分组身份删除
+  Folders 中的真实 child；隐藏点目录仍由显式 Hidden 开关控制。现场复现的 configured
+  workspace root 现在同时保留在 Locations 与其父目录的 Folders 中。
 - 面包屑最多 4 项，中间层折叠为省略号，长 root 只显示目录名，不再露出半截绝对路径；
 - 390x844 Chrome 与 1440x900 Microsoft Edge 截图人工检查通过，面板无水平溢出，主操作
   固定在可视区底部；临时截图已删除，未写入公开仓库；

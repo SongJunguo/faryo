@@ -52,8 +52,11 @@ Owner restart reconstructs that monitor from the private tmux marker. A missing
 CLI, invalid configured path, or unavailable shell still fails before redirect.
 Managed sessions use the first free `faryoN` name. The start flow asks for the
 workstation, then opens a directory-only browser at the most recent cwd. It
-shows the current path, parent, configured roots, recent locations and child
-folders; the selected canonical path is signed and revalidated by Owner.
+shows the current path, parent, configured roots, recent locations and every
+returned child folder without a count cap or cross-section removal. Hidden
+dot-directories remain controlled only by the remembered Hidden toggle; an
+optional search filters only while the user has entered text. The selected
+canonical path is signed and revalidated by Owner.
 
 Gateway route labels come from runtime configuration. Public browser requests
 never receive raw Owner tokens; Gateway injects them while proxying.
