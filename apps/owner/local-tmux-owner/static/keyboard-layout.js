@@ -23,22 +23,50 @@
     };
   }
 
+  function withInteractiveWidget(content, value) {
+    const parts = String(content || '')
+      .split(',')
+      .map((part) => part.trim())
+      .filter((part) => part && !/^interactive-widget\s*=/i.test(part));
+    parts.push(`interactive-widget=${value}`);
+    return parts.join(', ');
+  }
+
   function createKeyboardLayout(view, options = {}) {
     if (!view?.document) throw new TypeError('keyboard layout requires a window');
     const rootElement = options.root || view.document.documentElement;
     const keyboard = virtualKeyboardOf(options.navigator || view.navigator);
+    const viewportMeta = options.viewportMeta
+      || view.document.querySelector?.('meta[name="viewport"]')
+      || null;
     let mode = 'viewport-resize';
     let restoreOverlay = null;
+    let restoreViewportContent = null;
+    const restoreViewport = () => {
+      if (restoreViewportContent === null || !viewportMeta) return;
+      viewportMeta.setAttribute('content', restoreViewportContent);
+      restoreViewportContent = null;
+    };
     if (keyboard) {
       try {
         const previous = Boolean(keyboard.overlaysContent);
+        if (viewportMeta) {
+          restoreViewportContent = viewportMeta.getAttribute('content') || '';
+          viewportMeta.setAttribute(
+            'content',
+            withInteractiveWidget(restoreViewportContent, 'overlays-content'),
+          );
+        }
         keyboard.overlaysContent = true;
         if (keyboard.overlaysContent === true) {
           mode = 'virtual-keyboard';
           restoreOverlay = previous;
+        } else {
+          restoreViewport();
         }
       } catch (_error) {
         mode = 'viewport-resize';
+        try { restoreViewport(); } catch (_restoreError) {}
       }
     }
 
@@ -87,6 +115,7 @@
             keyboard.overlaysContent = restoreOverlay;
           } catch (_error) {}
         }
+        try { restoreViewport(); } catch (_error) {}
         rootElement?.classList?.remove('virtual-keyboard-layout');
         if (rootElement?.dataset) {
           delete rootElement.dataset.faryoKeyboardLayout;
@@ -100,5 +129,6 @@
     createKeyboardLayout,
     keyboardSnapshot,
     virtualKeyboardOf,
+    withInteractiveWidget,
   };
 });

@@ -10,6 +10,17 @@ assert.deepEqual(keyboardLayout.keyboardSnapshot('viewport-resize', null), {
   visible: false,
   insetHeight: 0,
 });
+assert.equal(
+  keyboardLayout.withInteractiveWidget(
+    'width=device-width, initial-scale=1, interactive-widget=resizes-content',
+    'overlays-content',
+  ),
+  'width=device-width, initial-scale=1, interactive-widget=overlays-content',
+);
+assert.equal(
+  keyboardLayout.withInteractiveWidget('width=device-width', 'resizes-content'),
+  'width=device-width, interactive-widget=resizes-content',
+);
 
 function fakeView({ virtualKeyboard = null } = {}) {
   const listeners = new Map();
@@ -24,6 +35,11 @@ function fakeView({ virtualKeyboard = null } = {}) {
       contains(name) { return classes.has(name); },
     },
   };
+  let viewportContent = 'width=device-width, initial-scale=1, interactive-widget=resizes-content';
+  const viewportMeta = {
+    getAttribute(name) { return name === 'content' ? viewportContent : null; },
+    setAttribute(name, value) { if (name === 'content') viewportContent = String(value); },
+  };
   const add = (scope) => (name, listener) => listeners.set(`${scope}:${name}`, listener);
   const remove = (scope) => (name, listener) => {
     if (listeners.get(`${scope}:${name}`) === listener) listeners.delete(`${scope}:${name}`);
@@ -37,7 +53,10 @@ function fakeView({ virtualKeyboard = null } = {}) {
     removeEventListener: remove('viewport'),
   };
   const view = {
-    document: { documentElement: root },
+    document: {
+      documentElement: root,
+      querySelector(selector) { return selector === 'meta[name="viewport"]' ? viewportMeta : null; },
+    },
     navigator: virtualKeyboard ? { virtualKeyboard } : {},
     visualViewport,
     addEventListener: add('window'),
@@ -48,6 +67,7 @@ function fakeView({ virtualKeyboard = null } = {}) {
   return {
     view,
     root,
+    viewportMeta,
     listeners,
     flush() {
       const pending = [...frames.values()];
@@ -64,6 +84,7 @@ const controller = keyboardLayout.createKeyboardLayout(supported.view, {
   onChange: (snapshot) => observed.push(snapshot),
 });
 assert.equal(keyboard.overlaysContent, true);
+assert.match(supported.viewportMeta.getAttribute('content'), /interactive-widget=overlays-content/);
 assert.equal(controller.getSnapshot().mode, 'virtual-keyboard');
 assert.equal(supported.root.dataset.faryoKeyboardLayout, 'virtual-keyboard');
 assert.equal(supported.root.dataset.faryoKeyboardOpen, '0');
@@ -83,6 +104,7 @@ assert.deepEqual(controller.getSnapshot(), {
 assert.equal(supported.root.dataset.faryoKeyboardOpen, '1');
 controller.destroy();
 assert.equal(keyboard.overlaysContent, false);
+assert.match(supported.viewportMeta.getAttribute('content'), /interactive-widget=resizes-content/);
 assert.equal(supported.listeners.size, 0);
 assert.equal(supported.root.classList.contains('virtual-keyboard-layout'), false);
 assert.equal('faryoKeyboardLayout' in supported.root.dataset, false);
@@ -113,6 +135,7 @@ const refusingKeyboard = {
 const refused = fakeView({ virtualKeyboard: refusingKeyboard });
 const refusedController = keyboardLayout.createKeyboardLayout(refused.view);
 assert.equal(refusedController.getSnapshot().mode, 'viewport-resize');
+assert.match(refused.viewportMeta.getAttribute('content'), /interactive-widget=resizes-content/);
 assert.equal(refused.listeners.has('viewport:resize'), true);
 refusedController.destroy();
 

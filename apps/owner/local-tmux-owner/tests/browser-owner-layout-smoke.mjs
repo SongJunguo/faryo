@@ -73,6 +73,9 @@ await withBrowser(
       const opened = controller.getSnapshot();
       const active = {
         overlay: keyboard.overlaysContent,
+        viewport: document
+          .querySelector('meta[name="viewport"]')
+          ?.getAttribute("content"),
         mode: document.documentElement.dataset.faryoKeyboardLayout,
         open: document.documentElement.dataset.faryoKeyboardOpen,
         classActive: document.documentElement.classList.contains(
@@ -85,6 +88,9 @@ await withBrowser(
         opened,
         active,
         restoredOverlay: keyboard.overlaysContent,
+        restoredViewport: document
+          .querySelector('meta[name="viewport"]')
+          ?.getAttribute("content"),
         cleaned:
           !document.documentElement.classList.contains(
             "virtual-keyboard-layout",
@@ -97,10 +103,16 @@ await withBrowser(
       keyboardController.opened.insetHeight !== 240 ||
       !keyboardController.opened.visible ||
       !keyboardController.active.overlay ||
+      !keyboardController.active.viewport?.includes(
+        "interactive-widget=overlays-content",
+      ) ||
       keyboardController.active.mode !== "virtual-keyboard" ||
       keyboardController.active.open !== "1" ||
       !keyboardController.active.classActive ||
       keyboardController.restoredOverlay ||
+      !keyboardController.restoredViewport?.includes(
+        "interactive-widget=resizes-content",
+      ) ||
       !keyboardController.cleaned
     ) {
       throw new Error(
