@@ -7,22 +7,33 @@
   "scripts": {
     "build:diff-review": "node tools/diff-review/build.mjs",
     "build:gateway-preact": "node tools/gateway-preact/build.mjs",
+    "build:owner-ui": "node tools/owner-ui/build.mjs",
     "check:diff-review": "node tools/diff-review/build.mjs --check",
     "check:gateway-preact": "node tools/gateway-preact/build.mjs --check",
-    "check:format": "prettier --check apps/gateway/server/static/workbench.js apps/gateway/server/static/workbench.css apps/gateway/ui/preact-workbench.jsx apps/gateway/ui/session-model.mjs tools/gateway-preact/build.mjs",
+    "check:owner-ui": "node tools/owner-ui/build.mjs --check",
+    "check:format": "prettier --check apps/gateway/server/static/workbench.js apps/gateway/server/static/workbench.css apps/gateway/ui/preact-workbench.jsx apps/gateway/ui/session-model.mjs apps/owner/ui tools/gateway-preact/build.mjs tools/owner-ui/build.mjs",
     "check:lint": "eslint apps tools",
     "format:gateway": "prettier --write apps/gateway/server/static/workbench.js apps/gateway/server/static/workbench.css apps/gateway/ui/preact-workbench.jsx apps/gateway/ui/session-model.mjs tools/gateway-preact/build.mjs",
+    "format:owner-ui": "prettier --write apps/owner/ui tools/owner-ui/build.mjs",
     "test:browser-harness": "node --test tools/browser-harness/*.test.mjs",
     "test:diff-review": "node --test tools/diff-review/*.test.mjs",
-    "test:gateway-preact": "node --test apps/gateway/server/tests/session-model.test.mjs"
+    "test:gateway-preact": "node --test apps/gateway/server/tests/session-model.test.mjs",
+    "test:owner-ui-browser": "node apps/owner/local-tmux-owner/tests/browser-owner-ui-smoke.mjs",
+    "test:owner-interactions-browser": "node apps/owner/local-tmux-owner/tests/browser-structured-interactions.mjs",
+    "test:owner-goal-browser": "node apps/owner/local-tmux-owner/tests/browser-goal-details.mjs",
+    "test:gateway-resume-browser": "node apps/gateway/server/tests/browser-resume-preflight.mjs",
+    "typecheck:owner-ui": "tsc -p tsconfig.owner.json"
   },
   "devDependencies": {
+    "@preact/preset-vite": "2.10.6",
     "diff2html": "3.4.56",
     "dompurify": "3.4.14",
     "esbuild": "0.28.2",
     "eslint": "10.8.1",
     "playwright-core": "1.62.1",
     "preact": "10.29.8",
-    "prettier": "3.9.6"
+    "prettier": "3.9.6",
+    "typescript": "7.0.2",
+    "vite": "8.2.2"
   }
 }

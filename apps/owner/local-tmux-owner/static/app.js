@@ -15,7 +15,7 @@
     { createHistoryController, isStructuredCapture },
     { createCaptureController },
     { createComposerDelivery },
-    { renderGoalStatus },
+    { goalViewModel },
   ] = await Promise.all([
     apiClientModulePromise,
     attachmentControllerModulePromise,
@@ -26,13 +26,28 @@
   ]);
 
   const $ = (id) => document.getElementById(id);
+  const ownerUiApi = window.FaryoOwnerUI || {};
+  const composerShellController = typeof ownerUiApi.mountComposerShell === 'function'
+    ? ownerUiApi.mountComposerShell($('composerShellRoot'), {
+      onSuggestionSelect: (index) => {
+        const item = commandMatches()[index];
+        if (item) applyCommandSuggestion(item);
+      },
+    })
+    : null;
+  if (!composerShellController) throw new Error('Faryo Preact composer is unavailable');
+  const statusShellController = typeof ownerUiApi.mountStatusShell === 'function'
+    ? ownerUiApi.mountStatusShell($('statusShellRoot'), {
+      onGoalClick: handleGoalPillClick,
+    })
+    : null;
+  if (!statusShellController) throw new Error('Faryo Preact status shell is unavailable');
   const outputWrap = $('outputWrap');
   const output = $('output');
   const promptInput = $('promptInput');
   const attachmentInput = $('attachmentInput');
   const attachmentPreview = $('attachmentPreview');
   const errorBox = $('errorBox');
-  const phasePill = $('phasePill');
   const goalPill = $('goalPill');
   const bottomBtn = $('bottomBtn');
   const questionNavigatorElement = $('questionNavigator');
@@ -102,7 +117,7 @@
   let liveState = 'fallback';
   let petSending = false, petSendTimer = null, petStopping = false, petStopTimer = null, agentRunning = false, lastPetPhase = '';
   let outputActivity = 0, outputActivityTimer = null, lastCaptureSignature = '', lastCompactCapture = null, lastFullCapture = null;
-  let outputMode = 'compact', fullLocked = false, preserveErrorUntil = 0, seenInitialPageShow = false, needsConfirmUI = false, errorTimer = null, currentPromptTip = '';
+  let outputMode = 'compact', fullLocked = false, preserveErrorUntil = 0, seenInitialPageShow = false, errorTimer = null, currentPromptTip = '';
   let markdownRenderRevision = 0, highlighterRenderFrame = 0;
   const markdownHtmlCache = new Map();
   const pendingAttachments = [];
@@ -116,6 +131,12 @@
     : outputWrap;
   document.documentElement.classList.toggle('document-scroll-mode', useDocumentScroller);
   document.documentElement.dataset.faryoScrollSurface = useDocumentScroller ? 'document' : 'conversation';
+  const visualViewportDock = typeof scrollSurfaceApi.createVisualViewportDock === 'function'
+    ? scrollSurfaceApi.createVisualViewportDock(window, {
+      root: document.documentElement,
+      enabled: useDocumentScroller,
+    })
+    : null;
   const params = new URLSearchParams(location.search);
   const OWNER_TOKEN_STORAGE_KEY = 'faryoOwnerToken:v1';
   const queryOwnerToken = params.get('token') || '';
@@ -149,12 +170,29 @@
     sendAction: (payload, options) => postAction('/api/send', payload, options),
     onChecking: () => setError('Checking whether the message was delivered…', { timeoutMs: 0 }),
   });
+  const interactionHost = typeof ownerUiApi.mountInteractionHost === 'function'
+    ? ownerUiApi.mountInteractionHost($('interactionRoot'), {
+      onRespond: async (request) => {
+        const response = await postAction('/api/interaction/respond', {
+          ...request,
+          clientRequestId: newInteractionRequestId(),
+        });
+        syncStructuredInteraction(response.interaction || null);
+        refreshStatus({ silent: true }).catch(handleBackgroundError);
+        refreshCapture(currentCaptureLines(), { silent: true }).catch(handleBackgroundError);
+        return response;
+      },
+      onError: (error) => setError(userErrorMessage(error)),
+    })
+    : null;
+  document.documentElement.dataset.faryoInteractionUi = interactionHost ? 'preact' : 'fallback';
   const HISTORY_PAGE_TURNS = 12;
   const HISTORY_REFRESH_MIN_MS = 2500;
   let historyController = null;
   let initialLatestScrollPending = true, initialLatestScrollTimer = null;
   let submitInFlight = false;
   let activeSurfacePanel = null, panelReturnFocus = null;
+  let goalDetailsRequestGeneration = 0;
   let immersiveController = null;
   const restoringLivePanels = new WeakSet();
   let questionNavigatorController = null;
@@ -197,9 +235,11 @@
     document.documentElement.classList.remove('panel-open');
     $('draftState')?.setAttribute('aria-expanded', 'false');
     $('detailsBtn')?.setAttribute('aria-expanded', 'false');
-    setWorkbenchInert(false);
+    goalPill?.setAttribute('aria-expanded', 'false');
+    setWorkbenchInert(document.documentElement.classList.contains('has-pending-interaction'));
     activeSurfacePanel = null;
     panelReturnFocus = null;
+    clearGoalDetails();
     if (restoreFocus && returnFocus?.isConnected) requestAnimationFrame(() => returnFocus.focus());
   }
 
@@ -219,6 +259,7 @@
     document.documentElement.classList.add('panel-open');
     $('draftState')?.setAttribute('aria-expanded', panel === sessionMenu ? 'true' : 'false');
     $('detailsBtn')?.setAttribute('aria-expanded', panel === detailsPanel ? 'true' : 'false');
+    goalPill?.setAttribute('aria-expanded', panel === detailsPanel ? 'true' : 'false');
     setWorkbenchInert(true);
     requestAnimationFrame(() => (panel.querySelector('[data-close-panel]') || panelFocusable(panel)[0])?.focus());
   }
@@ -290,12 +331,13 @@
     const viewport = window.visualViewport;
     const keyboardOpen = viewport ? window.innerHeight - viewport.height > Math.max(110, window.innerHeight * 0.16) : false;
     document.documentElement.classList.toggle('keyboard-open', keyboardOpen || document.activeElement === promptInput);
+    visualViewportDock?.update();
     updateSendVisibility();
     renderCommandSuggestions();
   }
   promptInput.addEventListener('focus', syncKeyboardState);
   promptInput.addEventListener('blur', () => setTimeout(syncKeyboardState, 120));
-  promptInput.addEventListener('blur', () => setTimeout(() => commandSuggest?.classList.add('hidden'), 120));
+  promptInput.addEventListener('blur', () => setTimeout(hideCommandSuggestions, 120));
   window.visualViewport?.addEventListener('resize', syncKeyboardState);
   window.visualViewport?.addEventListener('scroll', syncKeyboardState);
   window.addEventListener('resize', syncKeyboardState);
@@ -362,28 +404,32 @@
   }
   function renderCommandSuggestions() {
     const items = commandMatches();
-    if (!commandSuggest) return;
     const signature = `${promptInput.value}\n${items.map((item) => item.value).join('\n')}`;
     if (signature !== commandSuggestionSignature) {
       commandSuggestionSignature = signature;
       commandSuggestionIndex = 0;
     }
     commandSuggestionIndex = Math.min(commandSuggestionIndex, Math.max(0, items.length - 1));
-    commandSuggest.classList.toggle('hidden', !items.length);
-    commandSuggest.setAttribute('aria-activedescendant', items.length ? `command-option-${commandSuggestionIndex}` : '');
-    if (!items.length) {
-      commandSuggest.replaceChildren();
-      return;
-    }
-    const summary = promptInput.value.trimStart() === '/' ? `<div class="command-suggest-summary">${items.length} Codex commands · ↑↓ to explore</div>` : '';
-    commandSuggest.innerHTML = summary + items.map((item, index) => {
-      const selected = index === commandSuggestionIndex;
+    const suggestions = items.map((item) => {
       const label = item.matchedAlias || item.command || item.value;
       const aliases = !item.matchedAlias && item.aliases?.length ? ` · ${item.aliases.join(', ')}` : '';
       const hint = item.argumentHint ? ` ${item.argumentHint}` : '';
-      const risk = item.risk ? `<span class="command-risk">${escapeHtml(item.risk)}</span>` : '';
-      return `<button id="command-option-${index}" type="button" role="option" aria-selected="${selected}" data-index="${index}" class="${selected ? 'selected' : ''}"><span class="command-suggest-main"><strong>${escapeHtml(label)}${escapeHtml(hint)}</strong><small>${escapeHtml(item.description || '')}</small></span><span class="command-suggest-meta">${escapeHtml(item.category || 'Command')}${escapeHtml(aliases)}${risk}</span></button>`;
-    }).join('');
+      return {
+        label,
+        hint,
+        description: item.description || '',
+        category: item.category || 'Command',
+        aliases,
+        risk: item.risk || '',
+      };
+    });
+    const summary = promptInput.value.trimStart() === '/'
+      ? `${items.length} Codex commands · ↑↓ to explore`
+      : '';
+    composerShellController.updateSuggestions(suggestions, commandSuggestionIndex, summary);
+  }
+  function hideCommandSuggestions() {
+    composerShellController.updateSuggestions([], 0, '');
   }
   function handleCommandSuggestionKey(event) {
     const items = commandMatches();
@@ -401,24 +447,20 @@
       return applyCommandSuggestion(item);
     }
     if (event.key === 'Escape') {
-      commandSuggest?.classList.add('hidden');
+      hideCommandSuggestions();
       commandSuggestionSignature = '';
     }
     return false;
   }
-  commandSuggest?.addEventListener('mousedown', (event) => event.preventDefault());
-  commandSuggest?.addEventListener('click', (event) => {
-    const index = Number(event.target.closest('button')?.dataset.index);
-    const item = commandMatches()[index];
-    if (item) applyCommandSuggestion(item);
-  });
   for (const id of ['petControl', 'dockPlusBtn']) $(id)?.addEventListener('pointerdown', (event) => event.preventDefault());
 
   function updateSendVisibility() {
     const ready = promptInput.value.trim() || pendingAttachments.length > 0;
     const docked = !document.documentElement.classList.contains('keyboard-open');
-    $('sendBtn')?.classList.toggle('hidden', !ready);
-    $('dockPlusBtn')?.classList.toggle('hidden', Boolean(ready && docked));
+    composerShellController.updateControls({
+      sendVisible: Boolean(ready),
+      plusVisible: !Boolean(ready && docked),
+    });
     updatePetControl();
   }
   updateSendVisibility();
@@ -761,7 +803,7 @@
   }
 
   function setBusy(isBusy) {
-    for (const id of ['sendBtn', 'refreshBtn', 'dockFullBtn', 'detailsChatBtn', 'detailsRawBtn', 'detailsRefreshBtn', 'dockPlusBtn', 'approveSmallBtn', 'attachmentBtn', 'upBtn', 'downBtn']) {
+    for (const id of ['sendBtn', 'refreshBtn', 'dockFullBtn', 'detailsChatBtn', 'detailsRawBtn', 'detailsRefreshBtn', 'dockPlusBtn', 'attachmentBtn']) {
       const el = $(id);
       if (el) el.disabled = isBusy;
     }
@@ -778,6 +820,70 @@
     $('detailsChangesBtn').hidden = payload.features?.workspaceChanges === false;
     $('detailsDiagnosticsBtn').hidden = payload.features?.diagnostics === false;
     return payload;
+  }
+
+  async function loadCodexCommandCatalog() {
+    if (typeof codexCommandApi.replaceInventory !== 'function') return null;
+    const payload = await api('/api/command-catalog');
+    codexCommandApi.replaceInventory(payload.commands, payload);
+    document.documentElement.dataset.faryoCommandCatalog = payload.source || 'fallback';
+    document.documentElement.dataset.faryoCommandDrift = payload.drifted ? 'true' : 'false';
+    renderCommandSuggestions();
+    return payload;
+  }
+
+  function goalElapsedLabel(value) {
+    const seconds = Number(value);
+    if (!Number.isFinite(seconds) || seconds < 0) return '—';
+    if (seconds < 60) return `${Math.round(seconds)}s`;
+    const minutes = Math.floor(seconds / 60);
+    if (minutes < 60) return `${minutes}m`;
+    const hours = Math.floor(minutes / 60), remainder = minutes % 60;
+    return remainder ? `${hours}h ${remainder}m` : `${hours}h`;
+  }
+
+  function clearGoalDetails() {
+    goalDetailsRequestGeneration += 1;
+    const section = $('goalDetailsSection');
+    if (section) section.hidden = true;
+    if ($('goalDetailsState')) $('goalDetailsState').textContent = '';
+    if ($('goalDetailsObjective')) $('goalDetailsObjective').textContent = '';
+    for (const id of ['goalDetailsElapsed', 'goalDetailsTokens', 'goalDetailsBudget']) {
+      if ($(id)) $(id).textContent = '—';
+    }
+  }
+
+  async function loadGoalDetails() {
+    const section = $('goalDetailsSection');
+    if (!section) return;
+    const generation = ++goalDetailsRequestGeneration;
+    const requestedSession = selectedSession;
+    section.hidden = false;
+    requestAnimationFrame(() => section.scrollIntoView({ block: 'nearest' }));
+    $('goalDetailsState').textContent = 'Loading…';
+    $('goalDetailsObjective').textContent = '';
+    try {
+      const payload = await api(apiPath('/api/goal'));
+      if (generation !== goalDetailsRequestGeneration || requestedSession !== selectedSession) return;
+      const status = String(payload.status || 'none').replaceAll('_', ' ');
+      $('goalDetailsState').textContent = status === 'none'
+        ? 'No active goal'
+        : status.charAt(0).toUpperCase() + status.slice(1);
+      $('goalDetailsObjective').textContent = payload.objective
+        || (status === 'none' ? 'No objective is active.' : 'Objective unavailable.');
+      $('goalDetailsElapsed').textContent = goalElapsedLabel(payload.timeUsedSeconds);
+      $('goalDetailsTokens').textContent = Number.isFinite(Number(payload.tokensUsed))
+        ? Number(payload.tokensUsed).toLocaleString()
+        : '—';
+      $('goalDetailsBudget').textContent = Number.isFinite(Number(payload.tokenBudget))
+        ? Number(payload.tokenBudget).toLocaleString()
+        : 'No fixed budget';
+      if (payload.objectiveTruncated) $('goalDetailsObjective').textContent += '\n\n[Objective display truncated]';
+    } catch (error) {
+      if (generation !== goalDetailsRequestGeneration || requestedSession !== selectedSession) return;
+      $('goalDetailsState').textContent = 'Goal details unavailable';
+      $('goalDetailsObjective').textContent = userErrorMessage(error);
+    }
   }
 
   async function downloadDiagnostics() {
@@ -1041,7 +1147,7 @@
 
 
   function compactGitLabel(git) {
-    if (!git) return 'git --';
+    if (!git) return 'No Git';
     if (git.state === 'error' && /^(?:⚠️|⚠)?\s*DETACHED\b/u.test(git.label || '')) return (git.label || '⚠️ DETACHED').replace(/^(?:⚠️|⚠)?\s*/u, '⚠️ ');
     const clean = git.state === 'clean';
     const icon = clean ? '🌿' : '✏️';
@@ -1054,10 +1160,12 @@
     return `${icon}${marks ? ` ${marks}` : ''} ${shortBranch}`;
   }
 
-  function updateStatusPill(git) {
-    phasePill.className = `pill git-pill ${(git && git.state) || 'muted'}`;
-    phasePill.textContent = compactGitLabel(git);
-    phasePill.title = git ? git.title : 'Current directory is not a Git repository';
+  function gitStatusModel(git) {
+    return {
+      text: compactGitLabel(git),
+      title: git ? git.title : 'Current directory is not a Git repository',
+      state: (git && git.state) || 'muted',
+    };
   }
 
   function weeklyElapsedPercent(rateLimit) {
@@ -1098,7 +1206,7 @@
     catch (_err) { return String(count); }
   }
 
-  function renderContextStatus(contextUsage) {
+  function contextStatusModel(contextUsage) {
     const percent = Number(contextUsage.percent);
     const percentText = Number.isFinite(percent) ? `${quotaPercent(percent)}%` : null;
     const usedTokens = numericTokenCount(contextUsage.usedTokens ?? contextUsage.inputTokens);
@@ -1110,13 +1218,11 @@
     const detail = hasReportedCounts
       ? `${exactTokenCount(usedTokens)} / ${exactTokenCount(contextWindow)} tokens${percentText ? ` · ${percentText} used` : ''}`
       : (percentText ? `${percentText} used` : 'Unavailable');
-    const label = $('ctxText');
-    if (label) {
-      label.textContent = compact;
-      label.title = hasReportedCounts ? `Agent-reported context · ${detail}` : detail;
-    }
-    if ($('detailsContext')) $('detailsContext').textContent = detail;
-    return compact;
+    return {
+      compact,
+      detail,
+      title: hasReportedCounts ? `Agent-reported context · ${detail}` : detail,
+    };
   }
 
   function quotaPercent(value) {
@@ -1142,12 +1248,7 @@
     }
   }
 
-  function renderQuotaStatus(rateLimit) {
-    const button = $('quotaTop') || $('statusLeft');
-    const label = $('quotaText');
-    const details = $('detailsQuota');
-    const usageFill = $('quotaFill');
-    const weekFill = $('quotaWeekFill');
+  function quotaStatusModel(rateLimit) {
     const percent = rateLimit.usedPercent === null || typeof rateLimit.usedPercent === 'undefined' ? NaN : Number(rateLimit.usedPercent);
     const scopedPercent = rateLimit.scopedPercent === null || typeof rateLimit.scopedPercent === 'undefined' ? NaN : Number(rateLimit.scopedPercent);
     if (Number.isFinite(scopedPercent)) {
@@ -1158,25 +1259,23 @@
       const scopedLabel = rateLimit.scopedLabel || 'Model';
       const compact = remaining === null ? 'Week --' : `Week ${remaining}% left`;
       const detail = [remaining === null ? 'All unavailable' : `All ${remaining}% left`, `${scopedLabel} ${scopedRemaining}% left`].join(' · ');
-      button.style.setProperty('--quota-pct', used === null ? 0 : Number(used));
-      button.style.setProperty('--quota-week-pct', Number(scopedUsed));
-      usageFill.setAttribute('aria-hidden', 'true');
-      weekFill.setAttribute('aria-hidden', 'true');
-      if (label) label.textContent = compact;
-      if (details) details.textContent = detail;
-      button.title = `Weekly quota · ${detail}`;
-      button.setAttribute('aria-label', button.title);
-      return compact;
+      return {
+        compact,
+        detail,
+        title: `Weekly quota · ${detail}`,
+        percent: used === null ? 0 : Number(used),
+        weekPercent: Number(scopedUsed),
+      };
     }
     const weekPercent = weeklyElapsedPercent(rateLimit);
     if (!Number.isFinite(percent)) {
-      button.style.setProperty('--quota-pct', 0);
-      button.style.setProperty('--quota-week-pct', Number.isFinite(weekPercent) ? weekPercent : 0);
-      if (label) label.textContent = 'Week --';
-      if (details) details.textContent = 'Unavailable';
-      button.title = 'Quota unknown';
-      button.setAttribute('aria-label', 'Quota unknown');
-      return 'Week --';
+      return {
+        compact: 'Week --',
+        detail: 'Unavailable',
+        title: 'Quota unknown',
+        percent: 0,
+        weekPercent: Number.isFinite(weekPercent) ? weekPercent : 0,
+      };
     }
     const clamped = Math.max(0, Math.min(100, percent));
     const used = quotaPercent(clamped);
@@ -1184,15 +1283,13 @@
     const reset = weeklyResetLabel(rateLimit);
     const compact = `Week ${remaining}% left`;
     const detail = `${remaining}% left · ${used}% used${reset ? ` · resets ${reset}` : ''}`;
-    button.style.setProperty('--quota-pct', clamped);
-    button.style.setProperty('--quota-week-pct', Number.isFinite(weekPercent) ? Math.max(0, Math.min(100, weekPercent)) : 0);
-    usageFill.setAttribute('aria-hidden', 'true');
-    weekFill.setAttribute('aria-hidden', 'true');
-    if (label) label.textContent = compact;
-    if (details) details.textContent = detail;
-    button.title = `Weekly quota · ${detail}`;
-    button.setAttribute('aria-label', button.title);
-    return compact;
+    return {
+      compact,
+      detail,
+      title: `Weekly quota · ${detail}`,
+      percent: clamped,
+      weekPercent: Number.isFinite(weekPercent) ? Math.max(0, Math.min(100, weekPercent)) : 0,
+    };
   }
 
   function leadingText(text, maxChars) {
@@ -1255,24 +1352,45 @@
     const model = data.model || `tmux:${data.session || 'unknown'}`;
     const ownerLabel = data.ownerLabel || 'TMUX';
     const contextUsage = data.contextUsage || {};
-    const contextText = renderContextStatus(contextUsage);
+    const context = contextStatusModel(contextUsage);
     const weeklyRateLimit = data.weeklyRateLimit || {};
     const sessionLabel = data.sessionTitle || data.sessionId || 'session unknown';
     const modelLabel = compactModelLabel(model, data.fastStatus);
     selectedSession = data.session || selectedSession;
     $('ownerText').textContent = ownerLabel;
     renderSessionLabel(sessionLabel);
-    $('modelText').textContent = modelLabel;
-    $('modelText').title = model;
-    const quotaText = renderQuotaStatus(weeklyRateLimit);
-    const goalModel = renderGoalStatus(data.goalStatus, { pill: goalPill, details: $('detailsGoal') });
+    const quota = quotaStatusModel(weeklyRateLimit);
+    const goalModel = goalViewModel(data.goalStatus);
+    const gitModel = gitStatusModel(data.gitStatus);
+    const subtitleTitle = `${context.compact} · ${quota.compact} · ${goalModel.detail} · ${model}${data.fastStatus ? ` · fast:${data.fastStatus}` : ''}`;
+    statusShellController.update({
+      contextText: context.compact,
+      contextTitle: context.title,
+      quotaText: quota.compact,
+      quotaTitle: quota.title,
+      quotaPercent: quota.percent,
+      quotaWeekPercent: quota.weekPercent,
+      modelText: modelLabel,
+      modelTitle: model,
+      subtitleTitle,
+      goalVisible: goalModel.visible,
+      goalText: goalModel.compact,
+      goalTitle: goalModel.visible ? `Goal status · ${goalModel.detail}` : '',
+      goalTone: goalModel.tone,
+      gitText: gitModel.text,
+      gitTitle: gitModel.title,
+      gitState: gitModel.state,
+    });
+    if ($('detailsContext')) $('detailsContext').textContent = context.detail;
+    if ($('detailsQuota')) $('detailsQuota').textContent = quota.detail;
+    if ($('detailsGoal')) $('detailsGoal').textContent = goalModel.detail;
+    if (!goalModel.visible) clearGoalDetails();
     document.documentElement.classList.toggle('has-goal-status', goalModel.visible);
-    $('subTitle').title = `${contextText} · ${quotaText} · ${goalModel.detail} · ${model}${data.fastStatus ? ` · fast:${data.fastStatus}` : ''}`;
+    syncStructuredInteraction(data.interaction || null);
     updateFolderLabel(data);
-    updateStatusPill(data.gitStatus);
     if ($('detailsOwner')) $('detailsOwner').textContent = ownerLabel;
     if ($('detailsModel')) $('detailsModel').textContent = modelLabel;
-    if ($('detailsGit')) $('detailsGit').textContent = phasePill.textContent || 'git --';
+    if ($('detailsGit')) $('detailsGit').textContent = gitModel.text;
     agentRunning = Boolean(data.agentRunning);
     updatePetControl();
   }
@@ -1284,6 +1402,7 @@
     persistPromptDraft();
     persistPendingSubmission();
     selectedSession = session;
+    clearGoalDetails();
     beginInitialLatestScroll();
     closeSurfacePanels({ restoreFocus: false });
     restorePromptDraft();
@@ -1733,7 +1852,7 @@
     output.dataset.captureSource = String(capture.captureSource || '');
     output.dataset.agentSource = String(capture.agentSource || '');
     if ($('detailsSource')) $('detailsSource').textContent = String(capture.captureSource || capture.source || 'unknown');
-    needsConfirmUI = hasConfirmUI(text, rules);
+    syncStructuredInteraction(capture.interaction || null);
     updateStatusLineAutoExpand();
     output.classList.toggle('compact-blocks', outputMode === 'compact');
     const isStructured = structuredCapture(capture);
@@ -1875,18 +1994,26 @@
     localStorage.setItem(key, enabled ? '1' : '0');
   }
 
-  function hasConfirmUI(text, rules = runtimeCompactRules) {
-    const tail = (text || '').split('\n').slice(-8).join('\n');
-    return rules.approvalPendingRe.test(tail) || /(?:Select Model(?: and Effort)?|Update Model Permissions|Press enter to confirm or esc to go back)/i.test(tail);
-  }
-
   function updateStatusLineAutoExpand() {
-    const on = pendingAttachments.length > 0 || needsConfirmUI;
+    const on = pendingAttachments.length > 0;
     const statusLine = document.querySelector('.status-line');
     statusLine?.classList.toggle('auto-expanded', on);
-    statusLine?.classList.toggle('tui-controls-visible', needsConfirmUI);
-    document.querySelector('.key-nav')?.setAttribute('aria-hidden', needsConfirmUI ? 'false' : 'true');
     document.querySelector('footer')?.classList.toggle('auto-expanded', on);
+  }
+
+  function newInteractionRequestId() {
+    return window.crypto?.randomUUID
+      ? `ixr-${window.crypto.randomUUID()}`
+      : `ixr-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 14)}`;
+  }
+
+  function syncStructuredInteraction(interaction) {
+    interactionHost?.update(interaction || null);
+    const active = Boolean(interaction && interaction.id);
+    document.documentElement.classList.toggle('has-pending-interaction', active);
+    if (active && interactionHost) updateStatusLineAutoExpand();
+    if (active && activeSurfacePanel) closeSurfacePanels({ restoreFocus: false });
+    setWorkbenchInert(active || Boolean(activeSurfacePanel));
   }
 
   const attachmentController = createAttachmentController({
@@ -1955,6 +2082,82 @@
     return composerDelivery.send(payload);
   }
 
+  function structuredSlashCommand(value) {
+    const invocation = String(value || '').trim();
+    if (!invocation || /[\r\n\0]/.test(invocation)) return '';
+    const command = invocation.split(/\s+/, 1)[0].toLowerCase();
+    if (!/^\/[a-z][a-z-]*$/.test(command)) return '';
+    return (codexCommandApi.inventory || []).some((entry) =>
+      [entry.command, ...(entry.aliases || [])]
+        .some((name) => String(name).toLowerCase() === command)
+    ) ? invocation : '';
+  }
+
+  function commandCatalogEntry(invocation) {
+    const command = String(invocation || '').trim().split(/\s+/, 1)[0].toLowerCase();
+    return (codexCommandApi.inventory || []).find((entry) =>
+      [entry.command, ...(entry.aliases || [])]
+        .some((name) => String(name).toLowerCase() === command)
+    ) || null;
+  }
+
+  function commandPendingKey(session) {
+    return `faryoCommandPending:${routeBase || 'owner'}:${session || 'default'}`;
+  }
+
+  function commandRequest(command, session) {
+    try {
+      const stored = JSON.parse(sessionStorage.getItem(commandPendingKey(session)) || 'null');
+      if (stored?.command === command && stored?.session === session && stored?.id) return stored;
+    } catch (_error) {}
+    const pending = { command, session, id: newInteractionRequestId() };
+    try { sessionStorage.setItem(commandPendingKey(session), JSON.stringify(pending)); } catch (_error) {}
+    return pending;
+  }
+
+  function clearCommandRequest(session) {
+    try { sessionStorage.removeItem(commandPendingKey(session)); } catch (_error) {}
+  }
+
+  async function submitLocalCommand(command) {
+    const session = selectedSession, browserText = promptInput.value;
+    const pending = commandRequest(command, session);
+    const entry = commandCatalogEntry(command);
+    const risk = String(entry?.risk || entry?.behavior || '');
+    const needsConfirmation = entry?.behavior === 'dangerous'
+      || entry?.behavior === 'unclassified'
+      || ['destructive', 'ends session', 'account', 'interrupts work', 'changes thread'].includes(risk);
+    let confirmed = false;
+    if (needsConfirmation) {
+      document.documentElement.classList.add('has-pending-interaction');
+      setWorkbenchInert(true);
+      confirmed = await interactionHost.confirmCommand({
+        command,
+        description: entry?.description || 'This command has not been classified by this Faryo version.',
+        risk: risk || 'unclassified',
+      });
+      document.documentElement.classList.remove('has-pending-interaction');
+      setWorkbenchInert(Boolean(activeSurfacePanel));
+      if (!confirmed) return false;
+    }
+    const response = await postAction('/api/interaction/start', {
+      command,
+      clientRequestId: pending.id,
+      confirmed,
+    });
+    clearCommandRequest(session);
+    if (selectedSession === session && promptInput.value === browserText) {
+      promptInput.value = '';
+      persistPromptDraft();
+      autosize();
+      updateSendVisibility();
+    }
+    syncStructuredInteraction(response.interaction || null);
+    refreshStatus({ silent: true }).catch(handleBackgroundError);
+    refreshCapture(currentCaptureLines(), { silent: true }).catch(handleBackgroundError);
+    return true;
+  }
+
 
   renderOutputModeButton();
   toggleClassState('header', 'collapsed', 'rdHeaderCollapsed'); toggleClassState('.app', 'header-collapsed', 'rdHeaderCollapsed'); syncStatusRefresh(false);
@@ -1974,6 +2177,13 @@
     openSurfacePanel(sessionMenu, $('draftState'));
   });
   $('detailsBtn').addEventListener('click', (event) => { event.stopPropagation(); openSurfacePanel(detailsPanel, $('detailsBtn')); });
+  function handleGoalPillClick(event) {
+    event?.stopPropagation();
+    if (activeSurfacePanel !== detailsPanel || detailsPanel.classList.contains('hidden')) {
+      openSurfacePanel(detailsPanel, goalPill);
+    }
+    loadGoalDetails();
+  }
   detailsPanel.addEventListener('click', (event) => { if (event.target.closest('[data-close-panel]')) closeSurfacePanels(); });
   const changesButton = $('detailsChangesBtn');
   changesButton.disabled = true;
@@ -2037,6 +2247,20 @@
     if (!text && !pendingAttachments.length) return;
     if (pendingAttachments.some((item) => ['compressing', 'uploading'].includes(item.status))) { setError('Attachments are still uploading'); return; }
     if (pendingAttachments.some((item) => item.status === 'error')) { setError('Remove failed attachments and try again'); return; }
+    const localCommand = !pendingAttachments.length ? structuredSlashCommand(text) : '';
+    if (localCommand) {
+      submitInFlight = true;
+      try {
+        closeDockMenu();
+        await submitLocalCommand(localCommand);
+      } catch (err) {
+        persistPromptDraft();
+        setError(userErrorMessage(err));
+      } finally {
+        submitInFlight = false;
+      }
+      return;
+    }
     const readyAttachments = pendingAttachments.filter((item) => item.path);
     const attachmentText = readyAttachments.map((item) => `${item.kind === 'image' ? 'Image' : 'Attachment'}: ${item.path}`).join('\n');
     const browserText = promptInput.value;
@@ -2107,12 +2331,6 @@
   });
 
 
-  async function chooseTuiOption() {
-    needsConfirmUI = false;
-    updateStatusLineAutoExpand();
-    try { await postAction('/api/approve'); refreshCapture(currentCaptureLines(), { silent: true }).catch(handleBackgroundError); setTimeout(() => refreshCapture(currentCaptureLines(), { silent: true }).catch(handleBackgroundError), 500); } catch (err) { setError(userErrorMessage(err)); }
-  }
-  $('approveSmallBtn').addEventListener('click', chooseTuiOption);
   const statusCollapseKey = 'rdStatusCollapsedV2';
   const storedStatusCollapse = localStorage.getItem(statusCollapseKey);
   const initialStatusCollapsed = storedStatusCollapse === null ? true : storedStatusCollapse === '1';
@@ -2124,17 +2342,12 @@
     toggleClassState('footer', 'status-collapsed', statusCollapseKey, on);
   });
 
-  async function navKey(path) {
-    try { await postAction(path); refreshCapture(currentCaptureLines(), { silent: true }).catch(handleBackgroundError); setTimeout(() => refreshCapture(currentCaptureLines(), { silent: true }).catch(handleBackgroundError), 350); } catch (err) { setError(userErrorMessage(err)); }
-  }
-  $('upBtn').addEventListener('click', () => navKey('/api/up'));
-  $('downBtn').addEventListener('click', () => navKey('/api/down'));
-
   // Fetch one complete metadata snapshot even when the persisted header state
   // is collapsed. Periodic status polling remains gated by header visibility;
   // lightweight capture/SSE metadata keeps `/rename` live after this point.
   refreshStatus().catch((err) => setError(userErrorMessage(err)));
   loadOwnerCapabilities().catch(handleBackgroundError);
+  loadCodexCommandCatalog().catch(handleBackgroundError);
   refreshCapture(currentCaptureLines()).catch((err) => setError(userErrorMessage(err)));
   startEventStream();
   document.documentElement.dataset.faryoAppReady = '1';

@@ -151,6 +151,7 @@ def install_services(
     install_user_units(selected, python=python)
     if no_start:
         return "units-installed"
+    tmux_before = migration.tmux_process_snapshot()
     try:
         if legacy:
             migration.migrate_owner(selected)
@@ -160,6 +161,7 @@ def install_services(
         systemctl("enable", "faryo-gateway.service")
         control_service("faryo-gateway.service", "restart")
         wait_for_health(selected)
+        migration.verify_process_snapshot(tmux_before, migration.tmux_process_snapshot())
     except Exception as exc:
         try:
             systemctl("disable", "--now", "faryo-owner.service", check=False)

@@ -638,6 +638,31 @@ class CodexTranscriptTest(unittest.TestCase):
         self.assertEqual(result["usedPercent"], 42.0)
         self.assertEqual(result["windowDurationMins"], 10_080)
 
+    def test_goal_details_use_formal_app_server_rpc_only_on_demand(self):
+        config = server.Config("faryo1", "fixture-token", 0)
+        result = {
+            "goal": {
+                "threadId": "thread-id",
+                "objective": "Anonymous objective",
+                "status": "active",
+                "tokensUsed": 12,
+                "timeUsedSeconds": 34,
+                "createdAt": 100,
+                "updatedAt": 200,
+            }
+        }
+        with (
+            mock.patch.object(server, "has_session", return_value=True),
+            mock.patch.object(server, "get_pane_cwd", return_value="/workspace"),
+            mock.patch.object(server, "active_agent_thread", return_value={"id": "thread-id"}),
+            mock.patch.object(server, "codex_app_server_request", return_value=result) as request,
+        ):
+            details = server.goal_details_for_config(config)
+
+        request.assert_called_once_with("thread/goal/get", {"threadId": "thread-id"}, timeout=3.0)
+        self.assertEqual(details["objective"], "Anonymous objective")
+        self.assertNotIn("threadId", details)
+
     def test_rate_limit_refresh_failure_does_not_wedge_future_attempts(self):
         with server._rate_limit_lock:
             server._rate_limit_refreshing = True

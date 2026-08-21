@@ -74,7 +74,13 @@ def resolve_start_directory(path_value: str | None, roots: list[Path]) -> Path:
     return path
 
 
-def list_start_directories(path: Path, roots: list[Path], limit: int) -> tuple[Path | None, list[Path], bool]:
+def list_start_directories(
+    path: Path,
+    roots: list[Path],
+    limit: int,
+    *,
+    show_hidden: bool = False,
+) -> tuple[Path | None, list[Path], bool]:
     parent = path.parent if path.parent != path and any(inside(path.parent, root) for root in roots) else None
     try:
         children = sorted(path.iterdir(), key=lambda item: item.name.casefold())
@@ -83,7 +89,7 @@ def list_start_directories(path: Path, roots: list[Path], limit: int) -> tuple[P
     directories: list[Path] = []
     truncated = False
     for child in children:
-        if child.name.startswith("."):
+        if child.name.startswith(".") and not show_hidden:
             continue
         try:
             resolved = child.resolve()

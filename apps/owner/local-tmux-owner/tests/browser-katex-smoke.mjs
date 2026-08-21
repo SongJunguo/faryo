@@ -51,7 +51,7 @@ const checkAstFixture = process.env.FARYO_SMOKE_CHECK_AST_FIXTURE === '1';
 const checkQuestionNavigator = process.env.FARYO_SMOKE_CHECK_QUESTION_NAV === '1';
 const forceRenderFailure = process.env.FARYO_SMOKE_FORCE_RENDER_FAILURE === '1';
 const expectedLivePanelState = process.env.FARYO_SMOKE_EXPECT_LIVE_PANEL_STATE || '';
-const expectedKeyNavState = process.env.FARYO_SMOKE_EXPECT_KEY_NAV || 'hidden';
+const expectedInteractionState = process.env.FARYO_SMOKE_EXPECT_INTERACTION || 'hidden';
 const viewportWidth = Number(process.env.FARYO_SMOKE_VIEWPORT_WIDTH || 0);
 const viewportHeight = Number(process.env.FARYO_SMOKE_VIEWPORT_HEIGHT || 0);
 const smokeTheme = process.env.FARYO_SMOKE_THEME || '';
@@ -204,8 +204,8 @@ if (!targetUrl) {
   throw new Error('FARYO_SMOKE_URL is required');
 }
 const smokeOwnerToken = new URL(targetUrl).searchParams.get('token') || '';
-if (!['hidden', 'visible'].includes(expectedKeyNavState)) {
-  throw new Error('FARYO_SMOKE_EXPECT_KEY_NAV must be hidden or visible');
+if (!['hidden', 'visible'].includes(expectedInteractionState)) {
+  throw new Error('FARYO_SMOKE_EXPECT_INTERACTION must be hidden or visible');
 }
 if (!['', 'table', 'math', 'code'].includes(uiScreenshotFocus)) {
   throw new Error('FARYO_SMOKE_UI_FOCUS must be table, math, code, or empty');
@@ -412,7 +412,7 @@ try {
           });
         const livePanel = output?.querySelector('.compact-live-terminal');
         const statusLine = document.querySelector('.status-line');
-        const keyNav = document.querySelector('.key-nav');
+        const interaction = document.querySelector('.interaction-backdrop');
         const promptRect = promptShell?.getBoundingClientRect();
         const homeLink = document.getElementById('homeBtn');
         const homeRect = homeLink?.getBoundingClientRect();
@@ -590,11 +590,8 @@ try {
             visibleComposerControls,
             statusCollapsed: Boolean(statusLine?.classList.contains('collapsed')),
             statusAutoExpanded: Boolean(statusLine?.classList.contains('auto-expanded')),
-            keyNavVisible: Boolean(keyNav && keyNav.getClientRects().length),
-            enterControl: {
-              label: String(document.getElementById('approveSmallBtn')?.textContent || '').trim(),
-              aria: String(document.getElementById('approveSmallBtn')?.getAttribute('aria-label') || ''),
-            },
+            interactionVisible: Boolean(interaction && interaction.getClientRects().length),
+            interactionKind: String(interaction?.dataset.interactionKind || ''),
             livePanel: livePanel ? { open: Boolean(livePanel.open), session: String(livePanel.dataset.session || '') } : null,
             weeklyQuota: {
               label: String(document.getElementById('quotaText')?.textContent || '').trim(),
@@ -956,13 +953,9 @@ try {
     }
     const undersizedControls = (layout.visibleComposerControls || []).filter((item) => item.width < 42 || item.height < 42);
     if (undersizedControls.length) throw new Error(`Owner composer controls are too small: ${JSON.stringify(undersizedControls)}`);
-    const expectKeyNavVisible = expectedKeyNavState === 'visible';
-    if (!layout.statusCollapsed || layout.keyNavVisible !== expectKeyNavVisible
-      || (expectKeyNavVisible && !layout.statusAutoExpanded)) {
-      throw new Error(`Owner terminal control visibility is wrong: ${JSON.stringify({ expectedKeyNavState, layout })}`);
-    }
-    if (layout.enterControl?.label !== 'Enter Choose' || !layout.enterControl?.aria.includes('current Codex TUI option')) {
-      throw new Error(`Owner Enter control is ambiguous: ${JSON.stringify(layout.enterControl)}`);
+    const expectInteractionVisible = expectedInteractionState === 'visible';
+    if (!layout.statusCollapsed || layout.interactionVisible !== expectInteractionVisible) {
+      throw new Error(`Owner structured interaction visibility is wrong: ${JSON.stringify({ expectedInteractionState, layout })}`);
     }
     const attachmentStripResult = await send('Runtime.evaluate', {
       expression: `(() => {
@@ -997,36 +990,6 @@ try {
       || !attachmentStrip.scrollable || attachmentStrip.pageOverflow) {
       throw new Error(`Owner 35-file attachment strip is not bounded: ${JSON.stringify(attachmentStrip)}`);
     }
-    const keyNavResult = await send('Runtime.evaluate', {
-      expression: `(() => {
-        const line = document.querySelector('.status-line');
-        const footer = document.querySelector('footer');
-        const nav = document.querySelector('.key-nav');
-        const wasAutoExpanded = Boolean(line?.classList.contains('auto-expanded'));
-        line?.classList.add('auto-expanded');
-        footer?.classList.add('auto-expanded');
-        const expandedVisible = Boolean(nav && nav.getClientRects().length);
-        line?.classList.toggle('auto-expanded', wasAutoExpanded);
-        footer?.classList.toggle('auto-expanded', wasAutoExpanded);
-        return { expandedVisible, restoredVisible: Boolean(nav && nav.getClientRects().length) };
-      })()`,
-      returnByValue: true,
-    });
-    const keyNavState = keyNavResult.result?.value || {};
-    if (keyNavState.expandedVisible !== expectKeyNavVisible || keyNavState.restoredVisible !== expectKeyNavVisible) {
-      throw new Error(`Owner terminal controls did not follow the approval expansion state: ${JSON.stringify(keyNavState)}`);
-    }
-    if (expectKeyNavVisible) {
-      const enterHideResult = await send('Runtime.evaluate', {
-        expression: `(() => {document.getElementById('approveSmallBtn')?.click();const nav=document.querySelector('.key-nav'),line=document.querySelector('.status-line');return{aria:nav?.getAttribute('aria-hidden')||'',visible:Boolean(nav&&nav.getClientRects().length),classVisible:Boolean(line?.classList.contains('tui-controls-visible'))};})()`,
-        returnByValue: true,
-      });
-      const enterHide = enterHideResult.result?.value || {};
-      if (enterHide.aria !== 'true' || enterHide.visible || enterHide.classVisible) {
-        throw new Error(`Owner Enter control did not auto-hide optimistically: ${JSON.stringify(enterHide)}`);
-      }
-    }
-
     const measurePrompt = async (action = '') => {
       const result = await send('Runtime.evaluate', {
         expression: `(() => {
@@ -2367,7 +2330,7 @@ try {
             previewCount: document.querySelectorAll('#attachmentPreview .attachment-thumb').length,
             inputValue: document.getElementById('promptInput')?.value || '',
             pastePrevented: Boolean(window.__faryoClipboardPasteDefaultPrevented),
-            keyNavVisible: Boolean(document.querySelector('.key-nav')?.getClientRects().length),
+            interactionVisible: Boolean(document.querySelector('.interaction-backdrop')?.getClientRects().length),
           };
         })()`,
         returnByValue: true,
@@ -2381,7 +2344,7 @@ try {
     if (attachmentViaClipboard && (uploadState.previewCount !== 1 || uploadState.inputValue !== 'anonymous clipboard caption' || !uploadState.pastePrevented)) {
       throw new Error(`Faryo clipboard image paste failed: ${JSON.stringify(uploadState)}`);
     }
-    if (uploadState.keyNavVisible) throw new Error('Attachment preview incorrectly revealed Codex TUI controls');
+    if (uploadState.interactionVisible) throw new Error('Attachment preview incorrectly revealed a Codex interaction');
 
     await send('Runtime.evaluate', {
       expression: `(() => {

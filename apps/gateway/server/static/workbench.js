@@ -109,6 +109,7 @@ document.addEventListener("click", (event) => {
   }
 });
 const WORKBENCH_CACHE_KEY = "faryoWorkbenchSnapshot";
+const DIRECTORY_HIDDEN_PREFERENCE_KEY = "faryoDirectoryShowHiddenV1";
 const labels = JSON.parse(
     document.getElementById("faryoRouteLabels")?.textContent || "{}",
   ),
@@ -127,6 +128,7 @@ const labels = JSON.parse(
 let draggedPackage = null;
 let assetTargetPackage = null;
 let handoffTargets = [];
+let latestAgentCwdChoices = {};
 let actionBusy = false;
 let historyPage = Math.max(
     1,
@@ -336,12 +338,17 @@ function resetSheetMode() {
   const modal = document.getElementById("modal"),
     toolbar = document.getElementById("directoryToolbar"),
     breadcrumb = document.getElementById("directoryBreadcrumb"),
-    search = document.getElementById("directorySearch");
+    search = document.getElementById("directorySearch"),
+    hiddenToggle = document.getElementById("directoryHiddenToggle");
   modal.classList.remove("directory-mode");
   toolbar.hidden = true;
   breadcrumb.replaceChildren();
   search.value = "";
   search.oninput = null;
+  hiddenToggle.onclick = null;
+  hiddenToggle.disabled = false;
+  hiddenToggle.setAttribute("aria-pressed", "false");
+  hiddenToggle.classList.remove("active");
 }
 function sheet(title, body, choices) {
   return new Promise((resolve) => {
@@ -731,8 +738,11 @@ async function selectNewRoute(entries, label) {
     choices,
   );
 }
-async function directoryPage(route, path) {
-  const query = path ? `?path=${encodeURIComponent(path)}` : "";
+async function directoryPage(route, path, showHidden = false) {
+  const params = new URLSearchParams();
+  if (path) params.set("path", path);
+  if (showHidden) params.set("showHidden", "1");
+  const query = params.size ? `?${params}` : "";
   return fetchJson(
     `/${route}/api/directories${query}`,
     { cache: "no-store" },
@@ -924,23 +934,26 @@ function directorySection(title, items, done, more) {
   section.append(heading, ...items.map((item) => directoryRow(item, done)));
   return section;
 }
-function directorySheet(data, recent, label) {
+function directorySheet(data, recent, label, options = {}) {
   return new Promise((resolve) => {
     const modal = document.getElementById("modal"),
       list = document.getElementById("modalChoices"),
       actions = document.getElementById("modalActions"),
       toolbar = document.getElementById("directoryToolbar"),
       breadcrumb = document.getElementById("directoryBreadcrumb"),
-      search = document.getElementById("directorySearch");
+      search = document.getElementById("directorySearch"),
+      hiddenToggle = document.getElementById("directoryHiddenToggle");
     resetSheetMode();
     modal.classList.remove("anchored");
     modal.classList.add("directory-mode");
     document.getElementById("modalTitle").textContent =
       "Choose working directory";
     document.getElementById("modalBody").textContent =
-      `Choose where this ${label} session should work.`;
+      options.body || `Choose where this ${label} session should work.`;
     toolbar.hidden = false;
-    let expanded = false;
+    let expanded = false,
+      currentData = data,
+      showHidden = Boolean(data.showHidden ?? options.showHidden);
     const done = (value) => {
         modal.classList.remove("open", "anchored", "directory-mode");
         modal.onclick = null;
@@ -949,7 +962,7 @@ function directorySheet(data, recent, label) {
       },
       render = () => {
         const model = directoryPickerModel(
-            data,
+            currentData,
             recent,
             search.value,
             expanded,
@@ -990,20 +1003,54 @@ function directorySheet(data, recent, label) {
         }
         list.replaceChildren(...nodes);
       };
-    breadcrumb.replaceChildren(
-      ...directoryBreadcrumbItems(data).map((item) => {
-        const button = document.createElement("button");
-        button.type = "button";
-        button.className = `directory-crumb${item.collapsed ? " directory-crumb-collapsed" : ""}`;
-        button.textContent = item.label;
-        if (item.current) {
-          button.disabled = true;
-          button.setAttribute("aria-current", "location");
-        } else
-          button.addEventListener("click", () => done({ path: item.path }));
-        return button;
-      }),
-    );
+    const renderBreadcrumb = () =>
+      breadcrumb.replaceChildren(
+        ...directoryBreadcrumbItems(currentData).map((item) => {
+          const button = document.createElement("button");
+          button.type = "button";
+          button.className = `directory-crumb${item.collapsed ? " directory-crumb-collapsed" : ""}`;
+          button.textContent = item.label;
+          if (item.current) {
+            button.disabled = true;
+            button.setAttribute("aria-current", "location");
+          } else
+            button.addEventListener("click", () => done({ path: item.path }));
+          return button;
+        }),
+      );
+    const syncHiddenToggle = () => {
+      hiddenToggle.setAttribute("aria-pressed", showHidden ? "true" : "false");
+      hiddenToggle.classList.toggle("active", showHidden);
+      hiddenToggle.title = showHidden
+        ? "Hide dot-prefixed folders"
+        : "Show dot-prefixed folders";
+    };
+    hiddenToggle.onclick = async () => {
+      if (hiddenToggle.disabled || typeof options.onToggleHidden !== "function")
+        return;
+      hiddenToggle.disabled = true;
+      try {
+        const next = await options.onToggleHidden(
+          !showHidden,
+          currentData.path,
+        );
+        if (next && typeof next === "object") {
+          currentData = next;
+          showHidden = Boolean(next.showHidden);
+          expanded = false;
+          renderBreadcrumb();
+          render();
+          requestAnimationFrame(() => {
+            breadcrumb.scrollLeft = breadcrumb.scrollWidth;
+          });
+        }
+      } finally {
+        hiddenToggle.disabled = false;
+        syncHiddenToggle();
+      }
+    };
+    renderBreadcrumb();
+    syncHiddenToggle();
     search.oninput = render;
     const cancel = document.createElement("button");
     cancel.type = "button";
@@ -1016,8 +1063,8 @@ function directorySheet(data, recent, label) {
     select.textContent = `Start ${label} here`;
     select.addEventListener("click", () =>
       done({
-        cwd: String(data.path || ""),
-        cwdToken: String(data.selectionToken || ""),
+        cwd: String(currentData.path || ""),
+        cwdToken: String(currentData.selectionToken || ""),
       }),
     );
     actions.replaceChildren(cancel, select);
@@ -1031,7 +1078,7 @@ function directorySheet(data, recent, label) {
     });
   });
 }
-async function firstAvailableDirectoryPage(route, recent) {
+async function firstAvailableDirectoryPage(route, recent, showHidden = false) {
   const candidates = [],
     seen = new Set();
   for (const item of recent) {
@@ -1044,24 +1091,49 @@ async function firstAvailableDirectoryPage(route, recent) {
   let lastError = null;
   for (const candidate of candidates) {
     try {
-      return { data: await directoryPage(route, candidate), path: candidate };
+      return {
+        data: await directoryPage(route, candidate, showHidden),
+        path: candidate,
+      };
     } catch (error) {
       lastError = error;
     }
   }
   throw lastError || new Error("No available working directory");
 }
-async function selectNewCwd(route, label, cwdChoices) {
+async function selectNewCwd(route, label, cwdChoices, body = "") {
   const recent = Array.isArray(cwdChoices?.[route]) ? cwdChoices[route] : [];
-  const initial = await firstAvailableDirectoryPage(route, recent);
+  let showHidden = false;
+  try {
+    showHidden = localStorage.getItem(DIRECTORY_HIDDEN_PREFERENCE_KEY) === "1";
+  } catch (_error) {}
+  const initial = await firstAvailableDirectoryPage(route, recent, showHidden);
   let path = initial.path,
     data = initial.data;
   while (true) {
-    const selected = await directorySheet(data, recent, label);
+    const selected = await directorySheet(data, recent, label, {
+      showHidden,
+      body,
+      onToggleHidden: async (nextShowHidden, currentPath) => {
+        const next = await directoryPage(
+          route,
+          currentPath || path,
+          nextShowHidden,
+        );
+        showHidden = nextShowHidden;
+        data = next;
+        try {
+          if (showHidden)
+            localStorage.setItem(DIRECTORY_HIDDEN_PREFERENCE_KEY, "1");
+          else localStorage.removeItem(DIRECTORY_HIDDEN_PREFERENCE_KEY);
+        } catch (_error) {}
+        return next;
+      },
+    });
     if (selected === null) return null;
     if (selected.cwd) return selected;
     path = String(selected.path || "");
-    data = await directoryPage(route, path);
+    data = await directoryPage(route, path, showHidden);
   }
 }
 function newLaunchRequestId() {
@@ -1099,15 +1171,36 @@ async function agentNew(route, command, directory) {
   location.href = data.redirect;
 }
 async function resumeSession(route, agentSessionId, source) {
-  const data = await fetchJson(
-    "/api/agent/resume",
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json", ...(await csrfHeaders()) },
-      body: JSON.stringify({ route, agent_session_id: agentSessionId, source }),
-    },
-    "Resume session",
-  );
+  const payload = { route, agent_session_id: agentSessionId, source };
+  const request = async () =>
+    fetchJson(
+      "/api/agent/resume",
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(await csrfHeaders()),
+        },
+        body: JSON.stringify(payload),
+      },
+      "Resume session",
+    );
+  let data = await request();
+  if (data.requiresWorkingDirectory) {
+    const recorded = String(data.recordedDisplayCwd || "the recorded folder"),
+      directory = await selectNewCwd(
+        route,
+        "resumed Codex",
+        latestAgentCwdChoices,
+        `${recorded} is unavailable. Choose a working directory before Codex resumes.`,
+      );
+    if (directory === null) return;
+    payload.cwd = directory.cwd;
+    payload.cwd_token = directory.cwdToken || "";
+    data = await request();
+    if (data.requiresWorkingDirectory)
+      throw new Error("The selected working directory was not accepted.");
+  }
   location.href =
     data.redirect || `/${route}/?session=${encodeURIComponent(data.session)}`;
 }
@@ -1208,6 +1301,7 @@ function renderWorkbench(data) {
         cwdChoices,
       },
     ].filter((item) => allowedCommands.has(item.command));
+  latestAgentCwdChoices = cwdChoices;
   processAttention(activeSessions);
   historyFilters.q = String(applied.q || "").slice(0, 96);
   historyFilters.period = validPeriods.has(applied.period)

@@ -44,33 +44,55 @@ def routes(legacy: Any, config: Any, client: owner_client.OwnerClient, support: 
                 route = str(payload.get("route") or "").strip()
                 target = legacy.clean_agent_session_id(str(payload.get("agent_session_id") or "")) or ""
                 source = str(payload.get("source") or "")
+                requested_cwd = str(payload.get("cwd") or "").strip()
+                cwd_token = str(payload.get("cwd_token") or payload.get("cwdToken") or "").strip()
                 if route not in legacy.BACKENDS or not target or not source:
                     raise ValueError("route, agent_session_id and source are required")
                 if not config.allowed_route(current, route):
                     status = HTTPStatus.FORBIDDEN
                     response = support.json_response({"ok": False, "error": "forbidden"}, status)
                 else:
+                    if requested_cwd:
+                        expected_cwd_token = legacy.owner_directory_selection_token(
+                            config.owner_token(route),
+                            requested_cwd,
+                        )
+                        if not cwd_token or not secrets.compare_digest(cwd_token, expected_cwd_token):
+                            raise ValueError("working directory selection is invalid or expired")
+                    owner_payload = {
+                        "agent_session_id": target,
+                        "source": source,
+                        "max_running": config.max_running(route),
+                    }
+                    if requested_cwd:
+                        owner_payload.update({"cwd": requested_cwd, "cwd_token": cwd_token})
                     result = await to_thread.run_sync(
                         lambda: client.json_request(
                             route,
                             "/api/agent/resume",
-                            {
-                                "agent_session_id": target,
-                                "source": source,
-                                "max_running": config.max_running(route),
-                            },
+                            owner_payload,
                             current,
                             timeout=20,
                         )
                     )
-                    session = legacy.clean_session_id(str(result.get("session") or "")) if result.get("ok") else ""
-                    if not session:
+                    session = ""
+                    if result.get("ok") and result.get("requiresWorkingDirectory"):
+                        status = HTTPStatus.OK
+                        response = support.json_response({
+                            "ok": True,
+                            "requiresWorkingDirectory": True,
+                            "reason": str(result.get("reason") or "recorded-directory-unavailable"),
+                            "recordedDisplayCwd": str(result.get("recordedDisplayCwd") or "Unavailable directory"),
+                        })
+                    else:
+                        session = legacy.clean_session_id(str(result.get("session") or "")) if result.get("ok") else ""
+                    if not result.get("requiresWorkingDirectory") and not session:
                         status = HTTPStatus.BAD_GATEWAY
                         response = support.json_response(
                             {"ok": False, "error": result.get("error") or "owner resume failed"},
                             status,
                         )
-                    else:
+                    elif session:
                         status = HTTPStatus.OK
                         response = support.json_response({
                             "ok": True,

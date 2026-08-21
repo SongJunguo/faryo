@@ -126,11 +126,15 @@ class AgentSessionTest(unittest.TestCase):
                 "FARYO_START_DIRECTORY_ROOTS": str(workspace),
             }, clear=False):
                 payload = server.directory_browser_payload(self.config, str(workspace))
+                hidden_payload = server.directory_browser_payload(self.config, str(workspace), show_hidden=True)
                 child = server.directory_browser_payload(self.config, str(visible))
                 with self.assertRaises(server.OwnerError) as denied:
                     server.resolve_start_directory(str(outside))
 
         self.assertEqual([item["name"] for item in payload["directories"]], ["visible"])
+        self.assertFalse(payload["showHidden"])
+        self.assertEqual([item["name"] for item in hidden_payload["directories"]], [".hidden", "visible"])
+        self.assertTrue(hidden_payload["showHidden"])
         self.assertEqual(payload["selectionToken"], server.directory_selection_token(self.config, workspace.resolve()))
         self.assertEqual(child["parent"], str(workspace.resolve()))
         self.assertEqual(denied.exception.status, server.HTTPStatus.FORBIDDEN)
@@ -141,11 +145,13 @@ class AgentSessionTest(unittest.TestCase):
             mock.patch.object(server, "active_agent_count", return_value=0),
             mock.patch.object(server, "agent_login_shell", return_value="/bin/bash"),
             mock.patch.object(server, "codex_cli_argv", return_value=["/runtime/node", "/runtime/codex.js"]),
+            mock.patch.object(server, "git_root_for_cwd", return_value="/workspace"),
             mock.patch.object(server, "tmux", return_value=completed) as tmux,
             mock.patch.object(server, "tmux_session_option") as session_option,
             mock.patch.object(server, "managed_launch_session", return_value=""),
             mock.patch.object(server, "has_session", return_value=True),
             mock.patch.object(server, "codex_cli_in_pane", side_effect=[False, True]),
+            mock.patch.object(server, "agent_ready_for_input", return_value=True),
             mock.patch.object(server, "ensure_pane_width") as ensure_width,
             mock.patch.object(server.time, "sleep"),
         ):
@@ -157,6 +163,7 @@ class AgentSessionTest(unittest.TestCase):
         self.assertIn("/runtime/codex.js", launch[-1])
         session_option.assert_any_call(self.config, name, "@faryo_managed", "1")
         session_option.assert_any_call(self.config, name, "@faryo_launch_id", "web-launch-123")
+        session_option.assert_any_call(self.config, name, "@faryo_git_root", "/workspace")
         self.assertTrue(any(call.args[2] == "@faryo_starting_at" and call.args[3] for call in session_option.call_args_list))
         session_option.assert_any_call(self.config, name, "@faryo_starting_at", "")
         ensure_width.assert_called_once()
@@ -167,6 +174,7 @@ class AgentSessionTest(unittest.TestCase):
             mock.patch.object(server, "active_agent_count") as active_count,
             mock.patch.object(server, "has_session", return_value=True),
             mock.patch.object(server, "codex_cli_in_pane", return_value=True),
+            mock.patch.object(server, "agent_ready_for_input", return_value=True),
             mock.patch.object(server, "ensure_pane_width") as ensure_width,
             mock.patch.object(server, "tmux") as tmux,
         ):
@@ -249,6 +257,61 @@ class AgentSessionTest(unittest.TestCase):
         self.assertEqual(raised.exception.status, server.HTTPStatus.BAD_GATEWAY)
         self.assertTrue(any(call.args[1][:2] == ["kill-session", "-t"] for call in tmux.call_args_list))
 
+    def test_new_agent_start_accepts_a_structured_startup_interaction(self):
+        completed = server.subprocess.CompletedProcess(["tmux"], 0, "", "")
+        pending = mock.sentinel.pending_interaction
+        with (
+            mock.patch.object(server, "active_agent_count", return_value=0),
+            mock.patch.object(server, "agent_login_shell", return_value="/bin/bash"),
+            mock.patch.object(server, "codex_cli_argv", return_value=["/runtime/codex"]),
+            mock.patch.object(server, "tmux", return_value=completed),
+            mock.patch.object(server, "tmux_session_option"),
+            mock.patch.object(server, "managed_launch_session", return_value=""),
+            mock.patch.object(server, "has_session", return_value=True),
+            mock.patch.object(server, "codex_cli_in_pane", return_value=True),
+            mock.patch.object(server, "tmux_current_capture", return_value="synthetic menu"),
+            mock.patch.object(server.codex_tui_interactions, "detect_interaction", return_value=pending),
+            mock.patch.object(server, "agent_ready_for_input") as ready,
+            mock.patch.object(server, "ensure_pane_width"),
+        ):
+            name = server.start_agent_runtime(self.config, Path("/workspace"), "codex", [])
+
+        self.assertTrue(name.startswith("faryo"))
+        ready.assert_not_called()
+
+    def test_missing_recorded_resume_directory_requires_user_selection(self):
+        with tempfile.TemporaryDirectory() as root:
+            missing = Path(root) / "moved-project"
+            thread = {"id": "thread-a", "cwd": str(missing)}
+            with (
+                mock.patch.object(server, "active_codex_thread_map", return_value={}),
+                mock.patch.object(server, "codex_thread_by_id", return_value=thread),
+            ):
+                requirement = server.codex_resume_directory_requirement(self.config, "thread-a")
+
+        self.assertTrue(requirement["requiresWorkingDirectory"])
+        self.assertEqual("recorded-directory-unavailable", requirement["reason"])
+
+    def test_resume_override_is_explicit_in_tmux_cwd_and_codex_cli(self):
+        with tempfile.TemporaryDirectory() as root:
+            selected = Path(root)
+            thread = {"id": "thread-a", "cwd": "/workspace/old"}
+            with (
+                mock.patch.object(server, "active_codex_thread_map", return_value={}),
+                mock.patch.object(server, "codex_thread_by_id", return_value=thread),
+                mock.patch.object(server, "start_agent_runtime", return_value="faryo7") as start,
+            ):
+                session = server.resume_codex_thread_session(
+                    self.config,
+                    "thread-a",
+                    cwd_override=selected,
+                )
+
+        self.assertEqual("faryo7", session)
+        args = start.call_args.args
+        self.assertEqual(selected, args[1])
+        self.assertEqual(["resume", "-C", str(selected), "thread-a"], args[3])
+
     def test_workspace_history_scope_hides_unmapped_desktop_agent(self):
         with (
             mock.patch.object(server, "codex_history_items", return_value=[]),
@@ -307,11 +370,58 @@ class AgentSessionTest(unittest.TestCase):
     def test_codex_history_filter_scopes_and_excludes_active_threads(self):
         where, params = server.codex_history_filter("/workspace/project", {"live-b", "live-a"})
 
+        self.assertIn("thread_source = 'user' OR thread_source IS NULL", where)
         self.assertIn("id NOT IN (?,?)", where)
         self.assertIn("cwd LIKE ? ESCAPE", where)
         self.assertEqual(params[:2], ("live-a", "live-b"))
         self.assertEqual(params[2], "/workspace/project")
         self.assertEqual(params[3], "/workspace/project/%")
+
+    def test_legacy_null_thread_source_is_visible_but_subagents_are_not(self):
+        self.assertTrue(server.interactive_top_level_thread({"source": "cli", "thread_source": None}))
+        self.assertTrue(server.interactive_top_level_thread({"source": "vscode", "thread_source": "user"}))
+        self.assertFalse(server.interactive_top_level_thread({"source": "cli", "thread_source": "subagent"}))
+        self.assertFalse(server.interactive_top_level_thread({"source": "exec", "thread_source": None}))
+        self.assertFalse(server.interactive_top_level_thread({"source": {"subagent": {}}, "thread_source": "user"}))
+
+    def test_history_search_includes_legacy_null_top_level_rows(self):
+        now = 2_000_000_000.0
+        with tempfile.TemporaryDirectory() as root:
+            state_db = Path(root) / "state.sqlite"
+            connection = sqlite3.connect(state_db)
+            try:
+                connection.execute(
+                    "CREATE TABLE threads (id TEXT, title TEXT, rollout_path TEXT, tokens_used INTEGER, "
+                    "model TEXT, reasoning_effort TEXT, cwd TEXT, updated_at REAL, source TEXT, "
+                    "thread_source TEXT, archived INTEGER, created_at REAL)"
+                )
+                connection.executemany(
+                    "INSERT INTO threads VALUES (?, ?, '', 0, '', '', ?, ?, ?, ?, 0, ?)",
+                    [
+                        ("legacy", "Anonymous migrated topic", "/workspace/legacy", now, "cli", None, now),
+                        ("current", "Anonymous current topic", "/workspace/current", now - 1, "cli", "user", now - 1),
+                        ("child", "Anonymous child topic", "/workspace/child", now - 2, "cli", "subagent", now - 2),
+                        ("exec", "Anonymous exec topic", "/workspace/exec", now - 3, "exec", None, now - 3),
+                    ],
+                )
+                connection.commit()
+            finally:
+                connection.close()
+            with (
+                mock.patch.object(server, "AGENT_STATE_DB", state_db),
+                mock.patch.object(server, "codex_session_index_titles", return_value={}),
+                mock.patch.object(server, "codex_session_item", side_effect=lambda _config, item, *_args: item),
+            ):
+                page, total = server.codex_history_page(
+                    self.config,
+                    10,
+                    query="Anonymous",
+                    archive="all",
+                    now=now,
+                )
+
+        self.assertEqual(total, 2)
+        self.assertEqual([item["id"] for item in page], ["legacy", "current"])
 
     def test_history_search_matches_explicit_rename_and_literal_folder_symbols(self):
         rows = [

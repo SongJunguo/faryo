@@ -73,6 +73,8 @@ release_checks() {
   (cd "$ROOT" && PATH="$(dirname "$NODE_BIN"):$PATH" npm run --silent test:diff-review)
   (cd "$ROOT" && PATH="$(dirname "$NODE_BIN"):$PATH" npm run --silent check:gateway-preact)
   (cd "$ROOT" && PATH="$(dirname "$NODE_BIN"):$PATH" npm run --silent test:gateway-preact)
+  (cd "$ROOT" && PATH="$(dirname "$NODE_BIN"):$PATH" npm run --silent typecheck:owner-ui)
+  (cd "$ROOT" && PATH="$(dirname "$NODE_BIN"):$PATH" npm run --silent check:owner-ui)
   bash -n \
     "$ROOT/scripts/check-source.sh" \
     "$ROOT"/scripts/*.sh \
@@ -149,6 +151,7 @@ release_checks() {
     "$ROOT/apps/owner/local-tmux-owner/static/app.js" \
     "$ROOT/apps/gateway/server/static/workbench.js" \
     "$ROOT/apps/gateway/server/static/workbench-preact.js" \
+    "$ROOT/apps/owner/local-tmux-owner/static/owner-ui.js" \
     "$ROOT/apps/gateway/ui/session-model.mjs" \
     "$ROOT/tools/gateway-preact/build.mjs"
   do
@@ -160,7 +163,11 @@ release_checks() {
   "$NODE_BIN" --check "$ROOT/apps/owner/local-tmux-owner/tests/browser-katex-smoke.mjs"
   "$NODE_BIN" --check "$ROOT/apps/owner/local-tmux-owner/tests/browser-immersive-smoke.mjs"
   "$NODE_BIN" --check "$ROOT/apps/owner/local-tmux-owner/tests/browser-workspace-changes-smoke.mjs"
+  "$NODE_BIN" --check "$ROOT/apps/owner/local-tmux-owner/tests/browser-owner-ui-smoke.mjs"
+  "$NODE_BIN" --check "$ROOT/apps/owner/local-tmux-owner/tests/browser-structured-interactions.mjs"
+  "$NODE_BIN" --check "$ROOT/apps/owner/local-tmux-owner/tests/browser-goal-details.mjs"
   "$NODE_BIN" --check "$ROOT/apps/gateway/server/tests/browser-workbench-smoke.mjs"
+  "$NODE_BIN" --check "$ROOT/apps/gateway/server/tests/browser-resume-preflight.mjs"
   "$NODE_BIN" "$ROOT/apps/owner/local-tmux-owner/tests/markdown-ast-bundle.test.js"
   "$NODE_BIN" "$ROOT/apps/owner/local-tmux-owner/tests/internal-annotations.test.js"
   "$NODE_BIN" "$ROOT/apps/owner/local-tmux-owner/tests/event-stream.test.js"
@@ -221,6 +228,8 @@ gateway_runner = (root / "apps/gateway/scripts/run-gateway.sh").read_text(encodi
 gateway_asgi_runner = (root / "apps/gateway/server/run_asgi.py").read_text(encoding="utf-8")
 gateway_workbench = (root / "apps/gateway/server/static/workbench.js").read_text(encoding="utf-8")
 gateway_preact_source = (root / "apps/gateway/ui/preact-workbench.jsx").read_text(encoding="utf-8")
+owner_status_source = (root / "apps/owner/ui/StatusShell.tsx").read_text(encoding="utf-8")
+owner_interaction_source = (root / "apps/owner/ui/InteractionHost.tsx").read_text(encoding="utf-8")
 gateway_ui = gateway + "\n" + gateway_workbench
 assert "firstAvailableDirectoryPage" in gateway_workbench and "for (const candidate of candidates)" in gateway_workbench, "directory picker must try every recent cwd before root fallback"
 ci_workflow = (root / ".github/workflows/ci.yml").read_text(encoding="utf-8")
@@ -236,6 +245,7 @@ assert "apps/gateway/server/tests" in check_script, "canonical checks must inclu
 assert (root / "package-lock.json").is_file(), "development JavaScript dependencies must be locked"
 package = json.loads((root / "package.json").read_text(encoding="utf-8"))
 assert package.get("devDependencies", {}).get("preact") == "10.29.8", "Preact pilot must remain exact-pinned"
+assert package.get("devDependencies", {}).get("vite") == "8.2.2" and package.get("devDependencies", {}).get("typescript") == "7.0.2", "Owner UI build dependencies must remain exact-pinned"
 pyproject = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
 project = pyproject.get("project") or {}
 assert project.get("name") == "faryo" and project.get("scripts", {}).get("faryo") == "faryo_cli.cli:main", "Faryo CLI package metadata is incomplete"
@@ -290,6 +300,8 @@ for script_path in (
     assert 'python3 -' not in source and '"$FARYO_PYTHON"' in source, f"{script_path.name} bypasses configured Python"
 owner_init_source = (root / "apps/owner/scripts/init-owner-env.sh").read_text(encoding="utf-8")
 gateway_init_source = (root / "apps/gateway/scripts/init-local-gateway.sh").read_text(encoding="utf-8")
+owner_unit_source = (root / "deploy/user-systemd/faryo-owner.service").read_text(encoding="utf-8")
+assert "KillMode=process" in owner_unit_source and "KillMode=mixed" not in owner_unit_source, "Owner restart must preserve tmux/Codex cgroup children"
 assert "faryo_resolve_python" in owner_init_source and "faryo_resolve_python" in gateway_init_source, "initializers must use shared Python discovery"
 assert 'or "720"' in gateway_init_source and "1 <= parsed_session_hours <= 720" in gateway_init_source, "Gateway initializer must keep the 30-day session contract"
 assert 'id="historySearchInput"' in gateway and 'data-history-period="7d"' in gateway, "Gateway must expose metadata history search"
@@ -405,7 +417,7 @@ assert "fetchProtectedResource" in app, "direct Owner resources must use authent
 assert "data-faryo-fetch-href" in app, "protected file links must use deferred authenticated fetches"
 assert "data-faryo-fetch-src" in app, "protected images must use deferred authenticated fetches"
 assert "target.searchParams.delete('token')" in app, "protected resource fetches must strip query tokens"
-assert 'id="quotaText"' in index and 'id="detailsQuota"' in index, "Owner must expose weekly quota in header and details"
+assert 'id="statusShellRoot"' in index and 'id="quotaText"' in owner_status_source and 'id="detailsQuota"' in index, "Owner must expose Preact weekly quota and details"
 assert "Week ${remaining}% left" in app, "Owner must label weekly quota as remaining allowance"
 assert "contextWindowSource === 'agent-reported'" in app, "Owner must distinguish reported context windows from fallbacks"
 assert "usedTokens" in app and "contextWindow" in app, "Owner must show actual context token counts"
@@ -417,12 +429,13 @@ assert "MAX_ATTACHMENTS = 35" in app and "uploadConcurrency: 4" in app, "Owner m
 assert "olderLoadQueued" in history_controller_source and "function emptyConversationHistory(" not in app, "Owner paged history state must remain in its controller"
 assert "retryEventStream" in capture_controller_source and "function consumeEventStream(" not in app, "Owner capture transport must remain in its controller"
 assert "isAmbiguousDeliveryError" in composer_delivery_source and "function isAmbiguousDeliveryError(" not in app, "Owner ambiguous delivery recovery must remain in its controller"
-assert "goal-status.mjs" in app and 'id="goalPill"' in index and 'id="detailsGoal"' in index, "Owner must render goal status in the header and details"
+assert "goal-status.mjs" in app and 'id="goalPill"' in owner_status_source and 'id="detailsGoal"' in index, "Owner must render Preact goal status in the header and details"
 assert "objective" not in goal_status_source and '"goalStatus": goal_status' in owner_server, "Owner goal UI must receive status-only metadata"
+assert '"thread/goal/get"' in owner_server and 'parsed.path == "/api/goal"' in owner_server and "interaction-confirm-run" in owner_interaction_source, "Owner must expose on-demand Goal details and structured command confirmation"
 assert "navigator.clipboard.read(" not in app + attachment_controller_source, "Owner must not read the clipboard outside a paste event"
 assert "lastCompactCapture" in app and "lastFullCapture" in app and "renderModeLoading" in app, "Chat and Raw must keep isolated capture caches"
 assert "renderOutput(lastCapture)" not in app, "compact callbacks must not replay a Raw capture"
-assert 'id="approveSmallBtn"' in index and '>Enter Choose</button>' in index and 'Codex menu' in index, "terminal selection controls must explain their TUI scope"
+assert 'id="approveSmallBtn"' not in index and 'class="key-nav"' not in index and "InteractionHost" in owner_interaction_source, "retired raw TUI buttons must stay replaced by the structured Preact interaction host"
 assert "CODEX_LIVE_TAIL_LINES = 180" in owner_server, "Live tmux must keep the bounded long tail"
 assert "faryoTransient" in stable_blocks_source and "selectionInsideLivePanel" in app and "compact-live-copy" in app, "Live tmux DOM, selection, and copy must remain stable"
 assert "compactOutputSources" not in app and "dataset.sourceIndex" not in app, "retired copy source indexing must not return"

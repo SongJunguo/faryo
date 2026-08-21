@@ -10,6 +10,11 @@ from faryo_cli.diagnostics import Layout, http_status, run_command, service_stat
 from faryo_cli.operations import OperationError, endpoint, run_legacy_owner, systemctl, unit_exists
 
 
+def tmux_server_absent(result: subprocess.CompletedProcess[str]) -> bool:
+    text = f"{result.stdout or ''}\n{result.stderr or ''}".lower()
+    return any(marker in text for marker in ("no server running", "failed to connect", "no sessions"))
+
+
 def tmux_geometry() -> dict[str, tuple[int, int]]:
     executable = shutil.which("tmux")
     if not executable:
@@ -21,6 +26,8 @@ def tmux_geometry() -> dict[str, tuple[int, int]]:
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise OperationError("tmux geometry is unavailable") from exc
+    if result.returncode != 0 and tmux_server_absent(result):
+        return {}
     if result.returncode != 0:
         raise OperationError("tmux geometry is unavailable")
     geometry: dict[str, tuple[int, int]] = {}
@@ -33,6 +40,35 @@ def tmux_geometry() -> dict[str, tuple[int, int]]:
         except ValueError:
             continue
     return geometry
+
+
+def tmux_process_snapshot() -> dict[str, tuple[int, int, int]]:
+    """Bind every existing session to geometry and its live pane process."""
+
+    executable = shutil.which("tmux")
+    if not executable:
+        raise OperationError("tmux is unavailable")
+    try:
+        result = run_command(
+            [executable, "list-panes", "-a", "-F", "#{session_name}\t#{window_width}\t#{window_height}\t#{pane_pid}"],
+            timeout=3,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise OperationError("tmux process snapshot is unavailable") from exc
+    if result.returncode != 0 and tmux_server_absent(result):
+        return {}
+    if result.returncode != 0:
+        raise OperationError("tmux process snapshot is unavailable")
+    snapshot: dict[str, tuple[int, int, int]] = {}
+    for line in result.stdout.splitlines():
+        parts = line.split("\t")
+        if len(parts) != 4 or parts[0] == "local-tmux-owner":
+            continue
+        try:
+            snapshot[parts[0]] = (int(parts[1]), int(parts[2]), int(parts[3]))
+        except ValueError:
+            continue
+    return snapshot
 
 
 def legacy_owner_exists() -> bool:
@@ -72,6 +108,15 @@ def verify_geometry(before: dict[str, tuple[int, int]], after: dict[str, tuple[i
     changed = [name for name, size in before.items() if after.get(name) != size]
     if changed:
         raise OperationError("agent tmux geometry changed during Owner migration")
+
+
+def verify_process_snapshot(
+    before: dict[str, tuple[int, int, int]],
+    after: dict[str, tuple[int, int, int]],
+) -> None:
+    changed = [name for name, identity in before.items() if after.get(name) != identity]
+    if changed:
+        raise OperationError("agent tmux sessions changed during Owner restart")
 
 
 def restore_legacy(layout: Layout) -> None:

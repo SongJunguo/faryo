@@ -38,23 +38,7 @@
           <button id="draftState" type="button" aria-label="Open running sessions" aria-expanded="false" aria-controls="sessionMenu">folder</button>
         </div>
       </div>
-      <div class="meta-row">
-        <div id="subTitle" class="subtitle meta-main">
-          <span id="ctxText">Ctx --</span>
-          <button id="quotaTop" class="quota-status quota-top" type="button" aria-label="Quota unknown" title="Quota unknown">
-            <span id="quotaText" class="quota-label">Week --</span>
-            <span class="quota-bars" aria-hidden="true">
-              <span class="quota-bar"><span id="quotaFill"></span></span>
-              <span class="quota-bar week-bar"><span id="quotaWeekFill"></span></span>
-            </span>
-          </button>
-          <span id="modelText">Connecting...</span>
-        </div>
-        <div class="meta-pills">
-          <span id="goalPill" class="pill goal-pill" role="status" aria-live="polite" hidden></span>
-          <span id="phasePill" class="pill git-pill">git --</span>
-        </div>
-      </div>
+      <div id="statusShellRoot"></div>
     </header>
     <div id="panelBackdrop" class="panel-backdrop hidden" aria-hidden="true"></div>
     <aside id="sessionMenu" class="session-menu surface-panel surface-panel-left hidden" role="dialog" aria-modal="true" aria-labelledby="sessionPanelTitle"></aside>
@@ -105,6 +89,17 @@
           <span>Download diagnostics</span><span aria-hidden="true">↓</span>
         </button>
       </section>
+      <section id="goalDetailsSection" class="details-section goal-details-section" aria-label="Goal details" hidden>
+        <div class="details-section-title">Current Goal</div>
+        <strong id="goalDetailsState">Loading…</strong>
+        <p id="goalDetailsObjective" class="goal-details-objective"></p>
+        <dl class="details-list goal-details-list">
+          <div><dt>Elapsed</dt><dd id="goalDetailsElapsed">—</dd></div>
+          <div><dt>Tokens</dt><dd id="goalDetailsTokens">—</dd></div>
+          <div><dt>Budget</dt><dd id="goalDetailsBudget">—</dd></div>
+        </dl>
+        <p class="details-display-note">Loaded only for this authenticated session. Goal text is not stored in browser history or diagnostics.</p>
+      </section>
       <p class="details-note">Chat uses structured history when available. Raw keeps the terminal evidence. Opening this panel never changes tmux dimensions.</p>
     </aside>
     <aside id="changesPanel" class="changes-panel surface-panel surface-panel-right hidden" role="dialog" aria-modal="true" aria-labelledby="changesPanelTitle">
@@ -136,12 +131,6 @@
 
     <footer>
       <div class="status-line">
-        <span class="key-nav" aria-hidden="true">
-          <span class="key-nav-label">Codex menu</span>
-          <button id="upBtn" type="button" aria-label="Move to the previous Codex TUI option" title="Move to the previous Codex TUI option">↑ Previous</button>
-          <button id="downBtn" type="button" aria-label="Move to the next Codex TUI option" title="Move to the next Codex TUI option">↓ Next</button>
-          <button id="approveSmallBtn" type="button" aria-label="Send Enter to choose the current Codex TUI option" title="Send Enter to choose the current Codex TUI option">Enter Choose</button>
-        </span>
         <div id="attachmentPreview" class="attachment-preview hidden"></div>
         <button id="versionToggle" class="product-mark" type="button" title="Faryo __FARYO_RELEASE_VERSION__">Faryo __FARYO_RELEASE_NUMBER__</button>
         <button id="statusLeft" class="quota-status hidden" type="button" aria-label="Quota unknown" title="Quota unknown"></button>
@@ -161,15 +150,7 @@
             <button id="dockFullBtn" type="button">Raw</button>
           </div>
         </div>
-        <div class="command-dock">
-          <div id="commandSuggest" class="command-suggest hidden" role="listbox" aria-label="Command suggestions"></div>
-          <div class="prompt-shell">
-            <div id="petControl" class="pet-control pet-offline" aria-label="Faryo offline; tap to interrupt"></div>
-            <textarea id="promptInput" placeholder="Ask Faryo" rows="1"></textarea>
-            <button id="dockPlusBtn" class="dock-plus" type="button" aria-label="Open input tools" aria-expanded="false" aria-controls="dockMenu">+</button>
-            <button id="sendBtn" class="dock-send hidden" type="button" aria-label="Send">↑</button>
-          </div>
-        </div>
+        <div id="composerShellRoot"></div>
         <input id="attachmentInput" class="hidden" type="file" accept="image/*,.pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx,.odt,.odp,.ods,.md,.txt,.csv,.json,.rtf" multiple />
         <div id="errorBox" class="error hidden"></div>
       </div>
@@ -181,6 +162,7 @@
     <div id="questionNavMarkers" class="question-nav-markers"></div>
   </nav>
   <div id="questionNavPreview" class="question-nav-preview" aria-hidden="true"></div>
+  <div id="interactionRoot"></div>
   <script src="vendor/markdown-ast/markdown-ast.min.js?v=faryo-markdown-ast-2"></script>
   <script src="internal-annotations.js?v=faryo-internal-annotations-1"></script>
   <script src="event-stream.js?v=faryo-event-stream-1"></script>
@@ -194,6 +176,7 @@
   <script type="module" src="vendor/markdown-ast/highlight/highlight.js?v=faryo-shiki-1"></script>
   <script src="compact-rules-codex.js?v=faryo-owner-plan-2"></script>
   <script src="live-scroll.js?v=faryo-owner-live-scroll-2"></script>
+  <script src="owner-ui.js?v=faryo-owner-ui-1"></script>
   <script src="app.js?v=faryo-owner-workbench-32"></script>
 </body>
 </html>

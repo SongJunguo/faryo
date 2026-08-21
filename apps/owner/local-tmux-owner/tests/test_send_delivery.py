@@ -126,6 +126,26 @@ class SendDeliveryTest(unittest.TestCase):
         with mock.patch.object(server, "tmux_current_capture", return_value="• Worked for 2s (esc to interrupt)\n› idle prompt"):
             self.assertEqual("Enter", server.codex_submission_key(self.config))
 
+    def test_exact_slash_command_cannot_enter_generic_retry_delivery(self):
+        with (
+            mock.patch.object(server, "has_session", return_value=True),
+            mock.patch.object(server, "tmux") as tmux,
+        ):
+            with self.assertRaises(server.OwnerError) as raised:
+                server.send_text(self.config, "/model", "web-command-route")
+
+        self.assertEqual(HTTPStatus.CONFLICT, raised.exception.status)
+        self.assertIn("structured interaction", str(raised.exception))
+        tmux.assert_not_called()
+
+        with (
+            mock.patch.object(server, "has_session", return_value=True),
+            mock.patch.object(server, "tmux") as tmux,
+        ):
+            with self.assertRaises(server.OwnerError):
+                server.send_text(self.config, "/rename Anonymous title", "web-command-argument")
+        tmux.assert_not_called()
+
     def test_wait_for_submission_accepts_cleared_active_composer_while_working(self):
         capture = "\n".join((
             "› prompt that has just been submitted",

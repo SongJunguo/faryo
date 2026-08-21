@@ -47,11 +47,9 @@ test("Gateway writes cache CSRF and retain route-local API paths", async () => {
   });
 
   await client.request("/api/send", { method: "POST", body: "{}" });
-  await client.request("/api/down", { method: "POST", body: "{}" });
 
   assert.equal(calls.filter(([path]) => path === "/api/csrf").length, 1);
   assert.equal(calls[1][0], "/lab/api/send");
-  assert.equal(calls[2][0], "/lab/api/down");
   assert.equal(calls[1][1].headers["X-Faryo-Csrf"], "fixture-csrf");
   assert.equal(calls[1][1].headers["Content-Type"], "application/json");
 });

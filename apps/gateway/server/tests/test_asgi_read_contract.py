@@ -126,7 +126,15 @@ class OwnerContractFixture(BaseHTTPRequestHandler):
         elif self.path == "/api/agent-session/unarchive":
             result["archived"] = False
         elif self.path == "/api/agent/resume":
-            result["session"] = "faryo3"
+            if payload.get("agent_session_id") == "thread-needs-cwd" and not payload.get("cwd"):
+                result.update({
+                    "session": "",
+                    "requiresWorkingDirectory": True,
+                    "reason": "recorded-directory-unavailable",
+                    "recordedDisplayCwd": "~/moved-project",
+                })
+            else:
+                result["session"] = "faryo3"
         elif self.path == "/api/agent/new":
             result["session"] = "faryo4"
         elif self.path == "/api/attachment":
@@ -511,7 +519,7 @@ class AsgiReadContractTest(unittest.TestCase):
 
     def test_proxy_control_rejects_missing_csrf_equally(self) -> None:
         body = json.dumps({"session": "fixture-session"}).encode("utf-8")
-        asgi_result = self.request(self.asgi_base, "/lab/api/down", authenticated=True, method="POST", body=body)
+        asgi_result = self.request(self.asgi_base, "/lab/api/interaction/respond", authenticated=True, method="POST", body=body)
         self.assertEqual(asgi_result[0], HTTPStatus.FORBIDDEN)
         self.assertEqual(json.loads(asgi_result[2]), {"ok": False, "error": "csrf required"})
 
@@ -618,6 +626,52 @@ class AsgiReadContractTest(unittest.TestCase):
         self.assertEqual(json.loads(asgi_result[2])["session"], "faryo3")
         self.assertEqual(self.config.audit_calls[0]["action"], "resume")
         self.assertEqual(self.config.audit_calls[0]["target"], "thread-fixture")
+
+    def test_agent_resume_returns_directory_preflight_then_accepts_signed_choice(self) -> None:
+        csrf = gateway_security.csrf_token(self.config.cookie_secret, "tester", self.config.auth_epoch("tester"))
+        headers = {legacy.CSRF_HEADER: csrf, "Content-Type": "application/json"}
+        initial = json.dumps({"route": "lab", "agent_session_id": "thread-needs-cwd", "source": "codex-cli"}).encode("utf-8")
+        response = self.request(
+            self.asgi_base, "/api/agent/resume", authenticated=True, method="POST", body=initial, extra_headers=headers,
+        )
+        first = json.loads(response[2])
+        self.assertEqual(response[0], HTTPStatus.OK)
+        self.assertTrue(first["requiresWorkingDirectory"])
+        self.assertNotIn("session", first)
+
+        cwd = "/workspace/fixture"
+        token = legacy.owner_directory_selection_token(self.config.owner_token("lab"), cwd)
+        selected = json.dumps({
+            "route": "lab",
+            "agent_session_id": "thread-needs-cwd",
+            "source": "codex-cli",
+            "cwd": cwd,
+            "cwd_token": token,
+        }).encode("utf-8")
+        response = self.request(
+            self.asgi_base, "/api/agent/resume", authenticated=True, method="POST", body=selected, extra_headers=headers,
+        )
+        self.assertEqual(response[0], HTTPStatus.OK)
+        self.assertEqual(json.loads(response[2])["session"], "faryo3")
+        owner_payload = json.loads(OwnerContractFixture.requests[-1]["body"])
+        self.assertEqual(owner_payload["cwd"], cwd)
+        self.assertEqual(owner_payload["cwd_token"], token)
+
+    def test_agent_resume_rejects_unsigned_directory_choice(self) -> None:
+        csrf = gateway_security.csrf_token(self.config.cookie_secret, "tester", self.config.auth_epoch("tester"))
+        headers = {legacy.CSRF_HEADER: csrf, "Content-Type": "application/json"}
+        body = json.dumps({
+            "route": "lab",
+            "agent_session_id": "thread-needs-cwd",
+            "source": "codex-cli",
+            "cwd": "/workspace/fixture",
+            "cwd_token": "wrong",
+        }).encode("utf-8")
+        response = self.request(
+            self.asgi_base, "/api/agent/resume", authenticated=True, method="POST", body=body, extra_headers=headers,
+        )
+        self.assertEqual(response[0], HTTPStatus.BAD_REQUEST)
+        self.assertEqual(json.loads(response[2])["error"], "working directory selection is invalid or expired")
 
     def test_agent_new_and_audit_contract_match(self) -> None:
         body = json.dumps({"route": "lab", "command": "codex", "client_launch_id": "launch-fixture"}).encode("utf-8")

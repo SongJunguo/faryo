@@ -647,6 +647,32 @@ main {
   gap: 9px;
   margin: 3px 0 10px;
 }
+.directory-filter-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+}
+.directory-hidden-toggle {
+  min-width: 88px;
+  min-height: 40px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--panel2);
+  color: var(--muted);
+  font: 750 11px/1.2 var(--app-font);
+}
+.directory-hidden-toggle:hover,
+.directory-hidden-toggle:focus-visible,
+.directory-hidden-toggle.active {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--line));
+  background: color-mix(in srgb, var(--accent) 10%, var(--panel2));
+  color: var(--accent);
+  outline: none;
+}
+.directory-hidden-toggle:disabled {
+  opacity: 0.55;
+}
 .directory-breadcrumb {
   display: flex;
   align-items: center;
@@ -870,6 +896,9 @@ main {
   }
   .directory-toolbar {
     margin-bottom: 7px;
+  }
+  .directory-hidden-toggle {
+    min-width: 82px;
   }
 }
 .modal.open.anchored {

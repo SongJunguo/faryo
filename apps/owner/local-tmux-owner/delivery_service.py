@@ -14,6 +14,8 @@ import time
 from typing import Any
 import uuid
 
+import codex_command_policy
+
 
 class DeliveryService:
     def __init__(self, runtime: Any) -> None:
@@ -113,6 +115,11 @@ class DeliveryService:
         delivery_id = runtime.clean_client_message_id(client_message_id) or uuid.uuid4().hex
         digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
         line = text.strip()
+        if codex_command_policy.command_invocation(line):
+            raise runtime.owner_error(
+                "exact Codex slash commands require the structured interaction endpoint",
+                HTTPStatus.CONFLICT,
+            )
         words = line.split()
         launch_command = Path(words[0]).name.lower() if words else ""
         shell_prep = bool(

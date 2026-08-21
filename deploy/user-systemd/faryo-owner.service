@@ -15,7 +15,9 @@ ExecStart="@FARYO_PYTHON@" -m faryo_cli internal run-owner
 Restart=on-failure
 RestartSec=3
 TimeoutStopSec=8
-KillMode=mixed
+# tmux may be first spawned by Owner and therefore share this service cgroup.
+# Restart only the web bridge; user tmux/Codex processes must survive updates.
+KillMode=process
 UMask=0077
 
 [Install]

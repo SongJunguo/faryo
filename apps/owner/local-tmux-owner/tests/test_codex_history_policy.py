@@ -72,6 +72,25 @@ class CodexHistoryPolicyTest(unittest.TestCase):
         self.assertNotIn("objective", snapshot)
         self.assertNotIn("threadId", snapshot)
 
+    def test_goal_details_are_explicitly_on_demand_and_omit_thread_identity(self) -> None:
+        details = codex_history.goal_details({
+            "threadId": "private-thread",
+            "objective": "Complete the anonymous fixture",
+            "status": "active",
+            "tokenBudget": 10_000,
+            "tokensUsed": 321,
+            "timeUsedSeconds": 65,
+            "createdAt": 100,
+            "updatedAt": 200,
+        })
+
+        self.assertEqual(details["objective"], "Complete the anonymous fixture")
+        self.assertEqual(details["tokenBudget"], 10_000)
+        self.assertEqual(details["createdAt"], 100)
+        self.assertFalse(details["objectiveTruncated"])
+        self.assertNotIn("threadId", details)
+        self.assertEqual(codex_history.goal_details(None), {"status": "none", "objective": ""})
+
     def test_direct_and_tool_goal_events_have_explicit_clear_semantics(self) -> None:
         direct = {
             "type": "response_item",

@@ -3,15 +3,22 @@ set -euo pipefail
 
 # Read-only PTY inventory: open the slash popup, scroll it, and compare command
 # names. No slash command is submitted and no existing tmux client is resized.
-repo_root=$(git rev-parse --show-toplevel)
+script_dir=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
+repo_root=$(CDPATH= cd -- "$script_dir/../../../.." && pwd -P)
 # shellcheck source=../../../../scripts/runtime-env.sh
 source "$repo_root/scripts/runtime-env.sh"
-module="$repo_root/apps/owner/local-tmux-owner/static/codex-commands.js"
+catalog="$repo_root/apps/owner/local-tmux-owner/static/codex-command-catalog.json"
+write_cache=false
+if [[ "${1:-}" == "--write-cache" ]]; then
+  write_cache=true
+elif [[ -n "${1:-}" ]]; then
+  printf 'usage: %s [--write-cache]\n' "$0" >&2
+  exit 2
+fi
 codex_bin=$(faryo_resolve_codex)
 node_bin=$(faryo_resolve_node)
 probe_session="faryo-command-inventory-$$"
-geometry_pattern='^(codex[0-9]*|local-tmux-owner|faryo[0-9]+)\|'
-before_geometry=$(tmux list-windows -a -F '#{session_name}|#{window_width}x#{window_height}' | rg "$geometry_pattern" | sort || true)
+before_geometry=$(tmux list-windows -a -F '#{session_name}|#{window_width}x#{window_height}' | rg -v "^${probe_session}\\|" | sort || true)
 
 cleanup() {
   if tmux has-session -t "$probe_session" 2>/dev/null; then
@@ -38,20 +45,46 @@ for _page in $(seq 0 13); do
 done
 
 cleanup
-after_geometry=$(tmux list-windows -a -F '#{session_name}|#{window_width}x#{window_height}' | rg "$geometry_pattern" | sort || true)
+after_geometry=$(tmux list-windows -a -F '#{session_name}|#{window_width}x#{window_height}' | rg -v "^${probe_session}\\|" | sort || true)
 if [[ "$before_geometry" != "$after_geometry" ]]; then
   printf '%s\n' 'existing tmux geometry changed during command inventory' >&2
   exit 1
 fi
 
 observed=$(printf '%s\n' "$observed" | sed '/^$/d' | sort -u)
-expected=$("$node_bin" -e 'const api=require(process.argv[1]); process.stdout.write(api.inventory.map((item)=>item.command).sort().join("\n"));' "$module")
+expected=$("$node_bin" -e 'const fs=require("node:fs");const value=JSON.parse(fs.readFileSync(process.argv[1],"utf8"));process.stdout.write(value.commands.map((item)=>item.command).sort().join("\n"));' "$catalog")
+version=$(PATH="$(dirname "$node_bin"):$PATH" "$codex_bin" --version)
+observed_version=${version##* }
+if [[ "$write_cache" == true ]]; then
+  cache_path=${FARYO_CODEX_COMMAND_CATALOG:-$HOME/.faryo/owner/cache/codex-command-catalog.json}
+  FARYO_OBSERVED_COMMANDS="$observed" FARYO_OBSERVED_CODEX_VERSION="$observed_version" \
+    "$node_bin" - "$cache_path" <<'NODE'
+const fs = require('node:fs');
+const path = require('node:path');
+const target = path.resolve(process.argv[2]);
+const commands = [...new Set((process.env.FARYO_OBSERVED_COMMANDS || '').split('\n').filter(Boolean))].sort();
+if (!commands.length) throw new Error('empty Codex command inventory');
+const payload = JSON.stringify({
+  schemaVersion: 1,
+  observedCodexVersion: process.env.FARYO_OBSERVED_CODEX_VERSION || '',
+  commands,
+}, null, 2) + '\n';
+fs.mkdirSync(path.dirname(target), { recursive: true, mode: 0o700 });
+const temporary = `${target}.tmp-${process.pid}`;
+fs.writeFileSync(temporary, payload, { encoding: 'utf8', mode: 0o600, flag: 'wx' });
+fs.renameSync(temporary, target);
+fs.chmodSync(target, 0o600);
+NODE
+  count=$(printf '%s\n' "$observed" | wc -l)
+  drift=$([[ "$observed" == "$expected" ]] && printf no || printf yes)
+  printf 'Codex command runtime catalog updated: %s, %s commands, drift=%s, existing tmux geometry unchanged\n' "$version" "$count" "$drift"
+  exit 0
+fi
 if [[ "$observed" != "$expected" ]]; then
   printf '%s\n' 'Codex slash-command inventory drift detected:' >&2
   comm -3 <(printf '%s\n' "$expected") <(printf '%s\n' "$observed") >&2
   exit 1
 fi
 
-version=$(PATH="$(dirname "$node_bin"):$PATH" "$codex_bin" --version)
 count=$(printf '%s\n' "$observed" | wc -l)
 printf 'Codex command inventory passed: %s, %s commands, existing tmux geometry unchanged\n' "$version" "$count"

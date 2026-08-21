@@ -5,6 +5,7 @@ export default [
       "**/vendor/**",
       "**/*.min.js",
       "apps/gateway/server/static/workbench-preact.js",
+      "apps/owner/local-tmux-owner/static/owner-ui.js",
     ],
   },
   {

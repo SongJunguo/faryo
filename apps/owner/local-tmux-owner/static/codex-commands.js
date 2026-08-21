@@ -1,7 +1,7 @@
 (() => {
   'use strict';
 
-  const inventory = Object.freeze([
+  let inventory = Object.freeze([
     { command: '/model', description: 'Choose the model and reasoning effort', category: 'Model' },
     { command: '/fast', description: 'Toggle faster responses with increased usage', category: 'Model' },
     { command: '/ide', description: 'Include IDE selection, open files, and context', category: 'Context' },
@@ -112,13 +112,47 @@
     return matches.slice(0, Math.max(1, Number(options.limit) || 64));
   }
 
-  const api = Object.freeze({
+  function replaceInventory(entries, metadata = {}) {
+    if (!Array.isArray(entries) || !entries.length) return false;
+    const known = new Map(inventory.map((entry) => [entry.command, entry]));
+    const next = [];
+    const seen = new Set();
+    for (const raw of entries) {
+      const command = String(raw?.command || '').trim().toLowerCase();
+      if (!/^\/[a-z][a-z-]*$/.test(command) || seen.has(command)) continue;
+      const fallback = known.get(command) || {};
+      const aliases = Array.isArray(raw.aliases) ? raw.aliases.filter((value) => /^\/[a-z][a-z-]*$/.test(value)) : (fallback.aliases || []);
+      const argumentHint = String(raw.argumentHint || fallback.argumentHint || '');
+      next.push(Object.freeze({
+        ...fallback,
+        command,
+        description: String(raw.description || fallback.description || 'New Codex command'),
+        category: String(raw.category || fallback.category || 'Unclassified'),
+        behavior: String(raw.behavior || fallback.behavior || 'unclassified'),
+        argumentHint,
+        insert: fallback.insert || (argumentHint && !argumentHint.startsWith('[') ? `${command} ` : undefined),
+        aliases: Object.freeze(aliases),
+        risk: fallback.risk || (raw.behavior === 'unclassified' ? 'unclassified' : ''),
+      }));
+      seen.add(command);
+    }
+    if (!next.length) return false;
+    inventory = Object.freeze(next);
+    api.observedCodexVersion = String(metadata.observedCodexVersion || '');
+    api.catalogDrifted = Boolean(metadata.drifted);
+    return true;
+  }
+
+  const api = {
     version: '1',
     testedCodexVersion: '0.148.0',
-    inventory,
+    observedCodexVersion: '',
+    catalogDrifted: false,
+    get inventory() { return inventory; },
     launchInventory,
     match,
-  });
+    replaceInventory,
+  };
   if (typeof module === 'object' && module.exports) module.exports = api;
   globalThis.FaryoCodexCommands = api;
 })();

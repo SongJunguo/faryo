@@ -353,8 +353,8 @@ class GatewayCsrfContractTest(unittest.TestCase):
         with mock.patch.object(self.config, "append_control_audit", side_effect=OSError("audit unavailable")):
             status, data = self.request(
                 "POST",
-                f"/{self.route}/api/down",
-                {"session": "session-a"},
+                f"/{self.route}/api/interaction/respond",
+                {"session": "session-a", "interactionId": "ix_fixture", "action": "cancel", "clientRequestId": "response-fixture"},
                 {gateway.CSRF_HEADER: csrf},
             )
 
@@ -386,12 +386,11 @@ class GatewayCsrfContractTest(unittest.TestCase):
         cases = (
             ("send", {"session": "session-a", "text": "anonymous"}),
             ("interrupt", {"session": "session-a"}),
-            ("approve", {"session": "session-a"}),
-            ("up", {"session": "session-a"}),
-            ("down", {"session": "session-a"}),
             ("session/close", {"session": "session-a"}),
+            ("interaction/start", {"session": "session-a", "command": "/model", "clientRequestId": "request-fixture"}),
+            ("interaction/respond", {"session": "session-a", "interactionId": "ix_fixture", "action": "cancel", "clientRequestId": "response-fixture"}),
         )
-        expected = ("send", "interrupt", "enter", "up", "down", "close")
+        expected = ("send", "interrupt", "close", "command", "interaction")
         self.config.audit_calls.clear()
 
         for (tail, body), action in zip(cases, expected, strict=True):

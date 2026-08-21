@@ -369,6 +369,7 @@ await withBrowser({
         currentCrumb: document.querySelector('#directoryBreadcrumb .directory-crumb[aria-current="location"]')?.textContent || '',
         headerBackAbsent: !document.getElementById('modalBack'),
         searchVisible: (() => { const item=document.getElementById('directorySearch');return Boolean(item&&item.getClientRects().length); })(),
+        hiddenToggleVisible: (() => { const item=document.getElementById('directoryHiddenToggle');return Boolean(item&&item.getClientRects().length&&item.getAttribute('aria-pressed')==='false'); })(),
         sections: [...document.querySelectorAll('#modalChoices .directory-section')].map((item) => item.dataset.directorySection),
         recentCount: document.querySelectorAll('#modalChoices .directory-row-recent').length,
         folderCount: document.querySelectorAll('#modalChoices .directory-row-folder').length,
@@ -389,7 +390,7 @@ await withBrowser({
     if (!cwdConfirmation.open || cwdConfirmation.title !== 'Choose working directory'
       || !cwdConfirmation.directoryMode || !cwdConfirmation.breadcrumbs || cwdConfirmation.breadcrumbs > 4
       || !cwdConfirmation.breadcrumbLabelsClean || !cwdConfirmation.currentCrumb
-      || !cwdConfirmation.headerBackAbsent || !cwdConfirmation.searchVisible
+      || !cwdConfirmation.headerBackAbsent || !cwdConfirmation.searchVisible || !cwdConfirmation.hiddenToggleVisible
       || !cwdConfirmation.sections.includes('folders') || cwdConfirmation.recentCount > 4
       || !cwdConfirmation.folderCount || !cwdConfirmation.parentRowFirst || !cwdConfirmation.folderRowsHaveNoPaths
       || !cwdConfirmation.flatPrefixesAbsent || !cwdConfirmation.hasCancel || !cwdConfirmation.hasPrimary
@@ -397,6 +398,25 @@ await withBrowser({
       || !cwdConfirmation.noHorizontalOverflow
       || !['auto', 'scroll'].includes(cwdConfirmation.listOverflowY)) {
       throw new Error(`Working-directory confirmation did not open: ${JSON.stringify(cwdConfirmation)}`);
+    }
+    await evaluate("document.getElementById('directoryHiddenToggle')?.click()");
+    let hiddenState = {};
+    for (let attempt = 0; attempt < 40; attempt += 1) {
+      await delay(50);
+      hiddenState = await evaluate(`(() => ({
+        pressed: document.getElementById('directoryHiddenToggle')?.getAttribute('aria-pressed') || '',
+        active: document.getElementById('directoryHiddenToggle')?.classList.contains('active') || false,
+        requested: performance.getEntriesByType('resource').some((item) => item.name.includes('/api/directories') && item.name.includes('showHidden=1')),
+      }))()`);
+      if (hiddenState.pressed === 'true') break;
+    }
+    if (hiddenState.pressed !== 'true' || !hiddenState.active || !hiddenState.requested)
+      throw new Error(`Hidden-folder toggle failed: ${JSON.stringify(hiddenState)}`);
+    await evaluate("document.getElementById('directoryHiddenToggle')?.click()");
+    for (let attempt = 0; attempt < 40; attempt += 1) {
+      await delay(50);
+      const pressed = await evaluate("document.getElementById('directoryHiddenToggle')?.getAttribute('aria-pressed') || ''");
+      if (pressed === 'false') break;
     }
     const searchState = await evaluate(`(() => {
       const input=document.getElementById('directorySearch'),rows=[...document.querySelectorAll('#modalChoices .directory-row-folder')],label=rows[0]?.querySelector('strong')?.textContent||'',query=label.slice(0,Math.min(3,label.length));input.value=query;input.dispatchEvent(new Event('input',{bubbles:true}));const filtered=[...document.querySelectorAll('#modalChoices .directory-row-folder')],parentVisible=Boolean(document.querySelector('#modalChoices .directory-row-parent'));const ok=Boolean(query&&filtered.length&&filtered.length<=rows.length&&filtered.every(item=>item.textContent.toLowerCase().includes(query.toLowerCase())));input.value='';input.dispatchEvent(new Event('input',{bubbles:true}));return{ok,parentVisible,queryLength:query.length,restored:document.querySelectorAll('#modalChoices .directory-row-folder').length===rows.length};})()`);

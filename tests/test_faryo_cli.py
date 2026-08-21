@@ -331,6 +331,8 @@ class FaryoCliTest(unittest.TestCase):
             unit = installer.rendered_unit("owner", layout, str(venv_python))
 
         self.assertIn(f'ExecStart="{venv_python}" -m faryo_cli', unit)
+        self.assertIn("KillMode=process", unit)
+        self.assertNotIn("KillMode=mixed", unit)
 
     def test_atomic_unit_install_backs_up_existing_unit(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -419,6 +421,7 @@ class FaryoCliTest(unittest.TestCase):
             with (
                 mock.patch.dict(os.environ, {"XDG_CONFIG_HOME": str(xdg)}, clear=False),
                 mock.patch.object(migration, "legacy_owner_exists", return_value=False),
+                mock.patch.object(migration, "tmux_process_snapshot", return_value={"faryo1": (145, 44, 100)}),
                 mock.patch.object(installer, "systemctl", side_effect=lambda *args, **kwargs: actions.append((args, kwargs))),
                 mock.patch.object(operations, "control_service", side_effect=lambda name, action: actions.append(((name, action), {}))),
                 mock.patch.object(operations, "wait_for_health") as wait,
@@ -444,6 +447,7 @@ class FaryoCliTest(unittest.TestCase):
             with (
                 mock.patch.dict(os.environ, {"XDG_CONFIG_HOME": str(xdg)}, clear=False),
                 mock.patch.object(migration, "legacy_owner_exists", return_value=False),
+                mock.patch.object(migration, "tmux_process_snapshot", return_value={"faryo1": (145, 44, 100)}),
                 mock.patch.object(installer, "systemctl"),
                 mock.patch.object(operations, "control_service"),
                 mock.patch.object(operations, "wait_for_health", side_effect=operations.OperationError("not healthy")),
@@ -467,6 +471,7 @@ class FaryoCliTest(unittest.TestCase):
             with (
                 mock.patch.dict(os.environ, {"XDG_CONFIG_HOME": str(xdg)}, clear=False),
                 mock.patch.object(migration, "legacy_owner_exists", return_value=False),
+                mock.patch.object(migration, "tmux_process_snapshot", return_value={"faryo1": (145, 44, 100)}),
                 mock.patch.object(installer, "systemctl", side_effect=lambda *args, **kwargs: calls.append((args, kwargs))),
                 mock.patch.object(operations, "control_service"),
                 mock.patch.object(operations, "wait_for_health", side_effect=operations.OperationError("not healthy")),
@@ -476,6 +481,19 @@ class FaryoCliTest(unittest.TestCase):
 
             self.assertIn((("restart", "faryo-owner.service"), {"check": False}), calls)
             self.assertIn((("restart", "faryo-gateway.service"), {"check": False}), calls)
+
+    def test_owner_restart_rejects_recreated_or_missing_tmux_sessions(self) -> None:
+        before = {"faryo1": (145, 44, 101), "faryo2": (145, 44, 202)}
+        with self.assertRaisesRegex(operations.OperationError, "tmux sessions changed"):
+            migration.verify_process_snapshot(before, {"faryo1": (145, 44, 999)})
+
+    def test_missing_tmux_server_is_an_empty_snapshot_for_fresh_install(self) -> None:
+        result = subprocess.CompletedProcess(["tmux"], 1, "", "no server running on /tmp/tmux-fixture/default")
+        with (
+            mock.patch.object(migration.shutil, "which", return_value="/usr/bin/tmux"),
+            mock.patch.object(migration, "run_command", return_value=result),
+        ):
+            self.assertEqual(migration.tmux_process_snapshot(), {})
 
     def test_runtime_python_update_preserves_private_config(self) -> None:
         with tempfile.TemporaryDirectory() as temp:

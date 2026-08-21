@@ -5,7 +5,9 @@
 
 ## Active
 
-当前没有未完成的版本实施计划。
+- [`v1.6-structured-interactions-and-owner-ui-plan.md`](v1.6-structured-interactions-and-owner-ui-plan.md)：
+  建立统一 Codex pending-interaction 协议与 TUI 适配器，修复 `/model`、历史恢复目录、
+  启动就绪和移动键盘问题，并把 Owner 动态交互壳增量迁移到 Preact + TypeScript + Vite。
 
 ## Completed or maintenance mode
 

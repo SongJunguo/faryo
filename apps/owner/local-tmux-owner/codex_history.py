@@ -12,6 +12,7 @@ from typing import Any
 GOAL_STATUSES = {"active", "blocked", "complete", "paused", "usage_limited"}
 GOAL_TOOL_CALL_RE = re.compile(r"\btools\.(?:create_goal|get_goal|update_goal)\s*\(")
 GOAL_OUTPUT_MAX_CHARS = 256 * 1024
+GOAL_OBJECTIVE_MAX_CHARS = 32 * 1024
 
 
 class HistoryCursorError(Exception):
@@ -131,6 +132,25 @@ def goal_snapshot(value: Any, *, allow_none: bool = False) -> dict[str, Any] | N
         if target in snapshot:
             continue
         parsed = _goal_nonnegative_int(value.get(source))
+        if parsed is not None:
+            snapshot[target] = parsed
+    return snapshot
+
+
+def goal_details(value: Any) -> dict[str, Any]:
+    """Return authenticated on-demand details without exposing thread identity."""
+
+    snapshot = goal_snapshot(value, allow_none=True)
+    if snapshot is None or snapshot.get("status") == "none":
+        return {"status": "none", "objective": ""}
+    objective = str(value.get("objective") or "") if isinstance(value, dict) else ""
+    truncated = len(objective) > GOAL_OBJECTIVE_MAX_CHARS
+    snapshot["objective"] = objective[:GOAL_OBJECTIVE_MAX_CHARS]
+    snapshot["objectiveTruncated"] = truncated
+    for source, target in (("createdAt", "createdAt"), ("created_at", "createdAt")):
+        if target in snapshot:
+            break
+        parsed = _goal_nonnegative_int(value.get(source)) if isinstance(value, dict) else None
         if parsed is not None:
             snapshot[target] = parsed
     return snapshot
