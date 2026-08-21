@@ -27,6 +27,7 @@ class FakeRuntimeClient:
         self.server_handlers = {}
         self.server_results = []
         self.turn_start_calls = 0
+        self.rpc_calls = []
 
     def register_server_request(self, method, handler):
         self.server_handlers[method] = handler
@@ -39,6 +40,7 @@ class FakeRuntimeClient:
         self.ready = False
 
     async def rpc(self, method, params):
+        self.rpc_calls.append((method, dict(params)))
         if method == "account/rateLimits/read":
             return {
                 "rateLimits": {
@@ -46,6 +48,46 @@ class FakeRuntimeClient:
                     "secondary": {"usedPercent": 40, "windowDurationMins": 10080},
                 }
             }
+        if method == "account/usage/read":
+            return {"summary": {"lifetimeTokens": 123456}}
+        if method == "model/list":
+            return {
+                "data": [
+                    {"id": "model-a", "model": "model-a", "displayName": "Model A", "description": "Current"},
+                    {"id": "model-b", "model": "model-b", "displayName": "Model B", "description": "Next"},
+                ],
+                "nextCursor": None,
+            }
+        if method == "permissionProfile/list":
+            return {
+                "data": [
+                    {"id": "standard", "allowed": True, "description": "Standard"},
+                    {"id": "blocked", "allowed": False, "description": "Unavailable"},
+                ],
+                "nextCursor": None,
+            }
+        if method == "thread/settings/update":
+            await self.notification(
+                "thread/settings/updated",
+                {
+                    "threadId": params["threadId"],
+                    "threadSettings": {
+                        "model": params.get("model") or "model-a",
+                        "serviceTier": params.get("serviceTier"),
+                    },
+                },
+            )
+            return {}
+        if method == "thread/name/set":
+            await self.notification(
+                "thread/name/updated",
+                {"threadId": params["threadId"], "threadName": params["name"]},
+            )
+            return {}
+        if method == "thread/compact/start":
+            return {}
+        if method == "thread/goal/get":
+            return {"goal": None}
         if method == "thread/start":
             self.thread_number += 1
             return {
@@ -53,6 +95,7 @@ class FakeRuntimeClient:
                     "id": f"thread_{self.thread_number}",
                     "turns": [],
                     "status": "idle",
+                    "model": "model-a",
                 }
             }
         if method == "thread/resume":
@@ -318,6 +361,65 @@ class RuntimeTest(unittest.TestCase):
         self.assertEqual(len(results), 2)
         self.assertEqual(sum(bool(result["duplicate"]) for result in results), 1)
         self.assertTrue(duplicate_after["duplicate"])
+
+    def test_web_commands_use_app_server_apis_instead_of_terminal_menus(self) -> None:
+        clients = []
+
+        def factory(notification, disconnected):
+            client = FakeRuntimeClient(notification, disconnected)
+            clients.append(client)
+            return client
+
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            runtime = AppServerRuntime(
+                socket_path=root / "app.sock",
+                registry_path=root / "registry.json",
+                client_version="test",
+                client_factory=factory,
+            )
+            runtime.start()
+            self.assertTrue(runtime.wait_ready(2))
+            session = runtime.start_session(cwd="/workspace")["session"]
+
+            opened = runtime.begin_command(
+                session,
+                command="/model",
+                client_request_id="command_model_1",
+            )
+            interaction = opened["interaction"]
+            model_b = next(option for option in interaction["options"] if option["label"] == "Model B")
+            runtime.respond_interaction(
+                session,
+                interaction_id=interaction["id"],
+                option_id=model_b["id"],
+                client_request_id="command_model_response_1",
+            )
+            self.assertEqual(runtime.capture(session)["snapshot"]["thread"]["model"], "model-b")
+
+            runtime.begin_command(session, command="/fast", client_request_id="command_fast_1")
+            duplicate_fast = runtime.begin_command(
+                session,
+                command="/fast",
+                client_request_id="command_fast_1",
+            )
+            self.assertEqual(runtime.capture(session)["snapshot"]["thread"]["serviceTier"], "fast")
+            self.assertTrue(duplicate_fast["duplicate"])
+
+            usage = runtime.begin_command(session, command="/usage", client_request_id="command_usage_1")
+            self.assertIn("Weekly window", usage["interaction"]["prompt"])
+            close = usage["interaction"]["options"][0]
+            runtime.respond_interaction(
+                session,
+                interaction_id=usage["interaction"]["id"],
+                option_id=close["id"],
+                client_request_id="command_usage_response_1",
+            )
+            runtime.stop()
+
+        settings_calls = [params for method, params in clients[0].rpc_calls if method == "thread/settings/update"]
+        self.assertTrue(any(params.get("model") == "model-b" for params in settings_calls))
+        self.assertEqual(sum(params.get("serviceTier") == "fast" for params in settings_calls), 1)
 
 
 if __name__ == "__main__":

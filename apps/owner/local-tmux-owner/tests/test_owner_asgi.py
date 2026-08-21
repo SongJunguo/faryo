@@ -1,0 +1,219 @@
+from __future__ import annotations
+
+import http.client
+import json
+from pathlib import Path
+import socket
+import sys
+import tempfile
+import threading
+import time
+import unittest
+from unittest import mock
+
+import uvicorn
+
+
+APP_DIR = Path(__file__).resolve().parents[1]
+REPO_ROOT = Path(__file__).resolve().parents[4]
+for value in (str(APP_DIR), str(REPO_ROOT / "src")):
+    if value not in sys.path:
+        sys.path.insert(0, value)
+
+import owner_asgi
+import server
+
+
+class FakeRegistry:
+    def get(self, name):
+        return None
+
+    def by_thread(self, thread_id):
+        return None
+
+
+class FakeRuntime:
+    def __init__(self, cwd: str) -> None:
+        self.cwd = cwd
+        self.started = False
+        self.stopped = False
+        self.sessions = set()
+        self.registry = FakeRegistry()
+        self.sent = []
+
+    def start(self):
+        self.started = True
+
+    def stop(self):
+        self.stopped = True
+
+    def has_session(self, name):
+        return name in self.sessions
+
+    def start_session(self, **_values):
+        self.sessions.add("faryo1")
+        return {
+            "session": "faryo1",
+            "threadId": "thread_demo",
+            "state": "idle",
+            "backend": "web-managed",
+            "duplicate": False,
+        }
+
+    def capture(self, name):
+        if name not in self.sessions:
+            raise RuntimeError("missing")
+        return {
+            "record": {
+                "session": name,
+                "threadId": "thread_demo",
+                "cwd": self.cwd,
+                "title": "Demo",
+                "model": "test-model",
+            },
+            "snapshot": {
+                "lifecycle": "idle",
+                "revision": 1,
+                "thread": {"id": "thread_demo", "model": "test-model"},
+                "tokenUsage": {},
+                "goal": None,
+                "interaction": None,
+                "interactionRevision": "appserver:0",
+                "rateLimits": {},
+            },
+            "messages": [],
+        }
+
+    def send(self, session, text, client_message_id):
+        self.sent.append((session, text, client_message_id))
+        return {
+            "accepted": True,
+            "deliveryId": client_message_id,
+            "delivery": "accepted",
+            "deliveryState": "submitted",
+            "session": session,
+            "duplicate": False,
+        }
+
+    def status(self):
+        return {"state": "ready", "ready": True}
+
+    def ready(self):
+        return True
+
+
+def free_port() -> int:
+    with socket.socket() as handle:
+        handle.bind(("127.0.0.1", 0))
+        return int(handle.getsockname()[1])
+
+
+class OwnerAsgiTest(unittest.TestCase):
+    def request(self, method: str, path: str, body: dict | None = None, *, token: bool = False):
+        connection = http.client.HTTPConnection("127.0.0.1", self.port, timeout=3)
+        headers = {}
+        encoded = None
+        if body is not None:
+            encoded = json.dumps(body).encode("utf-8")
+            headers.update({"Content-Type": "application/json", "Content-Length": str(len(encoded))})
+        if token:
+            headers["X-Owner-Token"] = "fixture-owner-token"
+        connection.request(method, path, body=encoded, headers=headers)
+        response = connection.getresponse()
+        payload = response.read()
+        result = (
+            response.status,
+            {name.lower(): value for name, value in response.getheaders()},
+            payload,
+        )
+        connection.close()
+        return result
+
+    def setUp(self) -> None:
+        self.temp = tempfile.TemporaryDirectory()
+        self.cwd = self.temp.name
+        self.runtime = FakeRuntime(self.cwd)
+        self.config = server.Config(server.DEFAULT_SESSION, "fixture-owner-token", 0)
+        self.app = owner_asgi.create_app(server, self.config, self.runtime)
+        self.port = free_port()
+        self.uvicorn = uvicorn.Server(uvicorn.Config(
+            self.app,
+            host="127.0.0.1",
+            port=self.port,
+            access_log=False,
+            lifespan="on",
+            log_level="error",
+        ))
+        self.pane_cwd = mock.patch.object(server, "get_pane_cwd", return_value=self.cwd)
+        self.pane_cwd.start()
+        self.thread = threading.Thread(target=self.uvicorn.run, daemon=True)
+        self.thread.start()
+        deadline = time.monotonic() + 3
+        while time.monotonic() < deadline:
+            if self.uvicorn.started:
+                break
+            time.sleep(0.01)
+        if not self.uvicorn.started:
+            raise RuntimeError("Owner ASGI fixture did not start")
+
+    def tearDown(self) -> None:
+        self.uvicorn.should_exit = True
+        self.thread.join(4)
+        self.pane_cwd.stop()
+        self.temp.cleanup()
+
+    def test_security_auth_web_session_and_static_contract(self) -> None:
+        status, headers, body = self.request("GET", "/health")
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body)["ok"], True)
+        self.assertEqual(headers.get("x-frame-options"), "DENY")
+        self.assertEqual(headers.get("cache-control"), "no-store")
+
+        status, _headers, body = self.request("GET", "/api/status?session=faryo1")
+        self.assertEqual(status, 401)
+        self.assertEqual(json.loads(body)["error"], "unauthorized")
+
+        status, _headers, body = self.request(
+            "POST",
+            "/api/agent/new",
+            {
+                "command": "codex",
+                "backend": "web-managed",
+                "client_launch_id": "launch-fixture-1",
+            },
+            token=True,
+        )
+        started = json.loads(body)
+        self.assertEqual(status, 200)
+        self.assertEqual(started["session"], "faryo1")
+
+        status, _headers, body = self.request("GET", "/api/status?session=faryo1", token=True)
+        web_status = json.loads(body)
+        self.assertEqual(status, 200)
+        self.assertEqual(web_status["backend"], "web-managed")
+        self.assertEqual(web_status["sessionId"], "thread_demo")
+
+        status, _headers, body = self.request(
+            "POST",
+            "/api/send",
+            {"session": "faryo1", "text": "hello", "clientMessageId": "client-fixture-1"},
+            token=True,
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body)["deliveryState"], "submitted")
+        self.assertEqual(self.runtime.sent, [("faryo1", "hello", "client-fixture-1")])
+
+        status, headers, body = self.request("GET", "/event-stream.js", token=True)
+        self.assertEqual(status, 200)
+        self.assertIn("javascript", headers.get("content-type", ""))
+        self.assertIn(b"createParser", body)
+
+        status, headers, body = self.request("GET", "/not-present.js")
+        self.assertEqual(status, 404)
+        self.assertEqual(headers.get("cache-control"), "no-store")
+        self.assertEqual(json.loads(body)["error"], "file not found")
+        self.assertTrue(self.runtime.started)
+
+
+if __name__ == "__main__":
+    unittest.main()

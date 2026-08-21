@@ -11,6 +11,7 @@ if str(APP_DIR) not in sys.path:
     sys.path.insert(0, str(APP_DIR))
 
 import server
+import owner_http
 
 
 class AgentSessionTest(unittest.TestCase):
@@ -724,16 +725,10 @@ class AgentSessionTest(unittest.TestCase):
 
     def test_history_query_is_bounded_and_access_log_omits_query_string(self):
         self.assertEqual(len(server.clean_agent_history_query("x" * 200)), 96)
-        handler = object.__new__(server.Handler)
-        handler.path = "/api/agent-sessions?q=private-title&token=secret"
-        handler.command = "GET"
-        with mock.patch.object(server.sys, "stderr") as stderr:
-            handler.log_message('"GET /api/agent-sessions?q=private-title HTTP/1.1" 200 -')
-
-        logged = stderr.write.call_args.args[0]
-        self.assertIn("GET /api/agent-sessions", logged)
-        self.assertNotIn("private-title", logged)
-        self.assertNotIn("secret", logged)
+        safe = owner_http.safe_log_path(
+            "/api/agent-sessions?q=private-title&token=secret"
+        )
+        self.assertEqual(safe, "/api/agent-sessions")
 
     def test_large_metadata_history_filters_before_pagination(self):
         now = 2_000_000_000.0

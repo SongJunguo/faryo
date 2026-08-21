@@ -139,7 +139,11 @@ class FaryoCliTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             home = Path(temp)
             app = home / ".local/share/faryo/versions/v1.5.0/app"
-            for relative in ("apps/owner/local-tmux-owner/server.py", "apps/gateway/server/run_asgi.py"):
+            for relative in (
+                "apps/owner/local-tmux-owner/server.py",
+                "apps/owner/local-tmux-owner/run_owner_asgi.py",
+                "apps/gateway/server/run_asgi.py",
+            ):
                 path = app / relative
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_text("fixture\n", encoding="utf-8")
@@ -153,12 +157,17 @@ class FaryoCliTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             home = Path(temp)
             managed = home / ".local/share/faryo/current/app"
-            for relative in ("apps/owner/local-tmux-owner/server.py", "apps/gateway/server/run_asgi.py"):
+            for relative in (
+                "apps/owner/local-tmux-owner/server.py",
+                "apps/owner/local-tmux-owner/run_owner_asgi.py",
+                "apps/gateway/server/run_asgi.py",
+            ):
                 path = managed / relative
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_text("fixture\n", encoding="utf-8")
             for root in (managed, ROOT):
                 self.assertTrue((root / "apps/owner/local-tmux-owner/server.py").is_file())
+                self.assertTrue((root / "apps/owner/local-tmux-owner/run_owner_asgi.py").is_file())
                 self.assertTrue((root / "apps/gateway/server/run_asgi.py").is_file())
             module_file = ROOT / "src/faryo_cli/diagnostics.py"
             self.assertEqual(diagnostics.discover_source_root({"HOME": str(home)}, module_file=module_file), ROOT)
@@ -306,6 +315,7 @@ class FaryoCliTest(unittest.TestCase):
 
         self.assertIn("private-owner-token", spec.environment.values())
         self.assertNotIn("private-owner-token", " ".join(spec.argv))
+        self.assertTrue(spec.argv[1].endswith("run_owner_asgi.py"))
         self.assertEqual(spec.argv[-4:], ["--host", "127.0.0.1", "--port", "8765"])
         self.assertEqual(spec.environment["FARYO_PYTHON"], sys.executable)
 

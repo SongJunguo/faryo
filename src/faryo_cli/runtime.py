@@ -87,15 +87,15 @@ def owner_process(layout: Layout | None = None) -> ProcessSpec:
         raise OperationError("Owner token is missing")
     host = loopback(values, "FARYO_OWNER_HOST", "127.0.0.1")
     owner_port = port(values, "FARYO_OWNER_PORT", 8765)
-    server = selected.source_root / "apps/owner/local-tmux-owner/server.py"
-    if not server.is_file():
+    runner = selected.source_root / "apps/owner/local-tmux-owner/run_owner_asgi.py"
+    if not runner.is_file():
         raise OperationError("Owner application is unavailable")
     environment = normalized_environment(values, selected.home)
     environment["FARYO_HOME"] = str(selected.faryo_home)
     return ProcessSpec(
         argv=[
             sys.executable,
-            str(server),
+            str(runner),
             "--session",
             values.get("FARYO_OWNER_DIRECT_SESSION") or "__faryo_no_default__",
             "--host",
@@ -103,7 +103,7 @@ def owner_process(layout: Layout | None = None) -> ProcessSpec:
             "--port",
             str(owner_port),
         ],
-        cwd=server.parent,
+        cwd=runner.parent,
         environment=environment,
     )
 

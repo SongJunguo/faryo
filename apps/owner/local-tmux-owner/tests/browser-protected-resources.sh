@@ -44,7 +44,7 @@ owner_log="$temp_root/owner.log"
 
 FARYO_OWNER_PANE_WIDTH=0 \
 PYTHONPATH="$repo_root/src${PYTHONPATH:+:$PYTHONPATH}" \
-  "$python_bin" "$repo_root/apps/owner/local-tmux-owner/server.py" \
+  "$python_bin" "$repo_root/apps/owner/local-tmux-owner/run_owner_asgi.py" \
     --host 127.0.0.1 --port "$port" --session "$session" --token "$token" --pane-width 0 \
     >"$owner_log" 2>&1 &
 owner_pid=$!

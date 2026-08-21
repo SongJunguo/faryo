@@ -18,6 +18,7 @@ HANDLED_NOTIFICATION_METHODS = frozenset({
     "thread/name/updated",
     "thread/started",
     "thread/status/changed",
+    "thread/settings/updated",
     "thread/tokenUsage/updated",
     "turn/completed",
     "turn/error",
@@ -109,6 +110,12 @@ class WebSessionActor:
             name = params.get("threadName")
             self.thread["name"] = name if isinstance(name, str) else None
             return [self._event("session.title", payload={"title": self.thread.get("name")})]
+        if method == "thread/settings/updated":
+            settings = params.get("threadSettings")
+            if isinstance(settings, Mapping):
+                self.thread.update(dict(settings))
+                return [self._event("session.settings", payload={"threadSettings": dict(settings)})]
+            return []
         if method == "turn/started":
             turn = params.get("turn")
             if not isinstance(turn, Mapping) or not isinstance(turn.get("id"), str):

@@ -57,7 +57,11 @@ def discover_source_root(values: Mapping[str, str] | None = None, *, module_file
         program = Path(env.get("FARYO_PROGRAM_HOME") or home / ".local/share/faryo").expanduser()
         candidates = [*(module_file or Path(__file__)).resolve().parents, program / "current/app"]
     for candidate in candidates:
-        if (candidate / "apps/owner/local-tmux-owner/server.py").is_file() and (candidate / "apps/gateway/server/run_asgi.py").is_file():
+        if (
+            (candidate / "apps/owner/local-tmux-owner/server.py").is_file()
+            and (candidate / "apps/owner/local-tmux-owner/run_owner_asgi.py").is_file()
+            and (candidate / "apps/gateway/server/run_asgi.py").is_file()
+        ):
             return candidate
     return None
 

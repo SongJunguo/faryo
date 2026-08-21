@@ -44,7 +44,7 @@ tmux new-session -d -x 200 -y 40 -s "$session" -c "$fixture" 'exec sleep 120'
 initial_size="$(tmux display-message -p -t "$session" '#{window_width}x#{window_height}')"
 
 FARYO_OWNER_DATA="$temp_root/data" PYTHONPATH="$repo_root/src${PYTHONPATH:+:$PYTHONPATH}" \
-  "$python_bin" "$repo_root/apps/owner/local-tmux-owner/server.py" \
+  "$python_bin" "$repo_root/apps/owner/local-tmux-owner/run_owner_asgi.py" \
   --host 127.0.0.1 --port "$port" --session "$session" --token "$token" --pane-width 0 \
   >/dev/null 2>&1 &
 owner_pid=$!

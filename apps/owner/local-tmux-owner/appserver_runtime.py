@@ -12,10 +12,12 @@ import time
 from typing import Any, Callable, Mapping
 
 from appserver_events import EventJournal, ReplayResult
+from appserver_commands import AppServerCommandError, AppServerCommandService
 from appserver_protocol import AppServerError, AppServerUnavailable
 from appserver_registry import WebSessionRecord, WebSessionRegistry
 from appserver_requests import (
     APPROVAL_METHODS,
+    CLIENT_REQUEST_RE,
     USER_INPUT_METHOD,
     AppServerInteractionBroker,
     AppServerInteractionError,
@@ -76,7 +78,12 @@ class AppServerRuntime:
         self.ignored_notifications: dict[str, int] = {}
         self.send_tasks: dict[str, tuple[str, str, asyncio.Task[dict[str, Any]]]] = {}
         self.send_receipts: dict[str, dict[str, Any]] = {}
+        self.command_receipts: dict[str, dict[str, Any]] = {}
         self.interactions = AppServerInteractionBroker(
+            on_open=self._interaction_opened,
+            on_close=self._interaction_closed,
+        )
+        self.commands = AppServerCommandService(
             on_open=self._interaction_opened,
             on_close=self._interaction_closed,
         )
@@ -196,6 +203,25 @@ class AppServerRuntime:
                 answers=answers,
                 action=action,
                 client_request_id=client_request_id,
+            ),
+            timeout,
+        )
+
+    def begin_command(
+        self,
+        name: str,
+        *,
+        command: str,
+        client_request_id: str,
+        confirmed: bool = False,
+        timeout: float = RUNTIME_CALL_TIMEOUT,
+    ) -> dict[str, Any]:
+        return self._submit(
+            self._begin_command(
+                name,
+                command=command,
+                client_request_id=client_request_id,
+                confirmed=confirmed,
             ),
             timeout,
         )
@@ -360,6 +386,10 @@ class AppServerRuntime:
         if method == "thread/name/updated":
             name = params.get("threadName")
             self.registry.update_metadata(record.name, title=str(name or ""))
+        elif method == "thread/settings/updated":
+            settings = params.get("threadSettings")
+            if isinstance(settings, Mapping) and isinstance(settings.get("model"), str):
+                self.registry.update_metadata(record.name, model=str(settings["model"]))
         elif method in {"turn/started", "turn/completed"}:
             self.registry.touch(record.name)
 
@@ -367,6 +397,9 @@ class AppServerRuntime:
         thread_id = str(params.get("threadId") or "")
         record = self.registry.by_thread(thread_id) if thread_id else None
         if record is None:
+            return declined_response(method, params)
+        actor = self.actors.get(record.name)
+        if actor is not None and actor.interaction is not None:
             return declined_response(method, params)
         return await self.interactions.request(record.name, method, params)
 
@@ -650,6 +683,16 @@ class AppServerRuntime:
     ) -> dict[str, Any]:
         self._require_session(name)
         try:
+            local = await self.commands.respond(
+                session=name,
+                interaction_id=interaction_id,
+                option_id=option_id,
+                action=action,
+                rpc=self._require_client().rpc,
+            )
+            if local is not None:
+                await asyncio.sleep(0)
+                return local
             if action == "cancel":
                 result = self.interactions.cancel(name, client_request_id=client_request_id)
             else:
@@ -662,8 +705,50 @@ class AppServerRuntime:
                 )
             await asyncio.sleep(0)
             return result
-        except AppServerInteractionError as exc:
+        except (AppServerCommandError, AppServerInteractionError) as exc:
             raise AppServerRuntimeError(str(exc)) from exc
+
+    async def _begin_command(
+        self,
+        name: str,
+        *,
+        command: str,
+        client_request_id: str,
+        confirmed: bool,
+    ) -> dict[str, Any]:
+        request_id = str(client_request_id or "").strip()
+        if not CLIENT_REQUEST_RE.fullmatch(request_id):
+            raise AppServerRuntimeError("invalid client request id")
+        invocation = str(command or "").strip()
+        identity = (name, invocation, bool(confirmed))
+        cutoff = time.monotonic() - SEND_RECEIPT_TTL_SECONDS
+        for key in [key for key, value in self.command_receipts.items() if value["updatedAt"] < cutoff]:
+            self.command_receipts.pop(key, None)
+        existing = self.command_receipts.get(request_id)
+        if existing is not None:
+            if existing["identity"] != identity:
+                raise AppServerRuntimeError("client request id was already used for another command")
+            return {**existing["result"], "duplicate": True}
+        record, actor = self._require_session(name)
+        if actor.interaction is not None:
+            raise AppServerRuntimeError("another Codex interaction is already pending")
+        try:
+            result = await self.commands.begin(
+                session=name,
+                thread_id=record.thread_id,
+                cwd=record.cwd,
+                thread=actor.thread,
+                command=invocation,
+                rpc=self._require_client().rpc,
+            )
+        except AppServerCommandError as exc:
+            raise AppServerRuntimeError(str(exc)) from exc
+        self.command_receipts[request_id] = {
+            "identity": identity,
+            "result": dict(result),
+            "updatedAt": time.monotonic(),
+        }
+        return result
 
     def _require_client(self) -> AsyncCodexAppServerClient:
         client = self.client

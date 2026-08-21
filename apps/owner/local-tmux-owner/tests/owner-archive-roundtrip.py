@@ -18,7 +18,7 @@ from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
-OWNER_SERVER = REPO_ROOT / "apps" / "owner" / "local-tmux-owner" / "server.py"
+OWNER_SERVER = REPO_ROOT / "apps" / "owner" / "local-tmux-owner" / "run_owner_asgi.py"
 DEFAULT_NODE = Path.home() / ".nvm" / "versions" / "node" / "v24.16.0" / "bin" / "node"
 DEFAULT_CODEX = Path.home() / ".nvm" / "versions" / "node" / "v24.16.0" / "lib" / "node_modules" / "@openai" / "codex" / "bin" / "codex.js"
 

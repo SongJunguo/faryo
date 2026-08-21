@@ -95,6 +95,7 @@ release_checks() {
     "$ROOT/apps/owner/local-tmux-owner/codex_history.py" \
     "$ROOT/apps/owner/local-tmux-owner/codex_app_server.py" \
     "$ROOT/apps/owner/local-tmux-owner/appserver_capabilities.py" \
+    "$ROOT/apps/owner/local-tmux-owner/appserver_commands.py" \
     "$ROOT/apps/owner/local-tmux-owner/appserver_events.py" \
     "$ROOT/apps/owner/local-tmux-owner/appserver_protocol.py" \
     "$ROOT/apps/owner/local-tmux-owner/appserver_registry.py" \
@@ -102,6 +103,12 @@ release_checks() {
     "$ROOT/apps/owner/local-tmux-owner/appserver_runtime.py" \
     "$ROOT/apps/owner/local-tmux-owner/appserver_session.py" \
     "$ROOT/apps/owner/local-tmux-owner/appserver_transport.py" \
+    "$ROOT/apps/owner/local-tmux-owner/owner_asgi.py" \
+    "$ROOT/apps/owner/local-tmux-owner/owner_asgi_control.py" \
+    "$ROOT/apps/owner/local-tmux-owner/owner_asgi_events.py" \
+    "$ROOT/apps/owner/local-tmux-owner/owner_asgi_read.py" \
+    "$ROOT/apps/owner/local-tmux-owner/owner_asgi_support.py" \
+    "$ROOT/apps/owner/local-tmux-owner/run_owner_asgi.py" \
     "$ROOT/apps/owner/local-tmux-owner/workspace_changes.py" \
     "$ROOT/apps/owner/local-tmux-owner/runtime_diagnostics.py" \
     "$ROOT/apps/owner/local-tmux-owner/tests/owner-archive-roundtrip.py" \
@@ -241,6 +248,18 @@ keyboard_layout_source = (root / "apps/owner/local-tmux-owner/static/keyboard-la
 composer_layout_source = (root / "apps/owner/local-tmux-owner/static/composer-layout.js").read_text(encoding="utf-8")
 owner_style = (root / "apps/owner/local-tmux-owner/static/style.css").read_text(encoding="utf-8")
 owner_server = (root / "apps/owner/local-tmux-owner/server.py").read_text(encoding="utf-8")
+owner_asgi_source = (root / "apps/owner/local-tmux-owner/owner_asgi.py").read_text(encoding="utf-8")
+owner_asgi_read_source = (root / "apps/owner/local-tmux-owner/owner_asgi_read.py").read_text(encoding="utf-8")
+owner_asgi_control_source = (root / "apps/owner/local-tmux-owner/owner_asgi_control.py").read_text(encoding="utf-8")
+owner_asgi_runner = (root / "apps/owner/local-tmux-owner/run_owner_asgi.py").read_text(encoding="utf-8")
+appserver_commands_source = (root / "apps/owner/local-tmux-owner/appserver_commands.py").read_text(encoding="utf-8")
+owner_backend_source = "\n".join((
+    owner_server,
+    owner_asgi_source,
+    owner_asgi_read_source,
+    owner_asgi_control_source,
+    appserver_commands_source,
+))
 workspace_changes_source = (root / "apps/owner/local-tmux-owner/workspace_changes.py").read_text(encoding="utf-8")
 runtime_diagnostics_source = (root / "apps/owner/local-tmux-owner/runtime_diagnostics.py").read_text(encoding="utf-8")
 owner_http_source = (root / "apps/owner/local-tmux-owner/owner_http.py").read_text(encoding="utf-8")
@@ -341,16 +360,17 @@ assert "faryo_resolve_python" in owner_init_source and "faryo_resolve_python" in
 assert 'or "720"' in gateway_init_source and "1 <= parsed_session_hours <= 720" in gateway_init_source, "Gateway initializer must keep the 30-day session contract"
 assert 'id="historySearchInput"' in gateway and 'data-history-period="7d"' in gateway, "Gateway must expose metadata history search"
 assert "agent_history_text_matches" in owner_server and "codex_conversation_history_page" not in owner_server[owner_server.index("def codex_history_page("):owner_server.index("def codex_history_items(")], "session search must not scan conversation history"
-assert "owner_http.safe_log_path(self.path)" in owner_server and "def safe_log_path" in owner_http_source, "Owner logs must omit private query strings"
+assert "ThreadingHTTPServer" not in owner_server and "uvicorn.Config" in owner_asgi_runner and "Starlette" in owner_asgi_source, "legacy Owner HTTP server must not return"
+assert "access_log=False" in owner_asgi_runner and "def safe_log_path" in owner_http_source, "Owner logs must omit private query strings"
 assert "ControlAuditStore" in gateway_config_source and "target_digest" in gateway_audit_source and "append_audit" in gateway_asgi_support and 'id="securityActivity"' in gateway, "Gateway must expose body-free control auditing"
 assert "GatewayHandler" not in gateway and "ThreadingHTTPServer" not in gateway, "legacy Gateway HTTP server must not return"
 assert "run_asgi.py" in gateway_runner and "FARYO_GATEWAY_HTTP_ENGINE" not in gateway_runner, "Gateway runner must remain ASGI-only"
 assert "class FaryoServer" in gateway_asgi_runner and "close_owner_streams" in gateway_asgi_runner, "Gateway shutdown must release active Owner streams before waiting"
 assert "/api/session-history/archive" in gateway and "/api/session-history/unarchive" in gateway, "Gateway must expose reversible history lifecycle controls"
-assert "/api/session-history/delete" not in gateway_ui and '"thread/delete"' not in owner_server, "Faryo must not expose hard thread deletion"
+assert "/api/session-history/delete" not in gateway_ui and '"thread/delete"' not in owner_backend_source, "Faryo must not expose hard thread deletion"
 assert 'class="brand" href="/" aria-label="Faryo home"' in gateway, "Gateway brand must remain on the session home"
 for retired_marker in ("/projects", "/api/project-workbench", "/api/faryo/start", "/api/faryo/dispatch", "/api/workorder"):
-    assert retired_marker not in gateway_ui and retired_marker not in owner_server, f"retired project orchestration route returned: {retired_marker}"
+    assert retired_marker not in gateway_ui and retired_marker not in owner_backend_source, f"retired project orchestration route returned: {retired_marker}"
 assert "PORTAL_CSS" not in gateway and "PORTAL_JS_TEMPLATE" not in gateway, "Gateway portal assets must stay external"
 assert "def gateway_asset_revision" in gateway and "GATEWAY_ASSET_REVISION = gateway_asset_revision()" in gateway, "Gateway mutable assets must use automatic content revisions"
 assert "GATEWAY_ASSET_REVISION = gateway_asset_revision()" in gateway and 'href="/workbench.css?v={asset_version}"' in gateway and 'src="/workbench.js?v={asset_version}"' in gateway, "Gateway must content-version external workbench assets"
@@ -446,8 +466,8 @@ assert 'import("./owner/history-controller.mjs?v=faryo-owner-history-1")' in app
 assert 'import("./owner/rich-block-controller.mjs?v=faryo-owner-rich-blocks-2")' in app, "Owner long histories must use the current versioned rich-block controller"
 assert 'import("./owner/capture-controller.mjs?v=faryo-owner-capture-4")' in app, "Owner capture must use its current versioned ES module"
 assert 'import("./owner/composer-delivery.mjs?v=faryo-owner-composer-1")' in app, "Owner composer delivery must use its native ES module"
-assert "/api/workspace-changes" in owner_server and "/api/workspace-changes" in changes_panel_source, "workspace changes must use the scoped read-only Owner API"
-assert "/api/capabilities" in owner_server and "/api/diagnostics" in owner_server and "loadOwnerCapabilities" in app, "Owner must expose versioned redacted diagnostics"
+assert "/api/workspace-changes" in owner_asgi_read_source and "/api/workspace-changes" in changes_panel_source, "workspace changes must use the scoped read-only Owner API"
+assert "/api/capabilities" in owner_asgi_read_source and "/api/diagnostics" in owner_asgi_read_source and "loadOwnerCapabilities" in app, "Owner must expose versioned redacted diagnostics"
 assert '"pendingQueueManagement": False' in runtime_diagnostics_source and '"pendingQueue": "unsupported"' in runtime_diagnostics_source, "Faryo must not overclaim editable Codex queues"
 assert '"queuedSendNow": True' in runtime_diagnostics_source and '"queuedSendNow": "escape-when-advertised"' in runtime_diagnostics_source, "Faryo must expose only the explicit Esc send-now capability"
 assert "shell=True" not in workspace_changes_source and "--no-ext-diff" in workspace_changes_source and "--no-textconv" in workspace_changes_source, "workspace diff must remain fixed and read-only"
@@ -487,16 +507,16 @@ assert "retryEventStream" in capture_controller_source and "function consumeEven
 assert "isAmbiguousDeliveryError" in composer_delivery_source and "function isAmbiguousDeliveryError(" not in app, "Owner ambiguous delivery recovery must remain in its controller"
 assert "goal-status.mjs" in app and 'id="goalPill"' in owner_status_source and 'id="detailsGoal"' in index, "Owner must render Preact goal status in the header and details"
 assert "objective" not in goal_status_source and '"goalStatus": goal_status' in owner_server, "Owner goal UI must receive status-only metadata"
-assert '"thread/goal/get"' in owner_server and 'parsed.path == "/api/goal"' in owner_server and "interaction-confirm-run" in owner_interaction_source, "Owner must expose on-demand Goal details and structured command confirmation"
+assert '"thread/goal/get"' in appserver_commands_source and 'path == "/api/goal"' in owner_asgi_read_source and "interaction-confirm-run" in owner_interaction_source, "Owner must expose on-demand Goal details and structured command confirmation"
 assert "navigator.clipboard.read(" not in app + attachment_controller_source, "Owner must not read the clipboard outside a paste event"
 assert "lastCompactCapture" in app and "lastFullCapture" in app and "renderModeLoading" in app, "Chat and Raw must keep isolated capture caches"
 assert "renderOutput(lastCapture)" not in app, "compact callbacks must not replay a Raw capture"
 assert 'id="approveSmallBtn"' not in index and 'class="key-nav"' not in index and "InteractionHost" in owner_interaction_source, "retired raw TUI buttons must stay replaced by the structured Preact interaction host"
-assert all(route not in app + owner_server for route in ("/api/approve", "/api/up", "/api/down")), "retired raw TUI key endpoints must not return"
+assert all(route not in app + owner_backend_source for route in ("/api/approve", "/api/up", "/api/down")), "retired raw TUI key endpoints must not return"
 assert "interaction-choose" in owner_interaction_source and "activeInteractionId" in owner_interaction_source, "structured fallback must expose Choose and isolate late responses"
 assert "syncStructuredInteraction(null)" in app and "ignored: true" in app, "session switches must fence pending interaction responses"
 assert "commandSuggestionIndex" not in app and "handleCommandSuggestionKey" not in app, "Preact CommandPalette must own selection and keyboard state"
-assert "start_agent_runtime_async" in owner_server and "AGENT_START_MONITORS" in owner_server and '"state": launch_state or "starting"' in owner_server, "Codex launch must return an async starting receipt with a recoverable monitor"
+assert "start_agent_runtime_async" in owner_asgi_control_source and "AGENT_START_MONITORS" in owner_server and '"state": launch_state or "starting"' in owner_asgi_control_source, "Codex launch must return an async starting receipt with a recoverable monitor"
 assert "session unknown" not in index and 'id="transcriptShellRoot"' in index and "Starting Codex" in owner_transcript_source, "Owner startup UI must use the Preact transcript state instead of a false unknown-session state"
 assert "generation" in owner_conversation_store_source and "accepts" in owner_conversation_store_source and "acceptScope" in capture_controller_source, "Owner transcript transport must reject obsolete session generations"
 assert "CODEX_LIVE_TAIL_LINES = 180" in owner_server, "Live tmux must keep the bounded long tail"
