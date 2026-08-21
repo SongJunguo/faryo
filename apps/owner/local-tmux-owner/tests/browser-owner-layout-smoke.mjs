@@ -211,7 +211,11 @@ await withBrowser(
           .getBoundingClientRect();
         return {
           appHeight: app.height,
+          appLeft: app.left,
+          appRight: app.right,
           mainHeight: main.getBoundingClientRect().height,
+          mainLeft: main.getBoundingClientRect().left,
+          mainRight: main.getBoundingClientRect().right,
           mainBottom: main.getBoundingClientRect().bottom,
           mainPaddingBottom: Number.parseFloat(
             getComputedStyle(main).paddingBottom,
@@ -221,6 +225,8 @@ await withBrowser(
           footerPosition: getComputedStyle(footerElement).position,
           footerBackground: getComputedStyle(footerElement).backgroundColor,
           footerHeight: footer.height,
+          footerLeft: footer.left,
+          footerRight: footer.right,
           footerTop: footer.top,
           footerBottom: footer.bottom,
           reserve: Number.parseFloat(
@@ -244,6 +250,14 @@ await withBrowser(
       keyboardClosed.mainOverflowAnchor !== "none" ||
       keyboardClosed.footerPosition !== "relative" ||
       keyboardClosed.footerBackground !== "rgba(0, 0, 0, 0)" ||
+      Math.abs(keyboardClosed.mainLeft - keyboardClosed.appLeft) > 1 ||
+      Math.abs(keyboardClosed.mainRight - keyboardClosed.appRight) > 1 ||
+      Math.abs(keyboardClosed.footerLeft - keyboardClosed.appLeft) > 1 ||
+      Math.abs(keyboardClosed.footerRight - keyboardClosed.appRight) > 1 ||
+      Math.abs(keyboardOpen.mainLeft - keyboardOpen.appLeft) > 1 ||
+      Math.abs(keyboardOpen.mainRight - keyboardOpen.appRight) > 1 ||
+      Math.abs(keyboardOpen.footerLeft - keyboardOpen.appLeft) > 1 ||
+      Math.abs(keyboardOpen.footerRight - keyboardOpen.appRight) > 1 ||
       keyboardClosed.documentOverflow ||
       keyboardOpen.documentOverflow ||
       Math.abs(
@@ -382,15 +396,25 @@ await withBrowser(
       const mainRect = main.getBoundingClientRect();
       const footerRect = footer.getBoundingClientRect();
       return {
+        appLeft: appRect.left,
+        appRight: appRect.right,
         headerBottom: headerRect.bottom,
         mainTop: mainRect.top,
+        mainLeft: mainRect.left,
+        mainRight: mainRect.right,
         mainBottom: mainRect.bottom,
+        footerLeft: footerRect.left,
+        footerRight: footerRect.right,
         footerBottom: footerRect.bottom,
         appBottom: appRect.bottom,
       };
     });
     if (
       expandedHeader.mainTop < expandedHeader.headerBottom - 1 ||
+      Math.abs(expandedHeader.mainLeft - expandedHeader.appLeft) > 1 ||
+      Math.abs(expandedHeader.mainRight - expandedHeader.appRight) > 1 ||
+      Math.abs(expandedHeader.footerLeft - expandedHeader.appLeft) > 1 ||
+      Math.abs(expandedHeader.footerRight - expandedHeader.appRight) > 1 ||
       Math.abs(expandedHeader.mainBottom - expandedHeader.appBottom) > 1 ||
       Math.abs(expandedHeader.footerBottom - expandedHeader.appBottom) > 1
     ) {

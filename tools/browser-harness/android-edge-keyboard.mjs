@@ -209,6 +209,15 @@ const snapshot = await page.evaluate(() => {
     root: {
       layout: document.documentElement.dataset.faryoKeyboardLayout || null,
       open: document.documentElement.dataset.faryoKeyboardOpen || null,
+      composerLayout:
+        document.documentElement.dataset.faryoComposerLayout || null,
+      composerReserve: round(
+        Number.parseFloat(
+          getComputedStyle(document.documentElement).getPropertyValue(
+            "--faryo-composer-reserve",
+          ),
+        ),
+      ),
       keyboardInsets,
       safeArea: {
         top: environmentLength("safe-area-inset-top"),
@@ -226,9 +235,24 @@ const snapshot = await page.evaluate(() => {
       promptInput: rect("#promptInput"),
       appGridRows: app ? getComputedStyle(app).gridTemplateRows : null,
       footerPosition: footer ? getComputedStyle(footer).position : null,
+      footerBackground: footer
+        ? getComputedStyle(footer).backgroundColor
+        : null,
       footerPaddingBottom: footer
         ? round(Number.parseFloat(getComputedStyle(footer).paddingBottom))
         : null,
+      mainPaddingBottom: round(
+        Number.parseFloat(
+          getComputedStyle(document.querySelector("#outputWrap")).paddingBottom,
+        ),
+      ),
+      mainFooterOverlap:
+        app && footer
+          ? round(
+              document.querySelector("#outputWrap").getBoundingClientRect()
+                .bottom - footer.getBoundingClientRect().top,
+            )
+          : null,
     },
   };
 });
