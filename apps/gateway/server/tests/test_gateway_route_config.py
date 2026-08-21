@@ -615,7 +615,8 @@ class GatewayRouteConfigTest(unittest.TestCase):
             auth.write_text(original_auth, encoding="utf-8")
             gateway_env.write_text(
                 "FARYO_DEFAULT_WORKSPACE=/preserved/workspace\n"
-                "FARYO_GATEWAY_SESSION_HOURS=720\n",
+                "FARYO_GATEWAY_SESSION_HOURS=720\n"
+                "FARYO_TXY_OWNER_LABEL=Workstation\n",
                 encoding="utf-8",
             )
             process_env = {
@@ -644,6 +645,7 @@ class GatewayRouteConfigTest(unittest.TestCase):
             self.assertIn("FARYO_TXY_MAX_RUNNING=8\n", gateway_env.read_text(encoding="utf-8"))
             self.assertIn("FARYO_GATEWAY_SESSION_HOURS=720\n", gateway_env.read_text(encoding="utf-8"))
             self.assertIn("FARYO_DEFAULT_WORKSPACE=/preserved/workspace\n", gateway_env.read_text(encoding="utf-8"))
+            self.assertIn("FARYO_TXY_OWNER_LABEL=Workstation\n", gateway_env.read_text(encoding="utf-8"))
 
     def test_local_initializer_uses_current_30_day_default(self) -> None:
         script = REPO_ROOT / "apps" / "gateway" / "scripts" / "init-local-gateway.sh"

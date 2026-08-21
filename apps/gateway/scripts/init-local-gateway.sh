@@ -109,7 +109,7 @@ values = {
     f"FARYO_{route_upper}_OWNER_TOKEN": owner_token,
     f"FARYO_{route_upper}_OWNER_HOST": owner.get("FARYO_OWNER_HOST") or "127.0.0.1",
     f"FARYO_{route_upper}_OWNER_PORT": owner.get("FARYO_OWNER_PORT") or "8765",
-    f"FARYO_{route_upper}_OWNER_LABEL": route_upper,
+    f"FARYO_{route_upper}_OWNER_LABEL": existing.get(f"FARYO_{route_upper}_OWNER_LABEL") or route_upper,
     f"FARYO_{route_upper}_MAX_RUNNING": existing.get(f"FARYO_{route_upper}_MAX_RUNNING") or max_running_defaults[route],
     "FARYO_DEFAULT_WORKSPACE": workspace,
     "FARYO_DEFAULT_FILE_INBOX": inbox,
