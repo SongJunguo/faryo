@@ -22,7 +22,9 @@ not an unavailable history source. Chat renders a quiet `No messages yet` state
 until the first prompt creates a durable turn. TUI startup redraws remain terminal
 evidence and may appear in Raw or the transient Live panel, but never masquerade
 as chat history. The warning fallback is reserved for an actual failure of both
-durable rollout and App Server reads.
+durable rollout and App Server reads. These lifecycle states are projected by a
+Preact transcript shell from a session/generation/mode-scoped store; Markdown,
+KaTeX and Live content remain independent rendering adapters.
 
 ## Gateway Workbench
 
@@ -316,6 +318,8 @@ remains interrupt.
 - single reading column;
 - 10–12 px normal side padding;
 - stable large composer above the bottom safe area;
+- composer and conversation reserve share one measured VisualViewport snapshot,
+  so the keyboard neither double-lifts the input nor covers a tail-pinned reply;
 - question rail overlays the extreme edge only while active;
 - tables, code, and display math use internal horizontal scrolling;
 - session/details panels cover the page instead of shrinking the conversation.

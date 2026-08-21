@@ -63,6 +63,24 @@ test("refresh cancellation ignores a late payload", async () => {
   assert.deepEqual(captures, []);
 });
 
+test("a response from an obsolete conversation scope is rejected", async () => {
+  let resolveCapture;
+  let scope = { session: "alpha", generation: 1, mode: "compact" };
+  const { controller, captures } = fixture({
+    getScope: () => ({ ...scope }),
+    acceptScope: (candidate) =>
+      candidate.session === scope.session &&
+      candidate.generation === scope.generation &&
+      candidate.mode === scope.mode,
+    loadCapture: () => new Promise((resolve) => { resolveCapture = resolve; }),
+  });
+  const pending = controller.refresh(320);
+  scope = { session: "beta", generation: 2, mode: "compact" };
+  resolveCapture({ ok: true, text: "obsolete" });
+  await pending;
+  assert.deepEqual(captures, []);
+});
+
 test("missing streaming support selects the polling fallback", () => {
   const intervals = [];
   const { controller, states } = fixture({

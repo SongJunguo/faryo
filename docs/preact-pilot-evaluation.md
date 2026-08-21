@@ -22,8 +22,10 @@ Owner, Compact Chat, Markdown/TeX and live tmux rendering remain framework-free.
 
 > Historical scope note: this document records the v1.4 Gateway-only pilot.
 > Faryo v1.6 later adopted a separate focused Owner bundle for composer,
-> command, interaction and status shells; the transcript and Markdown/TeX/Raw/
-> Live islands remain outside Preact. See the v1.6 structured-interaction plan.
+> command, interaction and status shells. Faryo v1.7 adds a framework-neutral
+> conversation store and a Preact transcript lifecycle shell; Markdown/TeX
+> bodies, Raw formatting, Live tmux and history paging remain isolated adapters.
+> See the v1.6 structured-interaction and v1.7 transcript-migration plans.
 
 This is an application of the repository dependency principle: use a focused
 library where it removes a difficult repeated behavior, but do not turn a

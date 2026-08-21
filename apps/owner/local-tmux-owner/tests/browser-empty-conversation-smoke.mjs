@@ -81,12 +81,14 @@ await withBrowser({
 
   const state = await page.evaluate(() => {
     const output = document.getElementById('output');
-    const text = String(output?.innerText || '');
+    const transcript = document.getElementById('transcriptShellRoot');
+    const text = String(transcript?.innerText || '');
     return {
       source: output?.dataset.captureSource || '',
       empty: output?.dataset.structuredEmpty || '',
       warningCount: output?.querySelectorAll('.compact-capture-warning').length || 0,
       compactBlocks: output?.querySelectorAll('.compact-block').length || 0,
+      phase: transcript?.querySelector('.transcript-shell')?.dataset.conversationPhase || '',
       hasEmptyMessage: text.includes('No messages yet. Ask Codex to start this conversation.'),
       leakedTerminalStartup: /Codex ready|Ask Codex to do anything|for shortcuts/i.test(text),
       horizontalOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth + 1,
@@ -94,7 +96,7 @@ await withBrowser({
   });
 
   if (captureRequests < 1 || eventRequests < 1 || state.source !== 'codex-app-server' || state.empty !== 'true'
-    || state.warningCount || !state.compactBlocks || !state.hasEmptyMessage
+    || state.warningCount || state.compactBlocks || state.phase !== 'empty' || !state.hasEmptyMessage
     || state.leakedTerminalStartup || state.horizontalOverflow) {
     throw new Error(`Empty structured conversation rendered incorrectly: ${JSON.stringify(state)}`);
   }
@@ -105,7 +107,7 @@ await withBrowser({
     return document.documentElement.dataset.faryoAppReady === '1'
       && output?.dataset.captureSource === 'codex-app-server'
       && output?.dataset.structuredEmpty === 'true'
-      && output?.innerText.includes('No messages yet. Ask Codex to start this conversation.')
+      && document.getElementById('transcriptShellRoot')?.innerText.includes('No messages yet. Ask Codex to start this conversation.')
       && !output?.querySelector('.compact-capture-warning');
   }, null, { timeout: 25_000 });
 

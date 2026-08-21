@@ -25,7 +25,7 @@ for (const viewport of [
       mobile: viewport.width < 720,
     },
     async ({ page }) => {
-      await page.setContent('<div class="app"><div id="status"></div><div id="composer"></div></div><div id="root"></div>');
+      await page.setContent('<div class="app"><div id="status"></div><div id="composer"></div><div id="transcript"></div></div><div id="root"></div>');
       await page.addStyleTag({ content: styles });
       await page.addScriptTag({ content: bundle });
       await page.evaluate(() => {
@@ -93,6 +93,18 @@ for (const viewport of [
           ],
           "2 commands",
         );
+        window.__conversationStore = window.FaryoOwnerUI.createConversationStore({
+          session: "alpha",
+          mode: "compact",
+        });
+        window.__transcriptController = window.FaryoOwnerUI.mountTranscriptShell(
+          document.getElementById("transcript"),
+          window.__conversationStore,
+        );
+        const retained = document.createElement("section");
+        retained.id = "legacyTranscriptChild";
+        retained.textContent = "retained legacy body";
+        window.__transcriptController.output.appendChild(retained);
         window.__interactionRequests = [];
         window.__interactionController = window.FaryoOwnerUI.mountInteractionHost(
           document.getElementById("root"),
@@ -187,6 +199,56 @@ for (const viewport of [
         || composer.status.fast !== "Default" || composer.status.fastPressed !== "false"
         || composer.status.fastDisabled) {
         throw new Error(`Owner composer shell failed: ${JSON.stringify({ viewport, composer })}`);
+      }
+      const transcript = await page.evaluate(async () => {
+        const frame = () => new Promise((resolve) => requestAnimationFrame(resolve));
+        const oldScope = window.__conversationStore.scope();
+        window.__conversationStore.switchSession("beta");
+        const staleAccepted = window.__conversationStore.commitCapture(
+          { captureSource: "codex-jsonl", agentSource: "codex-cli", text: "obsolete" },
+          oldScope,
+        );
+        const emptyAccepted = window.__conversationStore.commitCapture(
+          { captureSource: "codex-empty", agentSource: "codex-cli", text: "" },
+          window.__conversationStore.scope(),
+        );
+        await frame();
+        const emptyPhase = document.querySelector(".transcript-shell")?.dataset.conversationPhase;
+        window.__conversationStore.setMode("full");
+        await frame();
+        const rawLoadingPhase = document.querySelector(".transcript-shell")?.dataset.conversationPhase;
+        window.__conversationStore.commitCapture(
+          { captureSource: "tmux", agentSource: "codex-cli", text: "raw" },
+          window.__conversationStore.scope(),
+        );
+        await frame();
+        const rawReadyPhase = document.querySelector(".transcript-shell")?.dataset.conversationPhase;
+        window.__conversationStore.setMode("compact");
+        window.__conversationStore.commitCapture(
+          { captureSource: "tmux", agentSource: "codex-cli", text: "fallback" },
+          window.__conversationStore.scope(),
+        );
+        await frame();
+        return {
+          staleAccepted,
+          emptyAccepted,
+          emptyPhase,
+          rawLoadingPhase,
+          rawReadyPhase,
+          fallbackPhase: document.querySelector(".transcript-shell")?.dataset.conversationPhase,
+          legacyRetained: Boolean(document.getElementById("legacyTranscriptChild")),
+        };
+      });
+      if (
+        transcript.staleAccepted ||
+        !transcript.emptyAccepted ||
+        transcript.emptyPhase !== "empty" ||
+        transcript.rawLoadingPhase !== "loading" ||
+        transcript.rawReadyPhase !== "ready" ||
+        transcript.fallbackPhase !== "fallback" ||
+        !transcript.legacyRetained
+      ) {
+        throw new Error(`Owner transcript state failed: ${JSON.stringify(transcript)}`);
       }
       await page.locator("#fastToggle").click();
       await page.waitForFunction(() => Boolean(window.__resolveFastToggle));

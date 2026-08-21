@@ -1,9 +1,11 @@
 import { h, render } from "preact";
 
 import { mountComposerShell } from "./ComposerShell";
+import { createConversationStore } from "./ConversationStore";
 import { ErrorBoundary } from "./ErrorBoundary";
 import { InteractionHost } from "./InteractionHost";
 import { mountStatusShell } from "./StatusShell";
+import { mountTranscriptShell } from "./TranscriptShell";
 import type {
   InteractionHostController,
   InteractionHostOptions,
@@ -103,12 +105,16 @@ declare global {
       mountInteractionHost: typeof mountInteractionHost;
       mountComposerShell: typeof mountComposerShell;
       mountStatusShell: typeof mountStatusShell;
+      mountTranscriptShell: typeof mountTranscriptShell;
+      createConversationStore: typeof createConversationStore;
     };
   }
 }
 
 window.FaryoOwnerUI = {
+  createConversationStore,
   mountComposerShell,
   mountInteractionHost,
   mountStatusShell,
+  mountTranscriptShell,
 };

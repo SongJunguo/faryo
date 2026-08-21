@@ -5,7 +5,10 @@
 
 ## Active
 
-当前没有未完成的版本计划。
+- [`v1.7-preact-transcript-migration-plan.md`](v1.7-preact-transcript-migration-plan.md)：
+  渐进建立 Owner ConversationStore 和 Preact transcript 边界，修复折叠工作站名称与移动
+  键盘几何，并以量化门禁试点 TanStack Virtual；保持 v1.6.8 富正文离屏释放、Markdown/TeX、
+  复制、问题导航、可靠发送、认证与 tmux 几何不回归。
 
 ## Completed or maintenance mode
 

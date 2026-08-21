@@ -169,7 +169,7 @@ then verifies online, BFCache `pageshow`, and ordinary-reload recovery:
 
 ```bash
 FARYO_SMOKE_URL='http://127.0.0.1:8765/?token=<token>&session=<session>' \
-FARYO_SMOKE_EXPECT_RELEASE=v1.6.8 \
+FARYO_SMOKE_EXPECT_RELEASE=v1.7.0 \
 FARYO_SMOKE_EXPECT_CAPTURE_REVISION=faryo-owner-capture-2 \
   node apps/owner/local-tmux-owner/tests/browser-live-resilience.mjs
 ```
@@ -325,7 +325,13 @@ consumed as private runtime input and is never printed.
 - `static/owner/capture-controller.mjs` owns bounded capture requests, late
   response cancellation, SSE fetch/parser lifecycle, heartbeat timeout,
   reconnect backoff, deduplicated safety/fallback polling and unlocked Raw
-  refresh. Rendering remains in `app.js`.
+  refresh. Each delivery carries the ConversationStore scope captured when the
+  request or stream started, so a session/mode generation change rejects old
+  frames before they touch metadata or DOM. Rendering remains in `app.js`.
+- `apps/owner/ui/ConversationStore.ts` owns immutable session/generation/mode
+  snapshots. `TranscriptShell.tsx` projects loading, startup, empty, terminal
+  fallback and render-error states while preserving the adapter-owned
+  Markdown/KaTeX and Live transcript DOM below it.
 - `static/owner/composer-delivery.mjs` owns session-scoped draft/pending storage,
   stable client message IDs, success-only clearing, failed-draft preservation
   and one same-ID recovery attempt for ambiguous delivery errors.

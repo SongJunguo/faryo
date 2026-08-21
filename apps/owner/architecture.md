@@ -119,9 +119,12 @@ but the default upload destination should come from the Faryo data directory.
   ordinary message delivery.
 - `apps/owner/ui/` is the readable Preact + strict TypeScript source for the
   composer, command palette, structured interaction sheet, error boundary and
-  dynamic Context/Week/Model/Goal/Git shell. Vite produces one checked-in local
-  bundle; `app.js` is the composition adapter for the existing transcript,
-  Markdown/TeX, Raw and Live tmux islands rather than a second renderer.
+  dynamic Context/Week/Model/Goal/Git shell. Its framework-neutral
+  `ConversationStore` fences session/mode generations, while `TranscriptShell`
+  owns loading, startup, empty, terminal-fallback and render-error states. Vite
+  produces one checked-in local bundle; `app.js` remains the composition adapter
+  for Markdown/TeX bodies, Raw, Live tmux and paged-history islands rather than a
+  second renderer.
 - `owner_http.py` owns browser security headers, query-redacted log paths,
   Owner-token validation, bounded JSON/multipart parsing, gzip JSON and file
   byte responses. The Handler delegates these primitives and keeps routing.

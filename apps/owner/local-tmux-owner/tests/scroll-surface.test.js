@@ -46,9 +46,46 @@ assert.equal(scrollSurface.visualViewportShift({ layoutHeight: 844, visualHeight
 assert.equal(scrollSurface.visualViewportShift({ layoutHeight: 844, visualHeight: 900, offsetTop: 20 }), 0);
 assert.equal(scrollSurface.visualViewportShift({ layoutHeight: 844, visualHeight: 100, offsetTop: 2000 }), 0);
 
+assert.deepEqual(
+  scrollSurface.visualViewportSnapshot({
+    layoutHeight: 844,
+    visualHeight: 400,
+    offsetTop: 180,
+    dockBottom: 844,
+  }),
+  {
+    layoutHeight: 844,
+    visualTop: 180,
+    visualHeight: 400,
+    visualBottom: 580,
+    obscuredBottom: 264,
+    shift: -264,
+  },
+);
+assert.equal(scrollSurface.visualViewportSnapshot({
+  layoutHeight: 844,
+  visualHeight: 400,
+  offsetTop: 180,
+  dockBottom: 580,
+}).shift, 0);
+assert.equal(scrollSurface.visualViewportSnapshot({
+  layoutHeight: 844,
+  visualHeight: 400,
+  offsetTop: 180,
+  dockBottom: 0,
+}).shift, -264);
+assert.equal(scrollSurface.visualViewportSnapshot({
+  layoutHeight: 844,
+  visualHeight: 400,
+  offsetTop: 180,
+  dockBottom: 316,
+  currentShift: -264,
+}).shift, 0);
+
 const dockListeners = new Map();
 const viewportListeners = new Map();
 const properties = new Map();
+const dockElement = { bottom: 844, getBoundingClientRect() { return { bottom: this.bottom }; } };
 const dockView = {
   innerHeight: 844,
   visualViewport: {
@@ -67,13 +104,19 @@ const dockView = {
   requestAnimationFrame(callback) { callback(); return 1; },
   cancelAnimationFrame() {},
 };
-const dock = scrollSurface.createVisualViewportDock(dockView, { enabled: true });
+const dock = scrollSurface.createVisualViewportDock(dockView, { enabled: true, dock: dockElement });
 assert.equal(properties.get('--faryo-visual-viewport-shift-y'), '-264px');
+assert.equal(properties.get('--faryo-visual-viewport-obscured-bottom'), '264px');
+dockElement.bottom = 316;
+assert.equal(dock.update().shift, 0);
+dockElement.bottom = 580;
+assert.equal(dock.update().shift, 0);
 dockView.visualViewport.height = 844;
 dock.update();
 assert.equal(properties.get('--faryo-visual-viewport-shift-y'), '0px');
 dock.destroy();
 assert.equal(properties.get('--faryo-visual-viewport-shift-y'), '0px');
+assert.equal(properties.get('--faryo-visual-viewport-obscured-bottom'), '0px');
 assert.equal(viewportListeners.size, 0);
 
 console.log('scroll surface tests passed');

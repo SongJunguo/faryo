@@ -22,6 +22,14 @@ export function createCaptureController(options = {}) {
   let deliveredCapture = null;
   let deliveryRevision = 0;
 
+  function currentScope() {
+    return typeof options.getScope === "function" ? options.getScope() : null;
+  }
+
+  function scopeAccepted(scope) {
+    return typeof options.acceptScope !== "function" || options.acceptScope(scope) !== false;
+  }
+
   function sameCapture(left, right) {
     if (!left || !right) return false;
     return left.text === right.text
@@ -35,10 +43,12 @@ export function createCaptureController(options = {}) {
   }
 
   function deliverCapture(capture, meta) {
+    if (!scopeAccepted(meta.scope)) return false;
     if (meta.safety && sameCapture(deliveredCapture, capture)) return;
     deliveredCapture = capture;
     deliveryRevision += 1;
     options.onCapture(capture, meta);
+    return true;
   }
 
   async function refresh(lines = options.currentLines(), requestOptions = {}) {
@@ -48,6 +58,7 @@ export function createCaptureController(options = {}) {
     }
     refreshInFlight = true;
     const runId = ++refreshRunId;
+    const scope = currentScope();
     const deliveryRevisionAtStart = deliveryRevision;
     const controller = new view.AbortController();
     activeRefreshController = controller;
@@ -57,7 +68,11 @@ export function createCaptureController(options = {}) {
       const capture = await options.loadCapture(lines, controller.signal);
       if (runId !== refreshRunId) return;
       if (requestOptions.safety && deliveryRevisionAtStart !== deliveryRevision) return;
-      deliverCapture(capture, { source: "refresh", safety: Boolean(requestOptions.safety) });
+      deliverCapture(capture, {
+        source: "refresh",
+        safety: Boolean(requestOptions.safety),
+        scope,
+      });
     } catch (error) {
       if (error.name === "AbortError") return;
       throw error;
@@ -103,11 +118,12 @@ export function createCaptureController(options = {}) {
     }
   }
 
-  function applyEvent(event) {
+  function applyEvent(event, scope) {
     if (event.type !== "capture") return;
     const capture = JSON.parse(event.data || "{}");
+    if (!scopeAccepted(scope)) return;
     options.setLiveState("live");
-    deliverCapture(capture, { source: "event", safety: false });
+    deliverCapture(capture, { source: "event", safety: false, scope });
   }
 
   function closeEventStream() {
@@ -119,8 +135,12 @@ export function createCaptureController(options = {}) {
     setSafetyRefresh(false);
   }
 
-  function retryEventStream(controller, runId, error) {
+  function retryEventStream(controller, runId, scope, error) {
     if (controller.signal.aborted || eventController !== controller || eventRunId !== runId) return;
+    if (!scopeAccepted(scope)) {
+      eventController = null;
+      return;
+    }
     eventController = null;
     options.setLiveState("reconnecting");
     options.refreshStatusIfVisible();
@@ -134,7 +154,7 @@ export function createCaptureController(options = {}) {
     }
   }
 
-  async function consumeEventStream(controller, runId) {
+  async function consumeEventStream(controller, runId, scope) {
     const response = await options.fetch(options.eventUrl(), {
       headers: options.ownerHeaders(),
       cache: "no-store",
@@ -153,7 +173,7 @@ export function createCaptureController(options = {}) {
     setFallback(false);
     setSafetyRefresh(true);
     options.setLiveState("live");
-    const parser = options.eventStreamParser.createParser(applyEvent);
+    const parser = options.eventStreamParser.createParser((event) => applyEvent(event, scope));
     const reader = response.body.getReader();
     try {
       const decoder = new view.TextDecoder();
@@ -204,9 +224,10 @@ export function createCaptureController(options = {}) {
     options.setLiveState("reconnecting");
     const controller = new view.AbortController();
     const runId = eventRunId;
+    const scope = currentScope();
     eventController = controller;
-    consumeEventStream(controller, runId)
-      .catch((error) => retryEventStream(controller, runId, error));
+    consumeEventStream(controller, runId, scope)
+      .catch((error) => retryEventStream(controller, runId, scope, error));
   }
 
   function cancelRefresh() {

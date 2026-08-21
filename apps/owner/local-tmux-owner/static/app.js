@@ -30,6 +30,8 @@
 
   const $ = (id) => document.getElementById(id);
   const ownerUiApi = window.FaryoOwnerUI || {};
+  const params = new URLSearchParams(location.search);
+  const initialSelectedSession = params.get('session') || '';
   const composerShellController = typeof ownerUiApi.mountComposerShell === 'function'
     ? ownerUiApi.mountComposerShell($('composerShellRoot'), {
       onSuggestionSelect: (index) => {
@@ -52,8 +54,16 @@
     })
     : null;
   if (!statusShellController) throw new Error('Faryo Preact status shell is unavailable');
+  const conversationStore = typeof ownerUiApi.createConversationStore === 'function'
+    ? ownerUiApi.createConversationStore({ session: initialSelectedSession, mode: 'compact' })
+    : null;
+  const transcriptShellController = conversationStore && typeof ownerUiApi.mountTranscriptShell === 'function'
+    ? ownerUiApi.mountTranscriptShell($('transcriptShellRoot'), conversationStore)
+    : null;
+  if (!transcriptShellController) throw new Error('Faryo Preact transcript shell is unavailable');
+  document.documentElement.dataset.faryoTranscriptUi = 'preact';
   const outputWrap = $('outputWrap');
-  const output = $('output');
+  const output = transcriptShellController.output;
   const promptInput = $('promptInput');
   const attachmentInput = $('attachmentInput');
   const attachmentPreview = $('attachmentPreview');
@@ -148,9 +158,9 @@
     ? scrollSurfaceApi.createVisualViewportDock(window, {
       root: document.documentElement,
       enabled: useDocumentScroller,
+      dock: () => document.querySelector('footer'),
     })
     : null;
-  const params = new URLSearchParams(location.search);
   const OWNER_TOKEN_STORAGE_KEY = 'faryoOwnerToken:v1';
   const queryOwnerToken = params.get('token') || '';
   let ownerToken = queryOwnerToken;
@@ -170,7 +180,7 @@
     FormData: window.FormData,
   });
   const api = ownerApiClient.request;
-  let selectedSession = params.get('session') || '';
+  let selectedSession = initialSelectedSession;
   const composerDelivery = createComposerDelivery({
     storage: sessionStorage,
     routeKey: routeBase || 'owner',
@@ -205,6 +215,7 @@
   const HISTORY_REFRESH_MIN_MS = 2500;
   let historyController = null, richBlockController = null;
   let initialLatestScrollPending = true, initialLatestScrollTimer = null;
+  let viewportTailPinned = true;
   let submitInFlight = false;
   let activeSurfacePanel = null, panelReturnFocus = null;
   let goalDetailsRequestGeneration = 0;
@@ -346,8 +357,15 @@
   function syncKeyboardState() {
     const viewport = window.visualViewport;
     const keyboardOpen = viewport ? window.innerHeight - viewport.height > Math.max(110, window.innerHeight * 0.16) : false;
-    document.documentElement.classList.toggle('keyboard-open', keyboardOpen || document.activeElement === promptInput);
-    visualViewportDock?.update();
+    const keyboardActive = keyboardOpen || document.activeElement === promptInput;
+    const previousKeyboardActive = document.documentElement.classList.contains('keyboard-open');
+    const keepTailPinned = viewportTailPinned || isNearBottom();
+    document.documentElement.classList.toggle('keyboard-open', keyboardActive);
+    const viewportSnapshot = visualViewportDock?.update();
+    if (useDocumentScroller && keepTailPinned
+      && (previousKeyboardActive !== keyboardActive || viewportSnapshot?.changed)) {
+      requestAnimationFrame(() => scrollBottom(true));
+    }
     updateSendVisibility();
     renderCommandSuggestions();
   }
@@ -468,11 +486,11 @@
     return true;
   }
 
-  function renderCaptureWhenSafe(capture, keepBottom) {
+  function renderCaptureWhenSafe(capture, keepBottom, renderOptions = {}) {
     noteOutputActivity(capture);
     const previousScrollTop = conversationScroller.scrollTop;
     pendingDeferredCapture = null;
-    renderOutput(capture);
+    renderOutput(capture, renderOptions);
     if (initialLatestScrollPending) applyInitialLatestScroll(capture?.captureSource !== 'codex-jsonl');
     else if (keepBottom) scrollBottom(true);
     else requestAnimationFrame(() => {
@@ -485,6 +503,7 @@
     if (force || isNearBottom()) {
       requestAnimationFrame(() => {
         conversationScroller.scrollTop = conversationScroller.scrollHeight;
+        viewportTailPinned = true;
         updateBottomButton();
       });
     }
@@ -663,6 +682,7 @@
   });
 
   conversationScroller.addEventListener('scroll', () => {
+    viewportTailPinned = isNearBottom();
     updateBottomButton();
     richBlockController?.setTailPinned(isNearBottom());
     maybeLoadOlderHistory();
@@ -1132,6 +1152,8 @@
     eventIdleTimeoutMs: EVENT_STREAM_IDLE_MS,
     currentLines: currentCaptureLines,
     getOutputMode: () => outputMode,
+    getScope: () => conversationStore.scope(),
+    acceptScope: (scope) => conversationStore.accepts(scope),
     isHidden: () => document.hidden,
     setError,
     setLiveState,
@@ -1140,6 +1162,7 @@
       return api(apiPath(`/api/capture?lines=${lines}${format}`), { signal });
     },
     onCapture: (capture, meta) => {
+      if (!conversationStore.commitCapture(capture, meta.scope)) return;
       const keepBottom = isNearBottom();
       if (capture.sessionTitle) renderSessionLabel(capture.sessionTitle);
       if (Object.prototype.hasOwnProperty.call(capture, 'agentRunning')) {
@@ -1154,7 +1177,7 @@
         updatePetControl();
       }
       if (meta.source === 'refresh' || outputMode === 'compact') {
-        renderCaptureWhenSafe(capture, keepBottom);
+        renderCaptureWhenSafe(capture, keepBottom, { conversationCommitted: true });
       }
     },
     handleBackgroundError,
@@ -1417,7 +1440,9 @@
         || Boolean(data.interaction)
         || data.agentState === 'pending_interaction',
     });
-    selectedSession = data.session || selectedSession;
+    const nextSession = data.session || selectedSession;
+    if (nextSession !== selectedSession) conversationStore.switchSession(nextSession);
+    selectedSession = nextSession;
     if (data.session) {
       const currentUrl = new URL(location.href);
       if (currentUrl.searchParams.get('session') !== data.session) {
@@ -1463,7 +1488,8 @@
     if (data.agentState === 'starting' && outputMode === 'compact' && !lastCompactCapture) {
       output.classList.add('compact-blocks');
       const updatePending = data.codexUpdateStatus === 'pending';
-      output.innerHTML = `<section class="compact-block output startup-card" role="status"><div class="markdown-body"><strong>${updatePending ? 'Checking for a Codex update…' : 'Starting Codex…'}</strong><p>${updatePending ? 'Faryo will install an available official Codex update, then open this conversation automatically.' : 'The session is open. Faryo will connect automatically when startup finishes.'}</p></div></section>`;
+      conversationStore.beginStarting(updatePending);
+      output.replaceChildren();
     }
     const updateNotice = `${data.session || ''}:${data.codexUpdateStatus || ''}`;
     if (data.codexUpdateStatus === 'failed' && updateNotice !== lastCodexUpdateNotice) {
@@ -1489,6 +1515,7 @@
     if (routeBase !== `/${route}`) return location.assign(`${next.pathname}${next.search}${location.hash}`);
     persistPromptDraft();
     persistPendingSubmission();
+    conversationStore.switchSession(session);
     selectedSession = session;
     statusShellController.update({ fastVisible: false, fastDisabled: true });
     syncStructuredInteraction(null);
@@ -1506,6 +1533,7 @@
     closeEventStream();
     lastCaptureSignature = '';
     lastCompactCapture = lastFullCapture = null;
+    renderModeLoading(outputMode);
     refreshStatus({ silent: true }).catch(handleBackgroundError);
     refreshCapture(currentCaptureLines(), { silent: true }).catch(handleBackgroundError);
     if (outputMode === 'compact') startEventStream();
@@ -1953,7 +1981,8 @@
     if (parsed.citations.length) output.insertAdjacentHTML('beforeend', `\n${renderMemoryReferences(parsed.citations)}`);
   }
 
-  function renderOutput(capture) {
+  function renderOutput(capture, renderOptions = {}) {
+    if (!renderOptions.conversationCommitted && !conversationStore.commitCapture(capture)) return false;
     const liveStateSnapshot = liveTerminalState();
     if (outputMode === 'compact') lastCompactCapture = capture;
     else lastFullCapture = capture;
@@ -1974,30 +2003,34 @@
     updateStatusLineAutoExpand();
     output.classList.toggle('compact-blocks', outputMode === 'compact');
     if (outputMode === 'compact') {
-      try {
-        renderCompactOutput(text, rules, {
-          mode: isStructured ? 'settled' : 'streaming',
-        });
+      if (emptyStructured) {
+        richBlockController?.clear();
+        output.replaceChildren();
         delete output.dataset.renderFallback;
-      } catch (_error) {
-        const parsed = parsedInternalAnnotations(text);
-        output.dataset.renderFallback = 'true';
-        const livePanel = output.querySelector('[data-faryo-transient="live"]');
-        for (const child of Array.from(output.children)) {
-          if (child !== livePanel) child.remove();
+      } else {
+        try {
+          renderCompactOutput(text, rules, {
+            mode: isStructured ? 'settled' : 'streaming',
+          });
+          delete output.dataset.renderFallback;
+        } catch (_error) {
+          conversationStore.markRenderError();
+          const parsed = parsedInternalAnnotations(text);
+          output.dataset.renderFallback = 'true';
+          const livePanel = output.querySelector('[data-faryo-transient="live"]');
+          for (const child of Array.from(output.children)) {
+            if (child !== livePanel) child.remove();
+          }
+          const template = document.createElement('template');
+          template.innerHTML = `<section class="compact-block output"><pre class="capture-render-fallback">${escapeHtml(parsed.body || '')}</pre>${renderMemoryReferences(parsed.citations)}</section>`;
+          output.insertBefore(template.content, livePanel || null);
         }
-        const template = document.createElement('template');
-        template.innerHTML = `<section class="compact-capture-warning" role="status">Rich conversation layout failed. Safe plain text remains available and live updates will continue.</section><section class="compact-block output"><pre class="capture-render-fallback">${escapeHtml(parsed.body || '')}</pre>${renderMemoryReferences(parsed.citations)}</section>`;
-        output.insertBefore(template.content, livePanel || null);
       }
     }
     else {
       richBlockController?.clear();
       if (capture.html && !parsedInternalAnnotations(text).citations.length) output.innerHTML = decorateMetaLines(capture.html, text);
       else renderPlainOutput(text, rules);
-    }
-    if (outputMode === 'compact' && capture.agentSource === 'codex-cli' && !isStructured) {
-      output.insertAdjacentHTML('afterbegin', '<section class="compact-capture-warning" role="status">Structured Codex history is unavailable. Showing a terminal fallback; Markdown and formulas may be incomplete.</section>');
     }
     if (outputMode === 'compact') {
       syncLiveTerminal(capture.agentRunning && capture.liveText ? capture.liveText : '', liveStateSnapshot);
@@ -2007,6 +2040,7 @@
       : null;
     questionNavigatorController?.sync(outputMode === 'compact', indexedQuestions);
     void hydrateProtectedImages(output);
+    return true;
   }
 
   function resetRefreshState() {
@@ -2079,12 +2113,11 @@
 
   function renderModeLoading(mode) {
     const compact = mode === 'compact';
+    conversationStore.beginLoading();
     output.classList.toggle('compact-blocks', compact);
     output.dataset.captureSource = '';
     output.dataset.agentSource = '';
-    output.innerHTML = compact
-      ? '<section class="compact-block output"><div class="markdown-body">Loading conversation…</div></section>'
-      : 'Loading raw terminal…';
+    output.replaceChildren();
     questionNavigatorController?.sync(false, null);
   }
 
@@ -2097,6 +2130,7 @@
     if (returningToChat) persistLivePanelPreference(selectedSession, false);
     fullLocked = togglingFull ? !fullLocked : false;
     outputMode = mode;
+    conversationStore.setMode(mode);
     renderOutputModeButton();
     if (targetCapture) renderOutput(targetCapture);
     else renderModeLoading(mode);

@@ -165,6 +165,7 @@ release_checks() {
   "$NODE_BIN" --check "$ROOT/apps/owner/local-tmux-owner/tests/browser-immersive-smoke.mjs"
   "$NODE_BIN" --check "$ROOT/apps/owner/local-tmux-owner/tests/browser-workspace-changes-smoke.mjs"
   "$NODE_BIN" --check "$ROOT/apps/owner/local-tmux-owner/tests/browser-owner-ui-smoke.mjs"
+  "$NODE_BIN" --check "$ROOT/apps/owner/local-tmux-owner/tests/browser-owner-layout-smoke.mjs"
   "$NODE_BIN" --check "$ROOT/apps/owner/local-tmux-owner/tests/browser-empty-conversation-smoke.mjs"
   "$NODE_BIN" --check "$ROOT/apps/owner/local-tmux-owner/tests/browser-fast-toggle-smoke.mjs"
   "$NODE_BIN" --check "$ROOT/apps/owner/local-tmux-owner/tests/browser-live-resilience.mjs"
@@ -237,6 +238,8 @@ gateway_workbench = (root / "apps/gateway/server/static/workbench.js").read_text
 gateway_preact_source = (root / "apps/gateway/ui/preact-workbench.jsx").read_text(encoding="utf-8")
 owner_status_source = (root / "apps/owner/ui/StatusShell.tsx").read_text(encoding="utf-8")
 owner_interaction_source = (root / "apps/owner/ui/InteractionHost.tsx").read_text(encoding="utf-8")
+owner_transcript_source = (root / "apps/owner/ui/TranscriptShell.tsx").read_text(encoding="utf-8")
+owner_conversation_store_source = (root / "apps/owner/ui/ConversationStore.ts").read_text(encoding="utf-8")
 application_source = (root / "src/faryo_cli/application.py").read_text(encoding="utf-8")
 gateway_ui = gateway + "\n" + gateway_workbench
 assert "firstAvailableDirectoryPage" in gateway_workbench and "for (const candidate of candidates)" in gateway_workbench, "directory picker must try every recent cwd before root fallback"
@@ -467,7 +470,8 @@ assert "interaction-choose" in owner_interaction_source and "activeInteractionId
 assert "syncStructuredInteraction(null)" in app and "ignored: true" in app, "session switches must fence pending interaction responses"
 assert "commandSuggestionIndex" not in app and "handleCommandSuggestionKey" not in app, "Preact CommandPalette must own selection and keyboard state"
 assert "start_agent_runtime_async" in owner_server and "AGENT_START_MONITORS" in owner_server and '"state": launch_state or "starting"' in owner_server, "Codex launch must return an async starting receipt with a recoverable monitor"
-assert "session unknown" not in index and "startup-card" in app, "Owner startup UI must not expose a false unknown-session state"
+assert "session unknown" not in index and 'id="transcriptShellRoot"' in index and "Starting Codex" in owner_transcript_source, "Owner startup UI must use the Preact transcript state instead of a false unknown-session state"
+assert "generation" in owner_conversation_store_source and "accepts" in owner_conversation_store_source and "acceptScope" in capture_controller_source, "Owner transcript transport must reject obsolete session generations"
 assert "CODEX_LIVE_TAIL_LINES = 180" in owner_server, "Live tmux must keep the bounded long tail"
 assert "faryoTransient" in stable_blocks_source and "selectionInsideLivePanel" in app and "compact-live-copy" in app, "Live tmux DOM, selection, and copy must remain stable"
 assert "compactOutputSources" not in app and "dataset.sourceIndex" not in app, "retired copy source indexing must not return"

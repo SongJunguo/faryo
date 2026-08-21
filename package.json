@@ -19,6 +19,7 @@
     "test:diff-review": "node --test tools/diff-review/*.test.mjs",
     "test:gateway-preact": "node --test apps/gateway/server/tests/session-model.test.mjs",
     "test:owner-ui-browser": "node apps/owner/local-tmux-owner/tests/browser-owner-ui-smoke.mjs",
+    "test:owner-layout-browser": "node apps/owner/local-tmux-owner/tests/browser-owner-layout-smoke.mjs",
     "test:owner-interactions-browser": "node apps/owner/local-tmux-owner/tests/browser-structured-interactions.mjs",
     "test:owner-goal-browser": "node apps/owner/local-tmux-owner/tests/browser-goal-details.mjs",
     "test:gateway-resume-browser": "node apps/gateway/server/tests/browser-resume-preflight.mjs",

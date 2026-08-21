@@ -109,13 +109,16 @@ check. Production never loads these assets from a CDN.
   process
 - Scope: Gateway keyed file-package/launcher/active/history lists, plus Owner
   composer, command palette, structured interaction sheet and dynamic status
-  shell. Owner transcript/Markdown/Raw/Live remain outside Preact.
+  shell. Owner also uses a framework-neutral conversation store and Preact
+  lifecycle shell for loading/startup/empty/fallback/error states; rich
+  Markdown/TeX bodies, Raw formatting, Live tmux and paged history remain
+  isolated adapters.
 - Production transitive dependencies: none
-- Gateway bundle: 17,829 bytes raw / 7,250 gzip; SHA-256
-  `e209b3b4fa0414841b6815f8031e19de1375e1567828b175a6ef2f611a7bdf55`;
+- Gateway bundle: 18,240 bytes raw / 7,370 gzip; SHA-256
+  `06ba10825a65c2a26e0a774c7ebfefa237c2625a62283925600b1a99b2a12a72`;
   12 KiB gzip limit.
-- Owner bundle: 24,073 bytes raw / 8,971 gzip; SHA-256
-  `9d913094b1dd006a89c720f702c8b3f7c84c8e6ca2e4e96e967a427f6e9ceb2b`;
+- Owner bundle: 28,053 bytes raw / 10,245 gzip; SHA-256
+  `c89831e0fc63b2b74f9f9ddf3ef4ed6ed314c907156bf673906522eb8fc2d429`;
   24 KiB gzip limit.
 - Each bundle has a generated adjacent license notice recording exact version,
   hash, byte counts, transitive count and full MIT text.
@@ -126,7 +129,8 @@ check. Production never loads these assets from a CDN.
 - Removal path remains source-only and needs no server/private-data migration;
   each focused surface can be reverted independently through Git history.
 - Evidence: [Gateway pilot evaluation](preact-pilot-evaluation.md) and
-  [v1.6 structured interaction plan](plans/v1.6-structured-interactions-and-owner-ui-plan.md).
+  [v1.6 structured interaction plan](plans/v1.6-structured-interactions-and-owner-ui-plan.md),
+  plus the [v1.7 transcript migration plan](plans/v1.7-preact-transcript-migration-plan.md).
 
 ## Runtime and bundled assets
 
@@ -156,5 +160,8 @@ check. Production never loads these assets from a CDN.
   their own notices under the Owner static tree.
 - Floating UI was evaluated but not adopted: the tested `placeSheet` function is
   656 bytes, so the library would currently add more production code than it
-  removes. Lit and Python Web Push remain conditional future candidates.
+  removes. TanStack Virtual 3.17.8 reduced a synthetic 600-row outer DOM but its
+  first Preact/core adapter failed the history-prepend anchor gate; its temporary
+  dependency and adapter were removed. Lit and Python Web Push remain conditional
+  future candidates.
 - The current root npm dependency audit reports zero known vulnerabilities.
