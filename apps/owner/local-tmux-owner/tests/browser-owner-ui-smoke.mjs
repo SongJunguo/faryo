@@ -424,8 +424,60 @@ for (const viewport of [
           `Choose action mismatch: ${JSON.stringify(chooseRequest)}`,
         );
       }
+
+      await page.evaluate(() => {
+        window.__interactionController.update({
+          id: "ix-question",
+          generation: 5,
+          kind: "user_input",
+          title: "Codex needs your input",
+          prompt: "Answer before continuing.",
+          responseKind: "questions",
+          details: { command: "<img src=x onerror=alert(1)>" },
+          questions: [
+            {
+              id: "choice",
+              header: "Choice",
+              question: "Select one value",
+              options: [
+                { label: "Alpha", description: "First option" },
+                { label: "Beta", description: "Second option" },
+              ],
+              isOther: true,
+              isSecret: false,
+            },
+          ],
+          options: [],
+          actions: ["cancel"],
+          source: "codex-app-server",
+          status: "pending",
+        });
+      });
+      await page.locator('[data-interaction-kind="user_input"]').waitFor();
+      const questionState = await page.evaluate(() => ({
+        injectedImage: Boolean(document.querySelector(".interaction-request-details img")),
+        command: document.querySelector(".interaction-request-details pre")?.textContent || "",
+        submitDisabled: Boolean(document.querySelector(".interaction-submit-answers")?.disabled),
+      }));
+      if (questionState.injectedImage || !questionState.command.includes("<img") || !questionState.submitDisabled) {
+        throw new Error(`Question form baseline failed: ${JSON.stringify(questionState)}`);
+      }
+      await page.locator('.interaction-question-option input[value="Beta"]').check();
+      await page.locator(".interaction-submit-answers").click();
+      await page.locator(".interaction-backdrop").waitFor({ state: "detached" });
+      const questionRequest = await page.evaluate(
+        () => window.__interactionRequests.at(-1),
+      );
+      if (
+        questionRequest.interactionId !== "ix-question" ||
+        questionRequest.answers?.choice?.[0] !== "Beta"
+      ) {
+        throw new Error(
+          `Question response mismatch: ${JSON.stringify(questionRequest)}`,
+        );
+      }
     },
   );
 }
 
-console.log("faryo-owner-interaction-ui=PASS mobile=yes desktop=yes injection=text stale-response=isolated choose=explicit");
+console.log("faryo-owner-interaction-ui=PASS mobile=yes desktop=yes injection=text stale-response=isolated choose=explicit questions=form");

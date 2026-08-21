@@ -49,6 +49,7 @@ import delivery_service
 import owner_http
 import codex_history
 import codex_app_server
+import appserver_runtime
 import codex_command_policy
 import codex_tui_interactions
 import interaction_service
@@ -123,9 +124,9 @@ CODEX_HISTORY_PAGE_CHAR_BUDGET = 2 * 1024 * 1024
 CODEX_HISTORY_PREVIEW_CHARS = 88
 CODEX_HISTORY_INDEX_MAX_PATHS = CODEX_ROLLOUT_CACHE_MAX_PATHS
 THREAD_COLUMNS = "id, title, rollout_path, tokens_used, model, reasoning_effort, cwd, updated_at, source, thread_source, archived"
-INTERACTIVE_CODEX_THREAD_SOURCES = {"cli", "vscode"}
+INTERACTIVE_CODEX_THREAD_SOURCES = {"cli", "vscode", "appServer"}
 INTERACTIVE_TOP_LEVEL_THREAD_SQL = (
-    "source IN ('cli', 'vscode') "
+    "source IN ('cli', 'vscode', 'appServer') "
     "AND (thread_source = 'user' OR thread_source IS NULL)"
 )
 AGENT_SESSION_LIST_LIMIT = 20
@@ -160,6 +161,18 @@ FILE_INBOX_ROOT = Path(os.environ.get("FARYO_OWNER_INBOX_DIR", str(FARYO_OWNER_D
 CACHE_ROOT = Path(os.environ.get("FARYO_OWNER_CACHE_DIR", str(FARYO_OWNER_DATA / "cache"))).expanduser()
 LOGS_ROOT = Path(os.environ.get("FARYO_OWNER_LOGS_DIR", str(FARYO_OWNER_DATA / "logs"))).expanduser()
 SEND_DELIVERY_ROOT = Path(os.environ.get("FARYO_OWNER_DELIVERY_DIR", str(FARYO_OWNER_DATA / "send-deliveries"))).expanduser()
+APP_SERVER_SOCKET = Path(
+    os.environ.get(
+        "FARYO_CODEX_APP_SERVER_SOCKET",
+        str(FARYO_OWNER_DATA.parent / "runtime/codex-app-server.sock"),
+    )
+).expanduser()
+APP_SERVER_REGISTRY = Path(
+    os.environ.get(
+        "FARYO_CODEX_APP_SERVER_REGISTRY",
+        str(FARYO_OWNER_DATA.parent / "state/appserver-sessions.json"),
+    )
+).expanduser()
 MAX_ATTACHMENT_UPLOAD_BYTES = attachment_storage.DEFAULT_MAX_UPLOAD_BYTES
 IMAGE_SUFFIXES = attachment_storage.IMAGE_SUFFIXES
 IMAGE_CONTENT_TYPES = {
@@ -648,6 +661,7 @@ def codex_session_item(config: Config, item: dict[str, Any], index_titles: dict[
         target = Config(tmux_session, config.token, config.pane_width)
         profile = agent_profile_in_pane(target)
         state, agent_running = agent_session_lifecycle(config, tmux_session, profile, managed)
+    web_managed = item.get("source") == "appServer"
     return {
         "id": thread_id,
         "title": title,
@@ -659,13 +673,14 @@ def codex_session_item(config: Config, item: dict[str, Any], index_titles: dict[
         "rolloutPath": item.get("rollout_path") or "",
         "model": item.get("model") or "",
         "reasoningEffort": item.get("reasoning_effort") or "",
-        "source": "codex-cli",
+        "source": "codex-app-server" if web_managed else "codex-cli",
         "tmuxSession": tmux_session,
         "active": bool(tmux_session),
         "managed": managed,
         "agentRunning": agent_running,
         "state": state,
         "archived": archived,
+        "backend": "web-managed" if web_managed else "terminal-managed",
     }
 
 
@@ -707,7 +722,7 @@ def agent_history_text_matches(item: dict[str, Any], query: str, index_titles: d
 
 
 def interactive_top_level_thread(item: dict[str, Any]) -> bool:
-    """Accept current and legacy top-level CLI/VS Code threads only."""
+    """Accept top-level CLI, VS Code, and Faryo App Server threads."""
 
     source = item.get("source")
     return (
@@ -2455,6 +2470,170 @@ def codex_message_transcript(messages: list[tuple[str, str]], max_lines: int) ->
     )
 
 
+def appserver_context_usage(token_usage: Any) -> dict[str, int | float] | None:
+    if not isinstance(token_usage, dict):
+        return None
+    last = token_usage.get("last")
+    if not isinstance(last, dict):
+        return None
+    try:
+        input_tokens = int(last.get("inputTokens") or 0)
+        output_tokens = int(last.get("outputTokens") or 0)
+        used_tokens = int(last.get("totalTokens") or input_tokens + output_tokens)
+        context_window = int(token_usage.get("modelContextWindow") or 0)
+    except (TypeError, ValueError):
+        return None
+    if used_tokens < 0 or context_window <= 0:
+        return None
+    return {
+        "inputTokens": input_tokens,
+        "outputTokens": output_tokens,
+        "usedTokens": used_tokens,
+        "contextWindow": context_window,
+        "contextWindowSource": "agent-reported",
+        "percent": round((used_tokens / context_window) * 100, 1),
+    }
+
+
+def web_capture_payload_from_state(capture: dict[str, Any], lines: int) -> dict[str, Any]:
+    record = capture.get("record") or {}
+    snapshot = capture.get("snapshot") or {}
+    messages = capture.get("messages") or []
+    lifecycle = str(snapshot.get("lifecycle") or "loading")
+    running = lifecycle in {"running", "waiting_for_approval", "waiting_for_input"}
+    return {
+        "ok": True,
+        "text": codex_message_transcript(messages, lines),
+        "agentRunning": running,
+        "queuedSendNowAvailable": False,
+        "agentSource": "codex-app-server",
+        "agentProfile": "codex",
+        "captureSource": "codex-app-server",
+        "streaming": running,
+        "sessionId": record.get("threadId"),
+        "sessionTitle": record.get("title") or record.get("threadId"),
+        "contextUsage": appserver_context_usage(snapshot.get("tokenUsage")),
+        "goalStatus": codex_history.goal_snapshot(snapshot.get("goal"), allow_none=True),
+        "interaction": snapshot.get("interaction"),
+        "interactionRevision": str(snapshot.get("interactionRevision") or "none"),
+        "streamRevision": int(snapshot.get("revision") or 0),
+        "backend": "web-managed",
+        "updatedAt": now_iso(),
+    }
+
+
+def web_capture_payload(
+    runtime: appserver_runtime.AppServerRuntime,
+    session: str,
+    lines: int,
+) -> dict[str, Any]:
+    try:
+        capture = runtime.capture(session)
+    except appserver_runtime.AppServerRuntimeError as exc:
+        raise OwnerError(str(exc), HTTPStatus.BAD_GATEWAY) from exc
+    return web_capture_payload_from_state(capture, lines)
+
+
+def web_status_payload(runtime: appserver_runtime.AppServerRuntime, session: str) -> dict[str, Any]:
+    try:
+        state = runtime.capture(session)
+    except appserver_runtime.AppServerRuntimeError as exc:
+        raise OwnerError(str(exc), HTTPStatus.BAD_GATEWAY) from exc
+    capture = web_capture_payload_from_state(state, CAPTURE_COMPACT_LINES)
+    record = state.get("record") or {}
+    snapshot = state.get("snapshot") or {}
+    lifecycle = str(snapshot.get("lifecycle") or "loading")
+    running = bool(capture.get("agentRunning"))
+    agent_state = {
+        "idle": "waiting",
+        "loading": "starting",
+        "unloaded": "exited",
+        "failed": "exited",
+    }.get(lifecycle, "pending_interaction" if lifecycle.startswith("waiting_for_") else lifecycle)
+    cwd = str(record.get("cwd") or "")
+    thread = snapshot.get("thread") if isinstance(snapshot.get("thread"), dict) else {}
+    model = str(record.get("model") or thread.get("model") or "Codex")
+    return {
+        "ok": True,
+        "tmuxAlive": False,
+        "targetAlive": True,
+        "releaseVersion": release_version(),
+        "session": session,
+        "ownerLabel": owner_label(),
+        "paneWidth": None,
+        "cwd": cwd,
+        "displayCwd": short_path(cwd),
+        "shortCwd": short_path(cwd),
+        "model": model,
+        "reasoningEffort": thread.get("reasoningEffort"),
+        "fastStatus": "on" if str(thread.get("serviceTier") or "") == "fast" else "off",
+        "codexUpdateStatus": "",
+        "gitStatus": git_status(cwd),
+        "sessionTitle": record.get("title") or record.get("threadId"),
+        "sessionId": record.get("threadId"),
+        "contextUsage": capture.get("contextUsage"),
+        "goalStatus": capture.get("goalStatus"),
+        "interaction": capture.get("interaction"),
+        "interactionRevision": capture.get("interactionRevision"),
+        "weeklyRateLimit": rate_limit_from_response(snapshot.get("rateLimits") or {}),
+        "agentRunning": running,
+        "agentState": agent_state,
+        "launchError": "" if runtime.ready() else "Codex App Server is reconnecting.",
+        "queuedSendNowAvailable": False,
+        "paneCommand": None,
+        "agentSource": "codex-app-server",
+        "agentProfile": "codex",
+        "backend": "web-managed",
+        "updatedAt": now_iso(),
+    }
+
+
+def web_agent_session_items(
+    runtime: appserver_runtime.AppServerRuntime,
+    history_root: str | None = None,
+) -> list[dict[str, Any]]:
+    items: list[dict[str, Any]] = []
+    git_labels: dict[str, str] = {}
+    for record in runtime.session_records():
+        cwd = str(record.get("cwd") or "")
+        if history_root is not None and not path_under_root(cwd, history_root):
+            continue
+        session = str(record.get("session") or "")
+        try:
+            snapshot = runtime.capture(session).get("snapshot") or {}
+        except appserver_runtime.AppServerRuntimeError:
+            snapshot = {}
+        lifecycle = str(snapshot.get("lifecycle") or "loading")
+        state = {
+            "idle": "waiting",
+            "loading": "starting",
+            "unloaded": "exited",
+            "failed": "exited",
+        }.get(lifecycle, "pending_interaction" if lifecycle.startswith("waiting_for_") else lifecycle)
+        updated_ts = int(record.get("updatedAt") or 0)
+        items.append({
+            "id": record.get("threadId"),
+            "title": record.get("title") or record.get("threadId") or session,
+            "gitLabel": session_git_label(cwd, git_labels),
+            "cwd": short_path(cwd),
+            "createdAt": iso_from_ts(int(record.get("createdAt") or 0)),
+            "updatedAt": iso_from_ts(updated_ts),
+            "updatedTs": updated_ts,
+            "rolloutPath": "",
+            "model": record.get("model") or "",
+            "reasoningEffort": "",
+            "source": "codex-app-server",
+            "tmuxSession": session,
+            "active": True,
+            "managed": True,
+            "agentRunning": lifecycle == "running",
+            "state": state,
+            "archived": False,
+            "backend": "web-managed",
+        })
+    return items
+
+
 def codex_rollout_transcript(history_path: str | None, max_lines: int) -> str:
     return codex_message_transcript(codex_rollout_messages(history_path), max_lines)
 
@@ -3521,6 +3700,10 @@ class Handler(SimpleHTTPRequestHandler):
         return self.server.config  # type: ignore[attr-defined]
 
     @property
+    def web_runtime(self) -> appserver_runtime.AppServerRuntime:
+        return self.server.web_runtime  # type: ignore[attr-defined]
+
+    @property
     def http_support(self) -> owner_http.OwnerHttpSupport:
         support = getattr(self, "_owner_http_support", None)
         if support is None:
@@ -3550,10 +3733,22 @@ class Handler(SimpleHTTPRequestHandler):
             parsed = urlparse(self.path)
             if parsed.path == "/api/events":
                 self.require_token(parsed)
-                self.write_events(parsed)
+                session = parse_qs(parsed.query).get("session", [""])[0]
+                if self.web_runtime.has_session(session):
+                    self.write_web_events(parsed, session)
+                else:
+                    self.write_events(parsed)
                 return
             if parsed.path == "/api/status":
                 self.require_token(parsed)
+                session = parse_qs(parsed.query).get("session", [""])[0]
+                if self.web_runtime.has_session(session):
+                    payload = web_status_payload(self.web_runtime, session)
+                    header_label = clean_owner_label(self.headers.get("X-Faryo-Owner-Label"))
+                    if header_label:
+                        payload["ownerLabel"] = header_label
+                    self.write_json(payload)
+                    return
                 target = self.target_from_query(parsed)
                 ensure_pane_width(target)
                 payload = status_payload(target)
@@ -3564,11 +3759,34 @@ class Handler(SimpleHTTPRequestHandler):
                 return
             if parsed.path == "/api/interaction":
                 self.require_token(parsed)
+                session = parse_qs(parsed.query).get("session", [""])[0]
+                if self.web_runtime.has_session(session):
+                    try:
+                        capture = self.web_runtime.capture(session)
+                    except appserver_runtime.AppServerRuntimeError as exc:
+                        raise OwnerError(str(exc), HTTPStatus.BAD_GATEWAY) from exc
+                    snapshot = capture.get("snapshot") or {}
+                    self.write_json({
+                        "ok": True,
+                        "interaction": snapshot.get("interaction"),
+                        "interactionRevision": snapshot.get("interactionRevision") or "none",
+                        "updatedAt": now_iso(),
+                    })
+                    return
                 target = self.target_from_query(parsed)
                 self.write_json({"ok": True, **interaction_snapshot(target), "updatedAt": now_iso()})
                 return
             if parsed.path == "/api/goal":
                 self.require_token(parsed)
+                session = parse_qs(parsed.query).get("session", [""])[0]
+                if self.web_runtime.has_session(session):
+                    try:
+                        capture = self.web_runtime.capture(session)
+                    except appserver_runtime.AppServerRuntimeError as exc:
+                        raise OwnerError(str(exc), HTTPStatus.BAD_GATEWAY) from exc
+                    goal = (capture.get("snapshot") or {}).get("goal")
+                    self.write_json({"ok": True, **codex_history.goal_details(goal), "updatedAt": now_iso()})
+                    return
                 target = self.target_from_query(parsed)
                 self.write_json({"ok": True, **goal_details_for_config(target), "updatedAt": now_iso()})
                 return
@@ -3644,10 +3862,25 @@ class Handler(SimpleHTTPRequestHandler):
                         clean_agent_history_period(query.get("period", ["all"])[0]),
                         clean_agent_history_archive(query.get("archive", ["active"])[0]),
                     )
+                    web_items = web_agent_session_items(self.web_runtime, self.history_root())
+                    payload["activeSessions"] = sorted(
+                        [*web_items, *(payload.get("activeSessions") or [])],
+                        key=lambda item: float(item.get("updatedTs") or 0),
+                        reverse=True,
+                    )
                 else:
-                    items = self.agent_session_items()
+                    items = [*web_agent_session_items(self.web_runtime, self.history_root()), *self.agent_session_items()]
+                    items.sort(key=lambda item: float(item.get("updatedTs") or 0), reverse=True)
                     payload = {"sessions": items[offset:offset + limit]}
-                self.write_json({"ok": True, **payload, "activeCount": active_agent_count(self.config), "updatedAt": now_iso()})
+                web_active_count = len(web_items) if query.get("view", [""])[0] == "split" else len(
+                    web_agent_session_items(self.web_runtime, self.history_root())
+                )
+                self.write_json({
+                    "ok": True,
+                    **payload,
+                    "activeCount": active_agent_count(self.config) + web_active_count,
+                    "updatedAt": now_iso(),
+                })
                 return
             if parsed.path == "/api/conversation-history":
                 self.require_token(parsed)
@@ -3679,6 +3912,14 @@ class Handler(SimpleHTTPRequestHandler):
             if parsed.path == "/api/capture":
                 self.require_token(parsed)
                 query = parse_qs(parsed.query)
+                session = query.get("session", [""])[0]
+                if self.web_runtime.has_session(session):
+                    try:
+                        lines = int(query.get("lines", [str(CAPTURE_DEFAULT_LINES)])[0])
+                    except ValueError:
+                        lines = CAPTURE_DEFAULT_LINES
+                    self.write_json(web_capture_payload(self.web_runtime, session, max(40, min(lines, CAPTURE_MAX_LINES))))
+                    return
                 target = self.target_from_query(parsed)
                 ensure_pane_width(target)
                 try:
@@ -3756,10 +3997,11 @@ class Handler(SimpleHTTPRequestHandler):
         except OwnerError as exc:
             self.write_json({"ok": False, "error": str(exc), "updatedAt": now_iso()}, status=exc.status)
 
-    def send_event(self, event: str, payload: dict[str, Any]) -> bool:
+    def send_event(self, event: str, payload: dict[str, Any], event_id: str = "") -> bool:
         data = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
         try:
-            self.wfile.write(f"event: {event}\ndata: {data}\n\n".encode("utf-8"))
+            prefix = f"id: {event_id}\n" if event_id else ""
+            self.wfile.write(f"{prefix}event: {event}\ndata: {data}\n\n".encode("utf-8"))
             self.wfile.flush()
             return True
         except (BrokenPipeError, ConnectionResetError, TimeoutError):
@@ -3854,6 +4096,54 @@ class Handler(SimpleHTTPRequestHandler):
         finally:
             server.end_event_stream()
 
+    def write_web_events(self, parsed: Any, session: str) -> None:
+        query = parse_qs(parsed.query)
+        server = self.server
+        assert isinstance(server, OwnerServer)
+        if not server.begin_event_stream():
+            self.write_json(
+                {"ok": False, "error": "too many event streams", "updatedAt": now_iso()},
+                status=HTTPStatus.TOO_MANY_REQUESTS,
+            )
+            return
+        try:
+            lines = int(query.get("lines", [str(CAPTURE_COMPACT_LINES)])[0])
+        except ValueError:
+            lines = CAPTURE_COMPACT_LINES
+        lines = max(40, min(lines, CAPTURE_MAX_LINES))
+        cursor = self.headers.get("Last-Event-ID") or query.get("cursor", [""])[0]
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+        self.send_header("Cache-Control", "no-store, no-transform")
+        self.send_header("Connection", "keep-alive")
+        self.end_headers()
+        deadline = time.monotonic() + EVENT_STREAM_MAX_SECONDS
+        try:
+            while time.monotonic() < deadline:
+                result = self.web_runtime.wait_for_events(cursor, EVENT_STREAM_HEARTBEAT_SECONDS)
+                if result.status != "replay" or result.events or not cursor:
+                    if result.status in {"gap", "reset"}:
+                        if not self.send_event(
+                            "stream-state",
+                            {"status": result.status, "updatedAt": now_iso()},
+                            result.latest.render(),
+                        ):
+                            return
+                    try:
+                        capture = web_capture_payload(self.web_runtime, session, lines)
+                    except OwnerError:
+                        if not self.send_event_heartbeat():
+                            return
+                        cursor = result.latest.render()
+                        continue
+                    if not self.send_event("capture", capture, result.latest.render()):
+                        return
+                    cursor = result.latest.render()
+                elif not self.send_event_heartbeat():
+                    return
+        finally:
+            server.end_event_stream()
+
     def do_POST(self) -> None:
         parsed = urlparse(self.path)
         if not parsed.path.startswith("/api/"):
@@ -3893,6 +4183,22 @@ class Handler(SimpleHTTPRequestHandler):
                     raise OwnerError("invalid client launch id")
                 title = clean_session_title(payload.get("title"))
                 context_window_k = bounded_context_window_k(payload)
+                if str(payload.get("backend") or "") == "web-managed":
+                    if command != "codex":
+                        raise OwnerError("web-managed sessions only support Codex")
+                    try:
+                        result = self.web_runtime.start_session(
+                            cwd=str(cwd),
+                            title=title,
+                            model=str(payload.get("model") or ""),
+                            service_tier=str(payload.get("serviceTier") or payload.get("service_tier") or ""),
+                            context_window_k=context_window_k,
+                            launch_id=launch_id or "",
+                        )
+                    except appserver_runtime.AppServerRuntimeError as exc:
+                        raise OwnerError(str(exc), HTTPStatus.SERVICE_UNAVAILABLE) from exc
+                    self.write_json({"ok": True, "accepted": True, **result, "updatedAt": now_iso()})
+                    return
                 existing_launch = managed_launch_session(self.config, launch_id or "") if launch_id else ""
                 name = start_agent_runtime_async(
                     self.config,
@@ -3933,8 +4239,16 @@ class Handler(SimpleHTTPRequestHandler):
                 self.write_json({"ok": True, **result, "updatedAt": now_iso()})
                 return
             if parsed.path == "/api/session/close":
-                close_shell_session(self.config, str(payload.get("session") or ""))
-                self.write_json({"ok": True, "updatedAt": now_iso()})
+                session = str(payload.get("session") or "")
+                if self.web_runtime.has_session(session):
+                    try:
+                        result = self.web_runtime.close_session(session)
+                    except appserver_runtime.AppServerRuntimeError as exc:
+                        raise OwnerError(str(exc), HTTPStatus.CONFLICT) from exc
+                    self.write_json({"ok": True, **result, "updatedAt": now_iso()})
+                else:
+                    close_shell_session(self.config, session)
+                    self.write_json({"ok": True, "updatedAt": now_iso()})
                 return
             if parsed.path == "/api/agent/resume":
                 agent_session_id = clean_agent_session_id(str(payload.get("agent_session_id") or ""))
@@ -3963,6 +4277,43 @@ class Handler(SimpleHTTPRequestHandler):
                     if requirement is not None:
                         self.write_json({"ok": True, **requirement, "updatedAt": now_iso()})
                         return
+                if source == "codex-app-server":
+                    thread = codex_thread_by_id(agent_session_id)
+                    if thread is None or (
+                        self.history_root() is not None
+                        and not path_under_root(str(thread.get("cwd") or ""), self.history_root())
+                    ):
+                        raise OwnerError("agent session not found", HTTPStatus.NOT_FOUND)
+                    active_threads, superseded_threads = active_codex_thread_state(self.config)
+                    if agent_session_id in active_threads or agent_session_id in superseded_threads:
+                        raise OwnerError(
+                            "this Codex thread is already owned by a terminal session",
+                            HTTPStatus.CONFLICT,
+                        )
+                    recorded_cwd = str(thread.get("cwd") or "")
+                    resume_cwd = str(selected_cwd or recorded_cwd)
+                    if not resume_cwd or not Path(resume_cwd).is_dir():
+                        self.write_json({
+                            "ok": True,
+                            "requiresWorkingDirectory": True,
+                            "reason": "recorded-directory-unavailable",
+                            "recordedDisplayCwd": short_path(recorded_cwd) or "Unavailable directory",
+                            "updatedAt": now_iso(),
+                        })
+                        return
+                    try:
+                        result = self.web_runtime.resume_session(
+                            thread_id=agent_session_id,
+                            cwd=resume_cwd,
+                            title=codex_thread_title(thread, short_path(resume_cwd) or agent_session_id),
+                            model=str(thread.get("model") or ""),
+                            service_tier=str(payload.get("serviceTier") or payload.get("service_tier") or ""),
+                            context_window_k=context_window_k,
+                        )
+                    except appserver_runtime.AppServerRuntimeError as exc:
+                        raise OwnerError(str(exc), HTTPStatus.SERVICE_UNAVAILABLE) from exc
+                    self.write_json({"ok": True, "accepted": True, **result, "updatedAt": now_iso()})
+                    return
                 session = resume_agent_session(
                     self.config,
                     agent_session_id,
@@ -3985,6 +4336,42 @@ class Handler(SimpleHTTPRequestHandler):
                     "updatedAt": now_iso(),
                 })
                 return
+            session = str(payload.get("session") or "")
+            if self.web_runtime.has_session(session):
+                try:
+                    if parsed.path == "/api/interaction/respond":
+                        answers = payload.get("answers")
+                        if answers is not None and not isinstance(answers, dict):
+                            raise OwnerError("interaction answers must be an object")
+                        result = self.web_runtime.respond_interaction(
+                            session,
+                            interaction_id=str(payload.get("interactionId") or payload.get("interaction_id") or ""),
+                            option_id=str(payload.get("optionId") or payload.get("option_id") or ""),
+                            answers=answers,
+                            action=str(payload.get("action") or ""),
+                            client_request_id=str(payload.get("clientRequestId") or payload.get("client_request_id") or ""),
+                        )
+                        self.write_json({**result, "updatedAt": now_iso()})
+                        return
+                    if parsed.path == "/api/send":
+                        receipt = self.web_runtime.send(
+                            session,
+                            str(payload.get("text") or ""),
+                            str(payload.get("clientMessageId") or ""),
+                        )
+                        self.write_json({"ok": True, **receipt, "updatedAt": now_iso()})
+                        return
+                    if parsed.path == "/api/interrupt":
+                        result = self.web_runtime.interrupt(session)
+                        self.write_json({"ok": True, **result, "updatedAt": now_iso()})
+                        return
+                except appserver_runtime.AppServerRuntimeError as exc:
+                    raise OwnerError(str(exc), HTTPStatus.BAD_GATEWAY) from exc
+                if parsed.path == "/api/interaction/start":
+                    raise OwnerError(
+                        "this Codex command is not available in web-managed sessions yet",
+                        HTTPStatus.CONFLICT,
+                    )
             target = self.target_from_payload(payload)
             ensure_pane_width(target)
             if parsed.path == "/api/interaction/start":
@@ -4114,6 +4501,7 @@ class OwnerServer(ThreadingHTTPServer):
     allow_reuse_address = True
     daemon_threads = True
     config: Config
+    web_runtime: appserver_runtime.AppServerRuntime
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
@@ -4169,6 +4557,13 @@ def main() -> int:
         print(f"warning: {exc}", file=sys.stderr, flush=True)
     server = OwnerServer((args.host, args.port), Handler)
     server.config = config
+    server.web_runtime = appserver_runtime.AppServerRuntime(
+        socket_path=APP_SERVER_SOCKET,
+        registry_path=APP_SERVER_REGISTRY,
+        client_version=release_version() or "0",
+        reserved_names=lambda: tmux_sessions(config),
+    )
+    server.web_runtime.start()
 
     def stop(_signum: int, _frame: Any) -> None:
         raise KeyboardInterrupt
@@ -4185,6 +4580,7 @@ def main() -> int:
     except KeyboardInterrupt:
         print("stopping", flush=True)
     finally:
+        server.web_runtime.stop()
         stop_codex_app_server()
         server.server_close()
     return 0

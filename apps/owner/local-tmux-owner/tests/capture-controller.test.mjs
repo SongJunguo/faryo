@@ -150,6 +150,85 @@ test("a buffered event from a closed stream cannot update the conversation", asy
   assert.deepEqual(captures, []);
 });
 
+test("reconnect resumes from the last accepted event id", async (context) => {
+  const eventUrls = [];
+  let applyEvent = null;
+  const { controller } = fixture({
+    eventIdleTimeoutMs: 20,
+    eventRetryInitialMs: 5,
+    eventStreamParser: {
+      createParser(callback) {
+        applyEvent = callback;
+        return { push() {} };
+      },
+    },
+    eventUrl: (cursor) => {
+      eventUrls.push(cursor);
+      return `/api/events?cursor=${encodeURIComponent(cursor)}`;
+    },
+    fetch: async () => ({
+      ok: true,
+      status: 200,
+      body: new ReadableStream({
+        start(stream) {
+          stream.enqueue(new TextEncoder().encode(": opened\n\n"));
+        },
+      }),
+    }),
+  });
+  context.after(() => controller.closeEventStream());
+
+  controller.startEventStream();
+  await delay(0);
+  applyEvent({ id: "epoch-a:7", type: "capture", data: JSON.stringify({ ok: true, text: "seven" }) });
+  await delay(35);
+
+  assert.equal(controller.lastEventId, "epoch-a:7");
+  assert.deepEqual(eventUrls.slice(0, 2), ["", "epoch-a:7"]);
+});
+
+test("a new conversation scope resets the replay cursor", async (context) => {
+  let scope = { session: "alpha", generation: 1, mode: "compact" };
+  const eventUrls = [];
+  let applyEvent = null;
+  const { controller } = fixture({
+    getScope: () => ({ ...scope }),
+    acceptScope: (candidate) =>
+      candidate.session === scope.session && candidate.generation === scope.generation,
+    eventIdleTimeoutMs: 1000,
+    eventStreamParser: {
+      createParser(callback) {
+        applyEvent = callback;
+        return { push() {} };
+      },
+    },
+    eventUrl: (cursor) => {
+      eventUrls.push(cursor);
+      return `/api/events?cursor=${encodeURIComponent(cursor)}`;
+    },
+    fetch: async () => ({
+      ok: true,
+      status: 200,
+      body: new ReadableStream({
+        start(stream) {
+          stream.enqueue(new TextEncoder().encode(": opened\n\n"));
+        },
+      }),
+    }),
+  });
+  context.after(() => controller.closeEventStream());
+
+  controller.startEventStream();
+  await delay(0);
+  applyEvent({ id: "epoch-a:9", type: "capture", data: JSON.stringify({ ok: true, text: "alpha" }) });
+  scope = { session: "beta", generation: 2, mode: "compact" };
+  controller.startEventStream();
+  await delay(0);
+
+  assert.equal(controller.lastEventId, "");
+  assert.deepEqual(eventUrls, ["", ""]);
+});
+
 test("missing streaming support selects the polling fallback", () => {
   const intervals = [];
   const { controller, states } = fixture({

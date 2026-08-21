@@ -182,7 +182,7 @@ const workbenchRenderer = preactFactory({
           item.cwdChoices,
         );
         if (directory === null) return;
-        await agentNew(route, item.command, directory);
+        await agentNew(route, item.command, directory, item.backend);
       });
     },
     sessionAction(item, action, event) {
@@ -1284,8 +1284,13 @@ function newLaunchRequestId() {
     ? `web-${crypto.randomUUID()}`
     : `web-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 14)}`;
 }
-async function agentNew(route, command, directory) {
-  const payload = { route, command, client_launch_id: newLaunchRequestId() };
+async function agentNew(route, command, directory, backend = "web-managed") {
+  const payload = {
+    route,
+    command,
+    backend,
+    client_launch_id: newLaunchRequestId(),
+  };
   if (directory?.cwd) {
     payload.cwd = directory.cwd;
     payload.cwd_token = directory.cwdToken || "";
@@ -1457,6 +1462,8 @@ function renderWorkbench(data) {
         id: "new-codex",
         command: "codex",
         label: "Codex",
+        backend: "web-managed",
+        description: "New streaming web session",
         entries,
         cwdChoices,
       },

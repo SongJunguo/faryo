@@ -42,6 +42,7 @@ expected = {
     "idna": "3.19",
     "starlette": "1.6.0",
     "uvicorn": "0.52.4",
+    "websockets": "16.1.1",
 }
 actual = {name: version(name) for name in expected}
 if actual != expected:
@@ -93,6 +94,14 @@ release_checks() {
     "$ROOT/apps/owner/local-tmux-owner/owner_http.py" \
     "$ROOT/apps/owner/local-tmux-owner/codex_history.py" \
     "$ROOT/apps/owner/local-tmux-owner/codex_app_server.py" \
+    "$ROOT/apps/owner/local-tmux-owner/appserver_capabilities.py" \
+    "$ROOT/apps/owner/local-tmux-owner/appserver_events.py" \
+    "$ROOT/apps/owner/local-tmux-owner/appserver_protocol.py" \
+    "$ROOT/apps/owner/local-tmux-owner/appserver_registry.py" \
+    "$ROOT/apps/owner/local-tmux-owner/appserver_requests.py" \
+    "$ROOT/apps/owner/local-tmux-owner/appserver_runtime.py" \
+    "$ROOT/apps/owner/local-tmux-owner/appserver_session.py" \
+    "$ROOT/apps/owner/local-tmux-owner/appserver_transport.py" \
     "$ROOT/apps/owner/local-tmux-owner/workspace_changes.py" \
     "$ROOT/apps/owner/local-tmux-owner/runtime_diagnostics.py" \
     "$ROOT/apps/owner/local-tmux-owner/tests/owner-archive-roundtrip.py" \
@@ -120,6 +129,7 @@ release_checks() {
     "$ROOT/src/faryo_cli/__main__.py" \
     "$ROOT/src/faryo_cli/application.py" \
     "$ROOT/src/faryo_cli/cli.py" \
+    "$ROOT/src/faryo_cli/codex_runtime.py" \
     "$ROOT/src/faryo_cli/diagnostics.py" \
     "$ROOT/src/faryo_cli/installer.py" \
     "$ROOT/src/faryo_cli/maintenance.py" \
@@ -434,7 +444,7 @@ assert 'import("./owner/api-client.mjs?v=faryo-owner-api-1")' in app, "Owner API
 assert 'import("./owner/attachment-controller.mjs?v=faryo-owner-attachments-1")' in app, "Owner attachments must use their native ES module"
 assert 'import("./owner/history-controller.mjs?v=faryo-owner-history-1")' in app, "Owner history must use its native ES module"
 assert 'import("./owner/rich-block-controller.mjs?v=faryo-owner-rich-blocks-2")' in app, "Owner long histories must use the current versioned rich-block controller"
-assert 'import("./owner/capture-controller.mjs?v=faryo-owner-capture-3")' in app, "Owner capture must use its current versioned ES module"
+assert 'import("./owner/capture-controller.mjs?v=faryo-owner-capture-4")' in app, "Owner capture must use its current versioned ES module"
 assert 'import("./owner/composer-delivery.mjs?v=faryo-owner-composer-1")' in app, "Owner composer delivery must use its native ES module"
 assert "/api/workspace-changes" in owner_server and "/api/workspace-changes" in changes_panel_source, "workspace changes must use the scoped read-only Owner API"
 assert "/api/capabilities" in owner_server and "/api/diagnostics" in owner_server and "loadOwnerCapabilities" in app, "Owner must expose versioned redacted diagnostics"

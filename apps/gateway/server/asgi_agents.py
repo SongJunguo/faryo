@@ -155,6 +155,9 @@ def routes(legacy: Any, config: Any, client: owner_client.OwnerClient, support: 
                 context_window_k = legacy.clean_context_window_k(
                     payload.get("context_window_k", payload.get("contextWindowK"))
                 )
+                backend = str(payload.get("backend") or "web-managed").strip()
+                if backend not in {"web-managed", "terminal-managed"}:
+                    raise ValueError("invalid session backend")
                 target = launch_id or ""
                 if route not in legacy.BACKENDS or not command:
                     raise ValueError("route and command are required")
@@ -169,6 +172,7 @@ def routes(legacy: Any, config: Any, client: owner_client.OwnerClient, support: 
                 else:
                     launch = {
                         "command": command,
+                        "backend": backend,
                         "max_running": config.max_running(route),
                         **({"client_launch_id": launch_id} if launch_id else {}),
                         **({"context_window_k": context_window_k} if context_window_k else {}),

@@ -6,3 +6,4 @@ click==8.4.2
 h11==0.16.0
 idna==3.19
 tomli==2.4.1; python_version < "3.11"
+websockets==16.1.1

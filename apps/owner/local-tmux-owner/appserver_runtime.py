@@ -1,0 +1,718 @@
+"""Long-lived App Server connection and web-managed session orchestration."""
+
+from __future__ import annotations
+
+import asyncio
+from concurrent.futures import TimeoutError as FutureTimeoutError
+import hashlib
+from pathlib import Path
+import re
+import threading
+import time
+from typing import Any, Callable, Mapping
+
+from appserver_events import EventJournal, ReplayResult
+from appserver_protocol import AppServerError, AppServerUnavailable
+from appserver_registry import WebSessionRecord, WebSessionRegistry
+from appserver_requests import (
+    APPROVAL_METHODS,
+    USER_INPUT_METHOD,
+    AppServerInteractionBroker,
+    AppServerInteractionError,
+    declined_response,
+)
+from appserver_session import (
+    HANDLED_NOTIFICATION_METHODS,
+    ActorEvent,
+    WebSessionActor,
+    user_message_text,
+)
+from appserver_transport import AsyncCodexAppServerClient, unix_socket_connector
+
+
+RUNTIME_CALL_TIMEOUT = 20.0
+RUNTIME_RECONNECT_MIN_SECONDS = 0.2
+RUNTIME_RECONNECT_MAX_SECONDS = 8.0
+MAX_SEND_CHARS = 120_000
+CLIENT_MESSAGE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$")
+SEND_RECEIPT_TTL_SECONDS = 48 * 60 * 60
+
+
+class AppServerRuntimeError(RuntimeError):
+    pass
+
+
+class AppServerRuntime:
+    def __init__(
+        self,
+        *,
+        socket_path: Path,
+        registry_path: Path,
+        client_version: str,
+        reserved_names: Callable[[], list[str]] | None = None,
+        client_factory: Callable[[Callable[..., Any], Callable[..., Any]], Any] | None = None,
+        journal_max_events: int = 4096,
+        journal_max_bytes: int = 8 * 1024 * 1024,
+    ) -> None:
+        self.socket_path = socket_path
+        self.registry = WebSessionRegistry(registry_path)
+        self.client_version = client_version
+        self.reserved_names = reserved_names or (lambda: [])
+        self.client_factory = client_factory
+        self.journal = EventJournal(max_events=journal_max_events, max_bytes=journal_max_bytes)
+        self.actors: dict[str, WebSessionActor] = {}
+        self.client: AsyncCodexAppServerClient | None = None
+        self.loop: asyncio.AbstractEventLoop | None = None
+        self.thread: threading.Thread | None = None
+        self.stop_async: asyncio.Event | None = None
+        self.disconnected_async: asyncio.Event | None = None
+        self.launch_lock: asyncio.Lock | None = None
+        self.condition = threading.Condition()
+        self.state = "stopped"
+        self.last_error = ""
+        self.reconnect_count = 0
+        self.started_at = 0.0
+        self.rate_limits: dict[str, Any] = {}
+        self.ignored_notifications: dict[str, int] = {}
+        self.send_tasks: dict[str, tuple[str, str, asyncio.Task[dict[str, Any]]]] = {}
+        self.send_receipts: dict[str, dict[str, Any]] = {}
+        self.interactions = AppServerInteractionBroker(
+            on_open=self._interaction_opened,
+            on_close=self._interaction_closed,
+        )
+
+    def start(self) -> None:
+        with self.condition:
+            if self.thread is not None and self.thread.is_alive():
+                return
+            self.state = "connecting"
+            self.last_error = ""
+            self.started_at = time.monotonic()
+            self.thread = threading.Thread(target=self._thread_main, name="faryo-appserver-runtime", daemon=True)
+            self.thread.start()
+
+    def stop(self, timeout: float = 5.0) -> None:
+        loop = self.loop
+        stop = self.stop_async
+        if loop is not None and stop is not None:
+            loop.call_soon_threadsafe(stop.set)
+        thread = self.thread
+        if thread is not None and thread is not threading.current_thread():
+            thread.join(timeout=max(0.1, timeout))
+        with self.condition:
+            self.state = "stopped"
+            self.condition.notify_all()
+
+    def ready(self) -> bool:
+        with self.condition:
+            return self.state == "ready"
+
+    def wait_ready(self, timeout: float = 5.0) -> bool:
+        deadline = time.monotonic() + timeout
+        with self.condition:
+            while self.state not in {"ready", "stopped"} and time.monotonic() < deadline:
+                self.condition.wait(max(0.01, deadline - time.monotonic()))
+            return self.state == "ready"
+
+    def status(self) -> dict[str, Any]:
+        with self.condition:
+            return {
+                "state": self.state,
+                "ready": self.state == "ready",
+                "reconnectCount": self.reconnect_count,
+                "sessionCount": len(self.registry.values()),
+                "loadedSessionCount": len(self.actors),
+                "pendingRpcCount": self.client.pending_count if self.client is not None else 0,
+                "lastError": self.last_error,
+                "eventCursor": self.journal.latest.render(),
+                "eventCount": len(self.journal.events),
+                "eventBytes": self.journal.total_bytes,
+                "ignoredNotificationCount": sum(self.ignored_notifications.values()),
+            }
+
+    def has_session(self, name: str) -> bool:
+        return self.registry.get(name) is not None
+
+    def session_records(self) -> list[dict[str, Any]]:
+        return [record.public() for record in sorted(self.registry.values(), key=lambda item: item.updated_at, reverse=True)]
+
+    def start_session(
+        self,
+        *,
+        cwd: str,
+        title: str = "",
+        model: str = "",
+        service_tier: str = "",
+        context_window_k: int = 0,
+        launch_id: str = "",
+        timeout: float = RUNTIME_CALL_TIMEOUT,
+    ) -> dict[str, Any]:
+        return self._submit(
+            self._start_session(cwd, title, model, service_tier, context_window_k, launch_id),
+            timeout,
+        )
+
+    def resume_session(
+        self,
+        *,
+        thread_id: str,
+        cwd: str,
+        title: str = "",
+        model: str = "",
+        service_tier: str = "",
+        context_window_k: int = 0,
+        timeout: float = RUNTIME_CALL_TIMEOUT,
+    ) -> dict[str, Any]:
+        return self._submit(
+            self._resume_session(thread_id, cwd, title, model, service_tier, context_window_k),
+            timeout,
+        )
+
+    def send(self, name: str, text: str, client_message_id: str, timeout: float = RUNTIME_CALL_TIMEOUT) -> dict[str, Any]:
+        return self._submit(self._send(name, text, client_message_id), timeout)
+
+    def interrupt(self, name: str, timeout: float = RUNTIME_CALL_TIMEOUT) -> dict[str, Any]:
+        return self._submit(self._interrupt(name), timeout)
+
+    def close_session(self, name: str, timeout: float = RUNTIME_CALL_TIMEOUT) -> dict[str, Any]:
+        return self._submit(self._close_session(name), timeout)
+
+    def respond_interaction(
+        self,
+        name: str,
+        *,
+        interaction_id: str,
+        option_id: str = "",
+        answers: Mapping[str, Any] | None = None,
+        action: str = "",
+        client_request_id: str,
+        timeout: float = RUNTIME_CALL_TIMEOUT,
+    ) -> dict[str, Any]:
+        return self._submit(
+            self._respond_interaction(
+                name,
+                interaction_id=interaction_id,
+                option_id=option_id,
+                answers=answers,
+                action=action,
+                client_request_id=client_request_id,
+            ),
+            timeout,
+        )
+
+    def capture(self, name: str, timeout: float = 5.0) -> dict[str, Any]:
+        return self._submit(self._capture(name), timeout)
+
+    def replay(self, cursor: str | None) -> ReplayResult:
+        with self.condition:
+            return self.journal.replay(cursor)
+
+    def wait_for_events(self, cursor: str | None, timeout: float) -> ReplayResult:
+        with self.condition:
+            if not cursor:
+                return self.journal.replay(None)
+            initial_sequence = self.journal.latest.sequence
+            parsed_result = self.journal.replay(cursor)
+            if parsed_result.status != "replay" or parsed_result.events:
+                return parsed_result
+            self.condition.wait_for(
+                lambda: self.journal.latest.sequence > initial_sequence or self.state in {"stopped"},
+                timeout=max(0.01, timeout),
+            )
+            return self.journal.replay(cursor)
+
+    def _submit(self, coroutine: Any, timeout: float) -> Any:
+        loop = self.loop
+        if loop is None or not loop.is_running():
+            coroutine.close()
+            raise AppServerRuntimeError("Codex App Server runtime is not started")
+        future = asyncio.run_coroutine_threadsafe(coroutine, loop)
+        try:
+            return future.result(timeout=max(0.01, timeout))
+        except FutureTimeoutError as exc:
+            future.cancel()
+            raise AppServerRuntimeError("Codex App Server operation timed out") from exc
+        except AppServerRuntimeError:
+            raise
+        except Exception as exc:
+            raise AppServerRuntimeError(str(exc) or "Codex App Server operation failed") from exc
+
+    def _thread_main(self) -> None:
+        try:
+            asyncio.run(self._run())
+        finally:
+            self.loop = None
+            with self.condition:
+                if self.state != "stopped":
+                    self.state = "stopped"
+                self.condition.notify_all()
+
+    async def _run(self) -> None:
+        self.loop = asyncio.get_running_loop()
+        self.stop_async = asyncio.Event()
+        self.launch_lock = asyncio.Lock()
+        delay = RUNTIME_RECONNECT_MIN_SECONDS
+        while not self.stop_async.is_set():
+            self.disconnected_async = asyncio.Event()
+
+            async def disconnected(error: BaseException) -> None:
+                self._set_state("reconnecting", self._error_class(error))
+                if self.disconnected_async is not None:
+                    self.disconnected_async.set()
+
+            client = (
+                self.client_factory(self._notification, disconnected)
+                if self.client_factory is not None
+                else AsyncCodexAppServerClient(
+                    connector=lambda: unix_socket_connector(self.socket_path),
+                    client_version=self.client_version,
+                    notification_handler=self._notification,
+                    disconnect_handler=disconnected,
+                )
+            )
+            self.client = client
+            if hasattr(client, "register_server_request"):
+                for method in sorted({*APPROVAL_METHODS, USER_INPUT_METHOD}):
+                    client.register_server_request(
+                        method,
+                        lambda params, selected=method: self._server_request(selected, params),
+                    )
+            self._set_state("connecting")
+            try:
+                await client.connect()
+                try:
+                    rate_limits = await client.rpc("account/rateLimits/read", {})
+                    self.rate_limits = dict(rate_limits) if isinstance(rate_limits, Mapping) else {}
+                except AppServerError:
+                    self.rate_limits = {}
+                await self._restore_sessions()
+                self._set_state("ready")
+                delay = RUNTIME_RECONNECT_MIN_SECONDS
+                stop_wait = asyncio.create_task(self.stop_async.wait())
+                disconnect_wait = asyncio.create_task(self.disconnected_async.wait())
+                done, pending = await asyncio.wait(
+                    {stop_wait, disconnect_wait},
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                for task in pending:
+                    task.cancel()
+                await asyncio.gather(*pending, return_exceptions=True)
+                if stop_wait in done and stop_wait.result():
+                    break
+                self.reconnect_count += 1
+            except asyncio.CancelledError:
+                break
+            except Exception as exc:
+                self._set_state("reconnecting", self._error_class(exc))
+                self.reconnect_count += 1
+            finally:
+                await client.close()
+                if self.client is client:
+                    self.client = None
+            if self.stop_async.is_set():
+                break
+            try:
+                await asyncio.wait_for(self.stop_async.wait(), timeout=delay)
+            except asyncio.TimeoutError:
+                pass
+            delay = min(RUNTIME_RECONNECT_MAX_SECONDS, delay * 1.8)
+        self._set_state("stopped")
+
+    async def _restore_sessions(self) -> None:
+        client = self._require_client()
+        for record in self.registry.values():
+            actor = self.actors.get(record.name) or WebSessionActor(session_id=record.name, thread_id=record.thread_id)
+            self.actors[record.name] = actor
+            try:
+                result = await client.rpc("thread/resume", {"threadId": record.thread_id})
+            except AppServerError:
+                continue
+            thread = result.get("thread") if isinstance(result, dict) else None
+            if isinstance(thread, Mapping):
+                actor.hydrate(thread)
+                self._publish(record, ActorEvent("session.snapshot", payload=actor.snapshot()))
+
+    async def _notification(self, method: str, params: dict[str, Any]) -> None:
+        if method == "account/rateLimits/updated":
+            snapshot = params.get("rateLimits")
+            if isinstance(snapshot, Mapping):
+                self.rate_limits = {"rateLimits": dict(snapshot)}
+                for record in self.registry.values():
+                    self._publish(record, ActorEvent("session.rate_limits", payload={"rateLimits": dict(snapshot)}))
+            return
+        if method not in HANDLED_NOTIFICATION_METHODS:
+            with self.condition:
+                self.ignored_notifications[method] = self.ignored_notifications.get(method, 0) + 1
+            return
+        thread_id = str(params.get("threadId") or "")
+        if not thread_id:
+            thread = params.get("thread")
+            thread_id = str(thread.get("id") or "") if isinstance(thread, Mapping) else ""
+        record = self.registry.by_thread(thread_id)
+        if record is None:
+            return
+        actor = self.actors.get(record.name)
+        if actor is None:
+            actor = WebSessionActor(session_id=record.name, thread_id=record.thread_id)
+            self.actors[record.name] = actor
+        for event in actor.apply(method, params):
+            self._publish(record, event)
+        if method == "thread/name/updated":
+            name = params.get("threadName")
+            self.registry.update_metadata(record.name, title=str(name or ""))
+        elif method in {"turn/started", "turn/completed"}:
+            self.registry.touch(record.name)
+
+    async def _server_request(self, method: str, params: dict[str, Any]) -> dict[str, Any]:
+        thread_id = str(params.get("threadId") or "")
+        record = self.registry.by_thread(thread_id) if thread_id else None
+        if record is None:
+            return declined_response(method, params)
+        return await self.interactions.request(record.name, method, params)
+
+    async def _start_session(
+        self,
+        cwd: str,
+        title: str,
+        model: str,
+        service_tier: str,
+        context_window_k: int,
+        launch_id: str,
+    ) -> dict[str, Any]:
+        lock = self.launch_lock
+        if lock is None:
+            raise AppServerRuntimeError("Codex App Server runtime is not ready")
+        async with lock:
+            return await self._start_session_locked(cwd, title, model, service_tier, context_window_k, launch_id)
+
+    async def _start_session_locked(
+        self,
+        cwd: str,
+        title: str,
+        model: str,
+        service_tier: str,
+        context_window_k: int,
+        launch_id: str,
+    ) -> dict[str, Any]:
+        existing = self.registry.by_launch(launch_id)
+        if existing is not None:
+            actor = self.actors.get(existing.name)
+            return {
+                "session": existing.name,
+                "threadId": existing.thread_id,
+                "state": actor.lifecycle if actor is not None else "loading",
+                "backend": existing.backend,
+                "duplicate": True,
+            }
+        client = self._require_client()
+        params: dict[str, Any] = {"cwd": cwd, "serviceName": "faryo"}
+        if model:
+            params["model"] = model
+        if service_tier:
+            params["serviceTier"] = service_tier
+        if context_window_k:
+            params["config"] = {"model_context_window": context_window_k * 1000}
+        result = await client.rpc("thread/start", params)
+        thread = result.get("thread") if isinstance(result, dict) else None
+        thread_id = str(thread.get("id") or "") if isinstance(thread, Mapping) else ""
+        if not thread_id:
+            raise AppServerRuntimeError("Codex App Server did not return a thread id")
+        record = self.registry.add(
+            thread_id=thread_id,
+            cwd=cwd,
+            title=title,
+            model=model,
+            launch_id=launch_id,
+            reserved=self.reserved_names(),
+        )
+        actor = WebSessionActor(session_id=record.name, thread_id=thread_id)
+        if isinstance(thread, Mapping):
+            actor.hydrate(thread)
+        self.actors[record.name] = actor
+        self._publish(record, ActorEvent("session.snapshot", payload=actor.snapshot()))
+        return {
+            "session": record.name,
+            "threadId": thread_id,
+            "state": actor.lifecycle,
+            "backend": record.backend,
+            "duplicate": False,
+        }
+
+    async def _send(self, name: str, text: str, client_message_id: str) -> dict[str, Any]:
+        record, actor = self._require_session(name)
+        value = text.strip()
+        if not value:
+            raise AppServerRuntimeError("message is empty")
+        if len(text) > MAX_SEND_CHARS:
+            raise AppServerRuntimeError(f"text too long: {len(text)} > {MAX_SEND_CHARS}")
+        if not CLIENT_MESSAGE_RE.fullmatch(client_message_id):
+            raise AppServerRuntimeError("invalid client message id")
+        digest = hashlib.sha256(value.encode("utf-8")).hexdigest()
+        self._prune_send_receipts()
+        receipt = self.send_receipts.get(client_message_id)
+        if receipt is not None:
+            if receipt["session"] != name or receipt["digest"] != digest:
+                raise AppServerRuntimeError("client message id was already used for different content")
+            return {**receipt["result"], "duplicate": True}
+        for projection in actor.items.values():
+            if projection.type == "userMessage" and projection.raw.get("clientId") == client_message_id:
+                if user_message_text(projection.raw).strip() != value:
+                    raise AppServerRuntimeError("client message id was already used for different content")
+                result = self._delivery_receipt(name, client_message_id, "", duplicate=True)
+                self._remember_send_receipt(client_message_id, name, digest, result)
+                return result
+        existing = self.send_tasks.get(client_message_id)
+        duplicate = existing is not None
+        if existing is not None:
+            existing_name, existing_digest, task = existing
+            if existing_name != name or existing_digest != digest:
+                raise AppServerRuntimeError("client message id was already used for different content")
+        else:
+            task = asyncio.create_task(
+                self._perform_send(record, value, client_message_id),
+                name=f"faryo-send-{client_message_id[:24]}",
+            )
+            self.send_tasks[client_message_id] = (name, digest, task)
+            task.add_done_callback(
+                lambda completed, message_id=client_message_id: self._send_task_completed(message_id, completed)
+            )
+        result = await asyncio.shield(task)
+        if duplicate:
+            result = {**result, "duplicate": True}
+        return result
+
+    async def _perform_send(
+        self,
+        record: WebSessionRecord,
+        text: str,
+        client_message_id: str,
+    ) -> dict[str, Any]:
+        result = await self._require_client().rpc(
+            "turn/start",
+            {
+                "threadId": record.thread_id,
+                "input": [{"type": "text", "text": text}],
+                "clientUserMessageId": client_message_id,
+            },
+        )
+        turn = result.get("turn") if isinstance(result, dict) else None
+        turn_id = str(turn.get("id") or "") if isinstance(turn, Mapping) else ""
+        self.registry.touch(record.name)
+        return self._delivery_receipt(record.name, client_message_id, turn_id)
+
+    @staticmethod
+    def _delivery_receipt(name: str, client_message_id: str, turn_id: str, *, duplicate: bool = False) -> dict[str, Any]:
+        return {
+            "accepted": True,
+            "deliveryId": client_message_id,
+            "delivery": "accepted",
+            "deliveryState": "submitted",
+            "session": name,
+            "enterAttempts": 0,
+            "clientMessageId": client_message_id,
+            "turnId": turn_id,
+            "duplicate": duplicate,
+        }
+
+    def _send_task_completed(self, client_message_id: str, task: asyncio.Task[dict[str, Any]]) -> None:
+        entry = self.send_tasks.get(client_message_id)
+        if entry is None or entry[2] is not task:
+            return
+        name, digest, _task = entry
+        self.send_tasks.pop(client_message_id, None)
+        if task.cancelled():
+            return
+        error = task.exception()
+        if error is None:
+            self._remember_send_receipt(client_message_id, name, digest, task.result())
+
+    def _remember_send_receipt(
+        self,
+        client_message_id: str,
+        name: str,
+        digest: str,
+        result: dict[str, Any],
+    ) -> None:
+        self.send_receipts[client_message_id] = {
+            "session": name,
+            "digest": digest,
+            "result": dict(result),
+            "updatedAt": time.monotonic(),
+        }
+
+    def _prune_send_receipts(self) -> None:
+        cutoff = time.monotonic() - SEND_RECEIPT_TTL_SECONDS
+        for key in [key for key, value in self.send_receipts.items() if value["updatedAt"] < cutoff]:
+            self.send_receipts.pop(key, None)
+
+    async def _resume_session(
+        self,
+        thread_id: str,
+        cwd: str,
+        title: str,
+        model: str,
+        service_tier: str,
+        context_window_k: int,
+    ) -> dict[str, Any]:
+        clean_thread_id = str(thread_id or "").strip()
+        if not clean_thread_id:
+            raise AppServerRuntimeError("Codex thread id is required")
+        existing = self.registry.by_thread(clean_thread_id)
+        if existing is not None:
+            actor = self.actors.get(existing.name)
+            return {
+                "session": existing.name,
+                "threadId": existing.thread_id,
+                "state": actor.lifecycle if actor is not None else "loading",
+                "backend": existing.backend,
+                "duplicate": True,
+            }
+        params: dict[str, Any] = {"threadId": clean_thread_id}
+        if cwd:
+            params["cwd"] = cwd
+        if model:
+            params["model"] = model
+        if service_tier:
+            params["serviceTier"] = service_tier
+        if context_window_k:
+            params["config"] = {"model_context_window": context_window_k * 1000}
+        result = await self._require_client().rpc("thread/resume", params)
+        thread = result.get("thread") if isinstance(result, dict) else None
+        resumed_id = str(thread.get("id") or "") if isinstance(thread, Mapping) else ""
+        if resumed_id != clean_thread_id:
+            raise AppServerRuntimeError("Codex App Server resumed an unexpected thread")
+        thread_cwd = str(thread.get("cwd") or cwd) if isinstance(thread, Mapping) else cwd
+        if not thread_cwd:
+            raise AppServerRuntimeError("resumed Codex thread has no working directory")
+        record = self.registry.add(
+            thread_id=clean_thread_id,
+            cwd=thread_cwd,
+            title=title or (str(thread.get("name") or "") if isinstance(thread, Mapping) else ""),
+            model=model or (str(thread.get("model") or "") if isinstance(thread, Mapping) else ""),
+            reserved=self.reserved_names(),
+        )
+        actor = WebSessionActor(session_id=record.name, thread_id=clean_thread_id)
+        if isinstance(thread, Mapping):
+            actor.hydrate(thread)
+        self.actors[record.name] = actor
+        self._publish(record, ActorEvent("session.snapshot", payload=actor.snapshot()))
+        return {
+            "session": record.name,
+            "threadId": record.thread_id,
+            "state": actor.lifecycle,
+            "backend": record.backend,
+            "duplicate": False,
+        }
+
+    async def _interrupt(self, name: str) -> dict[str, Any]:
+        record, actor = self._require_session(name)
+        if not actor.active_turn_id:
+            return {"interrupted": False, "reason": "idle"}
+        await self._require_client().rpc(
+            "turn/interrupt",
+            {"threadId": record.thread_id, "turnId": actor.active_turn_id},
+        )
+        return {"interrupted": True, "turnId": actor.active_turn_id}
+
+    async def _capture(self, name: str) -> dict[str, Any]:
+        record, actor = self._require_session(name)
+        snapshot = actor.snapshot()
+        snapshot["rateLimits"] = dict(self.rate_limits)
+        return {
+            "record": record.public(),
+            "snapshot": snapshot,
+            "messages": actor.messages(),
+        }
+
+    async def _close_session(self, name: str) -> dict[str, Any]:
+        record, actor = self._require_session(name)
+        if actor.active_turn_id:
+            raise AppServerRuntimeError("active web-managed sessions must be interrupted before closing")
+        if any(entry[0] == name for entry in self.send_tasks.values()):
+            raise AppServerRuntimeError("submitting web-managed sessions cannot be closed")
+        if self.interactions.snapshot(name) is not None:
+            raise AppServerRuntimeError("pending interactions must be resolved before closing")
+        await self._require_client().rpc("thread/unsubscribe", {"threadId": record.thread_id})
+        self._publish(record, ActorEvent("session.closed", payload={"session": name}))
+        self.actors.pop(name, None)
+        self.registry.remove(name)
+        return {"closed": True, "session": name, "threadId": record.thread_id}
+
+    async def _respond_interaction(
+        self,
+        name: str,
+        *,
+        interaction_id: str,
+        option_id: str,
+        answers: Mapping[str, Any] | None,
+        action: str,
+        client_request_id: str,
+    ) -> dict[str, Any]:
+        self._require_session(name)
+        try:
+            if action == "cancel":
+                result = self.interactions.cancel(name, client_request_id=client_request_id)
+            else:
+                result = self.interactions.respond(
+                    name,
+                    interaction_id=interaction_id,
+                    option_id=option_id,
+                    answers=answers,
+                    client_request_id=client_request_id,
+                )
+            await asyncio.sleep(0)
+            return result
+        except AppServerInteractionError as exc:
+            raise AppServerRuntimeError(str(exc)) from exc
+
+    def _require_client(self) -> AsyncCodexAppServerClient:
+        client = self.client
+        if client is None or not client.ready:
+            raise AppServerUnavailable("Codex App Server is reconnecting")
+        return client
+
+    def _require_session(self, name: str) -> tuple[WebSessionRecord, WebSessionActor]:
+        record = self.registry.get(name)
+        actor = self.actors.get(name)
+        if record is None or actor is None:
+            raise AppServerRuntimeError("web-managed session is unavailable")
+        return record, actor
+
+    def _publish(self, record: WebSessionRecord, event: ActorEvent) -> None:
+        with self.condition:
+            self.journal.publish(
+                session_id=record.name,
+                thread_id=record.thread_id,
+                turn_id=event.turn_id,
+                item_id=event.item_id,
+                kind=event.kind,
+                revision=event.revision,
+                payload=event.payload,
+            )
+            self.condition.notify_all()
+
+    def _interaction_opened(self, name: str, interaction: dict[str, Any]) -> None:
+        record = self.registry.get(name)
+        actor = self.actors.get(name)
+        if record is None or actor is None:
+            return
+        self._publish(record, actor.set_interaction(interaction))
+
+    def _interaction_closed(self, name: str, interaction_id: str) -> None:
+        record = self.registry.get(name)
+        actor = self.actors.get(name)
+        if record is None or actor is None:
+            return
+        event = actor.clear_interaction(interaction_id)
+        if event is not None:
+            self._publish(record, event)
+
+    def _set_state(self, state: str, error: str = "") -> None:
+        with self.condition:
+            self.state = state
+            self.last_error = error
+            self.condition.notify_all()
+
+    @staticmethod
+    def _error_class(error: BaseException) -> str:
+        return error.__class__.__name__

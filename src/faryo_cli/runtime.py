@@ -8,6 +8,7 @@ from pathlib import Path
 import sys
 from typing import Mapping
 
+from faryo_cli import codex_runtime
 from faryo_cli.diagnostics import LOOPBACK_HOSTS, Layout, private_file_state, read_env
 from faryo_cli.operations import OperationError
 
@@ -145,6 +146,55 @@ def gateway_process(layout: Layout | None = None) -> ProcessSpec:
         cwd=runner.parent,
         environment=environment,
     )
+
+
+def appserver_socket_path(layout: Layout, values: Mapping[str, str]) -> Path:
+    root = (layout.faryo_home / "owner/runtime").resolve(strict=False)
+    configured = str(values.get("FARYO_CODEX_APP_SERVER_SOCKET") or "").strip()
+    path = Path(configured).expanduser() if configured else root / "codex-app-server.sock"
+    if not path.is_absolute():
+        raise OperationError("App Server socket path must be absolute")
+    resolved = path.resolve(strict=False)
+    if resolved.parent != root:
+        raise OperationError("App Server socket must remain in the private Faryo runtime directory")
+    return resolved
+
+
+def prepare_appserver_runtime(layout: Layout, socket_path: Path) -> None:
+    expected = (layout.faryo_home / "owner/runtime").resolve(strict=False)
+    if socket_path.parent != expected:
+        raise OperationError("App Server runtime path is invalid")
+    try:
+        expected.mkdir(parents=True, exist_ok=True, mode=0o700)
+        expected.chmod(0o700)
+    except OSError as exc:
+        raise OperationError("App Server runtime directory is unavailable") from exc
+
+
+def appserver_process(layout: Layout | None = None) -> ProcessSpec:
+    selected = layout or Layout.from_environment()
+    values = require_private_config(selected.owner_env, "Owner")
+    environment_values = dict(os.environ)
+    environment_values.update(values)
+    executable = codex_runtime.resolve_codex(
+        values.get("FARYO_CODEX_BIN") or "",
+        selected.home,
+        environment_values,
+    )
+    if not executable:
+        raise OperationError("Codex CLI is unavailable")
+    socket_path = appserver_socket_path(selected, values)
+    argv = codex_runtime.codex_argv(
+        executable,
+        "app-server",
+        "--listen",
+        f"unix://{socket_path}",
+    )
+    environment = codex_runtime.codex_environment(
+        argv,
+        normalized_environment(values, selected.home),
+    )
+    return ProcessSpec(argv=argv, cwd=selected.home, environment=environment)
 
 
 def exec_process(spec: ProcessSpec) -> None:

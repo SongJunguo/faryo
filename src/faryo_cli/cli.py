@@ -9,10 +9,17 @@ from typing import Any, Sequence
 
 from faryo_cli import __version__
 from faryo_cli.application import install_versioned_application
-from faryo_cli.diagnostics import build_report, compact_status
+from faryo_cli.diagnostics import Layout, build_report, compact_status, read_env
 from faryo_cli.maintenance import rollback_application, uninstall_application
 from faryo_cli.operations import OperationError, journal, open_gateway, service_operation
-from faryo_cli.runtime import exec_process, gateway_process, owner_process
+from faryo_cli.runtime import (
+    appserver_process,
+    appserver_socket_path,
+    exec_process,
+    gateway_process,
+    owner_process,
+    prepare_appserver_runtime,
+)
 from faryo_cli.updates import update_application
 
 
@@ -35,7 +42,7 @@ def parser() -> argparse.ArgumentParser:
     open_command = commands.add_parser("open", help="Open the local Gateway")
     open_command.add_argument("--print", action="store_true", dest="print_only", help="Print the URL without opening a browser")
     logs = commands.add_parser("logs", help="Show bounded systemd journal output")
-    logs.add_argument("component", choices=("owner", "gateway"))
+    logs.add_argument("component", choices=("appserver", "owner", "gateway"))
     logs.add_argument("--lines", type=int, default=120)
     install = commands.add_parser("install", help="Install user services from the current verified application")
     install.add_argument("--dry-run", action="store_true", help="Validate without writing service units")
@@ -57,6 +64,7 @@ def parser() -> argparse.ArgumentParser:
     internal_commands = internal.add_subparsers(dest="internal_command", required=True)
     internal_commands.add_parser("run-owner")
     internal_commands.add_parser("run-gateway")
+    internal_commands.add_parser("run-appserver")
     return root
 
 
@@ -75,6 +83,7 @@ def print_doctor(report: dict[str, Any]) -> None:
 def print_status(status: dict[str, Any]) -> None:
     print(f"Owner:  {status['owner']['service']} · health {status['owner']['health']}")
     print(f"Gateway: {status['gateway']['service']} · health {status['gateway']['health']}")
+    print(f"App Server: {status['appserver']['service']} · socket {status['appserver']['socket']}")
     print(f"tmux sessions: {status['tmuxSessions']}")
     if status["legacyOwner"]:
         print("Migration: legacy Owner tmux/keepalive is still active")
@@ -84,7 +93,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     arguments = parser().parse_args(argv)
     if arguments.command == "internal":
         try:
-            spec = owner_process() if arguments.internal_command == "run-owner" else gateway_process()
+            if arguments.internal_command == "run-owner":
+                spec = owner_process()
+            elif arguments.internal_command == "run-gateway":
+                spec = gateway_process()
+            else:
+                layout = Layout.from_environment()
+                spec = appserver_process(layout)
+                prepare_appserver_runtime(layout, appserver_socket_path(layout, read_env(layout.owner_env)))
             exec_process(spec)
         except OperationError as exc:
             print(f"Faryo service failed: {exc}", file=sys.stderr)

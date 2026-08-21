@@ -119,6 +119,21 @@ def wait_for_health(layout: Layout, timeout: float = 12.0) -> None:
         raise OperationError("Faryo services did not become healthy")
 
 
+def wait_for_appserver(layout: Layout, timeout: float = 12.0) -> None:
+    from faryo_cli.runtime import appserver_socket_path
+
+    socket_path = appserver_socket_path(layout, read_env(layout.owner_env))
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            if socket_path.is_socket():
+                return
+        except OSError:
+            pass
+        time.sleep(0.05)
+    raise OperationError("Codex App Server did not become ready")
+
+
 def service_operation(action: ServiceAction, layout: Layout | None = None) -> str:
     selected = layout or Layout.from_environment()
     direct_owner = unit_exists("faryo-owner.service")
@@ -129,10 +144,16 @@ def service_operation(action: ServiceAction, layout: Layout | None = None) -> st
             control_service("faryo-owner.service", "stop")
         else:
             run_legacy_owner(selected, "stop")
+        if unit_exists("faryo-appserver.service"):
+            control_service("faryo-appserver.service", "stop")
         return "stopped"
 
     if not unit_exists("faryo-gateway.service"):
         raise OperationError("Gateway service is not installed")
+    if unit_exists("faryo-appserver.service"):
+        # Owner restarts must not interrupt an active App Server turn.
+        control_service("faryo-appserver.service", "start")
+        wait_for_appserver(selected)
     if direct_owner:
         control_service("faryo-owner.service", action)
     elif action == "start" and http_status(*endpoint(selected, "owner")) == 200:
@@ -161,7 +182,7 @@ def open_gateway(layout: Layout | None = None, *, print_only: bool = False) -> s
     return url
 
 
-def journal(component: Literal["owner", "gateway"], lines: int = 120) -> str:
+def journal(component: Literal["appserver", "owner", "gateway"], lines: int = 120) -> str:
     unit = f"faryo-{component}.service"
     if component == "owner" and not unit_exists(unit):
         raise OperationError("Owner journal is unavailable until direct service migration")

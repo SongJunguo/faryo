@@ -19,6 +19,15 @@ export interface InteractionOption {
   disabled: boolean;
 }
 
+export interface InteractionQuestion {
+  id: string;
+  header: string;
+  question: string;
+  options: Array<{ label: string; description: string }>;
+  isOther: boolean;
+  isSecret: boolean;
+}
+
 export interface PendingInteraction {
   id: string;
   generation: number;
@@ -26,6 +35,9 @@ export interface PendingInteraction {
   title: string;
   prompt: string;
   options: InteractionOption[];
+  questions?: InteractionQuestion[];
+  details?: Record<string, unknown>;
+  responseKind?: "choice" | "questions";
   actions: InteractionAction[];
   source: "codex-tui" | string;
   status: "pending";
@@ -43,6 +55,7 @@ export interface InteractionHostOptions {
     interactionId: string;
     action?: InteractionAction;
     optionId?: string;
+    answers?: Record<string, string[]>;
   }): Promise<InteractionResponse>;
   onError?(error: unknown): void;
 }

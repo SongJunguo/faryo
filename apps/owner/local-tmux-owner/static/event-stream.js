@@ -8,6 +8,7 @@
 
   function decodeFrame(frame) {
     let type = 'message';
+    let id = '';
     const data = [];
     for (const line of String(frame || '').split(/\r?\n/)) {
       if (!line || line.startsWith(':')) continue;
@@ -16,9 +17,10 @@
       let value = separator < 0 ? '' : line.slice(separator + 1);
       if (value.startsWith(' ')) value = value.slice(1);
       if (field === 'event') type = value || 'message';
+      else if (field === 'id' && !value.includes('\0')) id = value;
       else if (field === 'data') data.push(value);
     }
-    return data.length ? { type, data: data.join('\n') } : null;
+    return data.length ? { type, data: data.join('\n'), id } : null;
   }
 
   function createParser(onEvent) {
@@ -44,7 +46,7 @@
     };
   }
 
-  const api = Object.freeze({ version: '1', createParser, decodeFrame });
+  const api = Object.freeze({ version: '2', createParser, decodeFrame });
   if (typeof module === 'object' && module.exports) module.exports = api;
   globalThis.FaryoEventStream = api;
 })();

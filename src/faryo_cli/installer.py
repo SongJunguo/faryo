@@ -12,6 +12,7 @@ from faryo_cli.operations import OperationError, systemctl
 
 
 UNIT_NAMES = {
+    "appserver": "faryo-appserver.service",
     "owner": "faryo-owner.service",
     "gateway": "faryo-gateway.service",
 }
@@ -96,7 +97,7 @@ def backup_unit(path: Path, layout: Layout) -> None:
 def install_user_units(
     layout: Layout | None = None,
     *,
-    components: Iterable[str] = ("owner", "gateway"),
+    components: Iterable[str] = ("appserver", "owner", "gateway"),
     python: str,
     reload: bool = True,
 ) -> list[str]:
@@ -129,12 +130,13 @@ def install_services(
 ) -> str:
     from faryo_cli import migration
     from faryo_cli.operations import control_service, wait_for_health
-    from faryo_cli.runtime import gateway_process, owner_process
+    from faryo_cli.runtime import appserver_process, gateway_process, owner_process
 
     selected = layout or Layout.from_environment()
     # Validate application/config/loopback contracts before writing units.
     owner_process(selected)
     gateway_process(selected)
+    appserver_process(selected)
     for component in UNIT_NAMES:
         rendered_unit(component, selected, python)
     legacy = migration.legacy_owner_exists()
@@ -153,18 +155,18 @@ def install_services(
         return "units-installed"
     tmux_before = migration.tmux_process_snapshot()
     try:
+        control_service("faryo-appserver.service", "start")
         if legacy:
             migration.migrate_owner(selected)
         else:
             control_service("faryo-owner.service", "restart")
-        systemctl("enable", "faryo-owner.service")
-        systemctl("enable", "faryo-gateway.service")
+        systemctl("enable", *UNIT_NAMES.values())
         control_service("faryo-gateway.service", "restart")
         wait_for_health(selected)
         migration.verify_process_snapshot(tmux_before, migration.tmux_process_snapshot())
     except Exception as exc:
         try:
-            systemctl("disable", "--now", "faryo-owner.service", check=False)
+            systemctl("disable", "--now", *UNIT_NAMES.values(), check=False)
             for component, name in UNIT_NAMES.items():
                 target = target_dir / name
                 body = previous[component]
@@ -179,6 +181,8 @@ def install_services(
                 systemctl("restart", "faryo-owner.service", check=False)
             if previous["gateway"] is not None:
                 systemctl("restart", "faryo-gateway.service", check=False)
+            if previous["appserver"] is not None:
+                systemctl("start", "faryo-appserver.service", check=False)
         except Exception as rollback_exc:
             raise OperationError("service install and rollback both failed") from rollback_exc
         if isinstance(exc, OperationError):

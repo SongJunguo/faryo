@@ -1,0 +1,8 @@
+{"id":1,"result":{"userAgent":"codex-cli/0.149.0","codexHome":"/anonymous/codex-home","platformFamily":"unix","platformOs":"linux"}}
+{"method":"thread/started","params":{"thread":{"id":"thread_demo","turns":[],"status":{"type":"active","activeFlags":["waitingOnModel"]}}}}
+{"method":"turn/started","params":{"threadId":"thread_demo","turn":{"id":"turn_demo","items":[],"status":"inProgress"}}}
+{"method":"item/started","params":{"threadId":"thread_demo","turnId":"turn_demo","startedAtMs":1,"item":{"id":"item_demo","type":"agentMessage","text":""}}}
+{"method":"item/agentMessage/delta","params":{"threadId":"thread_demo","turnId":"turn_demo","itemId":"item_demo","delta":"Hello "}}
+{"method":"item/agentMessage/delta","params":{"threadId":"thread_demo","turnId":"turn_demo","itemId":"item_demo","delta":"$x^2$."}}
+{"method":"item/completed","params":{"threadId":"thread_demo","turnId":"turn_demo","completedAtMs":2,"item":{"id":"item_demo","type":"agentMessage","text":"Hello $x^2$."}}}
+{"method":"turn/completed","params":{"threadId":"thread_demo","turn":{"id":"turn_demo","items":[{"id":"item_demo","type":"agentMessage","text":"Hello $x^2$."}],"status":"completed"}}}

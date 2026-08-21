@@ -1458,6 +1458,37 @@ html[data-faryo-ui="workbench-v2"] .startup-card .markdown-body p {
 .interaction-heading > strong { display: block; color: var(--text); font-size: 18px; }
 .interaction-heading > p { margin: 5px 0 0; color: var(--muted); font: 500 12px/1.45 var(--app-font); }
 .interaction-options { min-height: 0; display: grid; align-content: start; gap: 5px; overflow-y: auto; }
+.interaction-request-details { min-width: 0; display: grid; gap: 5px; }
+.interaction-request-details pre {
+  max-height: min(24dvh, 180px);
+  margin: 0;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--panel2);
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font: 600 12px/1.45 var(--mono-font, ui-monospace, monospace);
+}
+.interaction-request-details small { color: var(--muted); overflow-wrap: anywhere; }
+.interaction-questions { min-height: 0; display: grid; gap: 10px; overflow-y: auto; }
+.interaction-questions fieldset { display: grid; gap: 6px; margin: 0; padding: 10px; border: 1px solid var(--line); border-radius: 12px; }
+.interaction-questions legend { max-width: 100%; padding: 0 4px; }
+.interaction-questions legend span,
+.interaction-questions legend strong { display: block; overflow-wrap: anywhere; }
+.interaction-questions legend span { color: var(--accent); font-size: 10px; font-weight: 800; text-transform: uppercase; }
+.interaction-questions legend strong { margin-top: 2px; font-size: 13px; }
+.interaction-question-option { display: flex; align-items: flex-start; gap: 8px; padding: 8px; border-radius: 9px; background: var(--panel2); }
+.interaction-question-option input { margin-top: 3px; accent-color: var(--accent); }
+.interaction-question-option span { min-width: 0; }
+.interaction-question-option strong,
+.interaction-question-option small { display: block; overflow-wrap: anywhere; }
+.interaction-question-option strong { font-size: 12px; }
+.interaction-question-option small { margin-top: 2px; color: var(--muted); font-size: 10px; }
+.interaction-question-other { width: 100%; min-height: 42px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 9px; background: var(--panel2); color: var(--text); font: 500 13px/1.4 var(--app-font); }
+.interaction-submit-answers { min-height: 42px; border: 1px solid color-mix(in srgb, var(--accent) 48%, var(--line)); border-radius: 10px; background: color-mix(in srgb, var(--accent) 12%, var(--panel2)); color: var(--text); font: 800 12px/1 var(--app-font); }
+.interaction-submit-answers:disabled { opacity: .48; }
 .interaction-option {
   width: 100%;
   min-height: 54px;

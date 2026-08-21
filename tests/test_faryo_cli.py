@@ -281,6 +281,7 @@ class FaryoCliTest(unittest.TestCase):
         self.assertEqual(actions, [
             ("faryo-gateway.service", "stop"),
             ("faryo-owner.service", "stop"),
+            ("faryo-appserver.service", "stop"),
         ])
         legacy.assert_not_called()
 
@@ -334,6 +335,34 @@ class FaryoCliTest(unittest.TestCase):
         self.assertEqual(probe.returncode, 0, probe.stderr)
         self.assertEqual(probe.stdout.strip(), "txy")
 
+    def test_appserver_spec_resolves_codex_per_start_and_keeps_socket_private(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            layout = self.layout(Path(temp))
+            with (
+                mock.patch.object(codex_runtime, "resolve_codex", return_value="/runtime/bin/codex") as resolve,
+                mock.patch.object(codex_runtime, "codex_argv", return_value=["/runtime/bin/node", "/runtime/codex.js", "app-server"]),
+            ):
+                spec = runtime.appserver_process(layout)
+            socket = runtime.appserver_socket_path(layout, diagnostics.read_env(layout.owner_env))
+            runtime.prepare_appserver_runtime(layout, socket)
+            socket_parent_mode = socket.parent.stat().st_mode & 0o777
+
+        resolve.assert_called_once()
+        self.assertEqual(spec.cwd, layout.home)
+        self.assertEqual(spec.argv[:2], ["/runtime/bin/node", "/runtime/codex.js"])
+        self.assertNotIn("private-owner-token", " ".join(spec.argv))
+        self.assertFalse(any(name.startswith(("FARYO_", "GATEWAY_")) for name in spec.environment))
+        self.assertEqual(socket.name, "codex-app-server.sock")
+        self.assertEqual(socket_parent_mode, 0o700)
+
+    def test_appserver_socket_cannot_escape_private_runtime_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            layout = self.layout(Path(temp))
+            values = diagnostics.read_env(layout.owner_env)
+            values["FARYO_CODEX_APP_SERVER_SOCKET"] = str(layout.home / "public.sock")
+            with self.assertRaisesRegex(operations.OperationError, "must remain"):
+                runtime.appserver_socket_path(layout, values)
+
     def test_direct_runtime_rejects_non_loopback_owner(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             layout = self.layout(Path(temp))
@@ -351,6 +380,23 @@ class FaryoCliTest(unittest.TestCase):
         ):
             code = cli.main(["internal", "run-owner"])
         self.assertEqual(code, 0)
+        execute.assert_called_once_with(spec)
+
+    def test_internal_appserver_prepares_private_runtime_before_exec(self) -> None:
+        spec = runtime.ProcessSpec(["codex", "app-server"], ROOT, {})
+        layout = diagnostics.Layout(Path("/tmp/fixture"), Path("/tmp/fixture/.faryo"), Path("/tmp/owner.env"), Path("/tmp/gateway.env"), Path("/tmp/auth.json"), ROOT)
+        socket = Path("/tmp/fixture/.faryo/owner/runtime/codex-app-server.sock")
+        with (
+            mock.patch.object(cli.Layout, "from_environment", return_value=layout),
+            mock.patch.object(cli, "read_env", return_value={}),
+            mock.patch.object(cli, "appserver_socket_path", return_value=socket),
+            mock.patch.object(cli, "appserver_process", return_value=spec),
+            mock.patch.object(cli, "prepare_appserver_runtime") as prepare,
+            mock.patch.object(cli, "exec_process") as execute,
+        ):
+            code = cli.main(["internal", "run-appserver"])
+        self.assertEqual(code, 0)
+        prepare.assert_called_once_with(layout, socket)
         execute.assert_called_once_with(spec)
 
     def test_service_units_use_unified_cli_and_no_legacy_owner_wrapper(self) -> None:
@@ -458,7 +504,10 @@ class FaryoCliTest(unittest.TestCase):
     def test_install_requires_explicit_legacy_migration(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             layout = self.layout(Path(temp))
-            with mock.patch.object(migration, "legacy_owner_exists", return_value=True):
+            with (
+                mock.patch.object(migration, "legacy_owner_exists", return_value=True),
+                mock.patch.object(runtime, "appserver_process"),
+            ):
                 with self.assertRaisesRegex(operations.OperationError, "requires --migrate-owner"):
                     installer.install_services(layout, python=sys.executable)
 
@@ -472,6 +521,7 @@ class FaryoCliTest(unittest.TestCase):
                 mock.patch.dict(os.environ, {"XDG_CONFIG_HOME": str(xdg)}, clear=False),
                 mock.patch.object(migration, "legacy_owner_exists", return_value=False),
                 mock.patch.object(migration, "tmux_process_snapshot", return_value={"faryo1": (145, 44, 100)}),
+                mock.patch.object(runtime, "appserver_process"),
                 mock.patch.object(installer, "systemctl", side_effect=lambda *args, **kwargs: actions.append((args, kwargs))),
                 mock.patch.object(operations, "control_service", side_effect=lambda name, action: actions.append(((name, action), {}))),
                 mock.patch.object(operations, "wait_for_health") as wait,
@@ -481,6 +531,8 @@ class FaryoCliTest(unittest.TestCase):
             self.assertEqual(result, "installed")
             self.assertTrue((xdg / "systemd/user/faryo-owner.service").is_file())
             self.assertTrue((xdg / "systemd/user/faryo-gateway.service").is_file())
+            self.assertTrue((xdg / "systemd/user/faryo-appserver.service").is_file())
+            self.assertIn((("faryo-appserver.service", "start"), {}), actions)
             self.assertIn((("faryo-owner.service", "restart"), {}), actions)
             self.assertIn((("faryo-gateway.service", "restart"), {}), actions)
             wait.assert_called_once_with(layout)
@@ -498,6 +550,7 @@ class FaryoCliTest(unittest.TestCase):
                 mock.patch.dict(os.environ, {"XDG_CONFIG_HOME": str(xdg)}, clear=False),
                 mock.patch.object(migration, "legacy_owner_exists", return_value=False),
                 mock.patch.object(migration, "tmux_process_snapshot", return_value={"faryo1": (145, 44, 100)}),
+                mock.patch.object(runtime, "appserver_process"),
                 mock.patch.object(installer, "systemctl"),
                 mock.patch.object(operations, "control_service"),
                 mock.patch.object(operations, "wait_for_health", side_effect=operations.OperationError("not healthy")),
@@ -522,6 +575,7 @@ class FaryoCliTest(unittest.TestCase):
                 mock.patch.dict(os.environ, {"XDG_CONFIG_HOME": str(xdg)}, clear=False),
                 mock.patch.object(migration, "legacy_owner_exists", return_value=False),
                 mock.patch.object(migration, "tmux_process_snapshot", return_value={"faryo1": (145, 44, 100)}),
+                mock.patch.object(runtime, "appserver_process"),
                 mock.patch.object(installer, "systemctl", side_effect=lambda *args, **kwargs: calls.append((args, kwargs))),
                 mock.patch.object(operations, "control_service"),
                 mock.patch.object(operations, "wait_for_health", side_effect=operations.OperationError("not healthy")),
@@ -531,6 +585,7 @@ class FaryoCliTest(unittest.TestCase):
 
             self.assertIn((("restart", "faryo-owner.service"), {"check": False}), calls)
             self.assertIn((("restart", "faryo-gateway.service"), {"check": False}), calls)
+            self.assertIn((("start", "faryo-appserver.service"), {"check": False}), calls)
 
     def test_owner_restart_rejects_recreated_or_missing_tmux_sessions(self) -> None:
         before = {"faryo1": (145, 44, 101), "faryo2": (145, 44, 202)}

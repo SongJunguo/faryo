@@ -621,9 +621,25 @@ class AgentSessionTest(unittest.TestCase):
     def test_legacy_null_thread_source_is_visible_but_subagents_are_not(self):
         self.assertTrue(server.interactive_top_level_thread({"source": "cli", "thread_source": None}))
         self.assertTrue(server.interactive_top_level_thread({"source": "vscode", "thread_source": "user"}))
+        self.assertTrue(server.interactive_top_level_thread({"source": "appServer", "thread_source": "user"}))
         self.assertFalse(server.interactive_top_level_thread({"source": "cli", "thread_source": "subagent"}))
         self.assertFalse(server.interactive_top_level_thread({"source": "exec", "thread_source": None}))
         self.assertFalse(server.interactive_top_level_thread({"source": {"subagent": {}}, "thread_source": "user"}))
+
+    def test_app_server_history_item_preserves_web_managed_resume_backend(self):
+        thread = {
+            "id": "thread-web",
+            "title": "Streaming session",
+            "cwd": "/workspace",
+            "updated_at": 1,
+            "source": "appServer",
+            "thread_source": "user",
+        }
+        with mock.patch.object(server, "session_git_label", return_value=""):
+            item = server.codex_session_item(self.config, thread, {}, {})
+
+        self.assertEqual(item["source"], "codex-app-server")
+        self.assertEqual(item["backend"], "web-managed")
 
     def test_history_search_includes_legacy_null_top_level_rows(self):
         now = 2_000_000_000.0

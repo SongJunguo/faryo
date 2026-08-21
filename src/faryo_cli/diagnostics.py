@@ -239,7 +239,7 @@ def build_report(layout: Layout | None = None) -> dict[str, Any]:
         pass
     checks.append(check("codex-auto-update", "ok", f"{'enabled' if auto_update else 'disabled'}; {update_result}"))
     checks.append(check("curl", "ok" if shutil.which("curl") else "error", "available" if shutil.which("curl") else "not found"))
-    missing_modules = [name for name in ("anyio", "bcrypt", "starlette", "uvicorn") if importlib.util.find_spec(name) is None]
+    missing_modules = [name for name in ("anyio", "bcrypt", "starlette", "uvicorn", "websockets") if importlib.util.find_spec(name) is None]
     checks.append(check("runtime-dependencies", "error" if missing_modules else "ok", "missing runtime packages" if missing_modules else "available"))
     systemd_available = systemd_user_available()
     checks.append(check("systemd-user", "ok" if systemd_available else "error", "available" if systemd_available else "unavailable"))
@@ -281,10 +281,18 @@ def build_report(layout: Layout | None = None) -> dict[str, Any]:
 
     gateway_service = service_state("faryo-gateway.service")
     owner_service = service_state("faryo-owner.service")
+    appserver_service = service_state("faryo-appserver.service")
     keepalive = service_state("faryo-owner-keepalive.timer")
     legacy_tmux = tmux_session_exists("local-tmux-owner")
     checks.append(check("gateway-service", "ok" if gateway_service == "active" else "warn", gateway_service))
     checks.append(check("owner-service", "ok" if owner_service == "active" else "warn", owner_service))
+    socket_path = selected.faryo_home / "owner/runtime/codex-app-server.sock"
+    try:
+        appserver_socket_ready = socket_path.is_socket()
+    except OSError:
+        appserver_socket_ready = False
+    checks.append(check("appserver-service", "ok" if appserver_service == "active" else "warn", appserver_service))
+    checks.append(check("appserver-socket", "ok" if appserver_socket_ready else "warn", "ready" if appserver_socket_ready else "unavailable"))
     checks.append(check("legacy-owner", "warn" if legacy_tmux or keepalive == "active" else "ok", "legacy supervision active" if legacy_tmux or keepalive == "active" else "retired"))
 
     status_counts = {value: sum(1 for item in checks if item["status"] == value) for value in ("ok", "warn", "error")}
@@ -293,7 +301,7 @@ def build_report(layout: Layout | None = None) -> dict[str, Any]:
         "ok": status_counts["error"] == 0,
         "checks": checks,
         "counts": status_counts,
-        "services": {"owner": owner_service, "gateway": gateway_service, "legacyKeepalive": keepalive},
+        "services": {"appserver": appserver_service, "owner": owner_service, "gateway": gateway_service, "legacyKeepalive": keepalive},
         "runtime": {"environment": environment_kind, "tmuxSessions": tmux_session_count()},
     }
 
@@ -305,6 +313,10 @@ def compact_status(report: Mapping[str, Any]) -> dict[str, Any]:
         "ok": bool(report.get("ok")),
         "owner": {"service": (report.get("services") or {}).get("owner"), "health": (checks.get("owner-health") or {}).get("status")},
         "gateway": {"service": (report.get("services") or {}).get("gateway"), "health": (checks.get("gateway-health") or {}).get("status")},
+        "appserver": {
+            "service": (report.get("services") or {}).get("appserver"),
+            "socket": (checks.get("appserver-socket") or {}).get("status"),
+        },
         "legacyOwner": (checks.get("legacy-owner") or {}).get("status") == "warn",
         "tmuxSessions": int((report.get("runtime") or {}).get("tmuxSessions") or 0),
     }

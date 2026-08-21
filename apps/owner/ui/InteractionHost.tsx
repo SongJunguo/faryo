@@ -10,6 +10,7 @@ import type {
 
 const KIND_LABELS: Record<string, string> = {
   approval: "Approval",
+  user_input: "Question",
   generic_tui: "Codex menu",
   model_select: "Model",
   permissions_select: "Permissions",
@@ -63,11 +64,15 @@ export function InteractionHost({
 }) {
   const [pending, setPending] = useState(false);
   const [localInteraction, setLocalInteraction] = useState(interaction);
+  const [questionAnswers, setQuestionAnswers] = useState<
+    Record<string, string>
+  >({});
   const activeInteractionId = useRef(interaction?.id || "");
 
   useLayoutEffect(() => {
     activeInteractionId.current = interaction?.id || "";
     setLocalInteraction(interaction);
+    setQuestionAnswers({});
     setPending(false);
   }, [interaction]);
 
@@ -76,6 +81,7 @@ export function InteractionHost({
   async function respond(request: {
     action?: InteractionAction;
     optionId?: string;
+    answers?: Record<string, string[]>;
   }) {
     if (!localInteraction || pending) return;
     const activeId = localInteraction.id;
@@ -172,6 +178,19 @@ export function InteractionHost({
 
   if (!localInteraction) return null;
   const kindLabel = KIND_LABELS[localInteraction.kind] || "Codex interaction";
+  const questions = localInteraction.questions || [];
+  const isQuestionForm =
+    localInteraction.responseKind === "questions" && questions.length > 0;
+  const questionFormComplete =
+    isQuestionForm &&
+    questions.every((question) =>
+      Boolean(questionAnswers[question.id]?.trim()),
+    );
+  const details = localInteraction.details || {};
+  const command = typeof details.command === "string" ? details.command : "";
+  const detailPath = [details.cwd, details.path].find(
+    (value) => typeof value === "string" && value,
+  ) as string | undefined;
   return (
     <div
       class="interaction-backdrop"
@@ -189,15 +208,100 @@ export function InteractionHost({
           <strong id="interactionTitle">{localInteraction.title}</strong>
           <p id="interactionPrompt">{localInteraction.prompt}</p>
         </div>
-        <div class="interaction-options" role="listbox" aria-busy={pending}>
-          {localInteraction.options.map((option) => (
-            <OptionRow
-              key={option.id}
-              option={option}
-              invoke={(selected) => void respond({ optionId: selected.id })}
-            />
-          ))}
-        </div>
+        {(command || detailPath) && (
+          <div class="interaction-request-details">
+            {command && <pre>{command}</pre>}
+            {detailPath && <small>{detailPath}</small>}
+          </div>
+        )}
+        {isQuestionForm ? (
+          <form
+            class="interaction-questions"
+            aria-busy={pending}
+            onSubmit={(event) => {
+              event.preventDefault();
+              if (!questionFormComplete) return;
+              void respond({
+                answers: Object.fromEntries(
+                  questions.map((question) => [
+                    question.id,
+                    [(questionAnswers[question.id] || "").trim()],
+                  ]),
+                ),
+              });
+            }}
+          >
+            {questions.map((question) => (
+              <fieldset key={question.id}>
+                <legend>
+                  <span>{question.header}</span>
+                  <strong>{question.question}</strong>
+                </legend>
+                {question.options.map((option) => (
+                  <label class="interaction-question-option" key={option.label}>
+                    <input
+                      type="radio"
+                      name={`question-${question.id}`}
+                      value={option.label}
+                      checked={questionAnswers[question.id] === option.label}
+                      onChange={() =>
+                        setQuestionAnswers((current) => ({
+                          ...current,
+                          [question.id]: option.label,
+                        }))
+                      }
+                    />
+                    <span>
+                      <strong>{option.label}</strong>
+                      {option.description && (
+                        <small>{option.description}</small>
+                      )}
+                    </span>
+                  </label>
+                ))}
+                {question.isOther && (
+                  <input
+                    class="interaction-question-other"
+                    type={question.isSecret ? "password" : "text"}
+                    autoComplete="off"
+                    placeholder="Type another answer"
+                    value={
+                      question.options.some(
+                        (option) =>
+                          option.label === questionAnswers[question.id],
+                      )
+                        ? ""
+                        : questionAnswers[question.id] || ""
+                    }
+                    onInput={(event) =>
+                      setQuestionAnswers((current) => ({
+                        ...current,
+                        [question.id]: event.currentTarget.value,
+                      }))
+                    }
+                  />
+                )}
+              </fieldset>
+            ))}
+            <button
+              class="interaction-submit-answers"
+              type="submit"
+              disabled={pending || !questionFormComplete}
+            >
+              Submit answers
+            </button>
+          </form>
+        ) : (
+          <div class="interaction-options" role="listbox" aria-busy={pending}>
+            {localInteraction.options.map((option) => (
+              <OptionRow
+                key={option.id}
+                option={option}
+                invoke={(selected) => void respond({ optionId: selected.id })}
+              />
+            ))}
+          </div>
+        )}
         <div class="interaction-actions">
           <div class="interaction-nav-actions">
             {actions.has("previous") && (

@@ -88,7 +88,7 @@ function LauncherCard({ item, actions }) {
           {starting ? `Starting ${item.label}…` : `Start ${item.label}`}
         </div>
         <div class="session-meta">
-          {starting ? "Creating session" : "New CLI session"}
+          {starting ? "Creating session" : item.description || "New session"}
         </div>
       </div>
       <div class="arrow">{starting ? "↗" : "›"}</div>

@@ -4,7 +4,7 @@
   const attachmentControllerModulePromise = import("./owner/attachment-controller.mjs?v=faryo-owner-attachments-1");
   const historyControllerModulePromise = import("./owner/history-controller.mjs?v=faryo-owner-history-1");
   const richBlockControllerModulePromise = import("./owner/rich-block-controller.mjs?v=faryo-owner-rich-blocks-2");
-  const captureControllerModulePromise = import("./owner/capture-controller.mjs?v=faryo-owner-capture-3");
+  const captureControllerModulePromise = import("./owner/capture-controller.mjs?v=faryo-owner-capture-4");
   const composerDeliveryModulePromise = import("./owner/composer-delivery.mjs?v=faryo-owner-composer-1");
   const goalStatusModulePromise = import("./owner/goal-status.mjs?v=faryo-owner-goal-1");
   // Workspace review is an optional surface. Start loading it immediately,
@@ -1185,7 +1185,9 @@
       if (headerStatusVisible()) refreshStatus({ silent: true }).catch(handleBackgroundError);
     },
     fetch: (...args) => window.fetch(...args),
-    eventUrl: () => routeBase + apiPath(`/api/events?lines=${COMPACT_CAPTURE_LINES}`),
+    eventUrl: (cursor = '') => routeBase + apiPath(
+      `/api/events?lines=${COMPACT_CAPTURE_LINES}${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`,
+    ),
     ownerHeaders: ownerApiClient.ownerHeaders,
     eventStreamParser,
     debug: (...args) => console.debug(...args),
@@ -2010,7 +2012,7 @@
       } else {
         try {
           renderCompactOutput(text, rules, {
-            mode: isStructured ? 'settled' : 'streaming',
+            mode: isStructured && !capture.streaming ? 'settled' : 'streaming',
           });
           delete output.dataset.renderFallback;
         } catch (_error) {

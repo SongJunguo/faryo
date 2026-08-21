@@ -21,6 +21,8 @@ export function createCaptureController(options = {}) {
   let retryDelayMs = eventRetryInitialMs;
   let deliveredCapture = null;
   let deliveryRevision = 0;
+  let lastEventId = "";
+  let eventCursorScope = "";
 
   function currentScope() {
     return typeof options.getScope === "function" ? options.getScope() : null;
@@ -39,7 +41,8 @@ export function createCaptureController(options = {}) {
       && left.sessionTitle === right.sessionTitle
       && left.agentRunning === right.agentRunning
       && left.queuedSendNowAvailable === right.queuedSendNowAvailable
-      && left.interactionRevision === right.interactionRevision;
+      && left.interactionRevision === right.interactionRevision
+      && left.streamRevision === right.streamRevision;
   }
 
   function deliverCapture(capture, meta) {
@@ -124,9 +127,10 @@ export function createCaptureController(options = {}) {
       || eventController !== controller
       || eventRunId !== runId
     ) return;
+    if (!scopeAccepted(scope)) return;
+    if (event.id) lastEventId = String(event.id);
     if (event.type !== "capture") return;
     const capture = JSON.parse(event.data || "{}");
-    if (!scopeAccepted(scope)) return;
     options.setLiveState("live");
     deliverCapture(capture, { source: "event", safety: false, scope });
   }
@@ -160,7 +164,7 @@ export function createCaptureController(options = {}) {
   }
 
   async function consumeEventStream(controller, runId, scope) {
-    const response = await options.fetch(options.eventUrl(), {
+    const response = await options.fetch(options.eventUrl(lastEventId), {
       headers: options.ownerHeaders(),
       cache: "no-store",
       credentials: "same-origin",
@@ -230,6 +234,11 @@ export function createCaptureController(options = {}) {
     const controller = new view.AbortController();
     const runId = eventRunId;
     const scope = currentScope();
+    const scopeKey = `${scope?.session || ""}:${scope?.generation || 0}`;
+    if (scopeKey !== eventCursorScope) {
+      eventCursorScope = scopeKey;
+      lastEventId = "";
+    }
     eventController = controller;
     consumeEventStream(controller, runId, scope)
       .catch((error) => retryEventStream(controller, runId, scope, error));
@@ -252,5 +261,6 @@ export function createCaptureController(options = {}) {
     closeEventStream,
     cancelRefresh,
     get refreshInFlight() { return refreshInFlight; },
+    get lastEventId() { return lastEventId; },
   };
 }
