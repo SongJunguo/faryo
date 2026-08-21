@@ -8,7 +8,8 @@
 - [`v1.8-mobile-keyboard-app-shell-plan.md`](v1.8-mobile-keyboard-app-shell-plan.md)：
   以单一会话滚动区、正常布局流 composer 和浏览器原生
   `interactive-widget=resizes-content` 替换移动端 fixed/VisualViewport/VirtualKeyboard inset
-  像素补偿；无线 CDP 已完成真实 Edge A/B，等待 v1.8.2 版本化部署与最终实机门。
+  像素补偿；无线 CDP 已完成真实 Edge A/B，v1.8.2 已证明原生 resize，等待 v1.8.3
+  最小安全聚焦间距的版本化部署与最终实机门。
 
 ## Completed or maintenance mode
 

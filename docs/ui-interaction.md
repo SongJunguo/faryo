@@ -162,6 +162,11 @@ coordinate system. The viewport declares `interactive-widget=resizes-content`,
 and Faryo explicitly disables VirtualKeyboard overlay when that API exists, so
 the browser shrinks the app shell around the software keyboard. Faryo never
 guesses keyboard pixels or adds a second keyboard-inset row.
+On a coarse-pointer device while the composer is focused, footer and prompt
+bottom spacing contract to the platform safe-area plus a 6 px focus-ring
+clearance. That is the smallest real-device value that keeps the 3 px outline,
+its 2 px offset and the rounded shell visible instead of clipping them at the
+browser-owned boundary.
 
 - Gateway's root manifest uses `display: standalone`, and every maintained page
   references it. An installed Faryo launches without the normal URL bar.

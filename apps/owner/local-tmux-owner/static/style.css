@@ -854,6 +854,16 @@ html[data-faryo-ui="workbench-v2"] footer {
   padding: 8px max(12px, env(safe-area-inset-left)) calc(env(safe-area-inset-bottom) + 14px) max(12px, env(safe-area-inset-right));
 }
 
+@media (hover: none) and (pointer: coarse) {
+  html[data-faryo-ui="workbench-v2"].keyboard-open footer {
+    padding-bottom: calc(env(safe-area-inset-bottom) + 6px);
+  }
+
+  html[data-faryo-ui="workbench-v2"].keyboard-open .prompt-shell {
+    padding-bottom: 6px;
+  }
+}
+
 html[data-faryo-ui="workbench-v2"] .status-line,
 html[data-faryo-ui="workbench-v2"] .composer {
   width: min(100%, 780px);

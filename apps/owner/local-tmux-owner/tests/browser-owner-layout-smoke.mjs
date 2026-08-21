@@ -207,6 +207,40 @@ await withBrowser(
         `Keyboard app shell violated its grid contract: ${JSON.stringify({ keyboardClosed, keyboardOpen })}`,
       );
     }
+
+    const focusedFooter = await page.evaluate(() => {
+      const root = document.documentElement;
+      root.dataset.faryoUi = "workbench-v2";
+      root.classList.remove("keyboard-open");
+      const idlePadding = Number.parseFloat(
+        getComputedStyle(document.querySelector("footer")).paddingBottom,
+      );
+      root.classList.add("keyboard-open");
+      const footer = document.querySelector("footer");
+      const shell = document.querySelector(".prompt-shell");
+      const app = document.querySelector(".app");
+      return {
+        coarsePointer: matchMedia("(hover: none) and (pointer: coarse)")
+          .matches,
+        idlePadding,
+        focusedPadding: Number.parseFloat(
+          getComputedStyle(footer).paddingBottom,
+        ),
+        shellToAppBottom:
+          app.getBoundingClientRect().bottom -
+          shell.getBoundingClientRect().bottom,
+      };
+    });
+    if (
+      !focusedFooter.coarsePointer ||
+      focusedFooter.idlePadding < 10 ||
+      focusedFooter.focusedPadding !== 6 ||
+      Math.abs(focusedFooter.shellToAppBottom - 6) > 1
+    ) {
+      throw new Error(
+        `Focused mobile composer retained an avoidable bottom gap: ${JSON.stringify(focusedFooter)}`,
+      );
+    }
   },
 );
 

@@ -2,13 +2,15 @@ import { chromium } from "playwright-core";
 
 const cdpUrl = process.env.FARYO_ANDROID_CDP_URL || "http://127.0.0.1:9223";
 const targetUrl = process.env.FARYO_SMOKE_URL || "";
-const action = process.argv.includes("--resize-contract")
-  ? "resize-contract"
-  : process.argv.includes("--tap")
-    ? "tap"
-    : process.argv.includes("--blur")
-      ? "blur"
-      : "measure";
+const action = process.argv.includes("--reload")
+  ? "reload"
+  : process.argv.includes("--resize-contract")
+    ? "resize-contract"
+    : process.argv.includes("--tap")
+      ? "tap"
+      : process.argv.includes("--blur")
+        ? "blur"
+        : "measure";
 
 const browser = await chromium.connectOverCDP(cdpUrl);
 const context = browser.contexts()[0];
@@ -31,6 +33,15 @@ if (targetUrl && !page.url().startsWith(targetOrigin)) {
     });
   } catch (_error) {
     throw new Error("Android Edge could not load the private smoke-test page");
+  }
+}
+if (action === "reload") {
+  try {
+    await page.reload({ waitUntil: "domcontentloaded", timeout: 20_000 });
+  } catch (_error) {
+    throw new Error(
+      "Android Edge could not reload the private smoke-test page",
+    );
   }
 }
 await page.waitForSelector("#promptInput", {
