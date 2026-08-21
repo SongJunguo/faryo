@@ -28,7 +28,9 @@ class RuntimeDiagnosticsTest(unittest.TestCase):
         self.assertTrue(payload["features"]["commandCatalog"])
         self.assertTrue(payload["features"]["goalDetails"])
         self.assertFalse(payload["features"]["pendingQueueManagement"])
+        self.assertTrue(payload["features"]["queuedSendNow"])
         self.assertEqual(payload["protocol"]["pendingQueue"], "unsupported")
+        self.assertEqual(payload["protocol"]["queuedSendNow"], "escape-when-advertised")
         self.assertEqual(payload["protocol"]["tuiInteraction"], "v1")
 
     def test_diagnostics_contains_only_allowlisted_metadata(self) -> None:

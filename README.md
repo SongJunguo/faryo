@@ -51,6 +51,12 @@ the existing tmux TUI as the execution surface.
   user-activated full-screen mode with clear exit controls.
 - **Reliable remote input:** delivery is confirmed, idempotent across retries and
   restarts, isolated by session, and preserves drafts on ambiguous failures.
+- **Fast asynchronous launch:** Start/Resume opens the tmux session immediately
+  with a real Starting state while a restart-safe monitor completes Codex/MCP
+  readiness in the background.
+- **Queued follow-up Send now:** when Codex advertises Esc-to-send-now, the
+  squirrel gains an ESC badge; phone tap and desktop Escape share one verified
+  action without pretending Faryo can edit the queue.
 - **Self-hosted security boundary:** Owner and Gateway stay on loopback behind an
   operator-controlled identity-aware HTTPS edge.
 

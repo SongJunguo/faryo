@@ -43,9 +43,13 @@ Gateway Settings exposes recent Security activity without message content and
 keeps two account actions distinct: sign out only this browser, or explicitly
 revoke every inner Faryo login without stopping Codex/tmux.
 
-`Start Codex` is successful only after Owner observes a live Codex process in
-the new managed tmux. A missing CLI, invalid configured path, unavailable shell,
-or readiness timeout returns an explicit error and removes the partial session.
+`Start Codex` returns an accepted `starting` receipt after command/path policy
+and managed tmux creation succeed; it does not call that receipt ready and does
+not block on MCP startup. The page opens immediately. A pane-identity-scoped
+background monitor then observes the real Codex process and drives Starting to
+Waiting, a structured startup interaction, or Exited with a bounded error.
+Owner restart reconstructs that monitor from the private tmux marker. A missing
+CLI, invalid configured path, or unavailable shell still fails before redirect.
 Managed sessions use the first free `faryoN` name. The start flow asks for the
 workstation, then opens a directory-only browser at the most recent cwd. It
 shows the current path, parent, configured roots, recent locations and child
@@ -255,10 +259,17 @@ Submission rules:
 - failed or ambiguous sends retain the browser draft;
 - Owner confirms Codex acceptance before clearing the draft;
 - a working Codex uses Tab for a queued follow-up, while an idle Codex uses Enter;
+- when Codex explicitly displays `press esc to interrupt and send immediately`,
+  the squirrel gains an `ESC` badge and accessible Send-now label; clicking it
+  or pressing physical Escape interrupts the current tool and expedites the
+  queued follow-up through one receipt;
 - no-evidence recovery remains an explicit failure rather than a false success.
 
 Attachments remain associated with the submission that included them; a late
 response cannot clear a later session's independent draft or attachments.
+Faryo does not claim a queue list, edit, reorder, or cancel API: Send now is the
+single TUI-advertised Escape action, while an ordinary busy squirrel click
+remains interrupt.
 
 ## Responsive Layout
 

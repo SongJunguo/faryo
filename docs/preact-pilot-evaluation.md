@@ -20,6 +20,11 @@ card renderer. Migrating those one-shot controls now would add a second modal
 state boundary without removing the card defects that motivated the pilot.
 Owner, Compact Chat, Markdown/TeX and live tmux rendering remain framework-free.
 
+> Historical scope note: this document records the v1.4 Gateway-only pilot.
+> Faryo v1.6 later adopted a separate focused Owner bundle for composer,
+> command, interaction and status shells; the transcript and Markdown/TeX/Raw/
+> Live islands remain outside Preact. See the v1.6 structured-interaction plan.
+
 This is an application of the repository dependency principle: use a focused
 library where it removes a difficult repeated behavior, but do not turn a
 successful component pilot into a framework rewrite.

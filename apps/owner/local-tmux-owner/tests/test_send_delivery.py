@@ -174,6 +174,55 @@ class SendDeliveryTest(unittest.TestCase):
 
         self.assertEqual("queued", state)
 
+    def test_send_now_detector_requires_codex_explicit_escape_instruction(self):
+        wrapped = """
+        Messages to be submitted after next tool call
+        (press esc to interrupt and send immediately)
+        """
+
+        self.assertTrue(server.codex_queued_send_now_available(wrapped))
+        self.assertFalse(
+            server.codex_queued_send_now_available("Queued follow-up inputs")
+        )
+
+    def test_interrupt_expedites_only_an_explicit_codex_queue(self):
+        queued = (
+            "• Working (esc to interrupt)\n"
+            "Messages to be submitted after next tool call "
+            "(press esc to interrupt and send immediately)"
+        )
+        with (
+            mock.patch.object(
+                server, "agent_profile_in_pane", return_value=server.CODEX_PROFILE
+            ),
+            mock.patch.object(server, "agent_ready_for_input", return_value=False),
+            mock.patch.object(server, "tmux_current_capture", return_value=queued),
+            mock.patch.object(server, "send_key") as send_key,
+        ):
+            result = server.interrupt_agent(self.config)
+
+        self.assertEqual(
+            result,
+            {"interrupted": True, "queuedFollowupExpedited": True},
+        )
+        send_key.assert_called_once_with(self.config, "Escape")
+
+    def test_ready_agent_interrupt_sends_no_key(self):
+        with (
+            mock.patch.object(
+                server, "agent_profile_in_pane", return_value=server.CODEX_PROFILE
+            ),
+            mock.patch.object(server, "agent_ready_for_input", return_value=True),
+            mock.patch.object(server, "send_key") as send_key,
+        ):
+            result = server.interrupt_agent(self.config)
+
+        self.assertEqual(
+            result,
+            {"interrupted": False, "queuedFollowupExpedited": False},
+        )
+        send_key.assert_not_called()
+
     def test_existing_identical_queue_does_not_confirm_active_composer_copy(self):
         capture = "\n".join((
             "• Queued follow-up inputs",

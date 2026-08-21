@@ -1,6 +1,6 @@
 # Faryo Dependency Ledger
 
-Updated: 2026-08-20
+Updated: 2026-08-21
 
 Faryo keeps production dependencies deliberate, not artificially zero. Every
 entry below is pinned, locally resolved and covered by the canonical source
@@ -103,27 +103,30 @@ check. Production never loads these assets from a CDN.
 
 - Upstream: [preactjs/preact](https://github.com/preactjs/preact)
 - License: MIT
-- Lock/build: exact root `package-lock.json` pin and
-  `tools/gateway-preact/build.mjs`
-- Classification: locally bundled Gateway runtime library; no CDN or runtime
-  Node process
-- Scope: only the keyed file-package, launcher, active-session and
-  history-session list roots on the authenticated Gateway home
+- Lock/build: exact root `package-lock.json` pin with
+  `tools/gateway-preact/build.mjs` and `tools/owner-ui/build.mjs`
+- Classification: two focused local browser bundles; no CDN or runtime Node
+  process
+- Scope: Gateway keyed file-package/launcher/active/history lists, plus Owner
+  composer, command palette, structured interaction sheet and dynamic status
+  shell. Owner transcript/Markdown/Raw/Live remain outside Preact.
 - Production transitive dependencies: none
-- Shipped bundle: 17,753 bytes raw and 7,211 bytes at gzip level 9; the build
-  rejects results over 12 KiB gzip
-- Bundle SHA-256:
-  `795ad3cc48e8610ed105cb68a936567bb7c97ab156ed656a5557958582c33f3d`
-- Notice: `workbench-preact.LICENSE.txt` is generated beside the bundle and
-  records the exact version, hash, byte counts, transitive count and MIT text
+- Gateway bundle: 17,829 bytes raw / 7,250 gzip; SHA-256
+  `e209b3b4fa0414841b6815f8031e19de1375e1567828b175a6ef2f611a7bdf55`;
+  12 KiB gzip limit.
+- Owner bundle: 24,073 bytes raw / 8,971 gzip; SHA-256
+  `9d913094b1dd006a89c720f702c8b3f7c84c8e6ca2e4e96e967a427f6e9ceb2b`;
+  24 KiB gzip limit.
+- Each bundle has a generated adjacent license notice recording exact version,
+  hash, byte counts, transitive count and full MIT text.
 - Measured result: removed the hand-written JSON-signature/DOM replacement
   renderer and string-built dynamic card HTML. Browser regressions require
   keyed node/focus/transient state to survive refresh and markup-looking server
   strings to remain inert text.
-- Removal path: remove the exact pin and build, delete the Gateway Preact source
-  and generated assets, and restore the last behavior-closed vanilla card
-  renderer. No server state or private data migration is involved.
-- Full adoption evidence: [Gateway Preact pilot evaluation](preact-pilot-evaluation.md)
+- Removal path remains source-only and needs no server/private-data migration;
+  each focused surface can be reverted independently through Git history.
+- Evidence: [Gateway pilot evaluation](preact-pilot-evaluation.md) and
+  [v1.6 structured interaction plan](plans/v1.6-structured-interactions-and-owner-ui-plan.md).
 
 ## Runtime and bundled assets
 

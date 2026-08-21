@@ -87,7 +87,10 @@ function runReceiver() {
     throw new Error('terminal-delivery-receiver requires a TTY');
   }
 
+  if (process.env.FARYO_RECEIVER_PROCESS_TITLE)
+    process.title = process.env.FARYO_RECEIVER_PROCESS_TITLE;
   const parser = new TerminalDeliveryParser();
+  let queuedSendNow = process.env.FARYO_RECEIVER_QUEUE_PROMPT === '1';
   let sequence = 0;
   const restore = () => {
     try { process.stdout.write('\u001b[?2004l'); } catch {}
@@ -102,9 +105,19 @@ function runReceiver() {
   process.stdin.setRawMode(true);
   process.stdin.resume();
   process.stdout.write('\u001b[?2004hFARYO_DELIVERY_READY\r\n');
+  if (queuedSendNow) {
+    process.stdout.write('• Working (esc to interrupt)\r\n');
+    process.stdout.write('Messages to be submitted after next tool call (press esc to interrupt and send immediately)\r\n');
+    process.stdout.write('» Synthetic queued follow-up\r\n');
+  }
 
   process.stdin.on('data', (chunk) => {
     if (chunk.includes('\u0003')) exit(0);
+    if (queuedSendNow && chunk.includes('\u001b')) {
+      queuedSendNow = false;
+      process.stdout.write('FARYO_QUEUE_EXPEDITED\r\n› Ask Codex to do anything\r\n');
+      return;
+    }
     for (const event of parser.push(chunk)) {
       if (event.type === 'paste') {
         // Owner confirms paste readiness by observing the compact tail in the

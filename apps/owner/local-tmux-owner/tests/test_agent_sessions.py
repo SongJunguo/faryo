@@ -16,6 +16,8 @@ import server
 class AgentSessionTest(unittest.TestCase):
     def setUp(self):
         self.config = server.Config("owner", "test-token", 145)
+        with server.AGENT_START_MONITOR_LOCK:
+            server.AGENT_START_MONITORS.clear()
         with server._codex_session_index_lock:
             server._codex_session_index_cache = {}
             server._codex_session_index_signature = None
@@ -131,6 +133,12 @@ class AgentSessionTest(unittest.TestCase):
     def test_capture_event_digest_changes_when_only_thread_name_changes(self):
         before = server.capture_event_digest("same transcript", "", {"sessionTitle": "Initial topic"})
         after = server.capture_event_digest("same transcript", "", {"sessionTitle": "Renamed topic"})
+
+        self.assertNotEqual(before, after)
+
+    def test_capture_event_digest_changes_when_send_now_becomes_available(self):
+        before = server.capture_event_digest("same", "", {}, "same", False)
+        after = server.capture_event_digest("same", "", {}, "same", True)
 
         self.assertNotEqual(before, after)
 
@@ -256,6 +264,66 @@ class AgentSessionTest(unittest.TestCase):
         self.assertFalse(any(call.args[1] and call.args[1][0] == "new-session" for call in tmux.call_args_list))
         ensure_width.assert_called_once()
 
+    def test_async_start_returns_session_and_delegates_readiness_to_monitor(self):
+        with (
+            mock.patch.object(
+                server, "start_agent_runtime", return_value="faryo4"
+            ) as start,
+            mock.patch.object(server, "ensure_agent_start_monitor") as monitor,
+        ):
+            name = server.start_agent_runtime_async(
+                self.config,
+                Path("/workspace"),
+                "codex",
+                [],
+                launch_id="web-launch-async",
+            )
+
+        self.assertEqual(name, "faryo4")
+        self.assertFalse(start.call_args.kwargs["wait_ready"])
+        monitor.assert_called_once_with(self.config, "faryo4")
+
+    def test_start_monitor_is_single_flight_and_pane_identity_scoped(self):
+        thread = mock.Mock()
+        with (
+            mock.patch.object(server, "managed_session", return_value=True),
+            mock.patch.object(
+                server,
+                "tmux_session_option",
+                side_effect=lambda _config, _session, key, _value=None: (
+                    "1000" if key == "@faryo_starting_at" else ""
+                ),
+            ),
+            mock.patch.object(server, "get_pane_pid", side_effect=[111, 111, 222]),
+            mock.patch.object(server.threading, "Thread", return_value=thread) as factory,
+        ):
+            self.assertTrue(server.ensure_agent_start_monitor(self.config, "faryo4"))
+            self.assertFalse(server.ensure_agent_start_monitor(self.config, "faryo4"))
+            self.assertTrue(server.ensure_agent_start_monitor(self.config, "faryo4"))
+
+        self.assertEqual(factory.call_count, 2)
+        self.assertEqual(thread.start.call_count, 2)
+        self.assertEqual(server.AGENT_START_MONITORS["faryo4"], 222)
+
+    def test_start_monitor_failure_marks_only_the_same_pane(self):
+        with server.AGENT_START_MONITOR_LOCK:
+            server.AGENT_START_MONITORS["faryo4"] = 111
+        with (
+            mock.patch.object(
+                server,
+                "wait_for_agent_runtime_ready",
+                side_effect=server.OwnerError("not ready"),
+            ),
+            mock.patch.object(server, "has_session", return_value=True),
+            mock.patch.object(server, "get_pane_pid", return_value=111),
+            mock.patch.object(server, "tmux_session_option") as option,
+        ):
+            server._monitor_agent_runtime(self.config, "faryo4", 111)
+
+        option.assert_any_call(self.config, "faryo4", "@faryo_start_error", "not-ready")
+        option.assert_any_call(self.config, "faryo4", "@faryo_starting_at", "")
+        self.assertNotIn("faryo4", server.AGENT_START_MONITORS)
+
     def test_agent_session_lifecycle_uses_process_and_start_marker_evidence(self):
         with mock.patch.object(server, "agent_ready_for_input", return_value=False):
             self.assertEqual(
@@ -273,10 +341,18 @@ class AgentSessionTest(unittest.TestCase):
             )
         with (
             mock.patch.object(server, "agent_profile_in_pane", return_value=None),
-            mock.patch.object(server, "tmux_session_option", return_value="1000"),
+            mock.patch.object(
+                server,
+                "tmux_session_option",
+                side_effect=lambda _config, _session, key, _value=None: (
+                    "1000" if key == "@faryo_starting_at" else ""
+                ),
+            ),
+            mock.patch.object(server, "ensure_agent_start_monitor") as monitor,
         ):
             self.assertEqual(server.agent_session_lifecycle(self.config, "faryo1", None, True, now=1010), ("starting", False))
             self.assertEqual(server.agent_session_lifecycle(self.config, "faryo1", None, True, now=1100), ("exited", False))
+        monitor.assert_called_once_with(self.config, "faryo1")
 
     def test_managed_shell_after_codex_exit_remains_visible_until_cleanup(self):
         def option(_config, _session, key, _value=None):

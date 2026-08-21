@@ -24,6 +24,7 @@ def capability_payload(release: str, app_server_configured: bool, metadata_avail
             "goalDetails": True,
             "markdownMath": True,
             "pendingQueueManagement": False,
+            "queuedSendNow": True,
             "pwa": True,
             "reliableDelivery": True,
             "structuredInteractions": True,
@@ -33,6 +34,7 @@ def capability_payload(release: str, app_server_configured: bool, metadata_avail
         "protocol": {
             "appServerConfigured": bool(app_server_configured),
             "pendingQueue": "unsupported",
+            "queuedSendNow": "escape-when-advertised",
             "tuiInteraction": "v1",
             "turnSteer": "not-used-for-tui-owned-turns",
         },

@@ -140,6 +140,8 @@ AGENT_START_STATE_GRACE_SECONDS = 5.0
 AGENT_ARCHIVE_VERIFY_TIMEOUT = 3.0
 START_DIRECTORY_MAX_ENTRIES = 160
 RUNTIME_LOCK = threading.RLock()
+AGENT_START_MONITOR_LOCK = threading.Lock()
+AGENT_START_MONITORS: dict[str, int] = {}
 RELEASE_VERSION_CACHE: str | None = None
 FARYO_OWNER_DATA = Path(os.environ.get("FARYO_OWNER_DATA", str(Path.home() / ".faryo" / "owner" / "data"))).expanduser()
 FILE_INBOX_ROOT = Path(os.environ.get("FARYO_OWNER_INBOX_DIR", str(FARYO_OWNER_DATA / "inbox"))).expanduser()
@@ -560,8 +562,9 @@ def capture_event_digest(
     live_text: str,
     session_metadata: dict[str, str],
     interaction_revision: str = "",
+    queued_send_now: bool = False,
 ) -> int:
-    return hash((text, live_text, session_metadata.get("sessionTitle", ""), interaction_revision))
+    return hash((text, live_text, session_metadata.get("sessionTitle", ""), interaction_revision, queued_send_now))
 
 
 def path_under_root(path_value: str | None, root_value: str | None) -> bool:
@@ -983,6 +986,94 @@ def managed_launch_session(config: Config, launch_id: str) -> str:
     return ""
 
 
+def wait_for_agent_runtime_ready(
+    config: Config,
+    name: str,
+    *,
+    created_here: bool,
+    cleanup_on_failure: bool = True,
+    expected_pane_pid: int = 0,
+) -> str:
+    target = Config(name, config.token, config.pane_width)
+    deadline = time.monotonic() + AGENT_START_READY_TIMEOUT
+    ready_since: float | None = None
+    while time.monotonic() < deadline:
+        if expected_pane_pid and get_pane_pid(target) != expected_pane_pid:
+            raise OwnerError("agent runtime identity changed", HTTPStatus.CONFLICT)
+        if has_session(target) and codex_cli_in_pane(target):
+            # A process can exist while Codex is still loading or waiting on a
+            # startup choice. New sessions require a continuous ready interval:
+            # the transient composer shown before MCP startup cannot pass.
+            pending = codex_tui_interactions.detect_interaction(
+                tmux_current_capture(target)
+            )
+            if not created_here or pending is not None:
+                tmux_session_option(config, name, "@faryo_start_error", "")
+                tmux_session_option(config, name, "@faryo_starting_at", "")
+                ensure_pane_width(target)
+                return name
+            ready = agent_ready_for_input(target, CODEX_PROFILE)
+            now = time.monotonic()
+            if ready:
+                ready_since = now if ready_since is None else ready_since
+                if now - ready_since >= AGENT_START_READY_STABLE_SECONDS:
+                    tmux_session_option(config, name, "@faryo_start_error", "")
+                    tmux_session_option(config, name, "@faryo_starting_at", "")
+                    ensure_pane_width(target)
+                    return name
+            else:
+                ready_since = None
+        else:
+            ready_since = None
+        time.sleep(0.2)
+    if created_here and cleanup_on_failure:
+        tmux(config, ["kill-session", "-t", name], timeout=3)
+    raise OwnerError("agent runtime did not become ready", HTTPStatus.BAD_GATEWAY)
+
+
+def _monitor_agent_runtime(config: Config, name: str, pane_pid: int) -> None:
+    try:
+        wait_for_agent_runtime_ready(
+            config,
+            name,
+            created_here=True,
+            cleanup_on_failure=False,
+            expected_pane_pid=pane_pid,
+        )
+    except OwnerError:
+        target = Config(name, config.token, config.pane_width)
+        if has_session(target) and get_pane_pid(target) == pane_pid:
+            tmux_session_option(config, name, "@faryo_start_error", "not-ready")
+            tmux_session_option(config, name, "@faryo_starting_at", "")
+    finally:
+        with AGENT_START_MONITOR_LOCK:
+            if AGENT_START_MONITORS.get(name) == pane_pid:
+                AGENT_START_MONITORS.pop(name, None)
+
+
+def ensure_agent_start_monitor(config: Config, name: str) -> bool:
+    if (
+        not managed_session(config, name)
+        or not tmux_session_option(config, name, "@faryo_starting_at")
+        or tmux_session_option(config, name, "@faryo_start_error")
+    ):
+        return False
+    pane_pid = get_pane_pid(Config(name, config.token, config.pane_width)) or 0
+    if not pane_pid:
+        return False
+    with AGENT_START_MONITOR_LOCK:
+        if AGENT_START_MONITORS.get(name) == pane_pid:
+            return False
+        AGENT_START_MONITORS[name] = pane_pid
+    threading.Thread(
+        target=_monitor_agent_runtime,
+        args=(config, name, pane_pid),
+        name=f"faryo-start-{name}",
+        daemon=True,
+    ).start()
+    return True
+
+
 def start_agent_runtime(config: Config, cwd: Path, command: str, args: list[str], max_running: int = 0, wait_ready: bool = True, agent_id: str = "", title: str = "", launch_id: str = "") -> str:
     clean_launch_id = clean_client_launch_id(launch_id)
     created_here = False
@@ -999,6 +1090,7 @@ def start_agent_runtime(config: Config, cwd: Path, command: str, args: list[str]
             created_here = True
             tmux_session_option(config, name, "@faryo_managed", "1")
             tmux_session_option(config, name, "@faryo_starting_at", str(time.time()))
+            tmux_session_option(config, name, "@faryo_start_error", "")
             if git_root := git_root_for_cwd(cwd):
                 tmux_session_option(config, name, SESSION_GIT_ROOT_OPTION, git_root)
             if source := AGENT_SOURCE_BY_COMMAND.get(command): tmux_session_option(config, name, "@faryo_agent_source", source)
@@ -1010,35 +1102,37 @@ def start_agent_runtime(config: Config, cwd: Path, command: str, args: list[str]
                 tmux_session_option(config, name, "@faryo_agent_session_id", agent_id)
     if not wait_ready:
         return name
-    target = Config(name, config.token, config.pane_width); deadline = time.monotonic() + AGENT_START_READY_TIMEOUT
-    ready_since: float | None = None
-    while time.monotonic() < deadline:
-        if has_session(target) and codex_cli_in_pane(target):
-            # A process can exist while Codex is still loading or waiting on a
-            # startup choice.  New sessions settle only at a real composer or
-            # a structured pending interaction; an idempotent existing launch
-            # remains immediately reusable even while its turn is running.
-            pending = codex_tui_interactions.detect_interaction(tmux_current_capture(target))
-            if not created_here or pending is not None:
-                tmux_session_option(config, name, "@faryo_starting_at", "")
-                ensure_pane_width(target)
-                return name
-            ready = agent_ready_for_input(target, CODEX_PROFILE)
-            now = time.monotonic()
-            if ready:
-                ready_since = now if ready_since is None else ready_since
-                if now - ready_since >= AGENT_START_READY_STABLE_SECONDS:
-                    tmux_session_option(config, name, "@faryo_starting_at", "")
-                    ensure_pane_width(target)
-                    return name
-            else:
-                ready_since = None
-        else:
-            ready_since = None
-        time.sleep(0.2)
-    if created_here:
-        tmux(config, ["kill-session", "-t", name], timeout=3)
-    raise OwnerError("agent runtime did not become ready", HTTPStatus.BAD_GATEWAY)
+    return wait_for_agent_runtime_ready(
+        config,
+        name,
+        created_here=created_here,
+        cleanup_on_failure=True,
+    )
+
+
+def start_agent_runtime_async(
+    config: Config,
+    cwd: Path,
+    command: str,
+    args: list[str],
+    max_running: int = 0,
+    agent_id: str = "",
+    title: str = "",
+    launch_id: str = "",
+) -> str:
+    name = start_agent_runtime(
+        config,
+        cwd,
+        command,
+        args,
+        max_running,
+        wait_ready=False,
+        agent_id=agent_id,
+        title=title,
+        launch_id=launch_id,
+    )
+    ensure_agent_start_monitor(config, name)
+    return name
 
 
 def codex_resume_directory_requirement(
@@ -1073,6 +1167,7 @@ def resume_codex_thread_session(
     max_running: int = 0,
     history_root: str | None = None,
     cwd_override: Path | None = None,
+    async_ready: bool = False,
 ) -> str:
     clean_id = clean_agent_session_id(thread_id)
     if not clean_id: raise OwnerError("invalid agent session id")
@@ -1085,7 +1180,8 @@ def resume_codex_thread_session(
         cwd = cwd_override or Path(str(thread.get("cwd") or "")).expanduser()
         if not cwd.is_dir():
             raise OwnerError("working directory selection is required", HTTPStatus.CONFLICT)
-        return start_agent_runtime(
+        starter = start_agent_runtime_async if async_ready else start_agent_runtime
+        return starter(
             config,
             cwd,
             "codex",
@@ -1101,9 +1197,17 @@ def resume_agent_session(
     max_running: int = 0,
     history_root: str | None = None,
     cwd_override: Path | None = None,
+    async_ready: bool = False,
 ) -> str:
     if source == "codex-cli":
-        return resume_codex_thread_session(config, session_id, max_running, history_root, cwd_override)
+        return resume_codex_thread_session(
+            config,
+            session_id,
+            max_running,
+            history_root,
+            cwd_override,
+            async_ready,
+        )
     raise OwnerError("unsupported agent source", HTTPStatus.BAD_REQUEST)
 
 def target_config(config: Config, session: str | None) -> Config:
@@ -1134,6 +1238,16 @@ def agent_session_lifecycle(config: Config, name: str, profile: AgentProfile | N
     target = Config(name, config.token, config.pane_width)
     managed = managed_session(config, name) if is_managed is None else is_managed
     detected = agent_profile_in_pane(target) if profile is None else profile
+    if managed and tmux_session_option(config, name, "@faryo_start_error"):
+        return "exited", False
+    try:
+        started_at = float(tmux_session_option(config, name, "@faryo_starting_at") or 0)
+    except ValueError:
+        started_at = 0.0
+    current = time.time() if now is None else now
+    if started_at and current - started_at <= AGENT_START_READY_TIMEOUT + AGENT_START_STATE_GRACE_SECONDS:
+        ensure_agent_start_monitor(config, name)
+        return "starting", False
     if detected is not None:
         running = not agent_ready_for_input(target, detected)
         if not managed:
@@ -1141,13 +1255,6 @@ def agent_session_lifecycle(config: Config, name: str, profile: AgentProfile | N
         return ("running" if running else "waiting"), running
     if not managed:
         return "", False
-    try:
-        started_at = float(tmux_session_option(config, name, "@faryo_starting_at") or 0)
-    except ValueError:
-        started_at = 0.0
-    current = time.time() if now is None else now
-    if started_at and current - started_at <= AGENT_START_READY_TIMEOUT + AGENT_START_STATE_GRACE_SECONDS:
-        return "starting", False
     return "exited", False
 
 
@@ -2549,6 +2656,16 @@ def codex_queued_followup_count(capture: str, text: str) -> int:
     return compact_capture_for_probe("\n".join(queued_lines)).count(probe)
 
 
+def codex_queued_send_now_available(capture: str) -> bool:
+    """Whether Codex explicitly advertises Esc as queued-message send-now."""
+
+    compact = " ".join(CONTROL_RE.sub("", str(capture or "")).split()).casefold()
+    return (
+        "messages to be submitted after next tool call" in compact
+        and "press esc to interrupt and send immediately" in compact
+    )
+
+
 def release_version() -> str:
     global RELEASE_VERSION_CACHE
     if RELEASE_VERSION_CACHE is not None:
@@ -2704,12 +2821,17 @@ def status_payload(config: Config) -> dict[str, Any]:
     reasoning_effort = None
     fast_status = None
     meta_cwd = None
+    queued_send_now = False
     if tmux_alive:
         try:
             raw_text = clean_capture(
                 tmux(config, ["capture-pane", "-p", "-J", "-t", tmux_target(config), "-S", "-80"], timeout=3).stdout,
                 strip_input_tail=False,
                 profile=capture_profile,
+            )
+            queued_send_now = bool(
+                profile is CODEX_PROFILE
+                and codex_queued_send_now_available(raw_text)
             )
             meta = latest_agent_meta(raw_text, capture_profile)
             fast_status = latest_fast_status(raw_text)
@@ -2767,6 +2889,12 @@ def status_payload(config: Config) -> dict[str, Any]:
         "weeklyRateLimit": weekly_rate_limit,
         "agentRunning": agent_running,
         "agentState": agent_state,
+        "launchError": (
+            "Codex did not become ready. Return Home and close this session."
+            if managed and tmux_session_option(config, config.session, "@faryo_start_error")
+            else ""
+        ),
+        "queuedSendNowAvailable": queued_send_now,
         "paneCommand": get_pane_current_command(config) if tmux_alive else None,
         "agentSource": profile.source if profile else "",
         "agentProfile": profile.key if profile else "",
@@ -3050,6 +3178,22 @@ def send_key(config: Config, key: str) -> None:
     res = tmux(config, ["send-keys", "-t", tmux_target(config), key], timeout=3)
     if res.returncode != 0:
         raise OwnerError(res.stderr.strip() or f"tmux send {key} failed", HTTPStatus.INTERNAL_SERVER_ERROR)
+
+
+def interrupt_agent(config: Config) -> dict[str, bool]:
+    profile = agent_profile_in_pane(config)
+    interrupted = bool(profile and not agent_ready_for_input(config, profile))
+    queued_send_now = bool(
+        interrupted
+        and profile is CODEX_PROFILE
+        and codex_queued_send_now_available(tmux_current_capture(config))
+    )
+    if interrupted:
+        send_key(config, "Escape")
+    return {
+        "interrupted": interrupted,
+        "queuedFollowupExpedited": queued_send_now,
+    }
 
 
 class InteractionRuntime:
@@ -3354,6 +3498,10 @@ class Handler(SimpleHTTPRequestHandler):
                     "ok": True,
                     "text": text,
                     "agentRunning": agent_running,
+                    "queuedSendNowAvailable": bool(
+                        profile is CODEX_PROFILE
+                        and codex_queued_send_now_available(terminal_text)
+                    ),
                     "agentSource": profile.source,
                     "agentProfile": profile.key,
                     "captureSource": capture_source,
@@ -3457,8 +3605,13 @@ class Handler(SimpleHTTPRequestHandler):
                             if agent_running:
                                 live_text = codex_live_tail(terminal_text)
                     session_metadata = codex_capture_session_metadata(thread_id)
+                    current_terminal = tmux_current_capture(target)
+                    queued_send_now = bool(
+                        profile is CODEX_PROFILE
+                        and codex_queued_send_now_available(current_terminal)
+                    )
                     interaction_state = (
-                        interaction_snapshot_from_capture(target, tmux_current_capture(target))
+                        interaction_snapshot_from_capture(target, current_terminal)
                         if profile is CODEX_PROFILE
                         else {"interaction": None, "interactionRevision": "none"}
                     )
@@ -3467,11 +3620,12 @@ class Handler(SimpleHTTPRequestHandler):
                         live_text,
                         session_metadata,
                         str(interaction_state.get("interactionRevision") or ""),
+                        queued_send_now,
                     )
                     if digest != last_hash or agent_running != last_running:
                         last_hash = digest
                         last_running = agent_running
-                        payload = {"ok": True, "text": text, "agentRunning": agent_running, "agentSource": capture_profile.source, "agentProfile": capture_profile.key, "captureSource": capture_source, **interaction_state, "updatedAt": now_iso()}
+                        payload = {"ok": True, "text": text, "agentRunning": agent_running, "queuedSendNowAvailable": queued_send_now, "agentSource": capture_profile.source, "agentProfile": capture_profile.key, "captureSource": capture_source, **interaction_state, "updatedAt": now_iso()}
                         if thread_id:
                             payload.update(session_metadata)
                         if live_text:
@@ -3528,8 +3682,27 @@ class Handler(SimpleHTTPRequestHandler):
                     raise OwnerError("invalid client launch id")
                 title = clean_session_title(payload.get("title"))
                 existing_launch = managed_launch_session(self.config, launch_id or "") if launch_id else ""
-                name = start_agent_runtime(self.config, cwd, command, [], bounded_max_running(payload), wait_ready=True, title=title, launch_id=launch_id or "")
-                self.write_json({"ok": True, "session": name, "duplicate": bool(existing_launch and existing_launch == name), "updatedAt": now_iso()})
+                name = start_agent_runtime_async(
+                    self.config,
+                    cwd,
+                    command,
+                    [],
+                    bounded_max_running(payload),
+                    title=title,
+                    launch_id=launch_id or "",
+                )
+                launch_state, _launch_running = agent_session_lifecycle(
+                    self.config,
+                    name,
+                )
+                self.write_json({
+                    "ok": True,
+                    "accepted": True,
+                    "state": launch_state or "starting",
+                    "session": name,
+                    "duplicate": bool(existing_launch and existing_launch == name),
+                    "updatedAt": now_iso(),
+                })
                 return
             if parsed.path == "/api/agent/cleanup-idle":
                 idle_seconds = max(60, min(int(payload.get("idle_seconds") or payload.get("idleSeconds") or 0), MAX_MANAGED_AGENT_IDLE_SECONDS))
@@ -3583,8 +3756,19 @@ class Handler(SimpleHTTPRequestHandler):
                     bounded_max_running(payload),
                     self.history_root(),
                     selected_cwd,
+                    True,
                 )
-                self.write_json({"ok": True, "session": session, "updatedAt": now_iso()})
+                launch_state, _launch_running = agent_session_lifecycle(
+                    self.config,
+                    session,
+                )
+                self.write_json({
+                    "ok": True,
+                    "accepted": True,
+                    "state": launch_state or "starting",
+                    "session": session,
+                    "updatedAt": now_iso(),
+                })
                 return
             target = self.target_from_payload(payload)
             ensure_pane_width(target)
@@ -3601,10 +3785,11 @@ class Handler(SimpleHTTPRequestHandler):
                 self.write_json({"ok": True, **receipt, "updatedAt": now_iso()})
                 return
             if parsed.path == "/api/interrupt":
-                profile = agent_profile_in_pane(target)
-                on = bool(profile and not agent_ready_for_input(target, profile))
-                if on: send_key(target, "Escape")
-                self.write_json({"ok": True, "interrupted": on, "updatedAt": now_iso()})
+                self.write_json({
+                    "ok": True,
+                    **interrupt_agent(target),
+                    "updatedAt": now_iso(),
+                })
                 return
         except OwnerError as exc:
             self.write_json({"ok": False, "error": str(exc), "updatedAt": now_iso()}, status=exc.status)

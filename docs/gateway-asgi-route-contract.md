@@ -1,7 +1,7 @@
 # Gateway ASGI Route Contract
 
-Updated: 2026-08-20
-Target: Faryo v1.4.0
+Updated: 2026-08-21
+Target: Faryo v1.6.0
 
 Production cutover status: Uvicorn is active on the loopback Gateway port. The
 legacy engine and rollback switch have been removed; rollback uses the signed
@@ -24,10 +24,10 @@ token, path, or session data.
 | Security activity, status and workbench | GET, HEAD | signed session and route scope | `asgi_read.py` | JSON, filtering/paging and bounded audit read |
 | Bridge package list/private asset | GET, HEAD | signed session and package owner | `asgi_read.py` | path allowlist, MIME, bytes and private no-store |
 | Owner API and SSE | GET, HEAD | signed session, route allow, injected Owner scope | `asgi_owner_proxy.py` | status, bytes, query, proxy headers and streaming SSE |
-| Owner page and allowlisted resources | GET, HEAD | signed session and route allow | `asgi_owner_proxy.py` | login redirect, HTML/JS bytes and unknown-resource denial |
+| Owner page and allowlisted resources | GET, HEAD | signed session and route allow | `asgi_owner_proxy.py` | login redirect, HTML/JS bytes, script/allowlist completeness and no-store denial |
 | Owner control API | POST | signed session, route allow and CSRF | `asgi_control.py` | arbitrary Owner API proxy plus action-only body-free audit |
 | Archive/Restore and revoke | POST | signed session and CSRF | `asgi_control.py` | status/error, idempotency and body-free audit |
-| Codex start/resume | POST | Codex-only, route/cwd policy and CSRF | `asgi_agents.py` | launch ID retry, fallback, redirect and audit |
+| Codex start/resume | POST | Codex-only, route/cwd policy and CSRF | `asgi_agents.py` | fast Starting receipt, launch ID retry, cwd fallback, redirect and audit |
 | Bridge package create/append/inject | POST | signed session, CSRF, bounded files and route scope | `asgi_bridge.py` | JSON bounds, multipart upload, send and audit |
 | MCP | OPTIONS, GET, DELETE, POST | dedicated bearer token and exact CORS origin | `asgi_mcp.py` | denial, 405, initialize, batch, notification and handoff |
 | Unknown direct API | GET, HEAD, POST | JSON 401; POST also requires CSRF before 404 | read/control fallback | legacy-equivalent status and JSON |
@@ -39,6 +39,12 @@ The executable contract is
 isolated loopback port and explicitly asserts status, selected headers, cookies,
 HTML/JSON, streaming bytes, uploads, Owner-injected headers, CSRF denials and
 body-free audit records.
+
+The canonical source gate also parses every script referenced by the Owner HTML
+and requires either an exact Gateway asset allowlist entry or an allowed local
+prefix. Unknown Owner resources return `Cache-Control: no-store`; the mutable
+style, Preact and app entries use the rendered Faryo release version as their
+query key. This prevents a previously cached 404 from requiring hard refresh.
 
 `apps/gateway/server/tests/test_asgi_shutdown.py` keeps a real Owner SSE response
 open, requests Gateway shutdown and requires the server to exit before the

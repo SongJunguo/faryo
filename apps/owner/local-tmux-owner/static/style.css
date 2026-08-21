@@ -157,6 +157,21 @@ textarea::placeholder { color: var(--muted); opacity: .42; }
 .pet-control.pet-carrying::before, .pet-control.pet-send::before { background-position: 25% center; }
 .pet-control.pet-working::before { background-position: 50% center; }
 .pet-control.pet-running::before { background-position: 50% center; animation: pet-running var(--pet-run-speed, 1.12s) ease-in-out infinite; }
+.pet-control.pet-queued::before { background-position: 50% center; animation: pet-running var(--pet-run-speed, .72s) ease-in-out infinite; }
+.pet-control.pet-queued::after {
+  content: "ESC";
+  position: absolute;
+  right: -2px;
+  bottom: -1px;
+  padding: 2px 4px;
+  border: 1px solid color-mix(in srgb, var(--accent) 54%, white);
+  border-radius: 999px;
+  background: var(--accent);
+  color: white;
+  box-shadow: 0 3px 10px rgba(0,0,0,.22);
+  font: 850 8px/1 var(--app-font);
+  letter-spacing: .04em;
+}
 .pet-control.pet-resting::before { background-position: 75% center; }
 .pet-control.pet-offline::before { background-position: 100% center; opacity: .76; filter: saturate(.72); }
 .pet-control.pet-stopping::before { background-position: 75% center; animation: pet-stop-ack .82s ease-out both; }
@@ -1363,6 +1378,11 @@ html[data-faryo-ui="workbench-v2"] .goal-details-objective {
   font: 500 12px/1.5 var(--app-font);
 }
 html[data-faryo-ui="workbench-v2"] .goal-details-list { margin-bottom: 8px; }
+html[data-faryo-ui="workbench-v2"] .startup-card .markdown-body p {
+  margin: 7px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+}
 
 #interactionRoot:empty { display: none; }
 .interaction-backdrop {

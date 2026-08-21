@@ -114,7 +114,7 @@
   let captureController = null, pendingDeferredCapture = null;
   let statusRefreshInFlight = false, activeStatusRefreshController = null, statusRefreshRunId = 0, statusRefreshTimer = null;
   let liveState = 'fallback';
-  let petSending = false, petSendTimer = null, petStopping = false, petStopTimer = null, agentRunning = false, lastPetPhase = '';
+  let petSending = false, petSendTimer = null, petStopping = false, petStopTimer = null, agentRunning = false, queuedSendNowAvailable = false, interruptInFlight = false, lastPetPhase = '';
   let outputActivity = 0, outputActivityTimer = null, lastCaptureSignature = '', lastCompactCapture = null, lastFullCapture = null;
   let outputMode = 'compact', fullLocked = false, preserveErrorUntil = 0, seenInitialPageShow = false, errorTimer = null, currentPromptTip = '';
   let markdownRenderRevision = 0, highlighterRenderFrame = 0;
@@ -194,6 +194,7 @@
   let submitInFlight = false;
   let activeSurfacePanel = null, panelReturnFocus = null;
   let goalDetailsRequestGeneration = 0;
+  let launchErrorVisible = false;
   let immersiveController = null;
   const restoringLivePanels = new WeakSet();
   let questionNavigatorController = null;
@@ -998,6 +999,7 @@
     if (petSending) return 'send';
     if (pendingAttachments.some((item) => ['compressing', 'uploading'].includes(item.status))) return 'carrying';
     if (pendingAttachments.length) return 'carrying';
+    if (queuedSendNowAvailable) return 'queued';
     if (outputMode === 'full' && fullLocked) return 'offline';
     if (promptInput.value.trim() || document.activeElement === promptInput || document.documentElement.classList.contains('keyboard-open')) return 'working';
     if (agentRunning) return 'running';
@@ -1010,14 +1012,16 @@
     const pet = $('petControl');
     if (!pet) return;
     const phase = petPhase();
-    const labels = { stopping: 'stopping', send: 'sending', carrying: 'carrying files', working: 'working', running: 'running', idle: 'online', resting: 'reconnecting', offline: 'offline' };
+    const labels = { stopping: 'stopping', send: 'sending', carrying: 'carrying files', queued: 'queued message; tap to interrupt and send now (Esc)', working: 'working', running: 'running', idle: 'online', resting: 'reconnecting', offline: 'offline' };
     if (phase !== lastPetPhase) {
       lastPetPhase = phase;
       pet.className = `pet-control pet-${phase}`;
       pet.title = `Faryo ${labels[phase] || phase}`;
       pet.setAttribute('aria-label', `${pet.title}; tap to interrupt`);
+      if (phase === 'queued') pet.setAttribute('aria-keyshortcuts', 'Escape');
+      else pet.removeAttribute('aria-keyshortcuts');
     }
-    if (phase === 'running') {
+    if (phase === 'running' || phase === 'queued') {
       const speed = outputActivity >= 3.5 ? '.48s' : outputActivity >= 1.6 ? '.72s' : outputActivity > 0 ? '1.08s' : '1.6s';
       pet.style.setProperty('--pet-run-speed', speed);
     } else if (pet.style.getPropertyValue('--pet-run-speed')) {
@@ -1063,6 +1067,12 @@
     updatePetControl();
   }
 
+  function stopPetStop() {
+    if (petStopTimer) clearTimeout(petStopTimer);
+    petStopTimer = null;
+    petStopping = false;
+  }
+
   function setStatusRefresh(on) { if (statusRefreshTimer) clearInterval(statusRefreshTimer); statusRefreshTimer = null; if (on && !document.hidden) statusRefreshTimer = setInterval(() => refreshStatus({ silent: true }).catch(handleBackgroundError), STATUS_REFRESH_MS); }
   function headerStatusVisible() { return !document.querySelector('header')?.classList.contains('collapsed'); }
   function syncStatusRefresh(refreshNow = false) { const on = headerStatusVisible(); setStatusRefresh(on); if (on && refreshNow) refreshStatus({ silent: true }).catch(handleBackgroundError); }
@@ -1092,6 +1102,10 @@
           agentRunning = nextRunning;
           updatePetControl();
         }
+      }
+      if (Object.prototype.hasOwnProperty.call(capture, 'queuedSendNowAvailable')) {
+        queuedSendNowAvailable = Boolean(capture.queuedSendNowAvailable);
+        updatePetControl();
       }
       if (meta.source === 'refresh' || outputMode === 'compact') {
         renderCaptureWhenSafe(capture, keepBottom);
@@ -1325,8 +1339,10 @@
     const contextUsage = data.contextUsage || {};
     const context = contextStatusModel(contextUsage);
     const weeklyRateLimit = data.weeklyRateLimit || {};
-    const sessionLabel = data.sessionTitle || data.sessionId || 'session unknown';
-    const modelLabel = compactModelLabel(model, data.fastStatus);
+    const sessionLabel = data.sessionTitle || data.sessionId || data.session || 'Starting Codex';
+    const modelLabel = data.agentState === 'starting'
+      ? 'Starting Codex…'
+      : compactModelLabel(model, data.fastStatus);
     selectedSession = data.session || selectedSession;
     if (data.session) {
       const currentUrl = new URL(location.href);
@@ -1369,7 +1385,20 @@
     if ($('detailsOwner')) $('detailsOwner').textContent = ownerLabel;
     if ($('detailsModel')) $('detailsModel').textContent = modelLabel;
     if ($('detailsGit')) $('detailsGit').textContent = gitModel.text;
+    if (data.agentState === 'starting' && outputMode === 'compact' && !lastCompactCapture) {
+      output.classList.add('compact-blocks');
+      output.innerHTML = '<section class="compact-block output startup-card" role="status"><div class="markdown-body"><strong>Starting Codex…</strong><p>The session is open. Faryo will connect automatically when startup finishes.</p></div></section>';
+    }
+    if (data.launchError) {
+      launchErrorVisible = true;
+      setError(String(data.launchError), { timeoutMs: 0 });
+    } else if (launchErrorVisible) {
+      launchErrorVisible = false;
+      preserveErrorUntil = 0;
+      setError('');
+    }
     agentRunning = Boolean(data.agentRunning);
+    queuedSendNowAvailable = Boolean(data.queuedSendNowAvailable);
     updatePetControl();
   }
 
@@ -2197,7 +2226,16 @@
   });
   document.addEventListener('keydown', (event) => {
     trapSurfacePanelFocus(event);
-    if (event.key === 'Escape') { closeDockMenu(); closeSurfacePanels(); }
+    if (event.key !== 'Escape' || event.defaultPrevented) return;
+    const overlayOpen = !dockMenu.classList.contains('hidden')
+      || Boolean(activeSurfacePanel)
+      || document.documentElement.classList.contains('has-pending-interaction');
+    closeDockMenu();
+    closeSurfacePanels();
+    if (!overlayOpen && queuedSendNowAvailable) {
+      event.preventDefault();
+      interruptOrSendQueuedNow();
+    }
   });
   $('refreshBtn').addEventListener('click', async () => {
     try {
@@ -2255,7 +2293,8 @@
     try {
       closeDockMenu();
       playPetSend();
-      await sendWithDeliveryRecovery({ session: submission.session, text: submission.outboundText, clientMessageId: submission.id });
+      const delivery = await sendWithDeliveryRecovery({ session: submission.session, text: submission.outboundText, clientMessageId: submission.id });
+      if (delivery.deliveryState === 'queued') queuedSendNowAvailable = true;
       clearDeliveredPromptDraft(submission);
       clearPendingSubmission(submission);
       attachmentController.clearSubmitted(submission.attachmentPaths);
@@ -2287,27 +2326,40 @@
     submitPrompt();
   });
 
-  $('petControl').addEventListener('click', async () => {
+  async function interruptOrSendQueuedNow() {
+    if (interruptInFlight) return;
+    interruptInFlight = true;
     const wasRunning = agentRunning;
+    const wasQueued = queuedSendNowAvailable;
     try {
       stopPetSend();
       playPetStop();
       const data = await api('/api/interrupt', { method: 'POST', body: JSON.stringify({ session: selectedSession }) });
-      agentRunning = data.interrupted ? false : wasRunning;
+      queuedSendNowAvailable = data.queuedFollowupExpedited ? false : (data.interrupted ? false : wasQueued);
+      agentRunning = data.queuedFollowupExpedited ? true : (data.interrupted ? false : wasRunning);
+      if (data.queuedFollowupExpedited) {
+        stopPetStop();
+        playPetSend();
+      }
       if (!data.interrupted) {
-        petStopping = false;
+        stopPetStop();
         updatePetControl();
       }
       refreshStatus({ silent: true }).catch(handleBackgroundError);
       refreshCapture(currentCaptureLines(), { silent: true }).catch(handleBackgroundError);
       setTimeout(() => refreshCapture(currentCaptureLines(), { silent: true }).catch(handleBackgroundError), 500);
     } catch (err) {
-      petStopping = false;
+      stopPetStop();
       agentRunning = wasRunning;
+      queuedSendNowAvailable = wasQueued;
       updatePetControl();
       setError(userErrorMessage(err));
+    } finally {
+      interruptInFlight = false;
     }
-  });
+  }
+
+  $('petControl').addEventListener('click', interruptOrSendQueuedNow);
 
 
   const statusCollapseKey = 'rdStatusCollapsedV2';

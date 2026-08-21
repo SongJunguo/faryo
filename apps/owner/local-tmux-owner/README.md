@@ -134,6 +134,12 @@ follow-up (see the [official interactive shortcuts](https://learn.chatgpt.com/do
 An idle Enter may be confirmed when the exact text leaves the active composer.
 A working Tab requires a new exact queued-follow-up occurrence or a new exact
 rollout user event; an old identical queue item is not sufficient evidence.
+When the real TUI additionally prints `press esc to interrupt and send
+immediately`, status/capture expose only a boolean `queuedSendNowAvailable`.
+The squirrel shows an ESC badge; its click and an unobstructed desktop Escape
+key call the same interrupt endpoint. The response distinguishes
+`queuedFollowupExpedited` from an ordinary interrupt. Faryo still exposes no
+queue list/edit/reorder/cancel API.
 
 Rebuild and test the committed browser bundle from the repository root with:
 

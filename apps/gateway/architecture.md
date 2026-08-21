@@ -105,8 +105,9 @@ Gateway host: the machine reached by the public HTTPS edge.
   nonce-protected JSON map of routes the current user may access.
 - A local Preact 10.29.8 bundle owns only the four keyed package/launcher/
   active-session/history-session list roots. Its exact build, hash, gzip bound
-  and MIT notice are source-checked. Attention, directory/sheet state and Owner
-  transcript rendering do not share a second framework state tree.
+  and MIT notice are source-checked. Owner has a separate focused Preact bundle
+  for composer/commands/interactions/status; Gateway proxies it through the same
+  authenticated route, while the transcript remains an independent island.
 - Gateway owns the root-scoped `standalone` PWA manifest and service worker.
   Owner session pages reference that same manifest so installed navigation stays
   within one authenticated app identity.
@@ -116,6 +117,12 @@ Gateway host: the machine reached by the public HTTPS edge.
   routes affect session resume and new-session selection only.
 - `/txy/?session=...`, `/txy/api/...`, and required owner static assets proxy
   to the Owner running on the Gateway host itself at `127.0.0.1:8765`.
+- Owner HTML script references are source-checked against the Gateway allowlist.
+  Mutable Owner entry assets use the release version as a cache key; rejected
+  resources are `no-store`, so ordinary reload/new-tab update is sufficient.
+- Start/Resume returns a fast accepted Starting receipt after tmux creation.
+  Owner's restart-safe, pane-identity monitor owns readiness and failure; Gateway
+  does not hold the browser request open while Codex starts MCP servers.
 - `/hp/?session=...`, `/hp/api/...`, and required owner static assets proxy to
   the HP reverse tunnel on `127.0.0.1:18766`. This port must be provided by the
   real HP reverse tunnel; do not bridge it to the local Owner port.
