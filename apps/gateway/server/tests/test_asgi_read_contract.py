@@ -568,8 +568,14 @@ class AsgiReadContractTest(unittest.TestCase):
         self.assert_contract("/lab/?session=fixture")
 
     def test_unknown_owner_resource_is_not_proxied(self) -> None:
-        asgi_result = self.request(self.asgi_base, "/lab/private.txt", authenticated=True)
+        asgi_result = self.request(
+            self.asgi_base,
+            "/lab/private.txt",
+            authenticated=True,
+        )
         self.assertEqual(asgi_result[0], HTTPStatus.NOT_FOUND)
+        headers = self.selected_headers(asgi_result[1])
+        self.assertEqual(headers.get("cache-control"), ["no-store"])
 
     def test_session_history_archive_restore_and_audit_contract_match(self) -> None:
         csrf = gateway_security.csrf_token(self.config.cookie_secret, "tester", self.config.auth_epoch("tester"))

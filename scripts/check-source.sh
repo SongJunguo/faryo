@@ -418,6 +418,8 @@ assert "data-faryo-fetch-href" in app, "protected file links must use deferred a
 assert "data-faryo-fetch-src" in app, "protected images must use deferred authenticated fetches"
 assert "target.searchParams.delete('token')" in app, "protected resource fetches must strip query tokens"
 assert 'id="statusShellRoot"' in index and 'id="quotaText"' in owner_status_source and 'id="detailsQuota"' in index, "Owner must expose Preact weekly quota and details"
+for asset in ("style.css", "owner-ui.js", "app.js"):
+    assert f'{asset}?v=__FARYO_RELEASE_VERSION__' in index, f"Owner release must cache-bust {asset}"
 owner_static_match = re.search(r"OWNER_STATIC_FILES\s*=\s*\{([^}]*)\}", gateway)
 assert owner_static_match, "Gateway Owner static allowlist is unavailable"
 owner_static_files = set(re.findall(r'"([A-Za-z0-9._-]+)"', owner_static_match.group(1)))

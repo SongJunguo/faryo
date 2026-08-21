@@ -1,6 +1,7 @@
 import { withBrowser } from "../../../../tools/browser-harness/playwright.mjs";
 
 const targetUrl = process.env.FARYO_INTERACTION_URL;
+const gatewayCookie = process.env.FARYO_INTERACTION_COOKIE || "";
 const chromeBin = process.env.CHROME_BIN || "/usr/bin/google-chrome";
 const width = Number(process.env.FARYO_INTERACTION_WIDTH || 390);
 const height = Number(process.env.FARYO_INTERACTION_HEIGHT || 844);
@@ -11,6 +12,7 @@ await withBrowser(
     executablePath: chromeBin,
     viewport: { width, height },
     mobile: width < 720,
+    extraHTTPHeaders: gatewayCookie ? { Cookie: gatewayCookie } : {},
   },
   async ({ page }) => {
     await page.goto(targetUrl, { waitUntil: "domcontentloaded" });
@@ -19,6 +21,14 @@ await withBrowser(
         document.documentElement.dataset.faryoAppReady === "1" &&
         document.documentElement.dataset.faryoInteractionUi === "preact" &&
         Boolean(document.getElementById("promptInput")),
+      null,
+      { timeout: 20_000 },
+    );
+    await page.waitForFunction(
+      () => {
+        const model = document.getElementById("modelText")?.textContent || "";
+        return Boolean(model) && !/(connecting|loading)/i.test(model);
+      },
       null,
       { timeout: 20_000 },
     );
@@ -41,9 +51,27 @@ await withBrowser(
     const prompt = page.locator("#promptInput");
     await prompt.fill("/model");
     await page.locator("#sendBtn").click();
-    await page
-      .locator('.interaction-backdrop[data-interaction-kind="model_select"]')
-      .waitFor({ timeout: 10_000 });
+    await page.waitForFunction(
+      () =>
+        Boolean(
+          document.querySelector(
+            '.interaction-backdrop[data-interaction-kind="model_select"]',
+          ),
+        ) ||
+        Boolean(
+          document.getElementById("errorBox")?.textContent &&
+          !document.getElementById("errorBox")?.classList.contains("hidden"),
+        ),
+      null,
+      { timeout: 10_000 },
+    );
+    const modelStartError = await page
+      .locator("#errorBox")
+      .evaluate((element) =>
+        element.classList.contains("hidden") ? "" : element.textContent || "",
+      );
+    if (modelStartError)
+      throw new Error(`Model interaction start failed: ${modelStartError}`);
     const model = await page.evaluate(() => ({
       options: document.querySelectorAll(".interaction-option").length,
       promptValue: document.getElementById("promptInput").value,

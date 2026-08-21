@@ -40,6 +40,7 @@ class Runtime:
         self.literals = []
         self.now = 0.0
         self.ready = False
+        self.ready_sequence = []
         self.draft = False
         self.command_text = ""
         self.on_key = None
@@ -75,6 +76,8 @@ class Runtime:
         self.screen = f"› {text}"
 
     def ready_for_input(self, _config):
+        if self.ready_sequence:
+            return self.ready_sequence.pop(0)
         return self.ready
 
     def composer_has_draft(self, _config):
@@ -198,6 +201,41 @@ class InteractionServiceTest(unittest.TestCase):
         self.assertEqual(["Enter"], self.runtime.keys)
         self.assertEqual("pending", result["commandState"])
         self.assertEqual("model_select", result["interaction"]["kind"])
+
+    def test_transient_not_ready_frame_is_rechecked_without_retrying_enter(self):
+        self.runtime.screen = "› Ask Codex"
+        self.runtime.ready_sequence = [False, False, True]
+
+        def transition(key):
+            if key == "Enter":
+                self.runtime.command_text = ""
+                self.runtime.screen = MODEL_A
+
+        self.runtime.on_key = transition
+        result = self.service.begin_command(
+            self.config,
+            command="/model",
+            client_request_id="command-ready-race-1",
+        )
+
+        self.assertEqual("pending", result["commandState"])
+        self.assertEqual(["/model"], self.runtime.literals)
+        self.assertEqual(["Enter"], self.runtime.keys)
+
+    def test_persistently_not_ready_command_sends_no_text_or_key(self):
+        self.runtime.screen = "› Ask Codex"
+        self.runtime.ready = False
+
+        with self.assertRaises(interaction_service.InteractionServiceError) as raised:
+            self.service.begin_command(
+                self.config,
+                command="/model",
+                client_request_id="command-not-ready-1",
+            )
+
+        self.assertEqual(409, raised.exception.status)
+        self.assertEqual([], self.runtime.literals)
+        self.assertEqual([], self.runtime.keys)
 
     def test_inline_command_returns_completed_without_rollout_evidence(self):
         self.runtime.screen = "› Ask Codex"

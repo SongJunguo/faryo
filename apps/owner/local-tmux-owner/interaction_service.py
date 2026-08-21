@@ -361,7 +361,23 @@ class InteractionService:
                     "Codex is already waiting for an interaction",
                     HTTPStatus.CONFLICT,
                 )
-            if not self.runtime.ready_for_input(config):
+            ready = self.runtime.ready_for_input(config)
+            if not ready:
+                turn_running = getattr(self.runtime, "turn_running", None)
+                readiness_deadline = self._now() + min(0.75, self.transition_timeout)
+                while self._now() < readiness_deadline:
+                    if callable(turn_running) and turn_running(config):
+                        break
+                    self._sleep(self.poll_interval)
+                    if self.snapshot(config).get("interaction") is not None:
+                        raise InteractionServiceError(
+                            "Codex is already waiting for an interaction",
+                            HTTPStatus.CONFLICT,
+                        )
+                    if self.runtime.ready_for_input(config):
+                        ready = True
+                        break
+            if not ready:
                 raise InteractionServiceError("Codex is not ready for a local command", HTTPStatus.CONFLICT)
             if self.runtime.composer_has_draft(config):
                 raise InteractionServiceError(

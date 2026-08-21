@@ -47,6 +47,14 @@ class OwnerProxyRoutes:
             stream.close()
         return len(streams)
 
+    @staticmethod
+    def not_found() -> Response:
+        return Response(
+            "not found",
+            status_code=HTTPStatus.NOT_FOUND,
+            headers={"Cache-Control": "no-store"},
+        )
+
     async def proxy_get(self, request: Request, current: str, route: str, upstream_path: str) -> Response:
         try:
             stream = await to_thread.run_sync(
@@ -111,14 +119,14 @@ class OwnerProxyRoutes:
         route = str(request.path_params["route"])
         tail = str(request.path_params.get("tail") or "")
         if route not in self.legacy.BACKENDS:
-            return Response("not found", status_code=HTTPStatus.NOT_FOUND)
+            return self.not_found()
         allowed = (
             (not tail and bool(request.query_params.get("session")))
             or tail in self.legacy.OWNER_STATIC_FILES
             or tail.startswith(self.legacy.OWNER_STATIC_PREFIXES)
         )
         if not allowed:
-            return Response("not found", status_code=HTTPStatus.NOT_FOUND)
+            return self.not_found()
         if not self.config.allowed_route(current, route):
             return self.support.html_page(
                 request,
