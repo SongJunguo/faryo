@@ -5,14 +5,16 @@
 
 ## Active
 
+- 无。
+
+## Completed or maintenance mode
+
 - [`v1.8-mobile-keyboard-app-shell-plan.md`](v1.8-mobile-keyboard-app-shell-plan.md)：
   以单一会话滚动区、Grid 锚定的透明 composer 和浏览器原生
   `interactive-widget=resizes-content` 替换移动端 fixed/VisualViewport/VirtualKeyboard inset
   像素补偿；无线 CDP 已完成真实 Edge A/B，v1.8.3 已证明原生 resize 与最小安全聚焦间距，
   v1.8.4 实机发现缺少共享 Grid 列并已回滚；v1.8.5 透明输入区、动态尾部留白、全宽同列、
-  长历史、可靠发送、服务和 tmux 实机门已通过，等待推送 `main`。
-
-## Completed or maintenance mode
+  长历史、可靠发送、服务、tmux 与 `main` 推送均已完成。
 
 - [`v1.7-preact-transcript-migration-plan.md`](v1.7-preact-transcript-migration-plan.md)：
   已建立 Owner ConversationStore 和 Preact transcript 生命周期边界，修复折叠工作站名称与
