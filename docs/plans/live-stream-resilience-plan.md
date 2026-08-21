@@ -1,6 +1,6 @@
 # Live Stream Resilience Plan
 
-状态：实施完成，等待 v1.6.6 发布门禁
+状态：已完成、部署并通过 v1.6.6 发布门禁
 
 ## 问题
 
@@ -40,4 +40,7 @@ Owner 的本地 SSE 会持续发送捕获变化并每 10 秒发送心跳，但�
   BFCache `pageshow` 和普通重新加载；不读取或输出对话正文。
 - 真实 Owner 与经过 Gateway SSE 代理的 390x844 浏览器路径均通过故障注入：每次观察到
   7 次有界捕获、4 次流连接，并在普通重新加载后取得当前版本资产。
-- 完整功能测试已通过 Owner 195、Gateway 115、CLI 56；发布元数据更新后的最终门禁待执行。
+- 完整 source gate 通过 Owner 195、Gateway 115、CLI 56，以及格式、lint、TypeScript 和
+  本地浏览器资产检查。
+- GitHub Source CI `32469357084` 在 Python 3.10 与 3.13 上通过同一套门禁。
+- 本机 v1.6.6 部署通过 22 项 doctor 检查，部署前后的既有 tmux pane PID 与几何保持不变。

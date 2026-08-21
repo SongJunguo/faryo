@@ -5,10 +5,13 @@
 
 ## Active
 
-- [`live-stream-resilience-plan.md`](live-stream-resilience-plan.md)：为移动浏览器、网络切换和
-  半开代理连接增加 SSE 心跳超时、去重安全捕获与前台自动恢复；等待 v1.6.6 最终发布门禁。
+当前没有未完成的版本计划。
 
 ## Completed or maintenance mode
+
+- [`live-stream-resilience-plan.md`](live-stream-resilience-plan.md)：为移动浏览器、网络切换和
+  半开代理连接增加 SSE 心跳超时、去重安全捕获与前台自动恢复；已完成真实 Owner/Gateway
+  故障注入、普通重新加载、部署和 v1.6.6 发布门禁。
 
 - [`codex-auto-update-runtime-plan.md`](codex-auto-update-runtime-plan.md)：动态解析 NVM
   default，启动前串行自动更新，失败后继续旧版，并同步新版命令目录与 App Server；已完成
