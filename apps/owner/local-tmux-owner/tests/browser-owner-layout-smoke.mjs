@@ -327,7 +327,7 @@ await withBrowser(
       );
     }
 
-    const dynamicComposer = await page.evaluate(async () => {
+    const dynamicComposerStart = await page.evaluate(() => {
       const main = document.querySelector("main");
       const shell = document.querySelector(".prompt-shell");
       main.scrollTop = main.scrollHeight;
@@ -337,10 +337,29 @@ await withBrowser(
         ),
       );
       shell.style.minHeight = "132px";
-      await new Promise((resolve) =>
-        requestAnimationFrame(() => requestAnimationFrame(resolve)),
-      );
-      await new Promise((resolve) => requestAnimationFrame(resolve));
+      return { before };
+    });
+    await page.waitForFunction(
+      ({ before }) => {
+        const root = document.documentElement;
+        const main = document.querySelector("main");
+        const footer = document.querySelector("footer");
+        const reserve = Number.parseFloat(
+          getComputedStyle(root).getPropertyValue("--faryo-composer-reserve"),
+        );
+        const footerHeight = footer.getBoundingClientRect().height;
+        const tailGap = main.scrollHeight - main.scrollTop - main.clientHeight;
+        return (
+          reserve > before &&
+          Math.abs(reserve - Math.ceil(footerHeight)) <= 1 &&
+          tailGap <= 1
+        );
+      },
+      dynamicComposerStart,
+      { timeout: 3000 },
+    );
+    const dynamicComposer = await page.evaluate(({ before }) => {
+      const main = document.querySelector("main");
       const after = Number.parseFloat(
         getComputedStyle(document.documentElement).getPropertyValue(
           "--faryo-composer-reserve",
@@ -353,7 +372,7 @@ await withBrowser(
           .height,
         tailGap: main.scrollHeight - main.scrollTop - main.clientHeight,
       };
-    });
+    }, dynamicComposerStart);
     if (
       dynamicComposer.after <= dynamicComposer.before ||
       Math.abs(
