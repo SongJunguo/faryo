@@ -22,6 +22,7 @@ for value in (str(APP_DIR), str(REPO_ROOT / "src")):
         sys.path.insert(0, value)
 
 import owner_asgi
+import run_owner_asgi
 import server
 
 
@@ -110,6 +111,13 @@ def free_port() -> int:
 
 
 class OwnerAsgiTest(unittest.TestCase):
+    def test_startup_log_url_never_contains_authentication_material(self) -> None:
+        value = run_owner_asgi.public_listen_url("127.0.0.1", 8765)
+
+        self.assertEqual(value, "http://127.0.0.1:8765/")
+        self.assertNotIn("token", value.lower())
+        self.assertNotIn("?", value)
+
     def request(self, method: str, path: str, body: dict | None = None, *, token: bool = False):
         connection = http.client.HTTPConnection("127.0.0.1", self.port, timeout=3)
         headers = {}

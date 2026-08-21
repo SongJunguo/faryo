@@ -108,7 +108,7 @@ Historical distribution and non-Codex platform paths may remain in the tree for
 upstream compatibility, but they are not part of this project's current validation
 or support claims.
 
-Current source line: **Faryo 1.9.0**. Latest tagged source release:
+Current source line: **Faryo 1.9.1**. Latest tagged source release:
 [Faryo 1.6.7](https://github.com/SongJunguo/faryo-codex-web-ui/releases/tag/v1.6.7).
 
 ## Current Functionality
@@ -435,7 +435,7 @@ layer while keeping Faryo's inner login enabled.
 
 The `main` branch was revalidated on 2026-08-22 with privacy-safe fixtures:
 
-- canonical source gate: 219 Owner, 118 Gateway, and 60 unified-CLI Python tests,
+- canonical source gate: 220 Owner, 118 Gateway, and 60 unified-CLI Python tests,
   plus Ruff, ESLint, Prettier, TypeScript and reproducible local browser bundles;
 - isolated real Codex App Server: initialize/capability fallback, body-delta
   streaming, keyed final convergence, Markdown/KaTeX/code, body-free replay

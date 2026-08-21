@@ -26,6 +26,12 @@ class FaryoOwnerServer(uvicorn.Server):
         await super().shutdown(sockets)
 
 
+def public_listen_url(host: str, port: int) -> str:
+    """Return a credential-free startup URL suitable for the systemd journal."""
+
+    return f"http://{host}:{port}/"
+
+
 def main() -> int:
     args = core.parse_args()
     token = args.token or core.secrets.token_urlsafe(24)
@@ -41,10 +47,7 @@ def main() -> int:
         print(f"warning: {exc}", file=core.sys.stderr, flush=True)
     core.refresh_command_catalog_if_needed()
     app = owner_asgi.create_app(core, config)
-    print(
-        f"Faryo Owner ASGI listening on http://{args.host}:{args.port}/?token=<private-token>",
-        flush=True,
-    )
+    print(f"Faryo Owner ASGI listening on {public_listen_url(args.host, args.port)}", flush=True)
     print(f"session={args.session} pane_width={config.pane_width}", flush=True)
     uvicorn_config = uvicorn.Config(
         app,

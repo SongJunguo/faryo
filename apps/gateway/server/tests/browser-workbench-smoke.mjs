@@ -654,7 +654,7 @@ await withBrowser({
     for (let attempt = 0; attempt < 250; attempt += 1) {
       await delay(100);
       try {
-        launched = await evaluate(`(() => {
+        launched = await evaluate(`(async () => {
           const route = location.pathname.split('/').filter(Boolean)[0] || '';
           const session = new URLSearchParams(location.search).get('session') || '';
           const uiReady = document.documentElement.dataset.faryoAppReady === '1'
@@ -665,7 +665,22 @@ await withBrowser({
           const model = document.getElementById('modelText')?.textContent || '';
           const codexReady = /^(?:GPT|o\d)/i.test(model)
             && !/(?:starting|connecting|loading)/i.test(model);
-          return { route, session, uiReady, captureSource, modelReady: Boolean(codexReady), ready: /^(?:hp|pc|txy)$/.test(route) && /^faryo[1-9][0-9]*$/.test(session) && uiReady && codexReady };
+          let status = {};
+          if (/^(?:hp|pc|txy)$/.test(route) && /^faryo[1-9][0-9]*$/.test(session)) {
+            try {
+              const response = await fetch('/' + route + '/api/status?session=' + encodeURIComponent(session), { cache: 'no-store' });
+              status = await response.json();
+            } catch (_error) {}
+          }
+          const webManagedReady = status.backend === 'web-managed'
+            && ['waiting', 'running', 'pending_interaction'].includes(status.agentState);
+          return {
+            route, session, uiReady, captureSource,
+            backend: status.backend || '', agentState: status.agentState || '',
+            modelReady: Boolean(codexReady),
+            ready: /^(?:hp|pc|txy)$/.test(route) && /^faryo[1-9][0-9]*$/.test(session)
+              && uiReady && (webManagedReady || codexReady),
+          };
         })()`);
       } catch (_error) {
         launched = {};
@@ -684,7 +699,7 @@ await withBrowser({
           });
         })()`);
       }
-      throw new Error(`Start Codex did not reach a managed ready session: ${JSON.stringify({ captureSource: launched.captureSource || '', modelReady: Boolean(launched.modelReady) })}`);
+      throw new Error(`Start Codex did not reach a managed ready session: ${JSON.stringify({ captureSource: launched.captureSource || '', backend: launched.backend || '', agentState: launched.agentState || '', modelReady: Boolean(launched.modelReady) })}`);
     }
     const cleanup = await evaluate(`(async () => {
       const csrfResponse = await fetch('/api/csrf', { cache: 'no-store' });
