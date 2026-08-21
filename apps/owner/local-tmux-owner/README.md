@@ -163,6 +163,22 @@ FARYO_SMOKE_URL='http://127.0.0.1:8765/?token=<token>&session=<session>' \
   node apps/owner/local-tmux-owner/tests/browser-katex-smoke.mjs
 ```
 
+The privacy-safe live-resilience browser check holds an authenticated SSE open
+without heartbeats, requires deduplicated safety capture and automatic retry,
+then verifies online, BFCache `pageshow`, and ordinary-reload recovery:
+
+```bash
+FARYO_SMOKE_URL='http://127.0.0.1:8765/?token=<token>&session=<session>' \
+FARYO_SMOKE_EXPECT_RELEASE=v1.6.6 \
+FARYO_SMOKE_EXPECT_CAPTURE_REVISION=faryo-owner-capture-2 \
+  node apps/owner/local-tmux-owner/tests/browser-live-resilience.mjs
+```
+
+The same check accepts `FARYO_SMOKE_LOGIN_USER` and
+`FARYO_SMOKE_LOGIN_PASSWORD_FILE` when its URL is an authenticated Gateway
+route, so the production SSE proxy path can be exercised without exposing a
+credential in process output.
+
 Direct Owner local files and images are fetched with `X-Owner-Token` and opened
 through temporary Blob URLs; the credential is not copied into resource DOM
 attributes. The entry token is moved to tab-scoped storage and removed from the
