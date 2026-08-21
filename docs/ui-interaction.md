@@ -326,6 +326,7 @@ The maintained matrix includes:
   inner-main scrollTop zero, fixed composer visibility and stable refresh anchor.
 
 Detailed evidence is maintained in
+[`plans/v1.6-structured-interactions-and-owner-ui-plan.md`](plans/v1.6-structured-interactions-and-owner-ui-plan.md),
 [`plans/deepseek-inspired-ui-plan.md`](plans/deepseek-inspired-ui-plan.md) and
 [`plans/codex-reliability-hardening-plan.md`](plans/codex-reliability-hardening-plan.md),
 plus [`plans/full-history-navigation-plan.md`](plans/full-history-navigation-plan.md).

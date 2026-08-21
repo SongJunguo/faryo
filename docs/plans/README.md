@@ -5,11 +5,14 @@
 
 ## Active
 
-- [`v1.6-structured-interactions-and-owner-ui-plan.md`](v1.6-structured-interactions-and-owner-ui-plan.md)：
-  建立统一 Codex pending-interaction 协议与 TUI 适配器，修复 `/model`、历史恢复目录、
-  启动就绪和移动键盘问题，并把 Owner 动态交互壳增量迁移到 Preact + TypeScript + Vite。
+当前没有未完成的版本计划。
 
 ## Completed or maintenance mode
+
+- [`v1.6-structured-interactions-and-owner-ui-plan.md`](v1.6-structured-interactions-and-owner-ui-plan.md)：
+  统一 Codex pending interaction、动态 slash catalog、Goal/Git/history/resume 修复、Owner
+  Preact/TypeScript shell、快速异步启动、普通刷新资产版本化与 queued Esc Send now；已完成
+  source/browser/真实 Codex/部署门并发布 v1.6.0。
 
 - [`github-standalone-renaming-and-discoverability-plan.md`](github-standalone-renaming-and-discoverability-plan.md)：
   已永久脱离 fork network，把独立 GitHub 仓库和本地目录统一为 `faryo-codex-web-ui`，保留上游归属
