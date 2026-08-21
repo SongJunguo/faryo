@@ -76,6 +76,9 @@ const minMemoryReferences = Number(process.env.FARYO_SMOKE_MIN_MEMORY_REFERENCES
 const minQuestionMarkers = Number(process.env.FARYO_SMOKE_MIN_QUESTION_MARKERS || 0);
 const expectedHistoryTurns = Number(process.env.FARYO_SMOKE_EXPECT_HISTORY_TURNS || 0);
 const historyRequiresFormula = process.env.FARYO_SMOKE_HISTORY_REQUIRE_FORMULA !== '0';
+const requireDeferredRichBlocks = process.env.FARYO_SMOKE_REQUIRE_DEFERRED_RICH === '1';
+const maxInitialRichBlocks = Number(process.env.FARYO_SMOKE_MAX_INITIAL_RICH || 0);
+const checkLongHistoryResize = process.env.FARYO_SMOKE_CHECK_LONG_HISTORY_RESIZE === '1';
 const minRenderFallbacks = Number(process.env.FARYO_SMOKE_MIN_RENDER_FALLBACKS || 0);
 const maxBareTex = Number(process.env.FARYO_SMOKE_MAX_BARE_TEX ?? -1);
 const screenshotTex = process.env.FARYO_SMOKE_SCREENSHOT_TEX || expectedTex.at(-1) || '';
@@ -553,6 +556,11 @@ try {
             reused: Number(output?.dataset.compactReused || -1),
             stable: Number(output?.dataset.compactStable || -1),
           },
+          richBlockState: {
+            rendered: output?.querySelectorAll(':scope > [data-faryo-rich-state="rendered"]').length || 0,
+            deferred: output?.querySelectorAll(':scope > [data-faryo-rich-state="deferred"]').length || 0,
+            descendants: output?.querySelectorAll('*').length || 0,
+          },
           questionNavigation: {
             markerCount: questionMarkers.length,
             loadedQuestionCount: output?.querySelectorAll('.compact-block.user').length || 0,
@@ -780,6 +788,10 @@ try {
     console.log('faryo-browser-refresh-latest=PASS reload=bottom settled=bottom manual=preserved');
   }
   if (expectedHistoryTurns > 0) {
+    if ((requireDeferredRichBlocks && Number(state.richBlockState?.deferred || 0) < 1)
+      || (maxInitialRichBlocks > 0 && Number(state.richBlockState?.rendered || 0) > maxInitialRichBlocks)) {
+      throw new Error(`Long-history rich DOM was not bounded: ${JSON.stringify(state.richBlockState)}`);
+    }
     const initialLoaded = Number(state.questionNavigation?.loadedQuestionCount || 0);
     if (state.questionNavigation?.markerCount !== expectedHistoryTurns
       || Number(state.questionNavigation?.total || 0) !== expectedHistoryTurns
@@ -799,6 +811,23 @@ try {
           key: anchor.dataset.faryoBlockKey,
           top: anchor.getBoundingClientRect().top,
         } : null;
+        window.__faryoHistoryAnchorTimeline = [];
+        let samples = 0;
+        const sampleAnchor = () => {
+          const target = anchor?.dataset.faryoBlockKey
+            ? [...document.querySelectorAll('#output > [data-faryo-block-key]')]
+              .find((item) => item.dataset.faryoBlockKey === anchor.dataset.faryoBlockKey)
+            : null;
+          window.__faryoHistoryAnchorTimeline.push({
+            frame: samples,
+            top: target ? Math.round(target.getBoundingClientRect().top) : null,
+            scrollTop: Math.round(scroller.scrollTop),
+            blocks: document.querySelectorAll('#output > [data-faryo-block-key]').length,
+          });
+          samples += 1;
+          if (samples < 24) requestAnimationFrame(sampleAnchor);
+        };
+        requestAnimationFrame(sampleAnchor);
         scroller.dispatchEvent(new Event('scroll'));
       })()`,
     });
@@ -817,6 +846,12 @@ try {
             cursorRequest: requests.some((url) => url.includes('/api/conversation-history') && /[?&]cursor=/.test(url)),
             anchorPreserved: Boolean(target && Math.abs(anchorDelta) <= 3),
             anchorDelta,
+            anchorState: target?.dataset.faryoRichState || '',
+            anchorTop: target ? Math.round(target.getBoundingClientRect().top) : null,
+            anchorHeight: target ? Math.round(target.getBoundingClientRect().height) : null,
+            precedingBlocks: target ? [...target.parentElement.children].indexOf(target) : -1,
+            deferredBlocks: document.querySelectorAll('#output > [data-faryo-rich-state="deferred"]').length,
+            anchorTimeline: window.__faryoHistoryAnchorTimeline || [],
             scrollTop: document.getElementById('outputWrap')?.scrollTop || 0,
           };
         })()`,
@@ -854,6 +889,14 @@ try {
             firstLoaded: Boolean(first && !first.classList.contains('unloaded') && target),
             firstActive: first?.getAttribute('aria-current') === 'step',
             formulaRendered: Boolean(answer?.querySelector('.katex')),
+            targetState: target?.dataset.faryoRichState || '',
+            answerState: answer?.dataset.faryoRichState || '',
+            nextBlocks: target ? [...document.querySelectorAll('#output > *')]
+              .slice([...document.querySelectorAll('#output > *')].indexOf(target), [...document.querySelectorAll('#output > *')].indexOf(target) + 5)
+              .map((item) => ({ className: item.className, state: item.dataset.faryoRichState || '' })) : [],
+            activeIndex: document.querySelector('#questionNavMarkers .question-nav-marker[aria-current="step"]')?.dataset.questionIndex || '',
+            targetTop: target ? Math.round(target.getBoundingClientRect().top) : null,
+            scrollTop: Math.round(document.getElementById('outputWrap')?.scrollTop || 0),
             aroundRequest: historyRequests.some((url) => /[?&]around=0(?:&|$)/.test(url)),
             pageHorizontalOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth + 1,
           };
@@ -898,6 +941,55 @@ try {
       throw new Error(`Full-history eventual completeness failed: ${JSON.stringify(finalHistory)}`);
     }
     console.log(`faryo-browser-full-history=PASS total=${expectedHistoryTurns} initial=${initialLoaded} preloaded=${preloadedHistory.loadedQuestionCount} loaded=${finalHistory.loadedQuestionCount} lazy-oldest=PASS`);
+    if (checkLongHistoryResize) {
+      await delay(900);
+      await send('Runtime.evaluate', {
+        expression: `(() => {
+          window.__faryoResizeLongTasks = [];
+          window.__faryoResizeObserver = new PerformanceObserver((list) => {
+            for (const entry of list.getEntries()) window.__faryoResizeLongTasks.push(Math.round(entry.duration));
+          });
+          window.__faryoResizeObserver.observe({ entryTypes: ['longtask'] });
+        })()`,
+      });
+      const resizeSteps = [
+        [390, 844, 1], [430, 820, 1.25], [680, 760, 1], [920, 780, 1.5],
+        [1440, 900, 1], [1080, 820, 1.25], [760, 760, 1], [390, 844, 1],
+      ];
+      for (let cycle = 0; cycle < 3; cycle += 1) {
+        for (const [width, height, deviceScaleFactor] of resizeSteps) {
+          await send('Emulation.setDeviceMetricsOverride', {
+            width, height, deviceScaleFactor, mobile: width < 720,
+          });
+          await delay(24);
+        }
+      }
+      await delay(500);
+      const resizeResult = await send('Runtime.evaluate', {
+        expression: `(() => {
+          window.__faryoResizeObserver?.disconnect();
+          const tasks = window.__faryoResizeLongTasks || [];
+          const output = document.getElementById('output');
+          return {
+            rendered: output?.querySelectorAll(':scope > [data-faryo-rich-state="rendered"]').length || 0,
+            deferred: output?.querySelectorAll(':scope > [data-faryo-rich-state="deferred"]').length || 0,
+            descendants: output?.querySelectorAll('*').length || 0,
+            markerCount: document.querySelectorAll('#questionNavMarkers .question-nav-marker').length,
+            longTasks: tasks.length,
+            maxLongTask: Math.max(0, ...tasks),
+            horizontalOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth + 1,
+          };
+        })()`,
+        returnByValue: true,
+      });
+      const resized = resizeResult.result?.value || {};
+      if (resized.rendered > 14 || resized.deferred < 1 || resized.descendants > 12000
+        || resized.markerCount !== expectedHistoryTurns || resized.maxLongTask > 400
+        || resized.horizontalOverflow) {
+        throw new Error(`Long-history resize budget failed: ${JSON.stringify(resized)}`);
+      }
+      console.log(`faryo-browser-long-history-resize=PASS rendered=${resized.rendered} deferred=${resized.deferred} descendants=${resized.descendants} max-long-task=${resized.maxLongTask}ms`);
+    }
   }
   if (checkOwnerLayout) {
     const layout = state.ownerLayout || {};

@@ -5,7 +5,9 @@
 
 ## Active
 
-当前没有未完成的版本计划。
+- [`long-conversation-rendering-plan.md`](long-conversation-rendering-plan.md)：参考 DeepSeek
+  Harness 的稳定 key、可见窗口、实测高度与前插锚点契约，为长 Markdown/KaTeX 对话建立
+  有界富 DOM，并缓存问题导航几何；正在实施和验证。
 
 ## Completed or maintenance mode
 

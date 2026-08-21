@@ -142,6 +142,7 @@ release_checks() {
     "$ROOT/apps/owner/local-tmux-owner/static/owner/api-client.mjs" \
     "$ROOT/apps/owner/local-tmux-owner/static/owner/attachment-controller.mjs" \
     "$ROOT/apps/owner/local-tmux-owner/static/owner/history-controller.mjs" \
+    "$ROOT/apps/owner/local-tmux-owner/static/owner/rich-block-controller.mjs" \
     "$ROOT/apps/owner/local-tmux-owner/static/owner/capture-controller.mjs" \
     "$ROOT/apps/owner/local-tmux-owner/static/owner/composer-delivery.mjs" \
     "$ROOT/apps/owner/local-tmux-owner/static/owner/goal-status.mjs" \
@@ -187,6 +188,7 @@ release_checks() {
   "$NODE_BIN" --test "$ROOT/apps/owner/local-tmux-owner/tests/api-client.test.mjs"
   "$NODE_BIN" --test "$ROOT/apps/owner/local-tmux-owner/tests/attachment-controller.test.mjs"
   "$NODE_BIN" --test "$ROOT/apps/owner/local-tmux-owner/tests/history-controller.test.mjs"
+  "$NODE_BIN" --test "$ROOT/apps/owner/local-tmux-owner/tests/rich-block-controller.test.mjs"
   "$NODE_BIN" --test "$ROOT/apps/owner/local-tmux-owner/tests/capture-controller.test.mjs"
   "$NODE_BIN" --test "$ROOT/apps/owner/local-tmux-owner/tests/composer-delivery.test.mjs"
   "$NODE_BIN" --test "$ROOT/apps/owner/local-tmux-owner/tests/goal-status.test.mjs"
@@ -403,6 +405,7 @@ changes_panel_source = (root / "apps/owner/local-tmux-owner/static/owner/changes
 api_client_source = (root / "apps/owner/local-tmux-owner/static/owner/api-client.mjs").read_text(encoding="utf-8")
 attachment_controller_source = (root / "apps/owner/local-tmux-owner/static/owner/attachment-controller.mjs").read_text(encoding="utf-8")
 history_controller_source = (root / "apps/owner/local-tmux-owner/static/owner/history-controller.mjs").read_text(encoding="utf-8")
+rich_block_controller_source = (root / "apps/owner/local-tmux-owner/static/owner/rich-block-controller.mjs").read_text(encoding="utf-8")
 capture_controller_source = (root / "apps/owner/local-tmux-owner/static/owner/capture-controller.mjs").read_text(encoding="utf-8")
 composer_delivery_source = (root / "apps/owner/local-tmux-owner/static/owner/composer-delivery.mjs").read_text(encoding="utf-8")
 goal_status_source = (root / "apps/owner/local-tmux-owner/static/owner/goal-status.mjs").read_text(encoding="utf-8")
@@ -410,6 +413,7 @@ assert 'import("./owner/changes-panel.mjs?v=faryo-owner-changes-1")' in app, "Ow
 assert 'import("./owner/api-client.mjs?v=faryo-owner-api-1")' in app, "Owner API must use its native ES module"
 assert 'import("./owner/attachment-controller.mjs?v=faryo-owner-attachments-1")' in app, "Owner attachments must use their native ES module"
 assert 'import("./owner/history-controller.mjs?v=faryo-owner-history-1")' in app, "Owner history must use its native ES module"
+assert 'import("./owner/rich-block-controller.mjs?v=faryo-owner-rich-blocks-1")' in app, "Owner long histories must use the versioned rich-block controller"
 assert 'import("./owner/capture-controller.mjs?v=faryo-owner-capture-2")' in app, "Owner capture must use its current versioned ES module"
 assert 'import("./owner/composer-delivery.mjs?v=faryo-owner-composer-1")' in app, "Owner composer delivery must use its native ES module"
 assert "/api/workspace-changes" in owner_server and "/api/workspace-changes" in changes_panel_source, "workspace changes must use the scoped read-only Owner API"
@@ -448,6 +452,7 @@ assert "copyFidelity?.handleCopy(event)" in app, "Compact Chat selections must u
 assert 'promptInput.addEventListener("paste"' in attachment_controller_source, "Owner composer must handle user-triggered image paste"
 assert "MAX_ATTACHMENTS = 35" in app and "uploadConcurrency: 4" in app, "Owner must bound 35-file attachment batches to four concurrent uploads"
 assert "olderLoadQueued" in history_controller_source and "function emptyConversationHistory(" not in app, "Owner paged history state must remain in its controller"
+assert "IntersectionObserver" in rich_block_controller_source and "shouldRenderEagerly" in app, "Owner long histories must render rich blocks near the viewport instead of mounting every formula at once"
 assert "retryEventStream" in capture_controller_source and "function consumeEventStream(" not in app, "Owner capture transport must remain in its controller"
 assert "isAmbiguousDeliveryError" in composer_delivery_source and "function isAmbiguousDeliveryError(" not in app, "Owner ambiguous delivery recovery must remain in its controller"
 assert "goal-status.mjs" in app and 'id="goalPill"' in owner_status_source and 'id="detailsGoal"' in index, "Owner must render Preact goal status in the header and details"

@@ -3,6 +3,7 @@
   const apiClientModulePromise = import("./owner/api-client.mjs?v=faryo-owner-api-1");
   const attachmentControllerModulePromise = import("./owner/attachment-controller.mjs?v=faryo-owner-attachments-1");
   const historyControllerModulePromise = import("./owner/history-controller.mjs?v=faryo-owner-history-1");
+  const richBlockControllerModulePromise = import("./owner/rich-block-controller.mjs?v=faryo-owner-rich-blocks-1");
   const captureControllerModulePromise = import("./owner/capture-controller.mjs?v=faryo-owner-capture-2");
   const composerDeliveryModulePromise = import("./owner/composer-delivery.mjs?v=faryo-owner-composer-1");
   const goalStatusModulePromise = import("./owner/goal-status.mjs?v=faryo-owner-goal-1");
@@ -13,6 +14,7 @@
     { createApiClient, sessionApiPath },
     { createAttachmentController },
     { createHistoryController, isStructuredCapture },
+    { createRichBlockController, shouldRenderEagerly },
     { createCaptureController },
     { createComposerDelivery },
     { goalViewModel },
@@ -20,6 +22,7 @@
     apiClientModulePromise,
     attachmentControllerModulePromise,
     historyControllerModulePromise,
+    richBlockControllerModulePromise,
     captureControllerModulePromise,
     composerDeliveryModulePromise,
     goalStatusModulePromise,
@@ -200,7 +203,7 @@
   document.documentElement.dataset.faryoInteractionUi = interactionHost ? 'preact' : 'fallback';
   const HISTORY_PAGE_TURNS = 12;
   const HISTORY_REFRESH_MIN_MS = 2500;
-  let historyController = null;
+  let historyController = null, richBlockController = null;
   let initialLatestScrollPending = true, initialLatestScrollTimer = null;
   let submitInFlight = false;
   let activeSurfacePanel = null, panelReturnFocus = null;
@@ -221,6 +224,7 @@
         scroller: conversationScroller,
         output,
         resolveTarget: resolveQuestionTarget,
+        prepareTarget: prepareQuestionTarget,
       });
     } catch (_error) {
       questionNavigatorController = null;
@@ -658,7 +662,11 @@
     liveSelectionFlushTimer = setTimeout(flushDeferredLiveTerminal, 80);
   });
 
-  conversationScroller.addEventListener('scroll', () => { updateBottomButton(); maybeLoadOlderHistory(); }, { passive: true });
+  conversationScroller.addEventListener('scroll', () => {
+    updateBottomButton();
+    richBlockController?.setTailPinned(isNearBottom());
+    maybeLoadOlderHistory();
+  }, { passive: true });
   conversationScroller.addEventListener('wheel', noteHistoryUserIntent, { passive: true });
   conversationScroller.addEventListener('touchstart', noteHistoryUserIntent, { passive: true });
   conversationScroller.addEventListener('touchmove', noteHistoryUserIntent, { passive: true });
@@ -949,11 +957,36 @@
     handleBackgroundError,
   });
 
-  function resetConversationHistory() { historyController.reset(); }
+  richBlockController = createRichBlockController({
+    view: window,
+    scroller: conversationScroller,
+    observerRoot: useDocumentScroller ? null : outputWrap,
+    isNearBottom,
+    renderBlock: (node, descriptor) => {
+      node.innerHTML = renderTextWithFilesSafely(descriptor.text, descriptor.renderOptions);
+    },
+    onHydrated: (node, descriptor, state) => {
+      copyFidelity?.bindBlock(node, {
+        source: descriptor.copySource,
+        renderSource: descriptor.renderSource,
+        kind: descriptor.kind,
+      });
+      void hydrateProtectedImages(node);
+      questionNavigatorController?.refreshLayout?.();
+      if (state.wasNearBottom) scrollBottom(true);
+    },
+    onReleased: () => {
+      releaseDetachedProtectedImages();
+      questionNavigatorController?.refreshLayout?.();
+    },
+  });
+
+  function resetConversationHistory() { historyController.reset(); richBlockController?.clear(); }
   function structuredCapture(capture) { return isStructuredCapture(capture); }
   function loadedHistoryTurns() { return historyController.loadedTurns(); }
   function mergedConversationCapture(capture) { return historyController.mergedCapture(capture); }
   function resolveQuestionTarget(question) { return historyController.resolveQuestionTarget(question); }
+  function prepareQuestionTarget(target) { richBlockController?.ensure(target, 1); }
   function scheduleConversationHistoryRefresh(capture, delay = 80) { historyController.scheduleRefresh(capture, delay); }
   function noteHistoryUserIntent() { historyController.noteUserIntent(); }
   function maybeLoadOlderHistory() { historyController.maybeLoadOlder(); }
@@ -1796,6 +1829,7 @@
         signature: `fallback-${index}-${String(block.text ?? '')}`,
         stable: false,
       }));
+    let richBlockTotal = 0;
     for (const model of models) {
       model.copySource = model.kind === 'output'
         ? copyableOutputText(model.text)
@@ -1803,6 +1837,7 @@
           ? String(model.text || '').replace(rules.userPromptRe, '').trim()
           : '';
       model.renderSource = ['output', 'user'].includes(model.kind) ? copyableOutputText(model.text) : '';
+      if (['output', 'user'].includes(model.kind)) model.richIndex = richBlockTotal++;
     }
     const createNode = (model) => {
       if (model.kind === 'process') {
@@ -1825,7 +1860,6 @@
       const node = document.createElement('section');
       const kindClass = /^[A-Za-z0-9_-]+$/.test(model.kind) ? model.kind : 'output';
       node.className = `compact-block ${kindClass}`;
-      node.innerHTML = renderTextWithFilesSafely(model.text, renderOptions);
       return node;
     };
     let metrics;
@@ -1844,7 +1878,25 @@
       const node = output.children[index];
       if (!node) return;
       if (['output', 'user'].includes(model.kind)) {
-        copyFidelity?.bindBlock(node, { source: model.copySource, renderSource: model.renderSource, kind: model.kind });
+        const descriptor = {
+          signature: model.signature,
+          kind: model.kind,
+          text: model.text,
+          copySource: model.copySource,
+          renderSource: model.renderSource,
+          renderOptions,
+        };
+        if (richBlockController) {
+          richBlockController.prepare(node, descriptor, {
+            eager: shouldRenderEagerly(model.richIndex, richBlockTotal),
+          });
+        } else {
+          node.innerHTML = renderTextWithFilesSafely(model.text, renderOptions);
+          node.dataset.faryoRichState = 'rendered';
+        }
+        if (node.dataset.faryoRichState === 'rendered') {
+          copyFidelity?.bindBlock(node, { source: model.copySource, renderSource: model.renderSource, kind: model.kind });
+        }
         node.dataset.faryoCopyBound = copyFidelity ? 'true' : 'false';
       }
       if (model.kind === 'user') {
@@ -1859,6 +1911,7 @@
         delete node.dataset.faryoQuestionPreview;
       }
     });
+    richBlockController?.prune();
     const blocks = output.querySelectorAll('.compact-block.output');
     blocks.forEach((block, index) => {
       const existing = block.querySelector(':scope > .copy-output-block');
@@ -1878,6 +1931,8 @@
     output.dataset.compactCreated = String(metrics.created);
     output.dataset.compactReused = String(metrics.reused);
     output.dataset.compactStable = String(metrics.stable);
+    output.dataset.richRendered = String(richBlockController?.renderedCount ?? richBlockTotal);
+    output.dataset.richDeferred = String(richBlockController?.pendingCount ?? 0);
   }
 
   function renderPlainOutput(text, rules) {
@@ -1936,8 +1991,11 @@
         output.insertBefore(template.content, livePanel || null);
       }
     }
-    else if (capture.html && !parsedInternalAnnotations(text).citations.length) output.innerHTML = decorateMetaLines(capture.html, text);
-    else renderPlainOutput(text, rules);
+    else {
+      richBlockController?.clear();
+      if (capture.html && !parsedInternalAnnotations(text).citations.length) output.innerHTML = decorateMetaLines(capture.html, text);
+      else renderPlainOutput(text, rules);
+    }
     if (outputMode === 'compact' && capture.agentSource === 'codex-cli' && !isStructured) {
       output.insertAdjacentHTML('afterbegin', '<section class="compact-capture-warning" role="status">Structured Codex history is unavailable. Showing a terminal fallback; Markdown and formulas may be incomplete.</section>');
     }

@@ -61,8 +61,22 @@ main { position: relative; min-width: 0; max-width: 100%; min-height: 0; overflo
 .card { margin-bottom: 12px; border-radius: 12px; padding: 12px; border: 1px solid var(--line); background: var(--panel); }
 .output { margin: 0; min-width: 0; max-width: 100%; min-height: 100%; white-space: pre-wrap; color: var(--text); font-family: var(--app-font); font-size: calc(14px + var(--font-step)); line-height: 1.48; overflow-wrap: anywhere; word-break: break-word; }
 .output * { white-space: inherit; overflow-wrap: anywhere; word-break: break-word; }
-.output.compact-blocks { display: flex; flex-direction: column; gap: 10px; font-size: calc(15px + var(--font-step)); }
+.output.compact-blocks { display: flex; flex-direction: column; gap: 10px; overflow-anchor: none; font-size: calc(15px + var(--font-step)); }
 .compact-block { max-width: 92%; padding: 10px 11px; border: 1px solid var(--line); border-radius: 13px; background: var(--block-bg); white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; }
+.compact-block[data-faryo-rich-state="deferred"] { overflow: hidden; contain: layout paint style; }
+.rich-block-placeholder {
+  display: block;
+  width: min(100%, 620px);
+  height: 100%;
+  min-height: 44px;
+  border-radius: 10px;
+  opacity: .52;
+  background:
+    linear-gradient(90deg, color-mix(in srgb, var(--muted) 17%, transparent), color-mix(in srgb, var(--muted) 8%, transparent)) 0 9px / 74% 8px no-repeat,
+    linear-gradient(90deg, color-mix(in srgb, var(--muted) 12%, transparent), transparent) 0 27px / 91% 7px no-repeat,
+    linear-gradient(90deg, color-mix(in srgb, var(--muted) 10%, transparent), transparent) 0 44px / 58% 7px no-repeat;
+}
+.compact-block.user .rich-block-placeholder { margin-left: auto; }
 .compact-block.user { align-self: flex-end; max-width: 84%; border-color: var(--user-block-border); background: var(--user-block-bg); box-shadow: var(--user-block-shadow); }
 .compact-block.output, .compact-process-line, .compact-status-line { align-self: flex-start; max-width: 92%; }
 .compact-block.output { font-size: calc(16px + var(--font-step)); }

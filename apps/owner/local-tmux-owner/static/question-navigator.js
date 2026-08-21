@@ -59,10 +59,14 @@
     let targets = [];
     let questions = [];
     let indexedQuestions = null;
+    let measuredTargets = [];
+    let layoutDirty = true;
     let active = -1;
     let enabled = true;
     let updateFrame = 0;
     let syncFrame = 0;
+    let measureFrame = 0;
+    let resizeTimer = 0;
     let scrollingTimer = 0;
     let flashTimer = 0;
     let flashTarget = null;
@@ -111,30 +115,65 @@
     function setActive(index, { reveal = true } = {}) {
       if (!targets.length) index = -1;
       else index = Math.max(0, Math.min(Number(index) || 0, targets.length - 1));
+      const previous = active;
       active = index;
       const buttons = [...markers.querySelectorAll('.question-nav-marker')];
-      buttons.forEach((button, buttonIndex) => {
-        const selected = buttonIndex === active;
+      const updateButton = (button, selected) => {
+        if (!button) return;
         button.classList.toggle('active', selected);
         button.tabIndex = selected ? 0 : -1;
         if (selected) button.setAttribute('aria-current', 'step');
         else button.removeAttribute('aria-current');
-      });
+      };
+      if (previous !== active) updateButton(buttons[previous], false);
+      updateButton(buttons[active], true);
       if (current) current.textContent = active >= 0 ? String(active + 1) : '0';
       if (reveal && active >= 0) keepMarkerVisible(buttons[active]);
+    }
+
+    function measureTargets() {
+      measureFrame = 0;
+      if (!layoutDirty) return;
+      layoutDirty = false;
+      const scrollerRect = scroller.getBoundingClientRect();
+      const scrollTop = Number(scroller.scrollTop || 0);
+      measuredTargets = targets
+        .map((target, index) => target ? {
+          index,
+          top: Number(target.getBoundingClientRect().top || 0) - Number(scrollerRect.top || 0) + scrollTop,
+        } : null)
+        .filter(Boolean);
+    }
+
+    function refreshLayout() {
+      layoutDirty = true;
+      if (measureFrame) return;
+      measureFrame = requestFrame(() => {
+        measureTargets();
+        scheduleActiveUpdate();
+      });
+    }
+
+    function refreshLayoutAfterResize() {
+      layoutDirty = true;
+      if (resizeTimer) view.clearTimeout(resizeTimer);
+      resizeTimer = view.setTimeout(() => {
+        resizeTimer = 0;
+        refreshLayout();
+      }, 120);
     }
 
     function updateActive() {
       updateFrame = 0;
       if (navigator.classList.contains('hidden') || !targets.length) return;
+      if (layoutDirty) measureTargets();
+      if (!measuredTargets.length) return;
       const scrollerRect = scroller.getBoundingClientRect();
-      const anchor = scrollerRect.top + Math.min(150, Math.max(72, scrollerRect.height * 0.22));
-      const loaded = targets.map((target, index) => ({ target, index })).filter((item) => item.target);
-      if (!loaded.length) return;
-      const positions = loaded.map((item) => item.target.getBoundingClientRect().top);
+      const anchor = Number(scroller.scrollTop || 0) + Math.min(150, Math.max(72, scrollerRect.height * 0.22));
+      const positions = measuredTargets.map((item) => item.top);
       const nearBottom = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 48;
-      const loadedIndex = nearBottom ? loaded.length - 1 : activeIndex(positions, anchor);
-      setActive(loaded[Math.max(0, loadedIndex)]?.index ?? 0);
+      const loadedIndex = nearBottom ? measuredTargets.length - 1 : activeIndex(positions, anchor);
+      setActive(measuredTargets[Math.max(0, loadedIndex)]?.index ?? 0);
     }
 
     function scheduleActiveUpdate() {
@@ -169,6 +208,8 @@
       targets = [];
       questions = [];
       indexedQuestions = null;
+      measuredTargets = [];
+      layoutDirty = true;
       active = -1;
       loadingIndex = -1;
       markers.replaceChildren();
@@ -179,6 +220,8 @@
       if (total) total.textContent = '0';
       if (scrollingTimer) view.clearTimeout(scrollingTimer);
       scrollingTimer = 0;
+      if (resizeTimer) view.clearTimeout(resizeTimer);
+      resizeTimer = 0;
       userScrollIntentUntil = 0;
       lastScrollTop = Number(scroller.scrollTop || 0);
       lastScrollAt = Number(view.performance?.now?.() || Date.now());
@@ -216,6 +259,8 @@
       }
       if (questions.length < 2) {
         targets = [];
+        measuredTargets = [];
+        layoutDirty = true;
         active = -1;
         markers.replaceChildren();
         navigator.classList.add('hidden');
@@ -237,6 +282,7 @@
         if (!button) {
           button = view.document.createElement('button');
           button.type = 'button';
+          button.tabIndex = -1;
           button.className = 'question-nav-marker';
           const dot = view.document.createElement('span');
           dot.className = 'question-nav-dot';
@@ -272,7 +318,7 @@
         : -1;
       const firstLoaded = targets.findIndex(Boolean);
       setActive(preservedIndex >= 0 ? preservedIndex : (active >= 0 && active < questions.length ? active : Math.max(0, firstLoaded)), { reveal: false });
-      scheduleActiveUpdate();
+      refreshLayout();
     }
 
     async function jumpTo(index) {
@@ -292,13 +338,18 @@
         target = targets[requested];
       }
       if (!target) return false;
+      if (typeof options.prepareTarget === 'function') {
+        await options.prepareTarget(target, questions[requested], requested);
+        refreshLayout();
+      }
       revealTemporarily();
       const scrollerRect = scroller.getBoundingClientRect();
       const targetRect = target.getBoundingClientRect();
       const maximum = Math.max(0, scroller.scrollHeight - scroller.clientHeight);
       const top = targetScrollTop(scroller.scrollTop, targetRect.top, scrollerRect.top, 20, maximum);
       const reducedMotion = Boolean(view.matchMedia?.('(prefers-reduced-motion: reduce)').matches);
-      if (typeof scroller.scrollTo === 'function') scroller.scrollTo({ top, behavior: reducedMotion ? 'auto' : 'smooth' });
+      const longJump = Math.abs(top - Number(scroller.scrollTop || 0)) > Number(scroller.clientHeight || 0) * 2;
+      if (typeof scroller.scrollTo === 'function') scroller.scrollTo({ top, behavior: reducedMotion || longJump ? 'auto' : 'smooth' });
       else scroller.scrollTop = top;
       setActive(requested);
       if (flashTarget) flashTarget.classList.remove('question-nav-flash');
@@ -378,14 +429,19 @@
     scroller.addEventListener('touchstart', markUserScrollIntent, { passive: true });
     scroller.addEventListener('touchmove', markUserScrollIntent, { passive: true });
     scroller.addEventListener('pointerdown', markUserScrollIntent, { passive: true });
-    view.addEventListener('resize', scheduleActiveUpdate);
+    view.addEventListener('resize', refreshLayoutAfterResize);
     const observer = typeof view.MutationObserver === 'function'
       ? new view.MutationObserver(scheduleSync)
       : null;
     observer?.observe(output, { childList: true });
+    const resizeObserver = typeof view.ResizeObserver === 'function'
+      ? new view.ResizeObserver(refreshLayoutAfterResize)
+      : null;
+    resizeObserver?.observe(output);
 
     function destroy() {
       observer?.disconnect();
+      resizeObserver?.disconnect();
       markers.removeEventListener('click', onClick);
       markers.removeEventListener('pointerover', onPointerOver);
       markers.removeEventListener('pointerout', onPointerOut);
@@ -397,15 +453,17 @@
       scroller.removeEventListener('touchstart', markUserScrollIntent);
       scroller.removeEventListener('touchmove', markUserScrollIntent);
       scroller.removeEventListener('pointerdown', markUserScrollIntent);
-      view.removeEventListener('resize', scheduleActiveUpdate);
+      view.removeEventListener('resize', refreshLayoutAfterResize);
       if (updateFrame) cancelFrame(updateFrame);
       if (syncFrame) cancelFrame(syncFrame);
+      if (measureFrame) cancelFrame(measureFrame);
+      if (resizeTimer) view.clearTimeout(resizeTimer);
       if (scrollingTimer) view.clearTimeout(scrollingTimer);
       if (flashTimer) view.clearTimeout(flashTimer);
       reset();
     }
 
-    return Object.freeze({ sync, reset, destroy, jumpTo, updateActive, get activeIndex() { return active; } });
+    return Object.freeze({ sync, reset, destroy, jumpTo, updateActive, refreshLayout, get activeIndex() { return active; } });
   }
 
   return Object.freeze({ version: '3', previewText, activeIndex, targetScrollTop, shouldRevealForScroll, createController });

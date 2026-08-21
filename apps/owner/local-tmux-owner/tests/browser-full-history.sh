@@ -69,6 +69,12 @@ events.extend((
     },
 ))
 for index in range(40):
+    sections = "\n\n".join(
+        f"### Anonymous section {part + 1}\n\n"
+        f"\\[x_{{{index + 1},{part + 1}}}=u_{{{part + 1}}}+{index + part + 2}\\]\n\n"
+        "The synthetic paragraph exercises a long Markdown and formula body without private conversation data."
+        for part in range(12)
+    )
     events.extend((
         {
             "type": "response_item",
@@ -85,7 +91,7 @@ for index in range(40):
                 "role": "assistant",
                 "content": [{
                     "type": "output_text",
-                    "text": f"## Anonymous result {index + 1}\n\n\\[x_{{{index + 1}}}=u+{index + 1}\\]\n\nThe complete turn remains paged.",
+                    "text": f"## Anonymous result {index + 1}\n\n{sections}\n\nThe complete turn remains paged.",
                 }],
             },
         },
@@ -172,6 +178,9 @@ env \
   'FARYO_SMOKE_CHECK_OWNER_LAYOUT=1' \
   'FARYO_SMOKE_CHECK_MODE_SWITCH=1' \
   'FARYO_SMOKE_EXPECT_GOAL_STATUS=active' \
+  'FARYO_SMOKE_REQUIRE_DEFERRED_RICH=1' \
+  'FARYO_SMOKE_MAX_INITIAL_RICH=14' \
+  'FARYO_SMOKE_CHECK_LONG_HISTORY_RESIZE=1' \
   "FARYO_SMOKE_UI_SCREENSHOT=${FARYO_HISTORY_UI_SCREENSHOT:-}" \
   'FARYO_SMOKE_MIN_QUESTION_MARKERS=40' \
   'FARYO_SMOKE_EXPECT_HISTORY_TURNS=40' \
