@@ -3,7 +3,7 @@
   const apiClientModulePromise = import("./owner/api-client.mjs?v=faryo-owner-api-1");
   const attachmentControllerModulePromise = import("./owner/attachment-controller.mjs?v=faryo-owner-attachments-1");
   const historyControllerModulePromise = import("./owner/history-controller.mjs?v=faryo-owner-history-1");
-  const captureControllerModulePromise = import("./owner/capture-controller.mjs?v=faryo-owner-capture-1");
+  const captureControllerModulePromise = import("./owner/capture-controller.mjs?v=faryo-owner-capture-2");
   const composerDeliveryModulePromise = import("./owner/composer-delivery.mjs?v=faryo-owner-composer-1");
   const goalStatusModulePromise = import("./owner/goal-status.mjs?v=faryo-owner-goal-1");
   // Workspace review is an optional surface. Start loading it immediately,
@@ -95,6 +95,7 @@
   const COMPACT_CAPTURE_LINES = 320, FULL_CAPTURE_LINES = 800;
   const FETCH_TIMEOUT_MS = 12000, MAX_ATTACHMENTS = 35;
   const TIP_REFRESH_MS = 120000, STATUS_REFRESH_MS = 20000, FULL_REFRESH_MS = 10000, CAPTURE_FALLBACK_MS = 2500;
+  const CAPTURE_SAFETY_MS = 12000, EVENT_STREAM_IDLE_MS = 28000;
   const WORKBENCH_CACHE_KEY = 'faryoWorkbenchSnapshot', WORKBENCH_CACHE_MS = 120000;
   const PET_SEND_MS = 1500;
   const PET_STOP_MS = 850;
@@ -125,6 +126,7 @@
   let currentFastStatus = 'off';
   let outputActivity = 0, outputActivityTimer = null, lastCaptureSignature = '', lastCompactCapture = null, lastFullCapture = null;
   let outputMode = 'compact', fullLocked = false, preserveErrorUntil = 0, seenInitialPageShow = false, errorTimer = null, currentPromptTip = '';
+  let lastLiveWakeAt = 0;
   let lastCodexUpdateNotice = '';
   let markdownRenderRevision = 0, highlighterRenderFrame = 0;
   const markdownHtmlCache = new Map();
@@ -1093,6 +1095,8 @@
     fetchTimeoutMs: FETCH_TIMEOUT_MS,
     fullRefreshMs: FULL_REFRESH_MS,
     fallbackRefreshMs: CAPTURE_FALLBACK_MS,
+    safetyRefreshMs: CAPTURE_SAFETY_MS,
+    eventIdleTimeoutMs: EVENT_STREAM_IDLE_MS,
     currentLines: currentCaptureLines,
     getOutputMode: () => outputMode,
     isHidden: () => document.hidden,
@@ -1967,13 +1971,23 @@
       return;
     }
     seenInitialPageShow = true;
-    refreshVisibleNow();
+    resumeLiveConnection();
   }
 
   function refreshVisibleNow() {
     if (document.hidden) return;
     if (headerStatusVisible()) refreshStatus({ silent: true }).catch(handleBackgroundError);
     refreshCapture(currentCaptureLines(), { silent: true }).catch(handleBackgroundError);
+  }
+
+  function resumeLiveConnection() {
+    if (document.hidden) return;
+    const now = Date.now();
+    if (now - lastLiveWakeAt < 750) return;
+    lastLiveWakeAt = now;
+    refreshVisibleNow();
+    if (outputMode === 'compact') startEventStream();
+    else setFullRefresh(!fullLocked);
   }
 
   function currentCaptureLines() { return outputMode === 'compact' ? COMPACT_CAPTURE_LINES : FULL_CAPTURE_LINES; }
@@ -2453,14 +2467,14 @@
   startEventStream();
   document.documentElement.dataset.faryoAppReady = '1';
   window.addEventListener('pageshow', handlePageShow);
-  window.addEventListener('pagehide', () => { cancelInitialLatestScroll(); cancelActiveRefreshes(); closeEventStream(); setCaptureFallback(false); setStatusRefresh(false); setFullRefresh(false); });
+  window.addEventListener('focus', resumeLiveConnection);
+  window.addEventListener('online', resumeLiveConnection);
+  window.addEventListener('pagehide', () => { lastLiveWakeAt = 0; cancelInitialLatestScroll(); cancelActiveRefreshes(); closeEventStream(); setCaptureFallback(false); setStatusRefresh(false); setFullRefresh(false); });
   document.addEventListener('visibilitychange', () => {
     setStatusRefresh(!document.hidden && headerStatusVisible());
-    if (document.hidden) { cancelActiveRefreshes(); closeEventStream(); setCaptureFallback(false); setFullRefresh(false); }
+    if (document.hidden) { lastLiveWakeAt = 0; cancelActiveRefreshes(); closeEventStream(); setCaptureFallback(false); setFullRefresh(false); }
     else {
-      refreshVisibleNow();
-      if (outputMode === 'compact') startEventStream();
-      else setFullRefresh(!fullLocked);
+      resumeLiveConnection();
     }
   });
 })();

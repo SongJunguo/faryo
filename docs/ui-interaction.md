@@ -346,6 +346,8 @@ The maintained matrix includes:
 - mobile directory-picker containment, default recent cwd, HMAC tamper rejection,
   `faryoN` naming and exact test-session cleanup;
 - offline/background recovery and 20-message exact delivery;
+- heartbeat-stalled SSE recovery, deduplicated safety capture and automatic
+  reconnection after pageshow, focus, online and foreground transitions;
 - cross-session retry/delayed-response isolation;
 - structured `/model` and `/usage`, generic-menu `Choose highlighted`, pending
   interaction reload, and late-response/session-switch isolation;

@@ -51,6 +51,9 @@ the existing tmux TUI as the execution surface.
   user-activated full-screen mode with clear exit controls.
 - **Reliable remote input:** delivery is confirmed, idempotent across retries and
   restarts, isolated by session, and preserves drafts on ambiguous failures.
+- **Self-healing live output:** authenticated SSE remains the fast path, while a
+  heartbeat watchdog, deduplicated safety capture and foreground/network wake
+  hooks recover automatically after a suspended or half-open browser stream.
 - **Fast asynchronous launch:** Start/Resume opens the tmux session immediately
   with a real Starting state while a restart-safe monitor completes Codex/MCP
   readiness in the background.
@@ -94,7 +97,7 @@ Historical distribution and non-Codex platform paths may remain in the tree for
 upstream compatibility, but they are not part of this project's current validation
 or support claims.
 
-Current release: [Faryo 1.6.5](https://github.com/SongJunguo/faryo-codex-web-ui/releases/tag/v1.6.5).
+Current release: [Faryo 1.6.6](https://github.com/SongJunguo/faryo-codex-web-ui/releases/tag/v1.6.6).
 
 ## Current Functionality
 
@@ -108,6 +111,9 @@ Current release: [Faryo 1.6.5](https://github.com/SongJunguo/faryo-codex-web-ui/
   silently erase the complete question index.
 - Separates stable conversation history from the transient `Live from tmux`
   execution panel.
+- Keeps live output self-healing across ordinary network interruption, browser
+  background suspension and back/forward cache restoration without requiring a
+  hard refresh. A low-frequency safety capture is deduplicated before rendering.
 - Treats a newly created zero-message Codex thread as a valid empty structured
   conversation. Its first page says `No messages yet` instead of replaying TUI
   startup frames through the lossy terminal fallback.
@@ -329,7 +335,7 @@ initial allowed workspace:
 
 ```bash
 sha256sum --check install-faryo.sh.sha256
-bash install-faryo.sh --version v1.6.5 --workspace "$PWD"
+bash install-faryo.sh --version v1.6.6 --workspace "$PWD"
 ```
 
 Upgrading a pre-v1.5 checkout that still uses the dedicated Owner keepalive
@@ -410,6 +416,8 @@ The `main` branch was revalidated on 2026-08-21 with privacy-safe fixtures:
   hidden-folder toggle, Git worktree status and server-paginated history search;
 - 20-message idempotent delivery including Chinese, Markdown/TeX, attachment,
   offline/background/504 recovery, failed drafts and cross-session isolation;
+- stalled-SSE heartbeat recovery, deduplicated safety capture and automatic
+  pageshow/focus/online live-stream restoration;
 - local Markdown AST/GFM/KaTeX/Shiki, 40-turn lazy history, full question index,
   exact Markdown/TeX copy, Raw→Chat isolation and 180-line stable Live tmux;
 - 390x844 and 1440x900 layout, keyboard/VisualViewport, document scrolling,

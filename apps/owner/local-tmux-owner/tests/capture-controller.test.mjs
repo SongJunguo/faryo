@@ -3,6 +3,9 @@ import test from "node:test";
 
 import { createCaptureController } from "../static/owner/capture-controller.mjs";
 
+const delay = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
+const eventParser = { createParser: () => ({ push() {} }) };
+
 function fixture(overrides = {}) {
   const states = [];
   const captures = [];
@@ -77,4 +80,147 @@ test("missing streaming support selects the polling fallback", () => {
   assert.equal(states.at(-1), "fallback");
   assert.equal(intervals.length, 1);
   controller.setFallback(false);
+});
+
+test("an apparently open stream with no heartbeat falls back and reconnects", async (context) => {
+  let fetchCalls = 0;
+  const { controller, states } = fixture({
+    eventIdleTimeoutMs: 20,
+    eventRetryInitialMs: 10,
+    fallbackRefreshMs: 10,
+    safetyRefreshMs: 1000,
+    eventStreamParser: eventParser,
+    fetch: async () => {
+      fetchCalls += 1;
+      return {
+        ok: true,
+        status: 200,
+        body: new ReadableStream({
+          start(stream) {
+            stream.enqueue(new TextEncoder().encode(": opened\n\n"));
+          },
+        }),
+      };
+    },
+  });
+  context.after(() => {
+    controller.closeEventStream();
+    controller.setFallback(false);
+  });
+
+  controller.startEventStream();
+  await delay(85);
+
+  assert.ok(fetchCalls >= 2, `expected a reconnect, saw ${fetchCalls} stream request(s)`);
+  assert.ok(states.includes("live"));
+  assert.ok(states.filter((state) => state === "reconnecting").length >= 2);
+});
+
+test("stream heartbeats prevent a false idle reconnect", async (context) => {
+  let fetchCalls = 0;
+  let heartbeatTimer = null;
+  const { controller } = fixture({
+    eventIdleTimeoutMs: 25,
+    eventRetryInitialMs: 10,
+    safetyRefreshMs: 1000,
+    eventStreamParser: eventParser,
+    fetch: async () => {
+      fetchCalls += 1;
+      return {
+        ok: true,
+        status: 200,
+        body: new ReadableStream({
+          start(stream) {
+            stream.enqueue(new TextEncoder().encode(": opened\n\n"));
+            heartbeatTimer = setInterval(() => {
+              stream.enqueue(new TextEncoder().encode(": keepalive\n\n"));
+            }, 8);
+          },
+          cancel() {
+            if (heartbeatTimer) clearInterval(heartbeatTimer);
+          },
+        }),
+      };
+    },
+  });
+  context.after(() => {
+    controller.closeEventStream();
+    if (heartbeatTimer) clearInterval(heartbeatTimer);
+  });
+
+  controller.startEventStream();
+  await delay(70);
+
+  assert.equal(fetchCalls, 1);
+});
+
+test("a live stream retains deduplicated capture polling as a safety net", async (context) => {
+  let refreshCalls = 0;
+  const { controller, states, captures } = fixture({
+    eventIdleTimeoutMs: 1000,
+    safetyRefreshMs: 12,
+    eventStreamParser: eventParser,
+    loadCapture: async () => {
+      refreshCalls += 1;
+      return { ok: true, text: "safety" };
+    },
+    fetch: async () => ({
+      ok: true,
+      status: 200,
+      body: new ReadableStream({
+        start(stream) {
+          stream.enqueue(new TextEncoder().encode(": opened\n\n"));
+        },
+      }),
+    }),
+  });
+  context.after(() => controller.closeEventStream());
+
+  controller.startEventStream();
+  await delay(45);
+
+  assert.equal(states.at(-1), "live");
+  assert.ok(refreshCalls >= 2, `expected safety refreshes, saw ${refreshCalls}`);
+  assert.equal(captures.length, 1, "unchanged safety payloads should not rerender the conversation");
+});
+
+test("a delayed safety response cannot replace a newer event frame", async (context) => {
+  let applyEvent = null;
+  let resolveSafety = null;
+  const { controller, captures } = fixture({
+    eventIdleTimeoutMs: 1000,
+    safetyRefreshMs: 1000,
+    eventStreamParser: {
+      createParser(callback) {
+        applyEvent = callback;
+        return { push() {} };
+      },
+    },
+    loadCapture: () => new Promise((resolve) => { resolveSafety = resolve; }),
+    fetch: async (_url, init) => {
+      let streamController = null;
+      const body = new ReadableStream({
+        start(stream) {
+          streamController = stream;
+          stream.enqueue(new TextEncoder().encode(": opened\n\n"));
+        },
+      });
+      init.signal.addEventListener("abort", () => {
+        const error = new Error("aborted");
+        error.name = "AbortError";
+        streamController.error(error);
+      }, { once: true });
+      return { ok: true, status: 200, body };
+    },
+  });
+  context.after(() => controller.closeEventStream());
+
+  controller.startEventStream();
+  await delay(0);
+  const pendingSafety = controller.refresh(320, { silent: true, safety: true });
+  applyEvent({ type: "capture", data: JSON.stringify({ ok: true, text: "new" }) });
+  resolveSafety({ ok: true, text: "old" });
+  await pendingSafety;
+
+  assert.deepEqual(captures.map(([capture]) => capture.text), ["new"]);
 });

@@ -5,7 +5,8 @@
 
 ## Active
 
-当前没有未完成的版本计划。
+- [`live-stream-resilience-plan.md`](live-stream-resilience-plan.md)：为移动浏览器、网络切换和
+  半开代理连接增加 SSE 心跳超时、去重安全捕获与前台自动恢复；等待 v1.6.6 最终发布门禁。
 
 ## Completed or maintenance mode
 

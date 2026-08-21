@@ -99,8 +99,9 @@ but the default upload destination should come from the Faryo data directory.
   indexes, latest/around/cursor loads, 409 reset, refresh debounce and near-top
   older-page loading. DOM anchor capture and rendering remain injected actions.
 - `static/owner/capture-controller.mjs` owns capture request cancellation,
-  coalescing, authenticated SSE parsing, reconnect backoff, polling fallback and
-  Raw refresh timers. Capture rendering and scroll decisions remain callbacks.
+  coalescing, authenticated SSE parsing, heartbeat timeout, reconnect backoff,
+  deduplicated safety/fallback polling and Raw refresh timers. Capture rendering
+  and scroll decisions remain callbacks.
 - `static/owner/composer-delivery.mjs` owns route/session-scoped drafts, pending
   message identity, success-only clearing, failed-draft restoration and one
   same-ID retry for ambiguous network/502/504 outcomes. DOM/animation stay out.
