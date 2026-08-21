@@ -9,5 +9,5 @@ fork's source-only GitHub Release notes.
 The maintained fork is source-only and Codex-focused. Use the repository root
 [`README.md`](../../README.md) for current scope, deployment, and validation.
 The current maintained release is [`v1.6.7`](v1.6.7.md). The
-[`v1.7.0`](v1.7.0.md) notes describe the next verified source candidate; the
-unpublished v1.6.8 rendering candidate is included in it.
+[`v1.7.1`](v1.7.1.md) notes describe the next verified source candidate; it
+includes the v1.7.0 transcript migration and its Android Edge geometry fix.

@@ -66,8 +66,8 @@ assert.equal(scrollSurface.visualViewportSnapshot({
   layoutHeight: 844,
   visualHeight: 400,
   offsetTop: 180,
-  dockBottom: 580,
-}).shift, 0);
+  dockBottom: 700,
+}).shift, -120);
 assert.equal(scrollSurface.visualViewportSnapshot({
   layoutHeight: 844,
   visualHeight: 400,
@@ -78,13 +78,13 @@ assert.equal(scrollSurface.visualViewportSnapshot({
   layoutHeight: 844,
   visualHeight: 400,
   offsetTop: 180,
-  dockBottom: 316,
-  currentShift: -264,
+  dockBottom: 580,
 }).shift, 0);
 
 const dockListeners = new Map();
 const viewportListeners = new Map();
 const properties = new Map();
+const propertyWrites = [];
 const dockElement = { bottom: 844, getBoundingClientRect() { return { bottom: this.bottom }; } };
 const dockView = {
   innerHeight: 844,
@@ -95,7 +95,7 @@ const dockView = {
     removeEventListener(name, listener) { if (viewportListeners.get(name) === listener) viewportListeners.delete(name); },
   },
   document: {
-    documentElement: { style: { setProperty(name, value) { properties.set(name, value); } } },
+    documentElement: { style: { setProperty(name, value) { properties.set(name, value); propertyWrites.push([name, value]); } } },
     addEventListener(name, listener) { dockListeners.set(`document:${name}`, listener); },
     removeEventListener(name, listener) { if (dockListeners.get(`document:${name}`) === listener) dockListeners.delete(`document:${name}`); },
   },
@@ -103,14 +103,19 @@ const dockView = {
   removeEventListener(name, listener) { if (dockListeners.get(name) === listener) dockListeners.delete(name); },
   requestAnimationFrame(callback) { callback(); return 1; },
   cancelAnimationFrame() {},
+  setTimeout() { return 1; },
+  clearTimeout() {},
 };
 const dock = scrollSurface.createVisualViewportDock(dockView, { enabled: true, dock: dockElement });
 assert.equal(properties.get('--faryo-visual-viewport-shift-y'), '-264px');
 assert.equal(properties.get('--faryo-visual-viewport-obscured-bottom'), '264px');
-dockElement.bottom = 316;
-assert.equal(dock.update().shift, 0);
 dockElement.bottom = 580;
+propertyWrites.length = 0;
 assert.equal(dock.update().shift, 0);
+assert.deepEqual(propertyWrites.filter(([name]) => name === '--faryo-visual-viewport-shift-y'), [
+  ['--faryo-visual-viewport-shift-y', '0px'],
+  ['--faryo-visual-viewport-shift-y', '0px'],
+]);
 dockView.visualViewport.height = 844;
 dock.update();
 assert.equal(properties.get('--faryo-visual-viewport-shift-y'), '0px');

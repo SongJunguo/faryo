@@ -66,7 +66,6 @@
     visualHeight = 0,
     offsetTop = 0,
     dockBottom = null,
-    currentShift = 0,
   } = {}) {
     const layout = Math.max(0, Number(layoutHeight) || 0);
     const visual = Math.max(0, Number(visualHeight) || 0);
@@ -79,10 +78,8 @@
       : 0;
     let shift = obscuredBottom ? -obscuredBottom : 0;
     const measuredBottom = Number(dockBottom);
-    const previousShift = Number(currentShift) || 0;
     if (obscuredBottom && dockBottom !== null && Number.isFinite(measuredBottom) && measuredBottom > 0) {
-      const unshiftedDockBottom = measuredBottom - previousShift;
-      shift = visualBottom - unshiftedDockBottom;
+      shift = visualBottom - measuredBottom;
     }
     shift = layout
       ? Math.max(-layout, Math.min(0, shift))
@@ -103,12 +100,16 @@
     const dockElement = typeof options.dock === 'function' ? options.dock : () => options.dock || null;
     const enabled = options.enabled !== false;
     const viewport = view.visualViewport;
-    let frame = 0, destroyed = false, currentShift = 0;
+    let frame = 0, destroyed = false;
+    const settleTimers = new Set();
     let currentSnapshot = visualViewportSnapshot();
     const apply = () => {
-      frame = 0;
       if (destroyed) return currentSnapshot;
       const dock = enabled ? dockElement() : null;
+      // Mobile Chromium may already anchor fixed elements to the visual
+      // viewport. Measure the dock with our previous correction removed so a
+      // keyboard inset is never applied twice.
+      if (dock) rootElement?.style?.setProperty('--faryo-visual-viewport-shift-y', '0px');
       const dockBottom = dock?.getBoundingClientRect?.().bottom;
       const next = enabled && viewport
         ? visualViewportSnapshot({
@@ -118,14 +119,12 @@
           dockBottom: Number.isFinite(Number(dockBottom)) && Number(dockBottom) > 0
             ? Number(dockBottom)
             : null,
-          currentShift,
         })
         : visualViewportSnapshot();
       const changed = next.shift !== currentSnapshot.shift
         || next.obscuredBottom !== currentSnapshot.obscuredBottom
         || next.visualHeight !== currentSnapshot.visualHeight
         || next.visualTop !== currentSnapshot.visualTop;
-      currentShift = next.shift;
       currentSnapshot = { ...next, changed };
       rootElement?.style?.setProperty('--faryo-visual-viewport-shift-y', `${next.shift}px`);
       rootElement?.style?.setProperty('--faryo-visual-viewport-obscured-bottom', `${next.obscuredBottom}px`);
@@ -133,9 +132,25 @@
       options.onChange?.(currentSnapshot);
       return currentSnapshot;
     };
+    const runScheduled = () => {
+      frame = 0;
+      apply();
+    };
+    const settle = () => {
+      for (const timer of settleTimers) (view.clearTimeout || clearTimeout)(timer);
+      settleTimers.clear();
+      for (const delay of [80, 240]) {
+        const timer = (view.setTimeout || setTimeout)(() => {
+          settleTimers.delete(timer);
+          apply();
+        }, delay);
+        settleTimers.add(timer);
+      }
+    };
     const schedule = () => {
-      if (destroyed || frame) return;
-      frame = (view.requestAnimationFrame || ((callback) => view.setTimeout(callback, 0)))(apply);
+      if (destroyed) return;
+      if (!frame) frame = (view.requestAnimationFrame || ((callback) => view.setTimeout(callback, 0)))(runScheduled);
+      settle();
     };
     for (const target of [viewport, view]) {
       target?.addEventListener?.('resize', schedule, { passive: true });
@@ -151,6 +166,8 @@
       destroy() {
         destroyed = true;
         if (frame) (view.cancelAnimationFrame || view.clearTimeout)?.call(view, frame);
+        for (const timer of settleTimers) (view.clearTimeout || clearTimeout)(timer);
+        settleTimers.clear();
         for (const target of [viewport, view]) {
           target?.removeEventListener?.('resize', schedule);
           target?.removeEventListener?.('scroll', schedule);
