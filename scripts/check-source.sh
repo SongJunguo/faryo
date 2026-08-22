@@ -289,9 +289,20 @@ assert "firstAvailableDirectoryPage" in gateway_workbench and "for (const candid
 assert "START_DIRECTORY_MAX_ENTRIES" not in owner_server and "folders = (data.directories || []).map" in gateway_workbench, "directory picker must not cap or cross-section-filter real child folders"
 ci_workflow = (root / ".github/workflows/ci.yml").read_text(encoding="utf-8")
 release_workflow = (root / ".github/workflows/release.yml").read_text(encoding="utf-8")
+codeql_workflow = (root / ".github/workflows/codeql.yml").read_text(encoding="utf-8")
+dependabot_config = (root / ".github/dependabot.yml").read_text(encoding="utf-8")
 check_script = (root / "scripts/check-source.sh").read_text(encoding="utf-8")
 assert "pull_request:" in ci_workflow and "branches: [main]" in ci_workflow, "source CI must cover PR and main"
 assert "scripts/check-source.sh" in ci_workflow and "scripts/check-source.sh" in release_workflow, "CI and release must share source checks"
+assert "ubuntu-22.04" in ci_workflow and "python-version: '3.10'" in ci_workflow, "CI must retain the real Ubuntu 22.04/Python 3.10 minimum lane"
+for workflow in (ci_workflow, release_workflow, codeql_workflow):
+    uses = re.findall(r"^\s*-?\s*uses:\s*([^\s#]+)", workflow, flags=re.MULTILINE)
+    assert uses and all(re.fullmatch(r"[^@]+@[0-9a-f]{40}", item) for item in uses), "GitHub Actions must use immutable commit SHAs"
+assert "github/codeql-action/init@" in codeql_workflow and "github/codeql-action/analyze@" in codeql_workflow, "CodeQL must scan Python and JavaScript"
+assert "language: [python, javascript-typescript]" in codeql_workflow, "CodeQL language matrix is incomplete"
+for ecosystem in ("npm", "pip", "github-actions"):
+    assert f"package-ecosystem: {ecosystem}" in dependabot_config, f"Dependabot does not cover {ecosystem}"
+assert dependabot_config.count("interval: weekly") == 3 and "patterns: ['*']" in dependabot_config, "Dependabot must use low-noise weekly grouped updates"
 assert "package-client.sh" not in release_workflow, "retired package workflow must not return"
 assert "faryo_${version}_all.deb" not in release_workflow and "macos.tar.gz" not in release_workflow, "release must remain source-only"
 assert "git archive --format=tar.gz" in release_workflow and "sha256sum" in release_workflow, "release must build a verified source archive"
