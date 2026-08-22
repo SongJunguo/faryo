@@ -1,4 +1,4 @@
-# Faryo — Self-hosted Codex Web UI for tmux
+# Faryo — Self-hosted Codex Web UI
 
 [![Release](https://img.shields.io/github/v/release/SongJunguo/faryo-codex-web-ui?display_name=tag&sort=semver)](https://github.com/SongJunguo/faryo-codex-web-ui/releases/latest)
 [![Source CI](https://github.com/SongJunguo/faryo-codex-web-ui/actions/workflows/ci.yml/badge.svg)](https://github.com/SongJunguo/faryo-codex-web-ui/actions/workflows/ci.yml)
@@ -36,16 +36,16 @@ Codex CLI. Faryo uses its own name and logo and includes no OpenAI brand assets.
 ## Why Faryo
 
 Most lightweight tmux web bridges can only reproduce terminal text. Faryo uses
-the official Codex App Server for new Web-managed sessions and Codex's rollout
-history for durable convergence, while preserving existing terminal-managed
-tmux sessions as an explicit compatibility mode.
+the official Codex App Server for structured Web sessions and Codex's rollout
+history for durable convergence, while preserving existing Codex TUI sessions
+in tmux as an explicit compatibility mode.
 
 - **Formula-first reading:** original Markdown and TeX render through a safe AST
   pipeline and local KaTeX, including tables, cases, matrices, indexed operators,
   and wide display equations.
-- **Explicit session ownership:** new Web sessions stream through one persistent
-  Codex App Server writer; existing terminal sessions keep their tmux/TUI writer
-  and are never silently taken over by the browser.
+- **Explicit session ownership:** New and Resume can select `Codex App Server`
+  or `Codex TUI (tmux)`. Exactly one writer owns a thread, and an occupied thread
+  is never silently taken over by the other backend.
 - **Real answer streaming:** stable item identities, bounded delta batching,
   cursor replay and snapshot recovery show the answer while Codex is producing
   it, then converge in place to the durable rollout without duplicate blocks.
@@ -58,9 +58,9 @@ tmux sessions as an explicit compatibility mode.
 - **Self-healing live output:** authenticated SSE remains the fast path, while a
   heartbeat watchdog, deduplicated safety capture and foreground/network wake
   hooks recover automatically after a suspended or half-open browser stream.
-- **Fast asynchronous launch:** Start/Resume opens the tmux session immediately
-  with a real Starting state while a restart-safe monitor completes Codex/MCP
-  readiness in the background.
+- **Fast asynchronous launch:** Start/Resume returns a real Starting state
+  immediately while the selected App Server or TUI backend completes readiness
+  asynchronously.
 - **Per-session context windows:** new and resumed sessions can inherit the
   workstation default, use 272K or 1M presets, or accept a bounded custom value
   in K tokens without rewriting the global Codex configuration.
@@ -98,7 +98,7 @@ Ubuntu/Linux workstation
   -> Cloudflare Tunnel + Access (or another hardened HTTPS edge)
   -> current Chrome or Microsoft Edge on phone/desktop
 
-Existing terminal-managed compatibility path:
+Existing Codex TUI (tmux) compatibility path:
   tmux -> Codex CLI/TUI -> Faryo Owner
 ```
 
@@ -109,18 +109,18 @@ upstream compatibility, but they are not part of this project's current validati
 or support claims.
 
 Current source line and latest tagged source release: **[Faryo
-1.9.1](https://github.com/SongJunguo/faryo-codex-web-ui/releases/tag/v1.9.1)**.
+1.10.0](https://github.com/SongJunguo/faryo-codex-web-ui/releases/tag/v1.10.0)**.
 
 ## Current Functionality
 
 ### Structured Codex conversation
 
-- Streams new Web-managed threads through Codex App Server `thread`, `turn`, and
+- Streams Codex App Server threads through `thread`, `turn`, and
   `item` lifecycle events, including agent-message deltas and final items.
 - Treats Codex rollout JSONL as the durable final source. An Owner restart can
   reconnect to the independent App Server service and recover the active turn
   without inventing a second message database.
-- Keeps existing tmux/TUI threads terminal-managed; tmux capture remains
+- Keeps Codex TUI threads in tmux as a compatibility backend; tmux capture remains
   conservative live evidence and never becomes a competing writer.
 - Keeps the initial payload to at most 12 recent complete turns, then exposes
   older turns through a revision-bound cursor API. Formula-heavy answers cannot
@@ -172,10 +172,10 @@ micromark -> mdast -> CommonMark/GFM/math nodes -> safe HTML -> KaTeX
 
 - Keeps an immutable session, message ID, text, and attachment snapshot across
   retries.
-- Sends a Web-managed message once through App Server `turn/start`, returns a
+- Sends a Codex App Server message once through `turn/start`, returns a
   fast idempotent acknowledgement even when the protocol response is slow, and
   converges from official item events.
-- Serializes one tmux composer per terminal-managed session without blocking
+- Serializes one tmux composer per Codex TUI (tmux) session without blocking
   unrelated sessions. That compatibility path still confirms submission from
   exact rollout, new queue, or safe idle-composer evidence instead of treating
   every cleared input as success.
@@ -212,6 +212,8 @@ micromark -> mdast -> CommonMark/GFM/math nodes -> safe HTML -> KaTeX
   preview strip, with at most four compression/upload workers active at once
   and a 25 MiB server-side limit for each file.
 - Shows agent-reported context used/window and weekly quota when available.
+- Shows the authoritative `Codex App Server` or `Codex TUI (tmux)` backend in
+  Session Details instead of exposing storage/protocol names.
 - Shows a session-scoped `Default`/`Fast` speed button beside the model. It
   submits the matching structured App Server command or Codex's exact `/fast`
   TUI command once, preserves any unsent browser draft, disables itself while
@@ -225,13 +227,17 @@ micromark -> mdast -> CommonMark/GFM/math nodes -> safe HTML -> KaTeX
 - Opens fresh, reloaded, and newly selected conversations at the latest output.
 - Preserves the main reading position during structured refreshes.
 - Keeps up to 180 lines from the current turn in an expanded Live tmux panel for
-  terminal-managed sessions,
+  Codex TUI (tmux) sessions,
   preserves the same DOM node and manual scroll position, pauses updates while
   its text is selected, and offers one-click copy of the visible terminal text.
 - Uses a versioned slash-command catalog populated by a private, read-only TUI
-  inventory probe. The bundled Codex 0.149.0 fallback contains 46 classified
-  commands; future additions appear as unclassified instead of being silently
-  submitted or hard-coded forever.
+  inventory probe. The bundled Codex 0.149.0 snapshot currently contains 46
+  classified commands, but it is only a fallback: additions or removals are
+  reconciled against the observed Codex version instead of being hard-coded
+  forever.
+- Uses each command's verified busy-time capability. Commands such as
+  `/goal clear` can reach Codex while a task runs; commands that Codex really
+  disables return a precise conflict and never become queued prompt text.
 - Routes `/model`, `/usage`, permissions, approvals, resume questions, and
   unknown blocking menus through one structured interaction service. Model and
   reasoning choices, Previous/Next, explicit `Choose highlighted`, and Cancel
@@ -273,15 +279,16 @@ micromark -> mdast -> CommonMark/GFM/math nodes -> safe HTML -> KaTeX
   SQLite/rollout files directly and deliberately exposes no hard-delete action.
 - Keeps card-body clicks as the fast resume path using the thread's recorded
   working directory and default Codex context. `Options` opens the authenticated
-  directory browser and resumes that same thread with an explicitly selected,
-  signed cwd and optional per-session context window.
+  directory browser and resumes that same thread with an explicitly selected
+  `Codex App Server` or `Codex TUI (tmux)` backend, signed cwd, and optional
+  per-session context window.
   Active sessions do not expose this action; archived sessions must be restored
   first.
 - Allows remote Close only for sessions that Faryo created and stamped.
-- `Start Codex` defaults to a Web-managed App Server thread and immediately opens
-  its Starting page. The explicit terminal-managed compatibility launcher still
-  resolves the configured CLI with its matching Node runtime, creates a managed
-  tmux, and lets a pane-identity monitor own final readiness/failure.
+- `Start Codex` defaults to a Codex App Server thread and immediately opens its
+  Starting page. The same launch sheet can instead select `Codex TUI (tmux)`,
+  which resolves the configured CLI with its matching Node runtime, creates a
+  managed tmux, and lets a pane-identity monitor own final readiness/failure.
 - Codex discovery is dynamic on every managed launch: Faryo follows the current
   NVM default and stable user commands before treating an old generated path as
   a fallback. It freezes an absolute Node/Codex pair only for that one process.
@@ -332,7 +339,7 @@ proxying. Owner uses Starlette/Uvicorn for authenticated HTTP, SSE and lifecycle
 handling; framework-neutral Python modules own the session actors, bounded event
 journal, App Server protocol, attachments and tmux compatibility adapter. The
 App Server is a separate user service with no TCP listener, so an Owner-only
-restart does not interrupt an active Web-managed turn. Codex rollout history
+restart does not interrupt an active Codex App Server turn. Codex rollout history
 remains the durable conversation source.
 
 Gateway portal CSS and JavaScript are separate versioned static assets; dynamic
@@ -367,7 +374,7 @@ initial allowed workspace:
 
 ```bash
 sha256sum --check install-faryo.sh.sha256
-bash install-faryo.sh --version v1.9.1 --workspace "$PWD"
+bash install-faryo.sh --version v1.10.0 --workspace "$PWD"
 ```
 
 Upgrading a pre-v1.5 checkout that still uses the dedicated Owner keepalive
@@ -415,9 +422,9 @@ normal reload or newly opened tab is sufficient after an update; users should
 never need a browser-specific hard-refresh gesture.
 
 `faryo restart` leaves the independent App Server process running while Owner
-and Gateway restart, preserving an active Web-managed turn. `faryo stop` stops
+and Gateway restart, preserving an active Codex App Server turn. `faryo stop` stops
 all three Faryo services; it preserves tmux and Codex history but should not be
-used during an active Web-managed turn. `faryo uninstall` removes services and
+used during an active Codex App Server turn. `faryo uninstall` removes services and
 versioned program files but preserves `~/.faryo`; irreversible private-data
 removal requires both `--purge-data` and `--yes`.
 
@@ -436,7 +443,7 @@ layer while keeping Faryo's inner login enabled.
 
 The `main` branch was revalidated on 2026-08-22 with privacy-safe fixtures:
 
-- canonical source gate: 220 Owner, 118 Gateway, and 60 unified-CLI Python tests,
+- canonical source gate: 225 Owner, 120 Gateway, and 65 unified-CLI Python tests,
   plus Ruff, ESLint, Prettier, TypeScript and reproducible local browser bundles;
 - isolated real Codex App Server: initialize/capability fallback, body-delta
   streaming, keyed final convergence, Markdown/KaTeX/code, body-free replay
@@ -446,6 +453,9 @@ The `main` branch was revalidated on 2026-08-22 with privacy-safe fixtures:
   `/usage`, Preact composer geometry and no fake chat turn;
 - stale interaction/session responses, duplicate request IDs, generation 409,
   CSRF, Owner token and body-free audit boundaries;
+- explicit New/Resume App Server or TUI selection, atomic single-writer 409,
+  authoritative Details labels, version-bound busy slash commands and stale
+  status-generation rejection;
 - real asynchronous Start: about 51ms accepted Starting response, duplicate
   launch reuse, Starting→Waiting browser transition, Owner-restart monitor
   recovery and unchanged pane identity;
@@ -465,6 +475,9 @@ The `main` branch was revalidated on 2026-08-22 with privacy-safe fixtures:
   PWA/fullscreen, read-only sanitized diff and protected-resource checks;
 - release-version cache keys and Gateway script allowlist completeness: ordinary
   reload/new tab loads the current app without hard refresh;
+- pinned GitHub Actions, Python/JavaScript CodeQL, weekly grouped dependency
+  proposals, and explicit Ubuntu 22.04/Python 3.10 plus Ubuntu 24.04/Python 3.13
+  source lanes;
 - checksum update/rollback gates with `KillMode=process`; every deployed preview
   preserved all pre-existing tmux session names, pane PIDs and 145x44 geometry.
 

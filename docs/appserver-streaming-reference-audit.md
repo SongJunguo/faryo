@@ -93,13 +93,16 @@ HAPI 的 Hub 使用有界事件环、epoch/sequence cursor 和 replay gap。Fary
 ### 3. 会话所有权互斥
 
 HAPI 在 local 与 remote launcher 间做显式切换，而不是让两个输入端并发驱动同一进程。
-Faryo 将同一思想落实为 `web-managed` 与 `terminal-managed` 两种后端：
+Faryo 将同一思想落实为 `Codex App Server` 与 `Codex TUI (tmux)` 两种后端：
 
-- 现有 tmux/TUI 会话继续是 `terminal-managed`；
-- 新的 App Server 会话是 `web-managed`；
+- 现有 tmux/TUI 会话继续由 `Codex TUI (tmux)` 驱动；
+- 新会话默认由 `Codex App Server` 驱动，也可显式选择 TUI；
 - 两者共享历史入口和视觉组件，但不共享写权限；
 - 未证明线程已空闲、无草稿、无审批、无活动 turn 且原 writer 已释放前，禁止 handoff；
 - 第一阶段不提供自动双向 handoff，避免伪同步和 writer-lock 风险。
+
+旧 registry/wire 值只在集中兼容适配层读取；领域代码使用
+`APP_SERVER`/`CODEX_TUI`，用户界面不显示旧协议名称。
 
 HAPI 当前 Codex converter 会在正文 delta 到达时只更新“正在输出”状态，并在 item complete
 后一次性提交正文。因此它不是 Faryo 正文流式实现的直接范本；Faryo 直接消费官方

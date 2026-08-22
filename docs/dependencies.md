@@ -114,11 +114,11 @@ check. Production never loads these assets from a CDN.
   Markdown/TeX bodies, Raw formatting, Live tmux and paged history remain
   isolated adapters.
 - Production transitive dependencies: none
-- Gateway bundle: 18,429 bytes raw / 7,438 gzip; SHA-256
-  `b5d545f4078df73d70036196c861077cbc4443a144674411466a1bcaa90c7d05`;
+- Gateway bundle: 18,414 bytes raw / 7,444 gzip; SHA-256
+  `87d421d62df2db8d2abd4cf799beeaf075065cb963f0ffaf3e49c9a8cb4e670b`;
   12 KiB gzip limit.
-- Owner bundle: 28,053 bytes raw / 10,245 gzip; SHA-256
-  `c89831e0fc63b2b74f9f9ddf3ef4ed6ed314c907156bf673906522eb8fc2d429`;
+- Owner bundle: 29,410 bytes raw / 10,759 gzip; SHA-256
+  `c790d74fd2dbeb4c35c8dd9ee91ae59eb6bd1021073dd722d7b05001d7f3b0b6`;
   24 KiB gzip limit.
 - Each bundle has a generated adjacent license notice recording exact version,
   hash, byte counts, transitive count and full MIT text.
@@ -166,3 +166,16 @@ check. Production never loads these assets from a CDN.
   dependency and adapter were removed. Lit and Python Web Push remain conditional
   future candidates.
 - The current root npm dependency audit reports zero known vulnerabilities.
+
+## Supply-chain automation
+
+- Dependabot proposes grouped weekly updates for npm, pip and GitHub Actions.
+  It has low open-PR limits and never auto-merges changes.
+- Every third-party GitHub Action is pinned to a full commit SHA; the readable
+  release number remains in a comment and Actions updates arrive as reviewable
+  pull requests.
+- CodeQL scans Python and JavaScript/TypeScript. Source CI separately exercises
+  the supported floor on Ubuntu 22.04/Python 3.10 and the current lane on Ubuntu
+  24.04/Python 3.13.
+- These automations consume only public dependency/source metadata. They do not
+  read deployment configuration, session state or conversation content.

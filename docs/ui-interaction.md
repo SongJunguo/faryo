@@ -40,11 +40,13 @@ The authenticated Gateway home page keeps two session regions separate:
   scans conversation content and never hides Active Sessions.
 
 Resumable Codex cards offer `Options` and `Archive`; archived cards offer
-`Restore`. Clicking the card body remains the fast path and lets Codex use its
-recorded cwd and default context. `Options` opens the same authenticated launch
-sheet as Start Codex and sends its signed directory plus an optional bounded
-context window with the first resume request, so it does not create a
-speculative session in the old cwd. Archive uses a clear
+`Restore`. Clicking the card body remains the fast path and uses the most recent
+backend, recorded cwd and default context. `Options` opens the same authenticated
+launch sheet as Start Codex, explicitly selects `Codex App Server` or `Codex TUI
+(tmux)`, and sends its signed directory plus an optional bounded context window
+with the first resume request, so it does not create a speculative session in
+the old cwd. New defaults to App Server; Resume defaults to the thread's most
+recent/source backend. Archive uses a clear
 confirmation because it moves the thread out of Current results, while Restore
 is immediate. These actions preserve the current search, filter, and page
 query. Active, desktop, running, waiting, starting, exited, and archived cards
@@ -86,6 +88,11 @@ Owner, then sets only that process's Codex context and 90% auto-compaction
 threshold; it never rewrites the user's global Codex config. Directory
 navigation keeps the in-progress context choice.
 
+Backend selection happens before resume. If either an App Server actor or a TUI
+writer already owns the thread, Owner rejects the competing start atomically;
+Faryo never starts a second writer and then attempts cleanup. Protocol/storage
+compatibility values are mapped at one boundary and are not shown to users.
+
 Gateway route labels come from runtime configuration. Public browser requests
 never receive raw Owner tokens; Gateway injects them while proxying.
 
@@ -108,7 +115,7 @@ The Owner page contains:
 - a privacy-safe Goal status pill whose authenticated, no-store details request
   loads the current objective only after an explicit click and clears it on
   close;
-- git status and structured-source/connection details;
+- git status, authoritative backend, and structured-source/connection details;
 - Compact Chat and Raw output modes;
 - attachments and a stable multiline composer;
 - structured Codex interactions, interrupt, refresh, and return-to-latest
@@ -131,6 +138,12 @@ read-only TUI inventory when the Codex version changes. A newly discovered
 command is visibly unclassified and requires one explicit confirmation; Faryo
 never retries Enter blindly.
 
+Command capability includes whether Codex accepts the local command while a turn
+is running. The installed Codex version and tested fallback version must match
+before a fallback can grant busy-time permission. Verified commands such as
+`/goal clear` are forwarded immediately; commands that Codex disables return a
+specific conflict and cannot fall through into queued message delivery.
+
 The model row also exposes the selected conversation's `Default` or `Fast`
 service tier. Its button invokes the catalogued `/fast` local action through the
 same one-Enter structured command path. The TUI model row is authoritative:
@@ -141,9 +154,10 @@ only the selected session. Switching sessions hides the old state until the new
 status arrives.
 
 Pending interaction identity includes the selected session and generation.
-Reload/SSE reconnect rebuilds it from the real TUI, session switches clear the
-old sheet immediately, and late responses are ignored rather than rendered over
-the newly selected session.
+Status refresh, Details, Goal, Git, cwd, model and usage use the same scoped
+acceptance rule. Reload/SSE reconnect rebuilds current state, session switches
+clear the old sheet immediately, and late responses are ignored rather than
+rendered over the newly selected session.
 
 Opening menus, details, Raw mode, or the question rail must never resize tmux or
 the Codex TUI.

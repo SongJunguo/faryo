@@ -13,7 +13,7 @@ systemd --user
 └── faryo-gateway.service    authenticated browser UI on 127.0.0.1:8780
 
 tmux
-└── existing sessions        terminal-managed Codex CLI/TUI compatibility mode
+└── existing sessions        Codex TUI (tmux) compatibility backend
 ```
 
 Owner is the private workstation-side service that reads Codex history and
@@ -25,9 +25,10 @@ Server exposes no TCP port; Owner reaches its mode-`700` Unix socket locally.
 
 Restarting Owner or Gateway does not stop App Server or resize Codex tmux
 sessions. `faryo restart` deliberately keeps App Server alive, so an active
-Web-managed turn can continue while the Web layers update. `faryo stop` also
-stops App Server and therefore should not be used during an active Web-managed
-turn; it still preserves rollout history, registry data and every tmux session.
+Codex App Server turn can continue while the Web layers update. `faryo stop`
+also stops App Server and therefore should not be used during an active App
+Server turn; it still preserves rollout history, registry data and every tmux
+session.
 
 ## Requirements
 
@@ -53,10 +54,10 @@ Review and verify the script before executing it:
 ```bash
 sha256sum --check install-faryo.sh.sha256
 less install-faryo.sh
-bash install-faryo.sh --version v1.6.7 --workspace /path/to/workspace
+bash install-faryo.sh --version v1.10.0 --workspace /path/to/workspace
 ```
 
-The script then downloads `faryo-v1.6.7.tar.gz` and its checksum, accepts only a
+The script then downloads `faryo-v1.10.0.tar.gz` and its checksum, accepts only a
 bounded single-root regular-file archive, and invokes the same `faryo install`
 path used by source developers. It does not execute sudo, install apt packages,
 create a tunnel, or change Cloudflare settings.
@@ -70,7 +71,7 @@ When upgrading a pre-v1.5 deployment that still has the dedicated
 supervisor migration:
 
 ```bash
-bash install-faryo.sh --version v1.6.7 --workspace /path/to/workspace --migrate-owner
+bash install-faryo.sh --version v1.10.0 --workspace /path/to/workspace --migrate-owner
 ```
 
 The migration records and compares every existing agent tmux geometry. It stops
@@ -168,7 +169,7 @@ tokens, session names, prompts, and conversation content.
 
 ```bash
 faryo update                    # latest stable release
-faryo update --version v1.6.7   # exact release
+faryo update --version v1.10.0  # exact release
 faryo rollback                  # previous healthy installed version
 ```
 
@@ -181,9 +182,9 @@ previous services. It never rolls back private conversation or attachment data.
 For a reviewed offline asset:
 
 ```bash
-faryo update --version v1.6.7 \
-  --archive ./faryo-v1.6.7.tar.gz \
-  --checksum ./faryo-v1.6.7.tar.gz.sha256
+faryo update --version v1.10.0 \
+  --archive ./faryo-v1.10.0.tar.gz \
+  --checksum ./faryo-v1.10.0.tar.gz.sha256
 ```
 
 ## Uninstall
