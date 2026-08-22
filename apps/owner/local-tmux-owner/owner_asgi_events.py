@@ -114,6 +114,10 @@ class OwnerEventStreams:
         lines = max(40, min(lines, self.core.CAPTURE_MAX_LINES))
         cursor = request.headers.get("Last-Event-ID") or request.query_params.get("cursor", "")
         web_managed = self.support.runtime.has_session(session)
+        # Resolve terminal targets before StreamingResponse sends its headers.
+        # Unknown/bookmarked history ids must produce a normal bounded 404,
+        # not raise inside the body iterator after a 200 SSE response started.
+        terminal_target = None if web_managed else self.support.target(session)
 
         async def stream() -> AsyncIterator[bytes]:
             try:
@@ -122,8 +126,7 @@ class OwnerEventStreams:
                     async for frame in self._web_stream(session, lines, cursor, stopped):
                         yield frame
                 else:
-                    target = self.support.target(session)
-                    async for frame in self._terminal_stream(target, lines, stopped):
+                    async for frame in self._terminal_stream(terminal_target, lines, stopped):
                         yield frame
             finally:
                 self.active.pop(stream_id, None)
@@ -173,9 +176,7 @@ class OwnerEventStreams:
                         abandon_on_cancel=True,
                     )
                 except self.core.OwnerError:
-                    yield b": keepalive\n\n"
-                    cursor = result.latest.render()
-                    continue
+                    return
                 yield event_frame("capture", capture, result.latest.render())
                 cursor = result.latest.render()
             else:

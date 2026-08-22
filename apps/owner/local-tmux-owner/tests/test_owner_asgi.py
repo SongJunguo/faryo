@@ -207,6 +207,15 @@ class OwnerAsgiTest(unittest.TestCase):
         self.assertEqual(status, 401)
         self.assertEqual(json.loads(body)["error"], "unauthorized")
 
+        status, headers, body = self.request(
+            "GET",
+            "/api/events?session=missing-session",
+            token=True,
+        )
+        self.assertEqual(status, 404)
+        self.assertEqual(headers.get("content-type"), "application/json; charset=utf-8")
+        self.assertIn("not found", json.loads(body)["error"])
+
         status, _headers, body = self.request(
             "POST",
             "/api/agent/new",
@@ -294,6 +303,62 @@ class OwnerAsgiTest(unittest.TestCase):
         self.assertEqual(status, 200, body)
         self.assertEqual(json.loads(body)["session"], "faryo2")
         self.assertEqual(self.runtime.resumed[0]["thread_id"], "thread_switch_app")
+
+    def test_active_app_server_history_keeps_app_server_question_identity(self) -> None:
+        self.runtime.sessions.add("faryo1")
+        capture = {
+            "record": {
+                "session": "faryo1",
+                "threadId": "thread_demo",
+                "cwd": self.cwd,
+                "title": "Demo",
+            },
+            "snapshot": {
+                "lifecycle": "idle",
+                "revision": 3,
+                "turns": [
+                    {
+                        "id": "turn_demo",
+                        "status": "completed",
+                        "items": [
+                            {
+                                "id": "user_demo",
+                                "type": "userMessage",
+                                "content": [{"type": "text", "text": "Anonymous question"}],
+                            },
+                            {
+                                "id": "answer_demo",
+                                "type": "agentMessage",
+                                "text": "Anonymous answer",
+                            },
+                        ],
+                    }
+                ],
+            },
+            "messages": [("user", "Anonymous question"), ("assistant", "Anonymous answer")],
+            "messageBlocks": [],
+        }
+        with (
+            mock.patch.object(self.runtime, "capture", return_value=capture),
+            mock.patch.object(
+                server,
+                "codex_thread_by_id",
+                return_value={"rollout_path": "/private/authoritative.jsonl"},
+            ) as rollout_lookup,
+        ):
+            status, _headers, body = self.request(
+                "GET",
+                "/api/conversation-history?session=faryo1&limit=12",
+                token=True,
+            )
+
+        payload = json.loads(body)
+        blocks = payload["turns"][0]["blocks"]
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["source"], "codex-app-server")
+        self.assertEqual([block["role"] for block in blocks], ["user", "assistant"])
+        self.assertEqual(blocks[0]["questionKey"], payload["questions"][0]["key"])
+        rollout_lookup.assert_not_called()
 
     def test_resume_can_switch_from_app_server_history_to_tui(self) -> None:
         with (

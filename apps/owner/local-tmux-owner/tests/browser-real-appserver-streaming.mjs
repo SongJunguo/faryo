@@ -114,14 +114,41 @@ await withBrowser(
       null,
       { timeout: 180_000 },
     );
-    await page.waitForFunction(
-      () =>
-        document.querySelectorAll("#output > .compact-block.user").length >= 2 &&
-        document.querySelectorAll("#output > .compact-block.output").length >= 2 &&
-        document.querySelectorAll("#questionNavMarkers .question-nav-marker:not(.unloaded)").length >= 2,
-      null,
-      { timeout: 25_000 },
-    );
+    try {
+      await page.waitForFunction(
+        () =>
+          document.querySelectorAll("#output > .compact-block.user").length >= 2 &&
+          document.querySelectorAll("#output > .compact-block.output").length >= 2 &&
+          document.querySelectorAll("#questionNavMarkers .question-nav-marker:not(.unloaded)").length >= 2,
+        null,
+        { timeout: 25_000 },
+      );
+    } catch (error) {
+      const roleState = await page.evaluate(() => {
+        const output = document.getElementById("output");
+        const markers = [
+          ...document.querySelectorAll("#questionNavMarkers .question-nav-marker"),
+        ];
+        return {
+          captureSource: output?.dataset.captureSource || "",
+          streaming: output?.dataset.streaming || "",
+          userBlocks: output?.querySelectorAll(":scope > .compact-block.user").length || 0,
+          outputBlocks: output?.querySelectorAll(":scope > .compact-block.output").length || 0,
+          processBlocks: output?.querySelectorAll(":scope > .compact-process-line").length || 0,
+          markers: markers.length,
+          loadedMarkers: markers.filter((marker) => !marker.classList.contains("unloaded")).length,
+          historyRequests: performance
+            .getEntriesByType("resource")
+            .filter((entry) => String(entry.name || "").includes("/api/conversation-history"))
+            .length,
+          renderFallback: output?.dataset.renderFallback || "",
+        };
+      });
+      throw new Error(
+        `Real App Server roles or question anchors did not converge: ${JSON.stringify(roleState)}`,
+        { cause: error },
+      );
+    }
 
     const jumpRequest = await page.evaluate(() => {
       const markers = [

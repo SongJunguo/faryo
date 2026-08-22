@@ -360,30 +360,22 @@ class OwnerReadRoutes:
             raise core.OwnerError("invalid conversation history pagination") from exc
         cursor = request.query_params.get("cursor", "")
         if self.support.runtime.has_session(session):
-            record = self.support.runtime.registry.get(session)
-            thread = core.codex_thread_by_id(record.thread_id) if record is not None else None
-            history_path = str((thread or {}).get("rollout_path") or "")
-            if history_path:
-                payload = await to_thread.run_sync(
-                    lambda: core.codex_conversation_history_page(
-                        history_path,
-                        limit=limit,
-                        cursor=cursor,
-                        around=around,
-                    ),
-                    abandon_on_cancel=True,
-                )
-            else:
-                capture = await to_thread.run_sync(
-                    lambda: self.support.runtime.capture(session),
-                    abandon_on_cancel=True,
-                )
-                payload = core.web_conversation_history_page(
-                    capture,
-                    limit=limit,
-                    cursor=cursor,
-                    around=around,
-                )
+            # Keep one identity domain for the lifetime of an App Server
+            # session. Switching to rollout JSONL as soon as its file appears
+            # changes question keys while live item blocks still use App Server
+            # turn identities, leaving every visible rail marker unloaded.
+            # The actor snapshot is hydrated from thread/read after reconnects;
+            # JSONL remains the durable source once the Web session is closed.
+            capture = await to_thread.run_sync(
+                lambda: self.support.runtime.capture(session),
+                abandon_on_cancel=True,
+            )
+            payload = core.web_conversation_history_page(
+                capture,
+                limit=limit,
+                cursor=cursor,
+                around=around,
+            )
         else:
             target = self.support.target(session)
             payload = await to_thread.run_sync(

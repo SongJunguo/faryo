@@ -258,6 +258,7 @@ owner_server = (root / "apps/owner/local-tmux-owner/server.py").read_text(encodi
 owner_asgi_source = (root / "apps/owner/local-tmux-owner/owner_asgi.py").read_text(encoding="utf-8")
 owner_asgi_read_source = (root / "apps/owner/local-tmux-owner/owner_asgi_read.py").read_text(encoding="utf-8")
 owner_asgi_control_source = (root / "apps/owner/local-tmux-owner/owner_asgi_control.py").read_text(encoding="utf-8")
+owner_asgi_events_source = (root / "apps/owner/local-tmux-owner/owner_asgi_events.py").read_text(encoding="utf-8")
 owner_asgi_runner = (root / "apps/owner/local-tmux-owner/run_owner_asgi.py").read_text(encoding="utf-8")
 appserver_commands_source = (root / "apps/owner/local-tmux-owner/appserver_commands.py").read_text(encoding="utf-8")
 appserver_session_source = (root / "apps/owner/local-tmux-owner/appserver_session.py").read_text(encoding="utf-8")
@@ -543,6 +544,8 @@ assert '"messageBlocks"' in owner_server and "def message_blocks(" in appserver_
 assert "mergeMessageBlocks(displayBlocks(), liveBlocks)" in history_controller_source and "if (capture.streaming) return capture" in history_controller_source, "settled history must not replace a live App Server capture"
 assert "appserver-stream-progress" in app and "appserver-stream-progress" in owner_style, "App Server streaming must expose a visible progress state"
 assert "state.activeLengthCount < 2" in real_appserver_browser_source and "state.loadedQuestionMarkers < 2" in real_appserver_browser_source and "state.userBlockCount < 2" in real_appserver_browser_source and "!questionJump.targetUser" in real_appserver_browser_source, "real App Server browser validation must prove incremental roles and a working question jump"
+assert "Keep one identity domain for the lifetime of an App Server" in owner_asgi_read_source and "core.web_conversation_history_page" in owner_asgi_read_source, "active App Server history must not switch to incompatible rollout question keys"
+assert "terminal_target = None if web_managed else self.support.target(session)" in owner_asgi_events_source and "except self.core.OwnerError:\n                    return" in owner_asgi_events_source, "event streams must reject unknown sessions before headers and close cleanly when a session disappears"
 assert "IntersectionObserver" in rich_block_controller_source and "shouldRenderEagerly" in app, "Owner long histories must render rich blocks near the viewport instead of mounting every formula at once"
 assert "retryEventStream" in capture_controller_source and "function consumeEventStream(" not in app, "Owner capture transport must remain in its controller"
 assert "isAmbiguousDeliveryError" in composer_delivery_source and "function isAmbiguousDeliveryError(" not in app, "Owner ambiguous delivery recovery must remain in its controller"
