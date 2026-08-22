@@ -684,6 +684,64 @@ main {
 .directory-hidden-toggle:disabled {
   opacity: 0.55;
 }
+.session-backend-picker {
+  min-width: 0;
+  margin: 0;
+  padding: 8px 9px 7px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--panel2) 72%, transparent);
+}
+.session-backend-picker legend {
+  padding: 0 4px;
+  color: var(--muted);
+  font: 850 10px/1.2 var(--app-font);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.session-backend-controls {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 7px;
+}
+.session-backend-controls button {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+  min-height: 50px;
+  padding: 7px 9px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  color: var(--text);
+  text-align: left;
+}
+.session-backend-controls button strong {
+  font: 800 12px/1.2 var(--app-font);
+}
+.session-backend-controls button small,
+.session-backend-picker > small {
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.25;
+}
+.session-backend-controls button[aria-pressed="true"],
+.session-backend-controls button:hover,
+.session-backend-controls button:focus-visible {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--line));
+  background: color-mix(in srgb, var(--accent) 10%, var(--panel));
+  outline: none;
+}
+.session-backend-controls button[aria-pressed="true"] strong {
+  color: var(--accent);
+}
+.session-backend-controls button:disabled {
+  opacity: 0.48;
+}
+.session-backend-picker > small {
+  display: block;
+  margin-top: 5px;
+}
 .context-window-picker {
   min-width: 0;
   margin: 0;

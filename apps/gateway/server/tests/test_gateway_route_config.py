@@ -269,7 +269,11 @@ class GatewayRouteConfigTest(unittest.TestCase):
         self.assertIn("view.active && item.managed", PREACT_WORKBENCH)
         self.assertIn("containers.launchers", PREACT_WORKBENCH)
         self.assertIn("item.disabled", PREACT_WORKBENCH)
-        self.assertIn("entry.appServerReady !== false", WORKBENCH_JS)
+        self.assertIn("entry.canCreate !== false", WORKBENCH_JS)
+        self.assertIn('id="sessionBackendPicker"', page)
+        self.assertIn("Codex App Server", page)
+        self.assertIn("Codex TUI (tmux)", page)
+        self.assertIn("routeEntry?.appServerReady !== false", WORKBENCH_JS)
 
     def test_history_filters_are_bounded_encoded_and_forwarded(self) -> None:
         filters = gateway.history_filters_from_query({

@@ -1,4 +1,4 @@
-"""Structured slash-command actions for web-managed Codex sessions."""
+"""Structured slash-command actions for Codex App Server sessions."""
 
 from __future__ import annotations
 
@@ -188,7 +188,7 @@ class AppServerCommandService:
                 prompt,
                 (self._choice("Close", "Return to the conversation."),),
             )
-        raise AppServerCommandError("this Codex command is not available in web-managed sessions")
+        raise AppServerCommandError("this Codex command is not available in Codex App Server sessions")
 
     async def respond(
         self,

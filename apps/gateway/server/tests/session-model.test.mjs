@@ -36,7 +36,7 @@ test("resumable limit and archived state stay distinct", () => {
   assert.equal(archived.canChooseFolder, false);
 });
 
-test("folder choice belongs only to inactive resumable Codex sessions", () => {
+test("resume options belong to every inactive resumable Codex session", () => {
   const resumable = sessionViewModel({
     id: "thread-a",
     state: "resumable",
@@ -56,6 +56,6 @@ test("folder choice belongs only to inactive resumable Codex sessions", () => {
   assert.equal(
     sessionViewModel({ state: "resumable", source: "other" })
       .canChooseFolder,
-    false,
+    true,
   );
 });

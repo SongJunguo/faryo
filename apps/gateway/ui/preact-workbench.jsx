@@ -117,7 +117,7 @@ function SessionCard({ item, routeLabels, actions }) {
             class="mini-btn choose-folder-session"
             type="button"
             disabled={view.chooseFolderDisabled}
-            title="Choose folder, context window and resume"
+            title="Choose backend, folder, context window and resume"
             aria-label="Resume options"
           >
             Options
@@ -150,7 +150,7 @@ function SessionCard({ item, routeLabels, actions }) {
         if (target.closest(".close-session"))
           actions.sessionAction(item, "close", event);
         else if (target.closest(".choose-folder-session"))
-          actions.sessionAction(item, "choose-folder", event);
+          actions.sessionAction(item, "resume-options", event);
         else if (target.closest(".archive-session"))
           actions.sessionAction(item, "archive", event);
         else if (target.closest(".restore-session"))

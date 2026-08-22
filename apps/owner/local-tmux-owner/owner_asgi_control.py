@@ -13,6 +13,7 @@ from starlette.responses import Response
 from starlette.routing import Route
 
 import appserver_runtime
+from faryo_cli import session_backend
 
 
 class OwnerControlRoutes:
@@ -148,9 +149,15 @@ class OwnerControlRoutes:
             raise core.OwnerError("invalid client launch id")
         title = core.clean_session_title(payload.get("title"))
         context_window_k = core.bounded_context_window_k(payload)
-        if str(payload.get("backend") or "") == "web-managed":
+        backend = session_backend.parse_backend(
+            payload.get("backend"),
+            default=session_backend.APP_SERVER,
+        )
+        if backend is None:
+            raise core.OwnerError("choose a supported Codex backend")
+        if backend is session_backend.APP_SERVER:
             if command != "codex":
-                raise core.OwnerError("web-managed sessions only support Codex")
+                raise core.OwnerError("Codex App Server sessions only support Codex")
             try:
                 result = await to_thread.run_sync(
                     lambda: self.support.runtime.start_session(
@@ -216,6 +223,12 @@ class OwnerControlRoutes:
             raise core.OwnerError("missing agent session id")
         if not source:
             raise core.OwnerError("missing agent source")
+        backend = session_backend.parse_backend(
+            payload.get("backend"),
+            default=session_backend.backend_for_source(source),
+        )
+        if backend is None:
+            raise core.OwnerError("choose a supported Codex backend")
         context_window_k = core.bounded_context_window_k(payload)
         raw_cwd = core.compact_text(payload.get("cwd"))
         selected_cwd: Path | None = None
@@ -230,7 +243,7 @@ class OwnerControlRoutes:
                 core.directory_selection_token(self.support.config, selected_cwd),
             ):
                 raise core.OwnerError("working directory selection expired", HTTPStatus.CONFLICT)
-        elif source == "codex-cli":
+        else:
             requirement = await to_thread.run_sync(
                 lambda: core.codex_resume_directory_requirement(
                     self.support.config,
@@ -241,19 +254,29 @@ class OwnerControlRoutes:
             )
             if requirement is not None:
                 return self._ok(requirement)
-        if source == "codex-app-server":
+        if backend is session_backend.APP_SERVER:
             return await self._resume_web(request, payload, agent_session_id, selected_cwd, context_window_k)
+
+        def resume_terminal_owned() -> str:
+            with core.RUNTIME_LOCK:
+                if self.support.runtime.has_thread(agent_session_id):
+                    raise core.OwnerError(
+                        "this Codex thread is already owned by Codex App Server",
+                        HTTPStatus.CONFLICT,
+                    )
+                return core.resume_agent_session(
+                    self.support.config,
+                    agent_session_id,
+                    "codex-cli",
+                    core.bounded_max_running(payload),
+                    self.support.history_root(request),
+                    selected_cwd,
+                    True,
+                    context_window_k,
+                )
+
         session = await to_thread.run_sync(
-            lambda: core.resume_agent_session(
-                self.support.config,
-                agent_session_id,
-                source,
-                core.bounded_max_running(payload),
-                self.support.history_root(request),
-                selected_cwd,
-                True,
-                context_window_k,
-            ),
+            resume_terminal_owned,
             abandon_on_cancel=True,
         )
         launch_state, _running = await to_thread.run_sync(
@@ -271,44 +294,56 @@ class OwnerControlRoutes:
         context_window_k: int,
     ) -> Response:
         core = self.core
-        thread = await to_thread.run_sync(lambda: core.codex_thread_by_id(thread_id), abandon_on_cancel=True)
-        if thread is None or (
-            self.support.history_root(request) is not None
-            and not core.path_under_root(str(thread.get("cwd") or ""), self.support.history_root(request))
-        ):
-            raise core.OwnerError("agent session not found", HTTPStatus.NOT_FOUND)
-        active_threads, superseded_threads = await to_thread.run_sync(
-            lambda: core.active_codex_thread_state(self.support.config),
-            abandon_on_cancel=True,
-        )
-        if thread_id in active_threads or thread_id in superseded_threads:
-            raise core.OwnerError(
-                "this Codex thread is already owned by a terminal session",
-                HTTPStatus.CONFLICT,
-            )
-        recorded_cwd = str(thread.get("cwd") or "")
-        resume_cwd = str(selected_cwd or recorded_cwd)
-        if not resume_cwd or not Path(resume_cwd).is_dir():
-            return self._ok({
-                "requiresWorkingDirectory": True,
-                "reason": "recorded-directory-unavailable",
-                "recordedDisplayCwd": core.short_path(recorded_cwd) or "Unavailable directory",
-            })
-        try:
-            result = await to_thread.run_sync(
-                lambda: self.support.runtime.resume_session(
+        history_root = self.support.history_root(request)
+
+        def resume_app_server_owned() -> dict[str, Any]:
+            with core.RUNTIME_LOCK:
+                thread = core.codex_thread_by_id(thread_id)
+                if thread is None or (
+                    history_root is not None
+                    and not core.path_under_root(str(thread.get("cwd") or ""), history_root)
+                ):
+                    raise core.OwnerError("agent session not found", HTTPStatus.NOT_FOUND)
+                active_threads, superseded_threads = core.active_codex_thread_state(
+                    self.support.config
+                )
+                if thread_id in active_threads or thread_id in superseded_threads:
+                    raise core.OwnerError(
+                        "this Codex thread is already owned by Codex TUI (tmux)",
+                        HTTPStatus.CONFLICT,
+                    )
+                recorded_cwd = str(thread.get("cwd") or "")
+                resume_cwd = str(selected_cwd or recorded_cwd)
+                if not resume_cwd or not Path(resume_cwd).is_dir():
+                    return {
+                        "requiresWorkingDirectory": True,
+                        "reason": "recorded-directory-unavailable",
+                        "recordedDisplayCwd": core.short_path(recorded_cwd)
+                        or "Unavailable directory",
+                    }
+                result = self.support.runtime.resume_session(
                     thread_id=thread_id,
                     cwd=resume_cwd,
-                    title=core.codex_thread_title(thread, core.short_path(resume_cwd) or thread_id),
+                    title=core.codex_thread_title(
+                        thread,
+                        core.short_path(resume_cwd) or thread_id,
+                    ),
                     model=str(thread.get("model") or ""),
-                    service_tier=str(payload.get("serviceTier") or payload.get("service_tier") or ""),
+                    service_tier=str(
+                        payload.get("serviceTier") or payload.get("service_tier") or ""
+                    ),
                     context_window_k=context_window_k,
-                ),
+                )
+                return {"accepted": True, **result}
+
+        try:
+            result = await to_thread.run_sync(
+                resume_app_server_owned,
                 abandon_on_cancel=True,
             )
         except appserver_runtime.AppServerRuntimeError as exc:
             raise core.OwnerError(str(exc), HTTPStatus.SERVICE_UNAVAILABLE) from exc
-        return self._ok({"accepted": True, **result})
+        return self._ok(result)
 
     async def _web_action(self, path: str, payload: dict[str, Any], session: str) -> Response:
         core = self.core

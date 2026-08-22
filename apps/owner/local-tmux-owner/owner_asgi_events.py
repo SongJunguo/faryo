@@ -1,4 +1,4 @@
-"""Bounded asynchronous SSE streams for terminal- and web-managed sessions."""
+"""Bounded asynchronous SSE streams for Codex TUI and App Server sessions."""
 
 from __future__ import annotations
 
@@ -64,6 +64,7 @@ def terminal_capture_payload(core: Any, config: Any, lines: int) -> tuple[dict[s
         "agentSource": capture_profile.source,
         "agentProfile": capture_profile.key,
         "captureSource": capture_source,
+        "backend": core.session_backend.CODEX_TUI.value,
         **interaction_state,
         "updatedAt": core.now_iso(),
     }

@@ -1,4 +1,4 @@
-"""Read-only Owner routes shared by terminal- and web-managed sessions."""
+"""Read-only Owner routes shared by Codex TUI and App Server sessions."""
 
 from __future__ import annotations
 
@@ -48,6 +48,7 @@ def terminal_capture_response(core: Any, target: Any, lines: int, want_html: boo
         "agentSource": profile.source,
         "agentProfile": profile.key,
         "captureSource": capture_source,
+        "backend": core.session_backend.CODEX_TUI.value,
         "updatedAt": core.now_iso(),
     }
     if profile is core.CODEX_PROFILE:

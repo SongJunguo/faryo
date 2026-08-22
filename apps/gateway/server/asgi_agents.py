@@ -15,6 +15,7 @@ from starlette.routing import Route
 
 import gateway_security
 import owner_client
+from faryo_cli import session_backend
 
 
 def routes(legacy: Any, config: Any, client: owner_client.OwnerClient, support: Any) -> list[Route]:
@@ -44,6 +45,10 @@ def routes(legacy: Any, config: Any, client: owner_client.OwnerClient, support: 
                 route = str(payload.get("route") or "").strip()
                 target = legacy.clean_agent_session_id(str(payload.get("agent_session_id") or "")) or ""
                 source = str(payload.get("source") or "")
+                backend = session_backend.parse_backend(
+                    payload.get("backend"),
+                    default=session_backend.backend_for_source(source),
+                )
                 requested_cwd = str(payload.get("cwd") or "").strip()
                 cwd_token = str(payload.get("cwd_token") or payload.get("cwdToken") or "").strip()
                 context_window_k = legacy.clean_context_window_k(
@@ -51,6 +56,8 @@ def routes(legacy: Any, config: Any, client: owner_client.OwnerClient, support: 
                 )
                 if route not in legacy.BACKENDS or not target or not source:
                     raise ValueError("route, agent_session_id and source are required")
+                if backend is None:
+                    raise ValueError("choose a supported Codex backend")
                 if not config.allowed_route(current, route):
                     status = HTTPStatus.FORBIDDEN
                     response = support.json_response({"ok": False, "error": "forbidden"}, status)
@@ -65,6 +72,7 @@ def routes(legacy: Any, config: Any, client: owner_client.OwnerClient, support: 
                     owner_payload = {
                         "agent_session_id": target,
                         "source": source,
+                        "backend": backend.value,
                         "max_running": config.max_running(route),
                     }
                     if context_window_k:
@@ -155,9 +163,12 @@ def routes(legacy: Any, config: Any, client: owner_client.OwnerClient, support: 
                 context_window_k = legacy.clean_context_window_k(
                     payload.get("context_window_k", payload.get("contextWindowK"))
                 )
-                backend = str(payload.get("backend") or "web-managed").strip()
-                if backend not in {"web-managed", "terminal-managed"}:
-                    raise ValueError("invalid session backend")
+                backend = session_backend.parse_backend(
+                    payload.get("backend"),
+                    default=session_backend.APP_SERVER,
+                )
+                if backend is None:
+                    raise ValueError("choose a supported Codex backend")
                 target = launch_id or ""
                 if route not in legacy.BACKENDS or not command:
                     raise ValueError("route and command are required")
@@ -172,7 +183,7 @@ def routes(legacy: Any, config: Any, client: owner_client.OwnerClient, support: 
                 else:
                     launch = {
                         "command": command,
-                        "backend": backend,
+                        "backend": backend.value,
                         "max_running": config.max_running(route),
                         **({"client_launch_id": launch_id} if launch_id else {}),
                         **({"context_window_k": context_window_k} if context_window_k else {}),

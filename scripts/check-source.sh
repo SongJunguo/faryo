@@ -145,6 +145,7 @@ release_checks() {
     "$ROOT/src/faryo_cli/migration.py" \
     "$ROOT/src/faryo_cli/operations.py" \
     "$ROOT/src/faryo_cli/runtime.py" \
+    "$ROOT/src/faryo_cli/session_backend.py" \
     "$ROOT/src/faryo_cli/updates.py"
   for js_file in \
     "$ROOT/apps/owner/local-tmux-owner/static/compact-rules-codex.js" \
@@ -256,12 +257,16 @@ owner_asgi_read_source = (root / "apps/owner/local-tmux-owner/owner_asgi_read.py
 owner_asgi_control_source = (root / "apps/owner/local-tmux-owner/owner_asgi_control.py").read_text(encoding="utf-8")
 owner_asgi_runner = (root / "apps/owner/local-tmux-owner/run_owner_asgi.py").read_text(encoding="utf-8")
 appserver_commands_source = (root / "apps/owner/local-tmux-owner/appserver_commands.py").read_text(encoding="utf-8")
+owner_session_catalog_source = (root / "apps/owner/local-tmux-owner/session_catalog.py").read_text(encoding="utf-8")
+owner_session_launch_source = (root / "apps/owner/local-tmux-owner/session_launch.py").read_text(encoding="utf-8")
 owner_backend_source = "\n".join((
     owner_server,
     owner_asgi_source,
     owner_asgi_read_source,
     owner_asgi_control_source,
     appserver_commands_source,
+    owner_session_catalog_source,
+    owner_session_launch_source,
 ))
 workspace_changes_source = (root / "apps/owner/local-tmux-owner/workspace_changes.py").read_text(encoding="utf-8")
 runtime_diagnostics_source = (root / "apps/owner/local-tmux-owner/runtime_diagnostics.py").read_text(encoding="utf-8")
@@ -362,7 +367,7 @@ assert "PYTHONPATH=" not in owner_unit_source + gateway_unit_source and "sanitiz
 assert "faryo_resolve_python" in owner_init_source and "faryo_resolve_python" in gateway_init_source, "initializers must use shared Python discovery"
 assert 'or "720"' in gateway_init_source and "1 <= parsed_session_hours <= 720" in gateway_init_source, "Gateway initializer must keep the 30-day session contract"
 assert 'id="historySearchInput"' in gateway and 'data-history-period="7d"' in gateway, "Gateway must expose metadata history search"
-assert "agent_history_text_matches" in owner_server and "codex_conversation_history_page" not in owner_server[owner_server.index("def codex_history_page("):owner_server.index("def codex_history_items(")], "session search must not scan conversation history"
+assert "agent_history_text_matches" in owner_session_catalog_source and "codex_conversation_history_page" not in owner_session_catalog_source[owner_session_catalog_source.index("def codex_history_page("):owner_session_catalog_source.index("def codex_history_items(")], "session search must not scan conversation history"
 assert "ThreadingHTTPServer" not in owner_server and "uvicorn.Config" in owner_asgi_runner and "Starlette" in owner_asgi_source, "legacy Owner HTTP server must not return"
 assert "access_log=False" in owner_asgi_runner and "def safe_log_path" in owner_http_source, "Owner logs must omit private query strings"
 assert "ControlAuditStore" in gateway_config_source and "target_digest" in gateway_audit_source and "append_audit" in gateway_asgi_support and 'id="securityActivity"' in gateway, "Gateway must expose body-free control auditing"

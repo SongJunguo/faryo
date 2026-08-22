@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Any, Callable
 
+from faryo_cli import session_backend
+
 
 class WorkbenchService:
     def __init__(
@@ -33,6 +35,16 @@ class WorkbenchService:
         raw_state = str(item.get("state") or "").strip().lower()
         if raw_state not in self.legacy.SESSION_STATES:
             raw_state = ("running" if item.get("agentRunning") else "waiting") if active else ("archived" if item.get("archived") else "resumable")
+        source = str(item.get("source") or "")
+        runtime = (
+            result.get("appServerRuntime")
+            if isinstance(result.get("appServerRuntime"), dict)
+            else {}
+        )
+        backend = session_backend.parse_backend(
+            item.get("backend"),
+            default=session_backend.backend_for_source(source),
+        )
         return {
             "id": str(item.get("id") or ""),
             "title": self.legacy.display_session_title(item.get("title") or item.get("label") or item.get("id") or "Untitled session"),
@@ -50,7 +62,9 @@ class WorkbenchService:
             "state": raw_state,
             "archived": bool(item.get("archived")),
             "limitReached": bool(not active and limit_reached),
-            "source": str(item.get("source") or ""),
+            "source": source,
+            "backend": (backend or session_backend.CODEX_TUI).value,
+            "appServerReady": bool(runtime.get("ready")) if runtime else None,
         }
 
     def owner_sessions(

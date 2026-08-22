@@ -1,4 +1,4 @@
-"""Private metadata registry for Faryo web-managed Codex sessions."""
+"""Private metadata registry for Faryo Codex App Server sessions."""
 
 from __future__ import annotations
 
@@ -11,6 +11,8 @@ import tempfile
 import threading
 import time
 from typing import Any, Iterable
+
+from faryo_cli import session_backend
 
 
 REGISTRY_SCHEMA_VERSION = 1
@@ -27,7 +29,7 @@ class WebSessionRecord:
     launch_id: str = ""
     created_at: int = 0
     updated_at: int = 0
-    backend: str = "web-managed"
+    backend: str = session_backend.APP_SERVER.value
 
     @classmethod
     def from_value(cls, value: Any) -> "WebSessionRecord | None":

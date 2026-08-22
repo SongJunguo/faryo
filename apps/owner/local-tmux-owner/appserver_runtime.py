@@ -1,4 +1,4 @@
-"""Long-lived App Server connection and web-managed session orchestration."""
+"""Long-lived Codex App Server session orchestration."""
 
 from __future__ import annotations
 
@@ -144,6 +144,9 @@ class AppServerRuntime:
 
     def has_session(self, name: str) -> bool:
         return self.registry.get(name) is not None
+
+    def has_thread(self, thread_id: str) -> bool:
+        return self.registry.by_thread(thread_id) is not None
 
     def session_records(self) -> list[dict[str, Any]]:
         return [record.public() for record in sorted(self.registry.values(), key=lambda item: item.updated_at, reverse=True)]
@@ -695,9 +698,9 @@ class AppServerRuntime:
     async def _close_session(self, name: str) -> dict[str, Any]:
         record, actor = self._require_session(name)
         if actor.active_turn_id:
-            raise AppServerRuntimeError("active web-managed sessions must be interrupted before closing")
+            raise AppServerRuntimeError("active Codex App Server sessions must be interrupted before closing")
         if any(entry[0] == name for entry in self.send_tasks.values()):
-            raise AppServerRuntimeError("submitting web-managed sessions cannot be closed")
+            raise AppServerRuntimeError("submitting Codex App Server sessions cannot be closed")
         if self.interactions.snapshot(name) is not None:
             raise AppServerRuntimeError("pending interactions must be resolved before closing")
         await self._require_client().rpc("thread/unsubscribe", {"threadId": record.thread_id})
@@ -795,7 +798,7 @@ class AppServerRuntime:
         record = self.registry.get(name)
         actor = self.actors.get(name)
         if record is None or actor is None:
-            raise AppServerRuntimeError("web-managed session is unavailable")
+            raise AppServerRuntimeError("Codex App Server session is unavailable")
         return record, actor
 
     def _publish(self, record: WebSessionRecord, event: ActorEvent) -> None:

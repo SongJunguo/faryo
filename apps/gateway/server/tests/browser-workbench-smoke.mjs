@@ -230,7 +230,8 @@ await withBrowser({
   }
   await page.unroute('**/api/agent/resume');
   if (!fastResumeNavigated || fastResumeRequests.length !== 1 || fastResumeRequests[0]?.cwd || fastResumeRequests[0]?.cwd_token
-    || fastResumeRequests[0]?.agent_session_id !== 'anonymous-fast-thread') {
+    || fastResumeRequests[0]?.agent_session_id !== 'anonymous-fast-thread'
+    || fastResumeRequests[0]?.backend !== 'terminal-managed') {
     throw new Error(`Default history click no longer performs a fast resume: ${JSON.stringify(fastResumeRequests)}`);
   }
   await evaluate(`(() => {history.replaceState(null,'',location.pathname+location.search);document.getElementById('faryoFastResumeFixture')?.remove();})()`);
@@ -276,6 +277,19 @@ await withBrowser({
     || !explicitFolderSheet.body.includes('saved Codex conversation') || !explicitFolderSheet.folder || !explicitFolderSheet.primary) {
     throw new Error(`Explicit resume folder picker did not open: ${JSON.stringify(explicitFolderSheet)}`);
   }
+  const backendPicker = await evaluate(`(() => ({
+    visible: Boolean(document.getElementById('sessionBackendPicker')?.getClientRects().length),
+    labels: [...document.querySelectorAll('[data-session-backend]')].map((item) => item.textContent.trim()),
+    selected: document.querySelector('[data-session-backend][aria-pressed="true"]')?.dataset.sessionBackend || '',
+    rawWireVisible: /web-managed|terminal-managed/.test(document.getElementById('sessionBackendPicker')?.textContent || ''),
+  }))()`);
+  if (!backendPicker.visible || backendPicker.selected !== 'CODEX_TUI'
+    || !backendPicker.labels.some((value) => value.includes('Codex App Server'))
+    || !backendPicker.labels.some((value) => value.includes('Codex TUI (tmux)'))
+    || backendPicker.rawWireVisible) {
+    throw new Error(`Backend picker is incomplete: ${JSON.stringify(backendPicker)}`);
+  }
+  await evaluate("document.querySelector('[data-session-backend=\"APP_SERVER\"]')?.click()");
   const contextPicker = await evaluate(`(() => ({
     visible: Boolean(document.getElementById('contextWindowPicker')?.getClientRects().length),
     defaultSelected: document.querySelector('[data-context-window-k="0"]')?.getAttribute('aria-pressed') === 'true',
@@ -317,7 +331,8 @@ await withBrowser({
     || explicitResumeRequests[0]?.agent_session_id !== 'anonymous-explicit-thread'
     || explicitResumeRequests[0]?.cwd !== '/workspace/selected'
     || explicitResumeRequests[0]?.cwd_token !== 'signed-selected-folder'
-    || explicitResumeRequests[0]?.context_window_k !== 272) {
+    || explicitResumeRequests[0]?.context_window_k !== 272
+    || explicitResumeRequests[0]?.backend !== 'web-managed') {
     throw new Error(`Explicit folder resume request is incorrect: ${JSON.stringify(explicitResumeRequests)}`);
   }
   await evaluate(`(() => {history.replaceState(null,'',location.pathname+location.search);document.getElementById('faryoExplicitResumeFixture')?.remove();})()`);
@@ -499,6 +514,10 @@ await withBrowser({
         searchVisible: (() => { const item=document.getElementById('directorySearch');return Boolean(item&&item.getClientRects().length); })(),
         hiddenToggleVisible: (() => { const item=document.getElementById('directoryHiddenToggle');return Boolean(item&&item.getClientRects().length&&item.getAttribute('aria-pressed')==='false'); })(),
         contextPickerVisible: (() => { const item=document.getElementById('contextWindowPicker');return Boolean(item&&item.getClientRects().length); })(),
+        backendPickerVisible: (() => { const item=document.getElementById('sessionBackendPicker');return Boolean(item&&item.getClientRects().length); })(),
+        backendDefault: document.querySelector('[data-session-backend="APP_SERVER"]')?.getAttribute('aria-pressed') === 'true',
+        backendLabels: [...document.querySelectorAll('[data-session-backend]')].map((item) => item.textContent.trim()),
+        backendWireHidden: !/web-managed|terminal-managed/.test(document.getElementById('sessionBackendPicker')?.textContent || ''),
         contextDefault: document.querySelector('[data-context-window-k="0"]')?.getAttribute('aria-pressed') === 'true',
         contextOneMillion: [...document.querySelectorAll('[data-context-window-k]')].some((item) => item.textContent.trim() === '1M'),
         sections: [...document.querySelectorAll('#modalChoices .directory-section')].map((item) => item.dataset.directorySection),
@@ -523,6 +542,9 @@ await withBrowser({
       || !cwdConfirmation.breadcrumbLabelsClean || !cwdConfirmation.currentCrumb
       || !cwdConfirmation.headerBackAbsent || !cwdConfirmation.searchVisible || !cwdConfirmation.hiddenToggleVisible
       || !cwdConfirmation.contextPickerVisible || !cwdConfirmation.contextDefault || !cwdConfirmation.contextOneMillion
+      || !cwdConfirmation.backendPickerVisible || !cwdConfirmation.backendDefault || !cwdConfirmation.backendWireHidden
+      || !cwdConfirmation.backendLabels.some((value) => value.includes('Codex App Server'))
+      || !cwdConfirmation.backendLabels.some((value) => value.includes('Codex TUI (tmux)'))
       || !cwdConfirmation.sections.includes('folders') || cwdConfirmation.recentCount > 4
       || !cwdConfirmation.folderCount || !cwdConfirmation.parentRowFirst || !cwdConfirmation.folderRowsHaveNoPaths
       || !cwdConfirmation.flatPrefixesAbsent || !cwdConfirmation.hasCancel || !cwdConfirmation.hasPrimary

@@ -647,6 +647,7 @@ class AsgiReadContractTest(unittest.TestCase):
         self.assertEqual(self.config.audit_calls[0]["target"], "thread-fixture")
         owner_payload = json.loads(OwnerContractFixture.requests[-1]["body"])
         self.assertEqual(owner_payload["context_window_k"], 1000)
+        self.assertEqual(owner_payload["backend"], "terminal-managed")
 
     def test_agent_resume_returns_directory_preflight_then_accepts_signed_choice(self) -> None:
         csrf = gateway_security.csrf_token(self.config.cookie_secret, "tester", self.config.auth_epoch("tester"))
@@ -713,6 +714,32 @@ class AsgiReadContractTest(unittest.TestCase):
         self.assertEqual(self.config.audit_calls[0]["target"], "faryo4")
         owner_payload = json.loads(OwnerContractFixture.requests[-1]["body"])
         self.assertEqual(owner_payload["context_window_k"], 272)
+        self.assertEqual(owner_payload["backend"], "web-managed")
+
+    def test_agent_resume_forwards_explicit_backend_choice(self) -> None:
+        body = json.dumps({
+            "route": "lab",
+            "agent_session_id": "thread-fixture",
+            "source": "codex-cli",
+            "backend": "web-managed",
+        }).encode("utf-8")
+        csrf = gateway_security.csrf_token(
+            self.config.cookie_secret,
+            "tester",
+            self.config.auth_epoch("tester"),
+        )
+        response = self.request(
+            self.asgi_base,
+            "/api/agent/resume",
+            authenticated=True,
+            method="POST",
+            body=body,
+            extra_headers={legacy.CSRF_HEADER: csrf, "Content-Type": "application/json"},
+        )
+
+        self.assertEqual(response[0], HTTPStatus.OK)
+        owner_payload = json.loads(OwnerContractFixture.requests[-1]["body"])
+        self.assertEqual(owner_payload["backend"], "web-managed")
 
     def test_agent_launch_rejects_invalid_context_window_before_owner(self) -> None:
         body = json.dumps({

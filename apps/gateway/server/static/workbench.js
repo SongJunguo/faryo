@@ -112,6 +112,33 @@ const WORKBENCH_CACHE_KEY = "faryoWorkbenchSnapshot";
 const DIRECTORY_HIDDEN_PREFERENCE_KEY = "faryoDirectoryShowHiddenV1";
 const CONTEXT_WINDOW_MIN_K = 32;
 const CONTEXT_WINDOW_MAX_K = 1050;
+const SESSION_BACKEND = Object.freeze({
+  APP_SERVER: Object.freeze({
+    key: "APP_SERVER",
+    wire: "web-managed",
+    label: "Codex App Server",
+  }),
+  CODEX_TUI: Object.freeze({
+    key: "CODEX_TUI",
+    wire: "terminal-managed",
+    label: "Codex TUI (tmux)",
+  }),
+});
+function sessionBackendKey(value, source = "") {
+  const raw = String(value || "");
+  if (raw === SESSION_BACKEND.APP_SERVER.wire)
+    return SESSION_BACKEND.APP_SERVER.key;
+  if (raw === SESSION_BACKEND.CODEX_TUI.wire)
+    return SESSION_BACKEND.CODEX_TUI.key;
+  return source === "codex-app-server"
+    ? SESSION_BACKEND.APP_SERVER.key
+    : SESSION_BACKEND.CODEX_TUI.key;
+}
+function sessionBackendWire(key) {
+  return key === SESSION_BACKEND.CODEX_TUI.key
+    ? SESSION_BACKEND.CODEX_TUI.wire
+    : SESSION_BACKEND.APP_SERVER.wire;
+}
 const labels = JSON.parse(
     document.getElementById("faryoRouteLabels")?.textContent || "{}",
   ),
@@ -176,13 +203,18 @@ const workbenchRenderer = preactFactory({
       return withBusy(async () => {
         const route = await selectNewRoute(item.entries, item.label);
         if (!route) return;
+        const routeEntry = item.entries.find((entry) => entry.id === route);
         const directory = await selectNewCwd(
           route,
           item.label,
           item.cwdChoices,
+          {
+            backend: item.backend,
+            appServerReady: routeEntry?.appServerReady !== false,
+          },
         );
         if (directory === null) return;
-        await agentNew(route, item.command, directory, item.backend);
+        await agentNew(route, item.command, directory);
       });
     },
     sessionAction(item, action, event) {
@@ -199,7 +231,7 @@ const workbenchRenderer = preactFactory({
           await changeSessionArchived(item, action === "archive");
           return;
         }
-        if (action === "choose-folder") {
+        if (action === "resume-options") {
           event.preventDefault();
           event.stopPropagation();
           if (!item.id) return;
@@ -238,7 +270,12 @@ const workbenchRenderer = preactFactory({
               item.route,
               "resumed Codex",
               explicitChoices,
-              "Choose the working directory for this saved Codex conversation.",
+              {
+                body: "Choose the backend, working directory and context window for this saved Codex conversation.",
+                backend: item.backend,
+                source: item.source,
+                appServerReady: item.appServerReady !== false,
+              },
             );
           if (directory === null) return;
           markAttentionRead(item);
@@ -247,6 +284,7 @@ const workbenchRenderer = preactFactory({
             item.id,
             item.source || "",
             directory,
+            directory.backend,
           );
           return;
         }
@@ -277,7 +315,13 @@ const workbenchRenderer = preactFactory({
           await notice("Agent limit reached", "Close a running session first.");
           return;
         }
-        await resumeSession(item.route, item.id, item.source || "");
+        await resumeSession(
+          item.route,
+          item.id,
+          item.source || "",
+          null,
+          item.backend,
+        );
       });
     },
     draggedPackage: () => draggedPackage,
@@ -393,6 +437,7 @@ function resetSheetMode() {
     breadcrumb = document.getElementById("directoryBreadcrumb"),
     search = document.getElementById("directorySearch"),
     hiddenToggle = document.getElementById("directoryHiddenToggle"),
+    backendHelp = document.getElementById("sessionBackendHelp"),
     contextInput = document.getElementById("contextWindowCustom"),
     contextError = document.getElementById("contextWindowError");
   modal.classList.remove("directory-mode");
@@ -404,6 +449,18 @@ function resetSheetMode() {
   hiddenToggle.disabled = false;
   hiddenToggle.setAttribute("aria-pressed", "false");
   hiddenToggle.classList.remove("active");
+  for (const button of document.querySelectorAll("[data-session-backend]")) {
+    button.onclick = null;
+    button.disabled = false;
+    button.setAttribute(
+      "aria-pressed",
+      button.dataset.sessionBackend === SESSION_BACKEND.APP_SERVER.key
+        ? "true"
+        : "false",
+    );
+  }
+  backendHelp.textContent =
+    "App Server is recommended for the best web experience.";
   for (const button of document.querySelectorAll("[data-context-window-k]")) {
     button.onclick = null;
     button.setAttribute(
@@ -997,6 +1054,37 @@ function directorySection(title, items, done, more) {
   section.append(heading, ...items.map((item) => directoryRow(item, done)));
   return section;
 }
+function bindSessionBackendPicker(state, { appServerReady = true } = {}) {
+  const buttons = [...document.querySelectorAll("[data-session-backend]")],
+    help = document.getElementById("sessionBackendHelp"),
+    appServerButton = buttons.find(
+      (button) =>
+        button.dataset.sessionBackend === SESSION_BACKEND.APP_SERVER.key,
+    );
+  appServerButton.disabled = !appServerReady;
+  if (!appServerReady && state.key === SESSION_BACKEND.APP_SERVER.key)
+    state.key = SESSION_BACKEND.CODEX_TUI.key;
+  const sync = () => {
+    for (const button of buttons)
+      button.setAttribute(
+        "aria-pressed",
+        String(button.dataset.sessionBackend === state.key),
+      );
+    help.textContent = !appServerReady
+      ? "Codex App Server is reconnecting; use Codex TUI (tmux) for this launch."
+      : state.key === SESSION_BACKEND.APP_SERVER.key
+        ? "App Server is recommended for structured streaming and reliable web control."
+        : "TUI compatibility keeps Codex inside a tmux terminal session.";
+  };
+  for (const button of buttons)
+    button.onclick = () => {
+      if (button.disabled) return;
+      state.key = button.dataset.sessionBackend;
+      sync();
+    };
+  sync();
+  return () => sessionBackendWire(state.key);
+}
 function contextWindowValue(state) {
   if (state.mode === "default") return 0;
   const raw =
@@ -1086,6 +1174,10 @@ function directorySheet(data, recent, label, options = {}) {
     document.getElementById("modalBody").textContent =
       options.body || `Choose where this ${label} session should work.`;
     toolbar.hidden = false;
+    const readBackend = bindSessionBackendPicker(
+      options.backendState || { key: SESSION_BACKEND.APP_SERVER.key },
+      { appServerReady: options.appServerReady !== false },
+    );
     const readContextWindowK = bindContextWindowPicker(
       options.contextWindowState || { mode: "default", k: 0, custom: "" },
     );
@@ -1206,6 +1298,7 @@ function directorySheet(data, recent, label, options = {}) {
         cwd: String(currentData.path || ""),
         cwdToken: String(currentData.selectionToken || ""),
         contextWindowK,
+        backend: readBackend(),
       });
     });
     actions.replaceChildren(cancel, select);
@@ -1242,9 +1335,14 @@ async function firstAvailableDirectoryPage(route, recent, showHidden = false) {
   }
   throw lastError || new Error("No available working directory");
 }
-async function selectNewCwd(route, label, cwdChoices, body = "") {
+async function selectNewCwd(route, label, cwdChoices, rawOptions = {}) {
+  const options =
+    typeof rawOptions === "string" ? { body: rawOptions } : rawOptions || {};
   const recent = Array.isArray(cwdChoices?.[route]) ? cwdChoices[route] : [];
   const contextWindowState = { mode: "default", k: 0, custom: "" };
+  const backendState = {
+    key: sessionBackendKey(options.backend, options.source),
+  };
   let showHidden = false;
   try {
     showHidden = localStorage.getItem(DIRECTORY_HIDDEN_PREFERENCE_KEY) === "1";
@@ -1255,8 +1353,10 @@ async function selectNewCwd(route, label, cwdChoices, body = "") {
   while (true) {
     const selected = await directorySheet(data, recent, label, {
       showHidden,
-      body,
+      body: options.body || "",
       contextWindowState,
+      backendState,
+      appServerReady: options.appServerReady !== false,
       onToggleHidden: async (nextShowHidden, currentPath) => {
         const next = await directoryPage(
           route,
@@ -1284,11 +1384,11 @@ function newLaunchRequestId() {
     ? `web-${crypto.randomUUID()}`
     : `web-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 14)}`;
 }
-async function agentNew(route, command, directory, backend = "web-managed") {
+async function agentNew(route, command, directory) {
   const payload = {
     route,
     command,
-    backend,
+    backend: directory?.backend || SESSION_BACKEND.APP_SERVER.wire,
     client_launch_id: newLaunchRequestId(),
   };
   if (directory?.cwd) {
@@ -1325,8 +1425,17 @@ async function resumeSession(
   agentSessionId,
   source,
   selectedDirectory = null,
+  selectedBackend = "",
 ) {
-  const payload = { route, agent_session_id: agentSessionId, source };
+  const payload = {
+    route,
+    agent_session_id: agentSessionId,
+    source,
+    backend:
+      selectedBackend ||
+      selectedDirectory?.backend ||
+      sessionBackendWire(sessionBackendKey("", source)),
+  };
   if (selectedDirectory?.cwd) {
     payload.cwd = selectedDirectory.cwd;
     payload.cwd_token = selectedDirectory.cwdToken || "";
@@ -1355,11 +1464,16 @@ async function resumeSession(
         route,
         "resumed Codex",
         latestAgentCwdChoices,
-        `${recorded} is unavailable. Choose a working directory before Codex resumes.`,
+        {
+          body: `${recorded} is unavailable. Choose a backend and working directory before Codex resumes.`,
+          backend: payload.backend,
+          source,
+        },
       );
     if (directory === null) return;
     payload.cwd = directory.cwd;
     payload.cwd_token = directory.cwdToken || "";
+    payload.backend = directory.backend || payload.backend;
     if (directory.contextWindowK)
       payload.context_window_k = directory.contextWindowK;
     data = await request();
@@ -1461,7 +1575,7 @@ function renderWorkbench(data) {
       (entry) =>
         entry.state !== "offline" &&
         entry.state !== "error" &&
-        entry.appServerReady !== false,
+        entry.canCreate !== false,
     ),
     appServerState = readyEntries.length
       ? readyEntries.some((entry) => entry.appServerReady === true)
@@ -1474,12 +1588,12 @@ function renderWorkbench(data) {
         id: "new-codex",
         command: "codex",
         label: "Codex",
-        backend: "web-managed",
+        backend: SESSION_BACKEND.APP_SERVER.wire,
         description: readyEntries.length
           ? appServerState === "ready"
-            ? "Streaming runtime ready"
-            : "New streaming web session"
-          : "Codex runtime is reconnecting",
+            ? "Choose App Server or TUI"
+            : "TUI available · App Server reconnecting"
+          : "No endpoint can start another session",
         disabled: !readyEntries.length,
         runtimeState: appServerState,
         entries: readyEntries,

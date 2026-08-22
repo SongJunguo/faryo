@@ -42,8 +42,7 @@ export function sessionViewModel(item, routeLabels = {}) {
           : "resumable"),
   );
   const blocked = Boolean(item?.limitReached);
-  const canChooseFolder =
-    !active && lifecycle === "resumable" && item?.source === "codex-cli";
+  const canChooseFolder = !active && lifecycle === "resumable";
   const title = [
     item?.title || item?.id || "Untitled session",
     item?.gitLabel || "",

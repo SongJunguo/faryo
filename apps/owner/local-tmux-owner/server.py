@@ -45,7 +45,7 @@ import session_catalog
 import session_launch
 import codex_tui_interactions
 import interaction_service
-from faryo_cli import codex_runtime
+from faryo_cli import codex_runtime, session_backend
 
 SHARED_DIR = Path(__file__).resolve().parents[2] / "shared"
 if str(SHARED_DIR) not in sys.path:
@@ -1717,7 +1717,7 @@ def web_capture_payload_from_state(capture: dict[str, Any], lines: int) -> dict[
         "streamItemId": str(streaming_item.get("id") or "") if streaming_item else "",
         "streamTurnId": str(streaming_item.get("turnId") or "") if streaming_item else "",
         "streamItemRevision": int(streaming_item.get("revision") or 0) if streaming_item else 0,
-        "backend": "web-managed",
+        "backend": session_backend.APP_SERVER.value,
         "updatedAt": now_iso(),
     }
 
@@ -1811,7 +1811,7 @@ def web_status_payload(runtime: appserver_runtime.AppServerRuntime, session: str
         "paneCommand": None,
         "agentSource": "codex-app-server",
         "agentProfile": "codex",
-        "backend": "web-managed",
+        "backend": session_backend.APP_SERVER.value,
         "updatedAt": now_iso(),
     }
 
@@ -1857,7 +1857,7 @@ def web_agent_session_items(
             "agentRunning": lifecycle == "running",
             "state": state,
             "archived": False,
-            "backend": "web-managed",
+            "backend": session_backend.APP_SERVER.value,
         })
     return items
 
@@ -2511,6 +2511,7 @@ def status_payload(config: Config) -> dict[str, Any]:
         "paneCommand": get_pane_current_command(config) if tmux_alive else None,
         "agentSource": profile.source if profile else "",
         "agentProfile": profile.key if profile else "",
+        "backend": session_backend.CODEX_TUI.value,
         "updatedAt": now_iso(),
     }
 

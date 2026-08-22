@@ -110,6 +110,15 @@
     approvalPendingRe: /(?:^|\n)\s*(?:Reviewing(?:\s+\d+)?\s+approval requests?(?:\s+\(|\s*$)|Automatic approval review\b|Approval requested\b|Allow Codex to run\b|Would you like to (?:run the following command|make the following edits|grant these permissions)\?)/i,
   };
   const COMPACT_CAPTURE_LINES = 320, FULL_CAPTURE_LINES = 800;
+  const SESSION_BACKEND = Object.freeze({
+    APP_SERVER: 'web-managed',
+    CODEX_TUI: 'terminal-managed',
+  });
+  function sessionBackendLabel(value) {
+    if (value === SESSION_BACKEND.APP_SERVER) return 'Codex App Server';
+    if (value === SESSION_BACKEND.CODEX_TUI) return 'Codex TUI (tmux)';
+    return 'Unknown backend';
+  }
   const FETCH_TIMEOUT_MS = 12000, MAX_ATTACHMENTS = 35;
   const TIP_REFRESH_MS = 120000, STATUS_REFRESH_MS = 20000, FULL_REFRESH_MS = 10000, CAPTURE_FALLBACK_MS = 2500;
   const CAPTURE_SAFETY_MS = 12000, EVENT_STREAM_IDLE_MS = 28000;
@@ -1490,6 +1499,7 @@
     if ($('detailsOwner')) $('detailsOwner').textContent = ownerLabel;
     if ($('detailsModel')) $('detailsModel').textContent = `${modelLabel} · ${fastView.fastText}`;
     if ($('detailsGit')) $('detailsGit').textContent = gitModel.text;
+    if ($('detailsBackend')) $('detailsBackend').textContent = sessionBackendLabel(data.backend);
     if (data.agentState === 'starting' && outputMode === 'compact' && !lastCompactCapture) {
       output.classList.add('compact-blocks');
       const updatePending = data.codexUpdateStatus === 'pending';
@@ -2014,6 +2024,9 @@
     output.dataset.streaming = capture.streaming ? 'true' : 'false';
     output.dataset.streamItemId = String(capture.streamItemId || '');
     if ($('detailsSource')) $('detailsSource').textContent = String(capture.captureSource || capture.source || 'unknown');
+    if ($('detailsBackend') && capture.backend) {
+      $('detailsBackend').textContent = sessionBackendLabel(capture.backend);
+    }
     syncStructuredInteraction(capture.interaction || null);
     updateStatusLineAutoExpand();
     output.classList.toggle('compact-blocks', outputMode === 'compact');

@@ -1,7 +1,7 @@
 Preact 10.29.8
 https://preactjs.com/
-Bundle SHA-256: b5d545f4078df73d70036196c861077cbc4443a144674411466a1bcaa90c7d05
-Bundle size: 18429 bytes raw; 7438 bytes gzip -9
+Bundle SHA-256: 87d421d62df2db8d2abd4cf799beeaf075065cb963f0ffaf3e49c9a8cb4e670b
+Bundle size: 18414 bytes raw; 7444 bytes gzip -9
 Transitive production dependencies: none
 
 The MIT License (MIT)

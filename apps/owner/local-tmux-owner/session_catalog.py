@@ -13,6 +13,8 @@ from http import HTTPStatus
 from pathlib import Path
 from typing import Any, Callable
 
+from faryo_cli import session_backend
+
 
 @dataclass(frozen=True)
 class CatalogBindings:
@@ -224,7 +226,11 @@ class SessionCatalog:
             "agentRunning": agent_running,
             "state": state,
             "archived": archived,
-            "backend": "web-managed" if web_managed else "terminal-managed",
+            "backend": (
+                session_backend.APP_SERVER.value
+                if web_managed
+                else session_backend.CODEX_TUI.value
+            ),
         }
 
     def clean_agent_history_query(self, value: Any) -> str:

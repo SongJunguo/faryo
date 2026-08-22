@@ -27,11 +27,14 @@ import server
 
 
 class FakeRegistry:
+    def __init__(self):
+        self.thread_records = {}
+
     def get(self, name):
         return None
 
     def by_thread(self, thread_id):
-        return None
+        return self.thread_records.get(thread_id)
 
 
 class FakeRuntime:
@@ -42,6 +45,7 @@ class FakeRuntime:
         self.sessions = set()
         self.registry = FakeRegistry()
         self.sent = []
+        self.resumed = []
 
     def start(self):
         self.started = True
@@ -51,6 +55,9 @@ class FakeRuntime:
 
     def has_session(self, name):
         return name in self.sessions
+
+    def has_thread(self, thread_id):
+        return self.registry.by_thread(thread_id) is not None
 
     def start_session(self, **_values):
         self.sessions.add("faryo1")
@@ -84,6 +91,17 @@ class FakeRuntime:
                 "rateLimits": {},
             },
             "messages": [],
+        }
+
+    def resume_session(self, **values):
+        self.resumed.append(values)
+        self.sessions.add("faryo2")
+        return {
+            "session": "faryo2",
+            "threadId": values["thread_id"],
+            "state": "idle",
+            "backend": "web-managed",
+            "duplicate": False,
         }
 
     def send(self, session, text, client_message_id):
@@ -234,6 +252,70 @@ class OwnerAsgiTest(unittest.TestCase):
         self.assertEqual(headers.get("cache-control"), "no-store")
         self.assertEqual(json.loads(body)["error"], "file not found")
         self.assertTrue(self.runtime.started)
+
+    def test_resume_can_switch_from_tui_history_to_app_server(self) -> None:
+        thread = {
+            "id": "thread_switch_app",
+            "cwd": self.cwd,
+            "title": "Anonymous thread",
+            "model": "test-model",
+        }
+        with (
+            mock.patch.object(server, "codex_thread_by_id", return_value=thread),
+            mock.patch.object(server, "active_codex_thread_state", return_value=({}, set())),
+        ):
+            status, _headers, body = self.request(
+                "POST",
+                "/api/agent/resume",
+                {
+                    "agent_session_id": "thread_switch_app",
+                    "source": "codex-cli",
+                    "backend": "web-managed",
+                },
+                token=True,
+            )
+
+        self.assertEqual(status, 200, body)
+        self.assertEqual(json.loads(body)["session"], "faryo2")
+        self.assertEqual(self.runtime.resumed[0]["thread_id"], "thread_switch_app")
+
+    def test_resume_can_switch_from_app_server_history_to_tui(self) -> None:
+        with (
+            mock.patch.object(server, "codex_resume_directory_requirement", return_value=None),
+            mock.patch.object(server, "resume_agent_session", return_value="faryo3") as resume,
+            mock.patch.object(server, "agent_session_lifecycle", return_value=("starting", False)),
+        ):
+            status, _headers, body = self.request(
+                "POST",
+                "/api/agent/resume",
+                {
+                    "agent_session_id": "thread_switch_tui",
+                    "source": "codex-app-server",
+                    "backend": "terminal-managed",
+                },
+                token=True,
+            )
+
+        self.assertEqual(status, 200, body)
+        self.assertEqual(json.loads(body)["session"], "faryo3")
+        self.assertEqual(resume.call_args.args[2], "codex-cli")
+
+    def test_resume_rejects_second_writer(self) -> None:
+        self.runtime.registry.thread_records["thread_busy"] = object()
+        with mock.patch.object(server, "codex_resume_directory_requirement", return_value=None):
+            status, _headers, body = self.request(
+                "POST",
+                "/api/agent/resume",
+                {
+                    "agent_session_id": "thread_busy",
+                    "source": "codex-app-server",
+                    "backend": "terminal-managed",
+                },
+                token=True,
+            )
+
+        self.assertEqual(status, 409)
+        self.assertIn("Codex App Server", json.loads(body)["error"])
 
 
 if __name__ == "__main__":

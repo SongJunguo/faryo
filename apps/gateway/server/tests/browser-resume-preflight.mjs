@@ -68,6 +68,7 @@ await withBrowser(
       resumeBodies.length !== 2 ||
       !resumeBodies[1].cwd ||
       !resumeBodies[1].cwd_token ||
+      !resumeBodies[1].backend ||
       resumeBodies[1].agent_session_id !== resumeBodies[0].agent_session_id
     ) {
       throw new Error(`Resume retry payload failed: ${JSON.stringify(resumeBodies)}`);
