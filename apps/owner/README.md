@@ -64,8 +64,11 @@ conversation logic to a Web framework.
 Web-managed sessions receive stable `thread`/`turn`/`item` notifications from
 the persistent App Server service. Agent-message deltas update one keyed item;
 the final item replaces that same slot and later converges to Codex rollout
-JSONL. The replay journal is count- and byte-bounded and stores control metadata,
-not a second persistent copy of conversation bodies.
+JSONL. Empty private-reasoning placeholders are not projected as messages.
+Commands, searches and file changes remain inspectable but are grouped into one
+default-collapsed Activity card per turn. The replay journal is count- and
+byte-bounded and stores control metadata, not a second persistent copy of
+conversation bodies.
 
 The old `ThreadingHTTPServer` production entry has been removed. The remaining
 synchronous `codex_app_server.py` helper is intentionally restricted to

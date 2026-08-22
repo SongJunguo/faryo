@@ -4,6 +4,7 @@
   const EXCLUDED_SELECTOR = [
     'button', '.copy-output-block', '.markdown-code-copy', '.memory-reference-card',
     '.compact-live-terminal', '.compact-process-line', '.compact-status-line',
+    '.compact-activity-card',
     '.compact-block.plan', '.question-navigator', '[aria-hidden="true"]',
   ].join(',');
 

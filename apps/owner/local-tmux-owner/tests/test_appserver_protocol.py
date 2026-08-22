@@ -161,12 +161,12 @@ class ProtocolTest(unittest.TestCase):
         rendered = "\n".join(text for _role, text in messages)
 
         self.assertIn(("process", "Ran python -m pytest · exit 0"), messages)
-        self.assertIn(("process", "Working"), messages)
         self.assertIn(("process", "Edited app.py"), messages)
+        self.assertNotIn(("process", "Working"), messages)
         self.assertNotIn("hidden reasoning body", rendered)
         self.assertNotIn("private command output", rendered)
         self.assertNotIn("private diff", rendered)
-        self.assertEqual([block["kind"] for block in blocks], ["process", "process", "process"])
+        self.assertEqual([block["kind"] for block in blocks], ["process", "process"])
         self.assertTrue(all(str(block["id"]).startswith("appserver-item-") for block in blocks))
 
     def test_event_journal_replay_gap_reset_and_byte_bound(self) -> None:

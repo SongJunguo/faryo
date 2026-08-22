@@ -162,6 +162,7 @@ release_checks() {
     "$ROOT/apps/owner/local-tmux-owner/static/keyboard-layout.js" \
     "$ROOT/apps/owner/local-tmux-owner/static/composer-layout.js" \
     "$ROOT/apps/owner/local-tmux-owner/static/owner/changes-panel.mjs" \
+    "$ROOT/apps/owner/local-tmux-owner/static/owner/activity-groups.mjs" \
     "$ROOT/apps/owner/local-tmux-owner/static/owner/api-client.mjs" \
     "$ROOT/apps/owner/local-tmux-owner/static/owner/attachment-controller.mjs" \
     "$ROOT/apps/owner/local-tmux-owner/static/owner/history-controller.mjs" \
@@ -212,6 +213,7 @@ release_checks() {
   "$NODE_BIN" "$ROOT/apps/owner/local-tmux-owner/tests/keyboard-layout.test.js"
   "$NODE_BIN" "$ROOT/apps/owner/local-tmux-owner/tests/composer-layout.test.js"
   "$NODE_BIN" --test "$ROOT/apps/owner/local-tmux-owner/tests/changes-panel.test.mjs"
+  "$NODE_BIN" --test "$ROOT/apps/owner/local-tmux-owner/tests/activity-groups.test.mjs"
   "$NODE_BIN" --test "$ROOT/apps/owner/local-tmux-owner/tests/api-client.test.mjs"
   "$NODE_BIN" --test "$ROOT/apps/owner/local-tmux-owner/tests/attachment-controller.test.mjs"
   "$NODE_BIN" --test "$ROOT/apps/owner/local-tmux-owner/tests/history-controller.test.mjs"
@@ -485,6 +487,7 @@ for grammar in ("python", "latex", "lean", "matlab", "markdown", "yaml", "html",
 assert (root / "tools/markdown-engine/package-lock.json").is_file(), "AST Markdown build must have a lockfile"
 app = (root / "apps/owner/local-tmux-owner/static/app.js").read_text(encoding="utf-8")
 changes_panel_source = (root / "apps/owner/local-tmux-owner/static/owner/changes-panel.mjs").read_text(encoding="utf-8")
+activity_groups_source = (root / "apps/owner/local-tmux-owner/static/owner/activity-groups.mjs").read_text(encoding="utf-8")
 api_client_source = (root / "apps/owner/local-tmux-owner/static/owner/api-client.mjs").read_text(encoding="utf-8")
 attachment_controller_source = (root / "apps/owner/local-tmux-owner/static/owner/attachment-controller.mjs").read_text(encoding="utf-8")
 history_controller_source = (root / "apps/owner/local-tmux-owner/static/owner/history-controller.mjs").read_text(encoding="utf-8")
@@ -496,6 +499,7 @@ status_controller_source = (root / "apps/owner/local-tmux-owner/static/owner/sta
 assert "document.currentScript" in app and "assetRevision" in app and "encodeURIComponent(assetRevision)" in app, "Owner modules must inherit the content-versioned app revision"
 for owner_module in (
     "changes-panel.mjs",
+    "activity-groups.mjs",
     "api-client.mjs",
     "attachment-controller.mjs",
     "history-controller.mjs",
@@ -507,6 +511,7 @@ for owner_module in (
 ):
     assert f"ownerModule('{owner_module}')" in app, f"Owner module is not revisioned: {owner_module}"
 assert "createStatusController" in app and "acceptScope" in status_controller_source and "refreshRunId" in status_controller_source, "Owner status projection must reject stale session responses"
+assert "groupActivityBlocks" in app and "isReasoningPlaceholder" in activity_groups_source and "compact-activity-card" in owner_style, "App Server activity must suppress empty reasoning and collapse tool steps by turn"
 assert "statusRefreshRunId" not in app and "activeStatusRefreshController" not in app, "status request ownership must not return to app.js"
 assert "/api/workspace-changes" in owner_asgi_read_source and "/api/workspace-changes" in changes_panel_source, "workspace changes must use the scoped read-only Owner API"
 assert "/api/capabilities" in owner_asgi_read_source and "/api/diagnostics" in owner_asgi_read_source and "loadOwnerCapabilities" in app, "Owner must expose versioned redacted diagnostics"
@@ -527,7 +532,7 @@ assert "data-faryo-fetch-href" in app, "protected file links must use deferred a
 assert "data-faryo-fetch-src" in app, "protected images must use deferred authenticated fetches"
 assert "target.searchParams.delete('token')" in app, "protected resource fetches must strip query tokens"
 assert 'id="statusShellRoot"' in index and 'id="quotaText"' in owner_status_source and 'id="detailsQuota"' in index, "Owner must expose Preact weekly quota and details"
-for asset in ("style.css", "owner-ui.js", "app.js"):
+for asset in ("style.css", "owner-ui.js", "copy-fidelity.js", "app.js"):
     assert f'{asset}?v=__FARYO_RELEASE_VERSION__' in index, f"Owner release must cache-bust {asset}"
 owner_static_match = re.search(r"OWNER_STATIC_FILES\s*=\s*\{([^}]*)\}", gateway)
 assert owner_static_match, "Gateway Owner static allowlist is unavailable"

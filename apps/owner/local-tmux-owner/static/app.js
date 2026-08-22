@@ -4,6 +4,7 @@
   const assetRevision = new URL(appScript?.src || location.href).searchParams.get('v') || 'dev';
   const ownerModule = (name) => import(`./owner/${name}?v=${encodeURIComponent(assetRevision)}`);
   const apiClientModulePromise = ownerModule('api-client.mjs');
+  const activityGroupsModulePromise = ownerModule('activity-groups.mjs');
   const attachmentControllerModulePromise = ownerModule('attachment-controller.mjs');
   const historyControllerModulePromise = ownerModule('history-controller.mjs');
   const richBlockControllerModulePromise = ownerModule('rich-block-controller.mjs');
@@ -16,6 +17,7 @@
   const changesPanelModulePromise = ownerModule('changes-panel.mjs');
   const [
     { createApiClient, sessionApiPath, validateBrowserEnvelope },
+    { activityItemCollapsible, activityItemSummary, groupActivityBlocks },
     { createAttachmentController },
     { createHistoryController, isStructuredCapture },
     { createRichBlockController, shouldRenderEagerly },
@@ -25,6 +27,7 @@
     { createStatusController },
   ] = await Promise.all([
     apiClientModulePromise,
+    activityGroupsModulePromise,
     attachmentControllerModulePromise,
     historyControllerModulePromise,
     richBlockControllerModulePromise,
@@ -1872,9 +1875,44 @@
     };
   }
 
+  function renderActivityCard(node, model) {
+    if (node.dataset.faryoActivitySignature === model.signature) return;
+    const wasOpen = Boolean(node.open);
+    const summary = document.createElement('summary');
+    summary.className = 'compact-activity-title';
+    const label = document.createElement('span');
+    label.textContent = String(model.summary || 'Activity');
+    summary.appendChild(label);
+
+    const list = document.createElement('div');
+    list.className = 'compact-activity-list';
+    for (const [index, item] of (model.items || []).entries()) {
+      const text = String(item?.text || '').trim();
+      if (!text) continue;
+      if (activityItemCollapsible(text)) {
+        const detail = document.createElement('details');
+        detail.className = 'compact-activity-item compact-activity-item-long';
+        const detailSummary = document.createElement('summary');
+        detailSummary.textContent = activityItemSummary(text, index);
+        const body = document.createElement('pre');
+        body.textContent = text;
+        detail.append(detailSummary, body);
+        list.appendChild(detail);
+      } else {
+        const line = document.createElement('div');
+        line.className = 'compact-activity-item';
+        line.textContent = text;
+        list.appendChild(line);
+      }
+    }
+    node.replaceChildren(summary, list);
+    node.open = wasOpen;
+    node.dataset.faryoActivitySignature = model.signature;
+  }
+
   function renderCompactOutput(text, rules, renderOptions = {}) {
     const mode = renderOptions.mode === 'streaming' ? 'streaming' : 'settled';
-    const structuredBlocks = Array.isArray(renderOptions.messageBlocks)
+    const structuredItems = Array.isArray(renderOptions.messageBlocks)
       ? renderOptions.messageBlocks.flatMap((item) => {
         const kind = String(item?.kind || '');
         const value = String(item?.text || '').trim();
@@ -1882,12 +1920,14 @@
         return [{
           kind,
           text: value,
+          turnKey: String(item.turnKey || ''),
           keyHint: item.id ? `appserver:${item.id}` : '',
           mutable: item.final === false,
           questionKey: String(item.questionKey || ''),
         }];
       })
       : [];
+    const structuredBlocks = groupActivityBlocks(structuredItems);
     const rawBlocks = structuredBlocks.length ? structuredBlocks : rules.compactBlocks(text);
     if (!rawBlocks.length) rawBlocks.push({ kind: 'output', text: 'No output yet' });
     const streamKey = mode === 'streaming' ? String(renderOptions.streamKey || '') : '';
@@ -1928,6 +1968,11 @@
       if (['output', 'user'].includes(model.kind)) model.richIndex = richBlockTotal++;
     }
     const createNode = (model) => {
+      if (model.kind === 'activity') {
+        const node = document.createElement('details');
+        node.className = 'compact-activity-card';
+        return node;
+      }
       if (model.kind === 'process') {
         const node = document.createElement('section');
         node.className = 'compact-process-line';
@@ -1969,6 +2014,7 @@
     models.forEach((model, index) => {
       const node = output.children[index];
       if (!node) return;
+      if (model.kind === 'activity') renderActivityCard(node, model);
       if (['output', 'user'].includes(model.kind)) {
         const descriptor = {
           signature: model.signature,
@@ -2055,7 +2101,7 @@
     capture = mergedConversationCapture(capture);
     const isStructured = structuredCapture(capture);
     const sourceText = String(capture.text || '');
-    const emptyStructured = isStructured && !sourceText.trim();
+    const emptyStructured = isStructured && !sourceText.trim() && !capture.streaming;
     const text = emptyStructured
       ? 'No messages yet. Ask Codex to start this conversation.'
       : sourceText || 'No output yet';

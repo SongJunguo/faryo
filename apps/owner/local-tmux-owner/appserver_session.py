@@ -49,7 +49,10 @@ def item_process_text(item: Mapping[str, Any], *, final: bool = False) -> str:
         text = str(item.get("text") or "").strip()
         return f"Updated Plan\n{text}" if text else "Updated Plan"
     if item_type == "reasoning":
-        return "Working"
+        # Reasoning bodies are intentionally private, and an empty "Working"
+        # block for every reasoning item only duplicates the single live turn
+        # status already projected by the browser.
+        return ""
     if item_type == "commandExecution":
         command = _bounded_text(item.get("command")) or "command"
         exit_code = item.get("exitCode", item.get("exit_code"))

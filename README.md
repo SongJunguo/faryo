@@ -49,6 +49,9 @@ in tmux as an explicit compatibility mode.
 - **Real answer streaming:** stable item identities, bounded delta batching,
   cursor replay and snapshot recovery show the answer while Codex is producing
   it, then converge in place to the durable rollout without duplicate blocks.
+- **Quiet activity trace:** private reasoning placeholders stay hidden, while
+  commands, searches and edits collapse into one inspectable Activity card per
+  turn instead of flooding the conversation.
 - **Long-conversation navigation:** structured history stays bounded, and a
   fast-scroll question rail jumps between prior user turns.
 - **Mobile immersive reading:** installable standalone PWA plus an explicit,
@@ -109,7 +112,7 @@ upstream compatibility, but they are not part of this project's current validati
 or support claims.
 
 Current source line and latest tagged source release: **[Faryo
-1.10.1](https://github.com/SongJunguo/faryo-codex-web-ui/releases/tag/v1.10.1)**.
+1.10.2](https://github.com/SongJunguo/faryo-codex-web-ui/releases/tag/v1.10.2)**.
 
 ## Current Functionality
 
@@ -117,9 +120,10 @@ Current source line and latest tagged source release: **[Faryo
 
 - Streams Codex App Server threads through `thread`, `turn`, and
   `item` lifecycle events, including agent-message deltas and final items.
-- Renders App Server user, assistant, plan, and process items as distinct keyed
-  blocks. A visible working/receiving state precedes and accompanies incremental
-  answer text instead of collapsing the whole thread into terminal-like output.
+- Renders App Server user, assistant and plan items as distinct keyed blocks.
+  One live working/receiving state accompanies incremental answer text; empty
+  reasoning placeholders are omitted, and tool activity is grouped by turn in
+  a default-collapsed, inspectable card.
 - Treats Codex rollout JSONL as the durable final source. An Owner restart can
   reconnect to the independent App Server service and recover the active turn
   without inventing a second message database.
@@ -379,7 +383,7 @@ initial allowed workspace:
 
 ```bash
 sha256sum --check install-faryo.sh.sha256
-bash install-faryo.sh --version v1.10.1 --workspace "$PWD"
+bash install-faryo.sh --version v1.10.2 --workspace "$PWD"
 ```
 
 Upgrading a pre-v1.5 checkout that still uses the dedicated Owner keepalive

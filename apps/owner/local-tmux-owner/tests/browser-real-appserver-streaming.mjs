@@ -225,6 +225,12 @@ await withBrowser(
         captureRevision,
         katexCount: output.querySelectorAll(".katex").length,
         codeCount: output.querySelectorAll(".markdown-code-block").length,
+        reasoningPlaceholderCount: [...output.children].filter(
+          (node) => node.textContent.trim() === "Working",
+        ).length,
+        openActivityCount: output.querySelectorAll(
+          ":scope > .compact-activity-card[open]",
+        ).length,
         fallback: output.dataset.renderFallback || "",
         streamItemId: output.dataset.streamItemId || "",
         overflow:
@@ -251,6 +257,8 @@ await withBrowser(
       state.captureRevision !== state.appRevision ||
       state.katexCount < 2 ||
       state.codeCount < 2 ||
+      state.reasoningPlaceholderCount ||
+      state.openActivityCount ||
       state.fallback ||
       state.streamItemId ||
       state.overflow ||

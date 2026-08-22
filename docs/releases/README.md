@@ -8,7 +8,7 @@ fork's source-only GitHub Release notes.
 
 The maintained fork is source-only and Codex-focused. Use the repository root
 [`README.md`](../../README.md) for current scope, deployment, and validation.
-The current maintained release is [`v1.10.1`](v1.10.1.md). It keeps the explicit
-Codex App Server/Codex TUI launch flow while replacing the redundant 272K context
-preset with 372K. The source-only distribution and security boundary are
-unchanged.
+The current maintained release is [`v1.10.2`](v1.10.2.md). It removes repeated
+empty App Server reasoning placeholders and groups tool activity into compact,
+inspectable per-turn cards. The source-only distribution and security boundary
+are unchanged.

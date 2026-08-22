@@ -105,6 +105,12 @@ conversation area with the complete terminal, so it has no nested `Live from
 tmux` card. Returning to Chat must synchronously restore structured Markdown/TeX
 and then resume the independently collapsible Live panel.
 
+For Codex App Server sessions, private reasoning items do not become repeated
+`Working` messages. The active turn has one transient working/receiving status.
+Commands, searches and edits are grouped by turn into a closed `Activity · N
+steps` card. Opening that card exposes the audit trail in a bounded scroll area;
+long command rows remain closed one level deeper until explicitly selected.
+
 ## Owner Session View
 
 The Owner page contains:
