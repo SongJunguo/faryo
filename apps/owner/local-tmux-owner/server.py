@@ -1761,6 +1761,11 @@ def web_conversation_history_page(
         return appserver_history.conversation_history_page(
             snapshot,
             thread_id=str(record.get("threadId") or ""),
+            message_blocks=[
+                item
+                for item in (capture.get("messageBlocks") or [])
+                if isinstance(item, dict)
+            ],
             limit=limit,
             cursor=cursor,
             around=around,

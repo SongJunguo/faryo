@@ -223,6 +223,41 @@ class ProtocolTest(unittest.TestCase):
         self.assertEqual([block["kind"] for block in latest["turns"][0]["blocks"]], ["user", "output"])
         self.assertEqual(latest["turns"][0]["blocks"][0]["questionKey"], latest["turns"][0]["key"])
 
+        structured = conversation_history_page(
+            {"turns": [{"id": "turn_raw", "items": []}]},
+            message_blocks=[
+                {
+                    "id": "appserver-item-user",
+                    "turnKey": "appserver-turn-safe",
+                    "questionKey": "ignored-client-value",
+                    "kind": "user",
+                    "role": "user",
+                    "text": "Anonymous structured question",
+                    "revision": 1,
+                    "final": True,
+                },
+                {
+                    "id": "appserver-item-answer",
+                    "turnKey": "appserver-turn-safe",
+                    "kind": "output",
+                    "role": "assistant",
+                    "text": "Anonymous structured answer",
+                    "revision": 2,
+                    "final": True,
+                },
+            ],
+            **options,
+        )
+        self.assertEqual(structured["totalTurns"], 1)
+        self.assertEqual(
+            [block["role"] for block in structured["turns"][0]["blocks"]],
+            ["user", "assistant"],
+        )
+        self.assertEqual(
+            structured["turns"][0]["blocks"][0]["questionKey"],
+            structured["questions"][0]["key"],
+        )
+
 
 class TransportTest(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:

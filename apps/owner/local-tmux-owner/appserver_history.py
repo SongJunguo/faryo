@@ -9,6 +9,71 @@ from appserver_session import browser_turn_key, message_block
 import codex_history
 
 
+PUBLIC_BLOCK_KINDS = {"user", "output", "process", "plan"}
+
+
+def _public_block(value: Mapping[str, Any]) -> dict[str, Any] | None:
+    kind = str(value.get("kind") or "")
+    item_id = str(value.get("id") or "")
+    turn_key = str(value.get("turnKey") or "")
+    text = str(value.get("text") or "").strip()
+    if kind not in PUBLIC_BLOCK_KINDS or not item_id or not turn_key or not text:
+        return None
+    try:
+        revision = max(0, int(value.get("revision") or 0))
+    except (TypeError, ValueError):
+        revision = 0
+    role = str(value.get("role") or "")
+    if role not in {"user", "assistant", "process"}:
+        role = "user" if kind == "user" else "assistant" if kind == "output" else "process"
+    block: dict[str, Any] = {
+        "id": item_id,
+        "turnKey": turn_key,
+        "kind": kind,
+        "role": role,
+        "text": text,
+        "revision": revision,
+        "final": value.get("final") is not False,
+    }
+    if kind == "user":
+        block["questionKey"] = turn_key
+    return block
+
+
+def _project_message_blocks(
+    values: list[Mapping[str, Any]],
+    preview_chars: int,
+) -> list[dict[str, Any]]:
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    order: list[str] = []
+    for value in values:
+        block = _public_block(value)
+        if block is None:
+            continue
+        turn_key = str(block["turnKey"])
+        if turn_key not in grouped:
+            grouped[turn_key] = []
+            order.append(turn_key)
+        grouped[turn_key].append(block)
+    projected: list[dict[str, Any]] = []
+    for turn_key in order:
+        blocks = grouped[turn_key]
+        text = _turn_text(blocks)
+        question = next(
+            (str(block["text"]) for block in blocks if block["kind"] == "user"),
+            "",
+        )
+        if text:
+            projected.append({
+                "id": turn_key,
+                "key": turn_key,
+                "preview": codex_history.history_preview(question, preview_chars),
+                "text": text,
+                "blocks": blocks,
+            })
+    return projected
+
+
 def _turn_blocks(turn: Mapping[str, Any]) -> list[dict[str, Any]]:
     turn_id = str(turn.get("id") or "")
     blocks: list[dict[str, Any]] = []
@@ -54,6 +119,7 @@ def conversation_history_page(
     snapshot: Mapping[str, Any],
     *,
     thread_id: str,
+    message_blocks: list[Mapping[str, Any]] | None = None,
     limit: int,
     cursor: str = "",
     around: int | None = None,
@@ -62,23 +128,25 @@ def conversation_history_page(
     preview_chars: int,
     updated_at: Callable[[], str],
 ) -> dict[str, Any]:
-    projected: list[dict[str, Any]] = []
-    for raw_turn in snapshot.get("turns") or []:
-        if not isinstance(raw_turn, Mapping):
-            continue
-        turn_id = str(raw_turn.get("id") or "")
-        blocks = _turn_blocks(raw_turn)
-        text = _turn_text(blocks)
-        if not turn_id or not text:
-            continue
-        question = _question_text(raw_turn)
-        projected.append({
-            "id": turn_id,
-            "key": browser_turn_key(turn_id),
-            "preview": codex_history.history_preview(question, preview_chars),
-            "text": text,
-            "blocks": blocks,
-        })
+    structured_values = [item for item in (message_blocks or []) if isinstance(item, Mapping)]
+    projected = _project_message_blocks(structured_values, preview_chars)
+    if not projected:
+        for raw_turn in snapshot.get("turns") or []:
+            if not isinstance(raw_turn, Mapping):
+                continue
+            turn_id = str(raw_turn.get("id") or "")
+            blocks = _turn_blocks(raw_turn)
+            text = _turn_text(blocks)
+            if not turn_id or not text:
+                continue
+            question = _question_text(raw_turn)
+            projected.append({
+                "id": turn_id,
+                "key": browser_turn_key(turn_id),
+                "preview": codex_history.history_preview(question, preview_chars),
+                "text": text,
+                "blocks": blocks,
+            })
 
     revision = _revision(thread_id, projected)
     total = len(projected)

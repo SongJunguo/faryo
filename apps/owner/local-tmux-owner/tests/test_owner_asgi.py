@@ -336,7 +336,27 @@ class OwnerAsgiTest(unittest.TestCase):
                 ],
             },
             "messages": [("user", "Anonymous question"), ("assistant", "Anonymous answer")],
-            "messageBlocks": [],
+            "messageBlocks": [
+                {
+                    "id": "appserver-item-user",
+                    "turnKey": "appserver-turn-demo",
+                    "questionKey": "appserver-turn-demo",
+                    "kind": "user",
+                    "role": "user",
+                    "text": "Anonymous question",
+                    "revision": 1,
+                    "final": True,
+                },
+                {
+                    "id": "appserver-item-answer",
+                    "turnKey": "appserver-turn-demo",
+                    "kind": "output",
+                    "role": "assistant",
+                    "text": "Anonymous answer",
+                    "revision": 2,
+                    "final": True,
+                },
+            ],
         }
         with (
             mock.patch.object(self.runtime, "capture", return_value=capture),
