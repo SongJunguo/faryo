@@ -693,6 +693,7 @@ class AppServerRuntime:
             "record": record.public(),
             "snapshot": snapshot,
             "messages": actor.messages(),
+            "messageBlocks": actor.message_blocks(),
         }
 
     async def _close_session(self, name: str) -> dict[str, Any]:

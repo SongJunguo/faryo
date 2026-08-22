@@ -42,17 +42,43 @@ await withBrowser(
         nextNodeId: 1,
         activeNodeIds: new Set(),
         activeLengths: new Set(),
+        itemNodeIds: new Map(),
+        unstableItem: false,
+        observations: [],
         sawMutable: false,
         sawStreaming: false,
+        sawProgress: false,
       };
       const sample = () => {
         if (output?.dataset.streaming !== "true") return;
         state.sawStreaming = true;
-        if (!output.dataset.streamItemId) return;
-        const node = output.querySelector(".compact-block.output:last-of-type");
+        if (output.querySelector(".appserver-stream-progress")) state.sawProgress = true;
+        const streamItemId = output.dataset.streamItemId;
+        if (!streamItemId) return;
+        const outputs = output.querySelectorAll(
+          ':scope > .compact-block.output[data-faryo-block-mutable="true"]',
+        );
+        const node = outputs[outputs.length - 1];
         if (!node) return;
         if (!nodeIds.has(node)) nodeIds.set(node, state.nextNodeId++);
-        state.activeNodeIds.add(nodeIds.get(node));
+        const nodeId = nodeIds.get(node);
+        state.activeNodeIds.add(nodeId);
+        const itemNodes = state.itemNodeIds.get(streamItemId) || new Set();
+        itemNodes.add(nodeId);
+        state.itemNodeIds.set(streamItemId, itemNodes);
+        if (itemNodes.size > 1) state.unstableItem = true;
+        if (
+          state.observations.length < 12 &&
+          state.observations.at(-1)?.nodeId !== nodeId
+        ) {
+          state.observations.push({
+            nodeId,
+            key: node.dataset.faryoBlockKey || "",
+            mutable: node.dataset.faryoBlockMutable || "",
+            created: output.dataset.compactCreated || "",
+            reused: output.dataset.compactReused || "",
+          });
+        }
         state.activeLengths.add(String(node.innerText || "").length);
         if (node.dataset.faryoBlockMutable === "true") state.sawMutable = true;
       };
@@ -88,6 +114,59 @@ await withBrowser(
       null,
       { timeout: 180_000 },
     );
+    await page.waitForFunction(
+      () =>
+        document.querySelectorAll("#output > .compact-block.user").length >= 2 &&
+        document.querySelectorAll("#output > .compact-block.output").length >= 2 &&
+        document.querySelectorAll("#questionNavMarkers .question-nav-marker:not(.unloaded)").length >= 2,
+      null,
+      { timeout: 25_000 },
+    );
+
+    const jumpRequest = await page.evaluate(() => {
+      const markers = [
+        ...document.querySelectorAll(
+          "#questionNavMarkers .question-nav-marker:not(.unloaded)",
+        ),
+      ];
+      const marker = markers[0];
+      const scroller = document.getElementById("outputWrap");
+      const request = {
+        index: marker?.dataset.questionIndex || "",
+        key: marker?.dataset.questionKey || "",
+        targetId: marker?.getAttribute("aria-controls") || "",
+        before: Number(scroller?.scrollTop || 0),
+      };
+      marker?.click();
+      return request;
+    });
+    await page.waitForFunction(
+      ({ index, key }) => {
+        const active = document.querySelector(
+          '#questionNavMarkers .question-nav-marker[aria-current="step"]',
+        );
+        return (
+          active?.dataset.questionIndex === index &&
+          active?.dataset.questionKey === key
+        );
+      },
+      jumpRequest,
+      { timeout: 10_000 },
+    );
+    const questionJump = await page.evaluate(({ targetId, before }) => {
+      const scroller = document.getElementById("outputWrap");
+      const target = document.getElementById(targetId);
+      const scrollerRect = scroller?.getBoundingClientRect();
+      const targetRect = target?.getBoundingClientRect();
+      const offset =
+        scrollerRect && targetRect ? targetRect.top - scrollerRect.top : -1;
+      return {
+        moved: Math.abs(Number(scroller?.scrollTop || 0) - Number(before)) > 4,
+        targetVisible:
+          offset >= 0 && offset < Number(scroller?.clientHeight || 0),
+        targetUser: Boolean(target?.classList.contains("user")),
+      };
+    }, jumpRequest);
 
     const state = await page.evaluate(() => {
       globalThis.__faryoRealStream.sample();
@@ -106,8 +185,15 @@ await withBrowser(
       return {
         sawStreaming: stream.sawStreaming,
         sawMutable: stream.sawMutable,
+        sawProgress: stream.sawProgress,
         activeNodeCount: stream.activeNodeIds.size,
+        streamItemCount: stream.itemNodeIds.size,
+        unstableItem: stream.unstableItem,
+        observations: stream.observations,
         activeLengthCount: stream.activeLengths.size,
+        userBlockCount: output.querySelectorAll(":scope > .compact-block.user").length,
+        outputBlockCount: output.querySelectorAll(":scope > .compact-block.output").length,
+        loadedQuestionMarkers: document.querySelectorAll("#questionNavMarkers .question-nav-marker:not(.unloaded)").length,
         appRevision,
         captureRevision,
         katexCount: output.querySelectorAll(".katex").length,
@@ -123,8 +209,17 @@ await withBrowser(
     if (
       !state.sawStreaming ||
       !state.sawMutable ||
-      state.activeNodeCount !== 1 ||
-      state.activeLengthCount < 1 ||
+      !state.sawProgress ||
+      state.activeNodeCount < 1 ||
+      state.streamItemCount < 1 ||
+      state.unstableItem ||
+      state.activeLengthCount < 2 ||
+      state.userBlockCount < 2 ||
+      state.outputBlockCount < 2 ||
+      state.loadedQuestionMarkers < 2 ||
+      !questionJump.moved ||
+      !questionJump.targetVisible ||
+      !questionJump.targetUser ||
       !state.appRevision ||
       state.captureRevision !== state.appRevision ||
       state.katexCount < 2 ||
@@ -136,7 +231,7 @@ await withBrowser(
       pageErrors.length
     ) {
       throw new Error(
-        `Real App Server browser stream failed: ${JSON.stringify({ ...state, sendAckMs, pageErrors })}`,
+        `Real App Server browser stream failed: ${JSON.stringify({ ...state, questionJump, sendAckMs, pageErrors })}`,
       );
     }
 
@@ -153,7 +248,7 @@ await withBrowser(
       { timeout: 25_000 },
     );
     console.log(
-      `faryo-browser-real-appserver=PASS send_ack_ms=${sendAckMs} frames=${state.activeLengthCount} keyed_node=yes markdown=yes katex=yes ordinary_reload=yes revision=${state.appRevision}`,
+      `faryo-browser-real-appserver=PASS send_ack_ms=${sendAckMs} frames=${state.activeLengthCount} roles=yes progress=yes loaded_markers=${state.loadedQuestionMarkers} question_jump=yes keyed_node=yes markdown=yes katex=yes ordinary_reload=yes revision=${state.appRevision}`,
     );
   },
 );

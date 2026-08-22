@@ -157,6 +157,7 @@ class ProtocolTest(unittest.TestCase):
             },
         )
         messages = actor.messages()
+        blocks = actor.message_blocks()
         rendered = "\n".join(text for _role, text in messages)
 
         self.assertIn(("process", "Ran python -m pytest · exit 0"), messages)
@@ -165,6 +166,8 @@ class ProtocolTest(unittest.TestCase):
         self.assertNotIn("hidden reasoning body", rendered)
         self.assertNotIn("private command output", rendered)
         self.assertNotIn("private diff", rendered)
+        self.assertEqual([block["kind"] for block in blocks], ["process", "process", "process"])
+        self.assertTrue(all(str(block["id"]).startswith("appserver-item-") for block in blocks))
 
     def test_event_journal_replay_gap_reset_and_byte_bound(self) -> None:
         journal = EventJournal(max_events=3, max_bytes=800, epoch="epoch")
@@ -217,6 +220,8 @@ class ProtocolTest(unittest.TestCase):
         self.assertEqual([turn["index"] for turn in older["turns"]], [20, 21, 22, 23, 24])
         self.assertIn("Question 3", around["turns"][3 - around["start"]]["text"])
         self.assertEqual(len(latest["questions"]), 30)
+        self.assertEqual([block["kind"] for block in latest["turns"][0]["blocks"]], ["user", "output"])
+        self.assertEqual(latest["turns"][0]["blocks"][0]["questionKey"], latest["turns"][0]["key"])
 
 
 class TransportTest(unittest.IsolatedAsyncioTestCase):

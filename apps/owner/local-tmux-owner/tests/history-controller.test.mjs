@@ -1,7 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { createHistoryController, emptyConversationHistory, isStructuredCapture } from "../static/owner/history-controller.mjs";
+import {
+  createHistoryController,
+  emptyConversationHistory,
+  isStructuredCapture,
+  mergeMessageBlocks,
+} from "../static/owner/history-controller.mjs";
 
 const delay = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
 
@@ -72,6 +77,52 @@ test("revision changes replace stale turn state", () => {
   controller.mergePage({ revision: "rev-a", totalTurns: 1, start: 0, turns: [{ index: 0, text: "old" }] }, "thread-a");
   controller.mergePage({ revision: "rev-b", totalTurns: 1, start: 0, turns: [{ index: 0, text: "new" }] }, "thread-a");
   assert.equal(controller.loadedTurns()[0].text, "new");
+});
+
+test("App Server live blocks extend history instead of being replaced by it", () => {
+  const controller = fixture();
+  controller.mergePage({
+    revision: "rev-structured",
+    totalTurns: 1,
+    start: 0,
+    questions: [{ index: 0, key: "turn-0", preview: "Question" }],
+    turns: [{
+      index: 0,
+      key: "turn-0",
+      text: "› Question\n\n• Old answer",
+      blocks: [
+        { id: "user-0", kind: "user", role: "user", text: "Question", questionKey: "turn-0" },
+        { id: "answer-0", kind: "output", role: "assistant", text: "Old answer" },
+      ],
+    }],
+  }, "thread-a");
+
+  const merged = controller.mergedCapture({
+    captureSource: "codex-app-server",
+    sessionId: "thread-a",
+    streaming: true,
+    text: "live compatibility text",
+    messageBlocks: [
+      { id: "user-0", kind: "user", role: "user", text: "Question", questionKey: "turn-0" },
+      { id: "answer-0", kind: "output", role: "assistant", text: "Growing answer", final: false },
+      { id: "user-1", kind: "user", role: "user", text: "Current question", questionKey: "turn-1" },
+      { id: "answer-1", kind: "output", role: "assistant", text: "Partial", final: false },
+    ],
+  });
+
+  assert.equal(merged.text, "live compatibility text");
+  assert.deepEqual(merged.messageBlocks.map((block) => block.id), ["user-0", "answer-0", "user-1", "answer-1"]);
+  assert.equal(merged.messageBlocks[1].text, "Growing answer");
+  assert.equal(merged.messageBlocks[3].final, false);
+});
+
+test("structured block merging retains history order and replaces matching live items", () => {
+  const merged = mergeMessageBlocks(
+    [{ id: "q", kind: "user", text: "Question" }, { id: "a", kind: "output", text: "Old" }],
+    [{ id: "a", kind: "output", text: "Partial", final: false }, { id: "p", kind: "process", text: "Working" }],
+  );
+  assert.deepEqual(merged.map((block) => block.id), ["q", "a", "p"]);
+  assert.equal(merged[1].text, "Partial");
 });
 
 test("structured capture detection stays source-specific", () => {

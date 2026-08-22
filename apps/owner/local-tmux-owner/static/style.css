@@ -100,6 +100,10 @@ main { grid-row: 2 / 4; grid-column: 1; position: relative; z-index: 1; min-widt
 .compact-process-line, .compact-status-line { color: var(--muted); padding: 2px 4px; font-size: calc(14px + var(--font-step)); }
 .compact-process-line { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; }
 .compact-status-line { font-size: calc(12px + var(--font-step)); }
+.appserver-stream-progress { display: inline-flex; align-items: center; gap: 7px; }
+.appserver-stream-progress::before { content: ""; width: 7px; height: 7px; flex: 0 0 auto; border-radius: 50%; background: var(--accent); animation: appserver-stream-pulse 1.1s ease-in-out infinite; }
+@keyframes appserver-stream-pulse { 0%, 100% { opacity: .32; transform: scale(.82); } 50% { opacity: 1; transform: scale(1); } }
+@media (prefers-reduced-motion: reduce) { .appserver-stream-progress::before { animation: none; } }
 .compact-block.plan { align-self: flex-start; max-width: 92%; background: var(--plan-bg); }
 .compact-plan-title { color: var(--muted); font-size: calc(12px + var(--font-step)); margin-bottom: 6px; }
 .compact-plan-list { display: grid; gap: 4px; }

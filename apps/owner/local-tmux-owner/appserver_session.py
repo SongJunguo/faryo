@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import hashlib
 from typing import Any, Mapping
 
 from appserver_protocol import agent_message_text, item_identity
@@ -112,6 +113,56 @@ def user_message_text(item: Mapping[str, Any]) -> str:
         elif value.get("type") in {"image", "localImage"}:
             parts.append("[Image attached]")
     return "\n".join(parts)
+
+
+def browser_item_key(item_id: str) -> str:
+    return "appserver-item-" + hashlib.sha256(item_id.encode("utf-8")).hexdigest()[:16]
+
+
+def browser_turn_key(turn_id: str) -> str:
+    return "appserver-turn-" + hashlib.sha256(turn_id.encode("utf-8")).hexdigest()[:16]
+
+
+def message_block(
+    item: Mapping[str, Any],
+    *,
+    item_id: str,
+    turn_id: str,
+    text_override: str | None = None,
+    revision: int = 0,
+    final: bool = True,
+) -> dict[str, Any] | None:
+    """Project one App Server item without exposing raw protocol identity."""
+
+    item_type = str(item.get("type") or "")
+    if item_type == "userMessage":
+        kind = "user"
+        role = "user"
+        text = user_message_text(item) if text_override is None else text_override
+    elif item_type == "agentMessage":
+        kind = "output"
+        role = "assistant"
+        text = agent_message_text(item) if text_override is None else text_override
+    else:
+        kind = "plan" if item_type in {"plan", "todoList"} else "process"
+        role = "process"
+        text = item_process_text(item, final=final) if text_override is None else text_override
+    text = str(text or "").strip()
+    if not item_id or not turn_id or not text:
+        return None
+    turn_key = browser_turn_key(turn_id)
+    block: dict[str, Any] = {
+        "id": browser_item_key(item_id),
+        "turnKey": turn_key,
+        "kind": kind,
+        "role": role,
+        "text": text,
+        "revision": max(0, int(revision)),
+        "final": bool(final),
+    }
+    if kind == "user":
+        block["questionKey"] = turn_key
+    return block
 
 
 @dataclass
@@ -397,19 +448,24 @@ class WebSessionActor:
             },
         )
 
-    def messages(self) -> list[tuple[str, str]]:
-        messages: list[tuple[str, str]] = []
+    def message_blocks(self) -> list[dict[str, Any]]:
+        blocks: list[dict[str, Any]] = []
         for item_id in self.item_order:
             projection = self.items[item_id]
-            if projection.type == "agentMessage" and projection.text:
-                messages.append(("assistant", projection.text))
-            elif projection.type == "userMessage":
-                text = user_message_text(projection.raw)
-                if text:
-                    messages.append(("user", text))
-            elif projection.text:
-                messages.append(("process", projection.text))
-        return messages
+            block = message_block(
+                projection.raw,
+                item_id=projection.id,
+                turn_id=projection.turn_id,
+                text_override=None if projection.type == "userMessage" else projection.text,
+                revision=projection.revision,
+                final=projection.final,
+            )
+            if block is not None:
+                blocks.append(block)
+        return blocks
+
+    def messages(self) -> list[tuple[str, str]]:
+        return [(str(block["role"]), str(block["text"])) for block in self.message_blocks()]
 
     def hydrate(self, thread: Mapping[str, Any], turns: list[Mapping[str, Any]] | None = None) -> None:
         if thread.get("id") == self.thread_id:

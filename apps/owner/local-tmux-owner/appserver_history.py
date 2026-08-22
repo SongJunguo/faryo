@@ -5,16 +5,31 @@ from __future__ import annotations
 import hashlib
 from typing import Any, Callable, Mapping
 
+from appserver_session import browser_turn_key, message_block
 import codex_history
 
 
-def _turn_text(turn: Mapping[str, Any], char_budget: int) -> str:
-    return codex_history.thread_transcript(
-        {"turns": [dict(turn)]},
-        max_lines=max(1, char_budget),
-        page_turns=1,
-        char_budget=max(1, char_budget),
-        min_turns=1,
+def _turn_blocks(turn: Mapping[str, Any]) -> list[dict[str, Any]]:
+    turn_id = str(turn.get("id") or "")
+    blocks: list[dict[str, Any]] = []
+    for item in turn.get("items") or []:
+        if not isinstance(item, Mapping):
+            continue
+        block = message_block(
+            item,
+            item_id=str(item.get("id") or ""),
+            turn_id=turn_id,
+            final=True,
+        )
+        if block is not None:
+            blocks.append(block)
+    return blocks
+
+
+def _turn_text(blocks: list[dict[str, Any]]) -> str:
+    return "\n\n".join(
+        f"{'›' if block['kind'] == 'user' else '•'} {block['text']}"
+        for block in blocks
     )
 
 
@@ -23,10 +38,6 @@ def _question_text(turn: Mapping[str, Any]) -> str:
         if isinstance(item, dict) and item.get("type") == "userMessage":
             return codex_history.user_message_text(item)
     return ""
-
-
-def _key(turn_id: str) -> str:
-    return "appserver-" + hashlib.sha256(turn_id.encode("utf-8")).hexdigest()[:16]
 
 
 def _revision(thread_id: str, turns: list[dict[str, Any]]) -> str:
@@ -56,15 +67,17 @@ def conversation_history_page(
         if not isinstance(raw_turn, Mapping):
             continue
         turn_id = str(raw_turn.get("id") or "")
-        text = _turn_text(raw_turn, page_char_budget)
+        blocks = _turn_blocks(raw_turn)
+        text = _turn_text(blocks)
         if not turn_id or not text:
             continue
         question = _question_text(raw_turn)
         projected.append({
             "id": turn_id,
-            "key": _key(turn_id),
+            "key": browser_turn_key(turn_id),
             "preview": codex_history.history_preview(question, preview_chars),
             "text": text,
+            "blocks": blocks,
         })
 
     revision = _revision(thread_id, projected)
@@ -102,6 +115,7 @@ def conversation_history_page(
             "key": str(item["key"]),
             "preview": str(item["preview"]),
             "text": str(item["text"]),
+            "blocks": list(item["blocks"]),
         }
         for item in selected
     ]

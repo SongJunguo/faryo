@@ -178,6 +178,27 @@ class AgentSessionTest(unittest.TestCase):
             {
                 "record": {"threadId": "thread-a", "title": "Demo"},
                 "messages": [("user", "Question"), ("assistant", "Partial")],
+                "messageBlocks": [
+                    {
+                        "id": "appserver-item-question",
+                        "turnKey": "appserver-turn-a",
+                        "questionKey": "appserver-turn-a",
+                        "kind": "user",
+                        "role": "user",
+                        "text": "Question",
+                        "revision": 1,
+                        "final": True,
+                    },
+                    {
+                        "id": "appserver-item-answer",
+                        "turnKey": "appserver-turn-a",
+                        "kind": "output",
+                        "role": "assistant",
+                        "text": "Partial",
+                        "revision": 3,
+                        "final": False,
+                    },
+                ],
                 "snapshot": {
                     "lifecycle": "running",
                     "revision": 7,
@@ -199,6 +220,8 @@ class AgentSessionTest(unittest.TestCase):
         self.assertEqual(capture["streamItemId"], "answer-a")
         self.assertEqual(capture["streamTurnId"], "turn-a")
         self.assertEqual(capture["streamItemRevision"], 3)
+        self.assertEqual([block["kind"] for block in capture["messageBlocks"]], ["user", "output"])
+        self.assertFalse(capture["messageBlocks"][-1]["final"])
 
     def test_directory_browser_lists_only_allowed_visible_directories(self):
         with tempfile.TemporaryDirectory() as root:

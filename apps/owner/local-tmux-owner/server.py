@@ -1656,6 +1656,18 @@ def codex_message_transcript(messages: list[tuple[str, str]], max_lines: int) ->
     )
 
 
+def codex_message_blocks(blocks: list[dict[str, Any]], max_lines: int) -> list[dict[str, Any]]:
+    messages = [(str(block.get("role") or "process"), str(block.get("text") or "")) for block in blocks]
+    selected = codex_history.bounded_rollout_messages(
+        messages,
+        page_turns=CODEX_TRANSCRIPT_PAGE_TURNS,
+        line_budget=max_lines,
+        char_budget=CODEX_TRANSCRIPT_CHAR_BUDGET,
+        min_turns=CODEX_TRANSCRIPT_MIN_TURNS,
+    )
+    return [dict(block) for block in blocks[-len(selected):]] if selected else []
+
+
 def appserver_context_usage(token_usage: Any) -> dict[str, int | float] | None:
     if not isinstance(token_usage, dict):
         return None
@@ -1685,6 +1697,7 @@ def web_capture_payload_from_state(capture: dict[str, Any], lines: int) -> dict[
     record = capture.get("record") or {}
     snapshot = capture.get("snapshot") or {}
     messages = capture.get("messages") or []
+    message_blocks = capture.get("messageBlocks") or []
     snapshot_items = snapshot.get("items") if isinstance(snapshot.get("items"), list) else []
     streaming_item = next(
         (
@@ -1701,6 +1714,7 @@ def web_capture_payload_from_state(capture: dict[str, Any], lines: int) -> dict[
     return {
         "ok": True,
         "text": codex_message_transcript(messages, lines),
+        "messageBlocks": codex_message_blocks(message_blocks, lines),
         "agentRunning": running,
         "queuedSendNowAvailable": False,
         "agentSource": "codex-app-server",

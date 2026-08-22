@@ -18,6 +18,42 @@ export function isStructuredCapture(capture) {
     || capture?.captureSource === "codex-empty";
 }
 
+const MESSAGE_KINDS = new Set(["user", "output", "process", "plan"]);
+
+export function normalizeMessageBlocks(value) {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((item, index) => {
+    const kind = String(item?.kind || "");
+    const text = String(item?.text || "").trim();
+    if (!MESSAGE_KINDS.has(kind) || !text) return [];
+    return [{
+      id: String(item?.id || `anonymous-${index}`),
+      turnKey: String(item?.turnKey || ""),
+      questionKey: String(item?.questionKey || ""),
+      kind,
+      role: String(item?.role || ""),
+      text,
+      revision: Math.max(0, Number(item?.revision || 0)),
+      final: item?.final !== false,
+    }];
+  });
+}
+
+export function mergeMessageBlocks(historyBlocks, liveBlocks) {
+  const merged = normalizeMessageBlocks(historyBlocks);
+  const positions = new Map(merged.map((block, index) => [block.id, index]));
+  for (const block of normalizeMessageBlocks(liveBlocks)) {
+    const position = positions.get(block.id);
+    if (position === undefined) {
+      positions.set(block.id, merged.length);
+      merged.push(block);
+    } else {
+      merged[position] = block;
+    }
+  }
+  return merged;
+}
+
 export function createHistoryController(options = {}) {
   const view = options.view || globalThis;
   const api = options.api;
@@ -58,6 +94,26 @@ export function createHistoryController(options = {}) {
     return blocks.filter(Boolean).join("\n\n");
   }
 
+  function displayBlocks() {
+    const blocks = [];
+    let previous = null;
+    for (const turn of loadedTurns()) {
+      if (previous !== null && turn.index > previous + 1) {
+        const missing = turn.index - previous - 1;
+        blocks.push({
+          id: `history-gap-${previous + 1}-${turn.index}`,
+          kind: "process",
+          role: "process",
+          text: `… ${missing} earlier turn${missing === 1 ? "" : "s"} not loaded; use the question rail to fetch them …`,
+          final: true,
+        });
+      }
+      blocks.push(...normalizeMessageBlocks(turn.blocks));
+      previous = turn.index;
+    }
+    return blocks;
+  }
+
   function mergedCapture(capture) {
     if (
       options.getOutputMode() !== "compact"
@@ -68,7 +124,20 @@ export function createHistoryController(options = {}) {
     ) {
       return capture;
     }
-    return { ...capture, text: displayText(), historyTotalTurns: history.totalTurns };
+    const historyText = displayText();
+    if (capture.captureSource === "codex-app-server") {
+      const liveBlocks = normalizeMessageBlocks(capture.messageBlocks);
+      if (liveBlocks.length) {
+        return {
+          ...capture,
+          text: capture.streaming ? String(capture.text || historyText) : historyText,
+          messageBlocks: mergeMessageBlocks(displayBlocks(), liveBlocks),
+          historyTotalTurns: history.totalTurns,
+        };
+      }
+      if (capture.streaming) return capture;
+    }
+    return { ...capture, text: historyText, historyTotalTurns: history.totalTurns };
   }
 
   function reset() {
@@ -106,6 +175,7 @@ export function createHistoryController(options = {}) {
         key: String(turn.key || `question-${index}`),
         preview: String(turn.preview || ""),
         text: String(turn.text || ""),
+        blocks: normalizeMessageBlocks(turn.blocks),
       });
     }
     const loaded = loadedTurns();
@@ -254,6 +324,7 @@ export function createHistoryController(options = {}) {
     mergedCapture,
     loadedTurns,
     displayText,
+    displayBlocks,
     resolveQuestionTarget,
     scheduleRefresh,
     noteUserIntent,

@@ -1874,15 +1874,38 @@
 
   function renderCompactOutput(text, rules, renderOptions = {}) {
     const mode = renderOptions.mode === 'streaming' ? 'streaming' : 'settled';
-    const rawBlocks = rules.compactBlocks(text);
+    const structuredBlocks = Array.isArray(renderOptions.messageBlocks)
+      ? renderOptions.messageBlocks.flatMap((item) => {
+        const kind = String(item?.kind || '');
+        const value = String(item?.text || '').trim();
+        if (!['user', 'output', 'process', 'plan'].includes(kind) || !value) return [];
+        return [{
+          kind,
+          text: value,
+          keyHint: item.id ? `appserver:${item.id}` : '',
+          mutable: item.final === false,
+          questionKey: String(item.questionKey || ''),
+        }];
+      })
+      : [];
+    const rawBlocks = structuredBlocks.length ? structuredBlocks : rules.compactBlocks(text);
     if (!rawBlocks.length) rawBlocks.push({ kind: 'output', text: 'No output yet' });
     const streamKey = mode === 'streaming' ? String(renderOptions.streamKey || '') : '';
-    if (streamKey) {
+    if (streamKey && !structuredBlocks.length) {
       for (let index = rawBlocks.length - 1; index >= 0; index -= 1) {
         if (String(rawBlocks[index]?.kind || '') !== 'output') continue;
         rawBlocks[index] = { ...rawBlocks[index], keyHint: streamKey, mutable: true };
         break;
       }
+    }
+    if (renderOptions.appServerStreaming) {
+      rawBlocks.push({
+        kind: 'status',
+        text: renderOptions.streamItemId ? 'Receiving response…' : 'Codex is working…',
+        keyHint: 'appserver-stream-progress',
+        mutable: true,
+        streamProgress: true,
+      });
     }
     const models = typeof stableBlocks.plan === 'function'
       ? stableBlocks.plan(rawBlocks, { mode, revision: markdownRenderRevision, tailCount: 2 })
@@ -1913,7 +1936,11 @@
       }
       if (model.kind === 'status') {
         const node = document.createElement('section');
-        node.className = 'compact-status-line';
+        node.className = `compact-status-line${model.streamProgress ? ' appserver-stream-progress' : ''}`;
+        if (model.streamProgress) {
+          node.setAttribute('role', 'status');
+          node.setAttribute('aria-live', 'polite');
+        }
         node.textContent = model.text;
         return node;
       }
@@ -1966,7 +1993,8 @@
       }
       if (model.kind === 'user') {
         const historyTurn = loadedQuestions[loadedQuestionIndex++];
-        if (historyTurn?.key) node.dataset.faryoQuestionKey = historyTurn.key;
+        const questionKey = String(model.questionKey || historyTurn?.key || '');
+        if (questionKey) node.dataset.faryoQuestionKey = questionKey;
         else delete node.dataset.faryoQuestionKey;
         node.dataset.faryoQuestionPreview = typeof questionNavigatorApi.previewText === 'function'
           ? questionNavigatorApi.previewText(model.text, 88)
@@ -2053,6 +2081,9 @@
         try {
           renderCompactOutput(text, rules, {
             mode: isStructured && !capture.streaming ? 'settled' : 'streaming',
+            messageBlocks: capture.messageBlocks,
+            appServerStreaming: capture.captureSource === 'codex-app-server' && Boolean(capture.streaming),
+            streamItemId: String(capture.streamItemId || ''),
             streamKey: capture.streamItemId
               ? `${capture.sessionId || ''}:${capture.streamTurnId || ''}:${capture.streamItemId}`
               : '',

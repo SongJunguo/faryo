@@ -117,6 +117,9 @@ Current source line and latest tagged source release: **[Faryo
 
 - Streams Codex App Server threads through `thread`, `turn`, and
   `item` lifecycle events, including agent-message deltas and final items.
+- Renders App Server user, assistant, plan, and process items as distinct keyed
+  blocks. A visible working/receiving state precedes and accompanies incremental
+  answer text instead of collapsing the whole thread into terminal-like output.
 - Treats Codex rollout JSONL as the durable final source. An Owner restart can
   reconnect to the independent App Server service and recover the active turn
   without inventing a second message database.
@@ -156,6 +159,8 @@ micromark -> mdast -> CommonMark/GFM/math nodes -> safe HTML -> KaTeX
 
 - Builds a right-edge marker for every indexed user question, including turns
   that have not yet been loaded into the DOM.
+- Links loaded App Server markers directly to their structured user blocks, so a
+  visible marker cannot silently exist without a working question target.
 - Stays hidden during normal reading and appears only after a fast user
   wheel/swipe.
 - Auto-hides after scrolling stops, while hover and keyboard focus keep it
