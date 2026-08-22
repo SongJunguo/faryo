@@ -169,6 +169,7 @@ release_checks() {
     "$ROOT/apps/owner/local-tmux-owner/static/owner/capture-controller.mjs" \
     "$ROOT/apps/owner/local-tmux-owner/static/owner/composer-delivery.mjs" \
     "$ROOT/apps/owner/local-tmux-owner/static/owner/goal-status.mjs" \
+    "$ROOT/apps/owner/local-tmux-owner/static/owner/status-controller.mjs" \
     "$ROOT/apps/owner/local-tmux-owner/static/vendor/markdown-ast/markdown-ast.min.js" \
     "$ROOT/apps/owner/local-tmux-owner/static/live-scroll.js" \
     "$ROOT/apps/shared/static/appearance.js" \
@@ -218,6 +219,7 @@ release_checks() {
   "$NODE_BIN" --test "$ROOT/apps/owner/local-tmux-owner/tests/capture-controller.test.mjs"
   "$NODE_BIN" --test "$ROOT/apps/owner/local-tmux-owner/tests/composer-delivery.test.mjs"
   "$NODE_BIN" --test "$ROOT/apps/owner/local-tmux-owner/tests/goal-status.test.mjs"
+  "$NODE_BIN" --test "$ROOT/apps/owner/local-tmux-owner/tests/status-controller.test.mjs"
   "$NODE_BIN" --test "$ROOT/apps/owner/local-tmux-owner/tests/terminal-delivery-receiver.test.mjs"
   PYTHONPATH="$ROOT/src${PYTHONPATH:+:$PYTHONPATH}" \
     "$PYTHON_BIN" -m unittest discover -s "$ROOT/apps/owner/local-tmux-owner/tests" -p 'test_*.py'
@@ -479,6 +481,7 @@ rich_block_controller_source = (root / "apps/owner/local-tmux-owner/static/owner
 capture_controller_source = (root / "apps/owner/local-tmux-owner/static/owner/capture-controller.mjs").read_text(encoding="utf-8")
 composer_delivery_source = (root / "apps/owner/local-tmux-owner/static/owner/composer-delivery.mjs").read_text(encoding="utf-8")
 goal_status_source = (root / "apps/owner/local-tmux-owner/static/owner/goal-status.mjs").read_text(encoding="utf-8")
+status_controller_source = (root / "apps/owner/local-tmux-owner/static/owner/status-controller.mjs").read_text(encoding="utf-8")
 assert "document.currentScript" in app and "assetRevision" in app and "encodeURIComponent(assetRevision)" in app, "Owner modules must inherit the content-versioned app revision"
 for owner_module in (
     "changes-panel.mjs",
@@ -489,8 +492,11 @@ for owner_module in (
     "capture-controller.mjs",
     "composer-delivery.mjs",
     "goal-status.mjs",
+    "status-controller.mjs",
 ):
     assert f"ownerModule('{owner_module}')" in app, f"Owner module is not revisioned: {owner_module}"
+assert "createStatusController" in app and "acceptScope" in status_controller_source and "refreshRunId" in status_controller_source, "Owner status projection must reject stale session responses"
+assert "statusRefreshRunId" not in app and "activeStatusRefreshController" not in app, "status request ownership must not return to app.js"
 assert "/api/workspace-changes" in owner_asgi_read_source and "/api/workspace-changes" in changes_panel_source, "workspace changes must use the scoped read-only Owner API"
 assert "/api/capabilities" in owner_asgi_read_source and "/api/diagnostics" in owner_asgi_read_source and "loadOwnerCapabilities" in app, "Owner must expose versioned redacted diagnostics"
 assert '"pendingQueueManagement": False' in runtime_diagnostics_source and '"pendingQueue": "unsupported"' in runtime_diagnostics_source, "Faryo must not overclaim editable Codex queues"

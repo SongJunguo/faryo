@@ -10,6 +10,7 @@
   const captureControllerModulePromise = ownerModule('capture-controller.mjs');
   const composerDeliveryModulePromise = ownerModule('composer-delivery.mjs');
   const goalStatusModulePromise = ownerModule('goal-status.mjs');
+  const statusControllerModulePromise = ownerModule('status-controller.mjs');
   // Workspace review is an optional surface. Start loading it immediately,
   // but never let a transient asset failure block capture/history rendering.
   const changesPanelModulePromise = ownerModule('changes-panel.mjs');
@@ -21,6 +22,7 @@
     { createCaptureController },
     { createComposerDelivery },
     { goalViewModel },
+    { createStatusController },
   ] = await Promise.all([
     apiClientModulePromise,
     attachmentControllerModulePromise,
@@ -29,6 +31,7 @@
     captureControllerModulePromise,
     composerDeliveryModulePromise,
     goalStatusModulePromise,
+    statusControllerModulePromise,
   ]);
 
   const $ = (id) => document.getElementById(id);
@@ -145,8 +148,8 @@
     'Tap folder to switch sessions',
     'Set font on home',
   ];
-  let captureController = null, pendingDeferredCapture = null;
-  let statusRefreshInFlight = false, activeStatusRefreshController = null, statusRefreshRunId = 0, statusRefreshTimer = null;
+  let captureController = null, statusController = null, pendingDeferredCapture = null;
+  let statusRefreshTimer = null;
   let liveState = 'fallback';
   let petSending = false, petSendTimer = null, petStopping = false, petStopTimer = null, agentRunning = false, queuedSendNowAvailable = false, interruptInFlight = false, lastPetPhase = '';
   let currentFastStatus = 'off';
@@ -1153,6 +1156,16 @@
   function headerStatusVisible() { return !document.querySelector('header')?.classList.contains('collapsed'); }
   function syncStatusRefresh(refreshNow = false) { const on = headerStatusVisible(); setStatusRefresh(on); if (on && refreshNow) refreshStatus({ silent: true }).catch(handleBackgroundError); }
 
+  statusController = createStatusController({
+    view: window,
+    timeoutMs: FETCH_TIMEOUT_MS,
+    getScope: () => conversationStore.scope(),
+    acceptScope: (scope) => conversationStore.accepts(scope),
+    setError,
+    loadStatus: (signal) => api(apiPath('/api/status'), { signal }),
+    onStatus: renderStatus,
+  });
+
   captureController = createCaptureController({
     view: window,
     compactLines: COMPACT_CAPTURE_LINES,
@@ -2083,10 +2096,7 @@
 
   function cancelActiveRefreshes() {
     captureController.cancelRefresh();
-    statusRefreshRunId += 1;
-    if (activeStatusRefreshController) activeStatusRefreshController.abort();
-    activeStatusRefreshController = null;
-    statusRefreshInFlight = false;
+    statusController.cancel();
   }
 
   function handlePageShow(event) {
@@ -2240,27 +2250,8 @@
   attachmentController.connect();
 
 
-  async function refreshStatus(options = {}) {
-    if (statusRefreshInFlight) return;
-    statusRefreshInFlight = true;
-    const runId = ++statusRefreshRunId;
-    const controller = new AbortController();
-    activeStatusRefreshController = controller;
-    const timeoutId = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
-    if (!options.silent) setError('');
-    try {
-      const status = await api(apiPath('/api/status'), { signal: controller.signal });
-      if (runId !== statusRefreshRunId) return;
-      renderStatus(status);
-      return status;
-    } catch (err) {
-      if (err.name === 'AbortError') return;
-      throw err;
-    } finally {
-      clearTimeout(timeoutId);
-      if (activeStatusRefreshController === controller) activeStatusRefreshController = null;
-      if (runId === statusRefreshRunId) statusRefreshInFlight = false;
-    }
+  function refreshStatus(options = {}) {
+    return statusController.refresh(options);
   }
 
   async function postAction(path, body, options = {}) {
@@ -2373,7 +2364,7 @@
     statusShellController.update(fastStatusModel(expected));
     for (let attempt = 0; attempt < 5 && session === selectedSession; attempt += 1) {
       await new Promise((resolve) => window.setTimeout(resolve, 120));
-      if (statusRefreshInFlight) continue;
+      if (statusController.refreshInFlight) continue;
       await refreshStatus({ silent: true });
       if (currentFastStatus === expected) break;
     }
