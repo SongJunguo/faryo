@@ -301,7 +301,8 @@ await withBrowser({
     inputMax: document.getElementById('contextWindowCustom')?.max || '',
   }))()`);
   if (!contextPicker.visible || !contextPicker.defaultSelected
-    || !contextPicker.presets.includes('272K') || !contextPicker.presets.includes('1M')
+    || !contextPicker.presets.includes('372K') || contextPicker.presets.includes('272K')
+    || !contextPicker.presets.includes('1M')
     || contextPicker.inputMin !== '32' || contextPicker.inputMax !== '1050') {
     throw new Error(`Context-window controls are incomplete: ${JSON.stringify(contextPicker)}`);
   }

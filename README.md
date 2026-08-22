@@ -62,7 +62,7 @@ in tmux as an explicit compatibility mode.
   immediately while the selected App Server or TUI backend completes readiness
   asynchronously.
 - **Per-session context windows:** new and resumed sessions can inherit the
-  workstation default, use 272K or 1M presets, or accept a bounded custom value
+  workstation default, use 372K or 1M presets, or accept a bounded custom value
   in K tokens without rewriting the global Codex configuration.
 - **Queued follow-up Send now:** when Codex advertises Esc-to-send-now, the
   squirrel gains an ESC badge; phone tap and desktop Escape share one verified
@@ -109,7 +109,7 @@ upstream compatibility, but they are not part of this project's current validati
 or support claims.
 
 Current source line and latest tagged source release: **[Faryo
-1.10.0](https://github.com/SongJunguo/faryo-codex-web-ui/releases/tag/v1.10.0)**.
+1.10.1](https://github.com/SongJunguo/faryo-codex-web-ui/releases/tag/v1.10.1)**.
 
 ## Current Functionality
 
@@ -314,7 +314,7 @@ micromark -> mdast -> CommonMark/GFM/math nodes -> safe HTML -> KaTeX
   action. Folders always contains every Owner-returned child even when that path
   is also a configured Root, Location, Parent, or Recent shortcut; there is no
   automatic entry cap.
-- The same launch sheet offers Default, 272K and 1M context presets plus a
+- The same launch sheet offers Default, 372K and 1M context presets plus a
   custom whole-number K field. A custom value is passed as one-off Codex config,
   with auto-compaction at 90%; it does not edit `~/.codex/config.toml`. The
   selected model/provider must support the requested window, and the session
@@ -379,7 +379,7 @@ initial allowed workspace:
 
 ```bash
 sha256sum --check install-faryo.sh.sha256
-bash install-faryo.sh --version v1.10.0 --workspace "$PWD"
+bash install-faryo.sh --version v1.10.1 --workspace "$PWD"
 ```
 
 Upgrading a pre-v1.5 checkout that still uses the dedicated Owner keepalive

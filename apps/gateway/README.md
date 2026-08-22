@@ -148,7 +148,7 @@ breadcrumbs, filters the current page without recursive search, and keeps
 `Start Codex here` fixed outside the scrolling list. Directory choices
 still come from Owner, carry its HMAC selection token, and are revalidated by
 Owner before the Web-managed session starts. The same sheet offers Default,
-272K, 1M and a bounded
+372K, 1M and a bounded
 custom K-token context window. Default sends no override. Custom values are
 validated independently by Gateway and Owner, then become one-off Codex
 `model_context_window` and 90% auto-compaction overrides. History-card body

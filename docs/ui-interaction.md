@@ -82,7 +82,7 @@ returned child folder without a count cap or cross-section removal. Hidden
 dot-directories remain controlled only by the remembered Hidden toggle; an
 optional search filters only while the user has entered text. The selected
 canonical path is signed and revalidated by Owner.
-The same sheet offers Default, 272K, 1M, and custom whole-number K-token context
+The same sheet offers Default, 372K, 1M, and custom whole-number K-token context
 choices. Default sends no override. A custom value is validated by Gateway and
 Owner, then sets only that process's Codex context and 90% auto-compaction
 threshold; it never rewrites the user's global Codex config. Directory
