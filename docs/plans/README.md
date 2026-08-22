@@ -5,7 +5,10 @@
 
 ## Active
 
-当前没有尚未完成的实施计划。
+- [`v1.10-release-and-maintainability-plan.md`](v1.10-release-and-maintainability-plan.md)：
+  补齐 1.9.1 公开发布断层，继续收敛 Owner/前端 composition root，建立版本化浏览器
+  envelope、依赖更新、固定 Actions、CodeQL 和 Ubuntu 22.04 最低兼容门；保持 App Server
+  流、Markdown/TeX、移动端、认证、可靠发送和 tmux 几何不回归。
 
 ## Completed or maintenance mode
 
