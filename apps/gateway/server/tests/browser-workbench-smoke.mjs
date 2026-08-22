@@ -8,6 +8,7 @@ const passwordFile = process.env.FARYO_SMOKE_LOGIN_PASSWORD_FILE || '';
 const loginPassword = passwordFile ? (await readFile(passwordFile, 'utf8')).trim() : '';
 const authCookie = process.env.FARYO_SMOKE_AUTH_COOKIE || '';
 const startCodex = process.env.FARYO_SMOKE_START_CODEX === '1';
+const startBackend = process.env.FARYO_SMOKE_START_BACKEND || 'APP_SERVER';
 const expectedActive = Number(process.env.FARYO_SMOKE_EXPECT_ACTIVE || 0);
 const expectedManaged = Number(process.env.FARYO_SMOKE_EXPECT_MANAGED || -1);
 const expectedDesktop = Number(process.env.FARYO_SMOKE_EXPECT_DESKTOP || -1);
@@ -20,6 +21,7 @@ const hostResolverRules = process.env.FARYO_SMOKE_HOST_RESOLVER_RULES || 'MAP * 
 const chromeBin = process.env.CHROME_BIN || '/usr/bin/google-chrome';
 
 if (!targetUrl) throw new Error('FARYO_SMOKE_URL is required');
+if (!['APP_SERVER', 'CODEX_TUI'].includes(startBackend)) throw new Error('FARYO_SMOKE_START_BACKEND must be APP_SERVER or CODEX_TUI');
 
 const delay = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
 await withBrowser({
@@ -94,6 +96,7 @@ await withBrowser({
       const packageList = document.getElementById('packageList');
       const maintainedLists = [packageList, document.getElementById('newSessionSlot'), activeList, historyList];
       window.__faryoHistoryPageOne = historySignature;
+      window.__faryoSessionsBeforeLaunch = active.map((item) => item.dataset.session).filter(Boolean);
       return {
         ready: activeList && historyList && history.length === 10 && document.getElementById('historyPageInput')?.value === '1' && Number(document.getElementById('historyPageTotal')?.textContent) > 2,
         activeCount: active.length,
@@ -702,6 +705,14 @@ await withBrowser({
       if (directorySheet?.ready) break;
     }
     if (!directorySheet.ready || directorySheet.title !== 'Choose working directory') throw new Error(`Start Codex directory sheet did not open: ${JSON.stringify(directorySheet)}`);
+    if (startBackend === 'CODEX_TUI') {
+      const selected = await evaluate(`(() => {
+        const button = document.querySelector('[data-session-backend="CODEX_TUI"]');
+        button?.click();
+        return button?.getAttribute('aria-pressed') === 'true';
+      })()`);
+      if (!selected) throw new Error('Start Codex did not select the requested TUI backend');
+    }
     await evaluate("[...document.querySelectorAll('#modalActions button')].find((item) => item.textContent === 'Start Codex here').click()");
     let launched = {};
     for (let attempt = 0; attempt < 250; attempt += 1) {
@@ -727,12 +738,16 @@ await withBrowser({
           }
           const webManagedReady = status.backend === 'web-managed'
             && ['waiting', 'running', 'pending_interaction'].includes(status.agentState);
+          const expectedBackend = ${JSON.stringify(startBackend)} === 'CODEX_TUI' ? 'terminal-managed' : 'web-managed';
+          const freshSession = !(window.__faryoSessionsBeforeLaunch || []).includes(session);
           return {
             route, session, uiReady, captureSource,
             backend: status.backend || '', agentState: status.agentState || '',
             modelReady: Boolean(codexReady),
+            freshSession,
             ready: /^(?:hp|pc|txy)$/.test(route) && /^faryo[1-9][0-9]*$/.test(session)
-              && uiReady && (webManagedReady || codexReady),
+              && uiReady && freshSession && status.backend === expectedBackend
+              && (webManagedReady || codexReady),
           };
         })()`);
       } catch (_error) {
@@ -752,7 +767,7 @@ await withBrowser({
           });
         })()`);
       }
-      throw new Error(`Start Codex did not reach a managed ready session: ${JSON.stringify({ captureSource: launched.captureSource || '', backend: launched.backend || '', agentState: launched.agentState || '', modelReady: Boolean(launched.modelReady) })}`);
+      throw new Error(`Start Codex did not reach a managed ready session: ${JSON.stringify({ captureSource: launched.captureSource || '', backend: launched.backend || '', agentState: launched.agentState || '', modelReady: Boolean(launched.modelReady), freshSession: Boolean(launched.freshSession) })}`);
     }
     const cleanup = await evaluate(`(async () => {
       const csrfResponse = await fetch('/api/csrf', { cache: 'no-store' });
@@ -766,7 +781,7 @@ await withBrowser({
       return { status: response.status, ok: Boolean(data.ok) };
     })()`);
     if (!cleanup?.ok || cleanup.status !== 200) throw new Error(`Started Codex session was not cleaned up: ${JSON.stringify(cleanup)}`);
-    console.log('faryo-browser-start-codex=PASS directory=selected ready=yes cleanup=yes');
+    console.log(`faryo-browser-start-codex=PASS backend=${startBackend} directory=selected fresh=yes ready=yes cleanup=yes`);
   }
 
   console.log(`faryo-browser-workbench-smoke=PASS viewport=${first.viewport.width}x${first.viewport.height} active=${first.activeCount} managed=${first.managedCount} desktop=${first.desktopCount}`);
