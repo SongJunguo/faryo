@@ -303,6 +303,8 @@ for workflow in (ci_workflow, release_workflow, codeql_workflow):
     assert uses and all(re.fullmatch(r"[^@]+@[0-9a-f]{40}", item) for item in uses), "GitHub Actions must use immutable commit SHAs"
 assert "github/codeql-action/init@" in codeql_workflow and "github/codeql-action/analyze@" in codeql_workflow, "CodeQL must scan Python and JavaScript"
 assert "language: [python, javascript-typescript]" in codeql_workflow, "CodeQL language matrix is incomplete"
+workflow_concurrency = codeql_workflow.split("jobs:", 1)[0]
+assert "matrix." not in workflow_concurrency, "workflow-level concurrency cannot use the job-only matrix context"
 for ecosystem in ("npm", "pip", "github-actions"):
     assert f"package-ecosystem: {ecosystem}" in dependabot_config, f"Dependabot does not cover {ecosystem}"
 assert dependabot_config.count("interval: weekly") == 3 and "patterns: ['*']" in dependabot_config, "Dependabot must use low-noise weekly grouped updates"
