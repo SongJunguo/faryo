@@ -108,8 +108,8 @@ Historical distribution and non-Codex platform paths may remain in the tree for
 upstream compatibility, but they are not part of this project's current validation
 or support claims.
 
-Current source line: **Faryo 1.9.1**. Latest tagged source release:
-[Faryo 1.6.7](https://github.com/SongJunguo/faryo-codex-web-ui/releases/tag/v1.6.7).
+Current source line and latest tagged source release: **[Faryo
+1.9.1](https://github.com/SongJunguo/faryo-codex-web-ui/releases/tag/v1.9.1)**.
 
 ## Current Functionality
 
@@ -278,9 +278,10 @@ micromark -> mdast -> CommonMark/GFM/math nodes -> safe HTML -> KaTeX
   Active sessions do not expose this action; archived sessions must be restored
   first.
 - Allows remote Close only for sessions that Faryo created and stamped.
-- `Start Codex` resolves the configured CLI with its matching Node runtime,
-  selects an available login shell, creates the managed tmux, and immediately
-  opens its Starting page; a pane-identity monitor owns final readiness/failure.
+- `Start Codex` defaults to a Web-managed App Server thread and immediately opens
+  its Starting page. The explicit terminal-managed compatibility launcher still
+  resolves the configured CLI with its matching Node runtime, creates a managed
+  tmux, and lets a pane-identity monitor own final readiness/failure.
 - Codex discovery is dynamic on every managed launch: Faryo follows the current
   NVM default and stable user commands before treating an old generated path as
   a fallback. It freezes an absolute Node/Codex pair only for that one process.
@@ -366,7 +367,7 @@ initial allowed workspace:
 
 ```bash
 sha256sum --check install-faryo.sh.sha256
-bash install-faryo.sh --version v1.6.7 --workspace "$PWD"
+bash install-faryo.sh --version v1.9.1 --workspace "$PWD"
 ```
 
 Upgrading a pre-v1.5 checkout that still uses the dedicated Owner keepalive
