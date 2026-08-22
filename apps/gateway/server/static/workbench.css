@@ -684,6 +684,7 @@ main {
 .directory-hidden-toggle:disabled {
   opacity: 0.55;
 }
+.workstation-picker,
 .session-backend-picker {
   min-width: 0;
   margin: 0;
@@ -692,12 +693,45 @@ main {
   border-radius: 10px;
   background: color-mix(in srgb, var(--panel2) 72%, transparent);
 }
+.workstation-picker legend,
 .session-backend-picker legend {
   padding: 0 4px;
   color: var(--muted);
   font: 850 10px/1.2 var(--app-font);
   letter-spacing: 0.08em;
   text-transform: uppercase;
+}
+.workstation-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.workstation-controls button {
+  min-height: 34px;
+  padding: 0 11px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  color: var(--muted);
+  font: 780 11px/1.2 var(--app-font);
+}
+.workstation-controls button[aria-pressed="true"],
+.workstation-controls button:hover,
+.workstation-controls button:focus-visible {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--line));
+  background: color-mix(in srgb, var(--accent) 10%, var(--panel));
+  color: var(--accent);
+  outline: none;
+}
+.workstation-controls button:disabled {
+  opacity: 0.55;
+}
+.workstation-picker > small {
+  display: block;
+  margin-top: 5px;
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.25;
 }
 .session-backend-controls {
   display: grid;

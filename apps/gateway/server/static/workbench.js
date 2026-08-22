@@ -234,9 +234,16 @@ const workbenchRenderer = preactFactory({
     },
     startLauncher(item) {
       return withBusy(async () => {
-        const route = await selectNewRoute(item.entries, item.label);
-        if (!route) return;
-        const routeEntry = item.entries.find((entry) => entry.id === route);
+        const entries = launchableEntries(item.entries);
+        if (!entries.length) {
+          await notice(
+            "No endpoint available",
+            "No workstation can start another session.",
+          );
+          return;
+        }
+        const route = entries[0].id;
+        const routeEntry = entries[0];
         const directory = await selectNewCwd(
           route,
           item.label,
@@ -244,10 +251,11 @@ const workbenchRenderer = preactFactory({
           {
             backend: item.backend,
             appServerReady: routeEntry?.appServerReady !== false,
+            routes: entries,
           },
         );
         if (directory === null) return;
-        await agentNew(route, item.command, directory);
+        await agentNew(directory.route || route, item.command, directory);
       });
     },
     sessionAction(item, action, event) {
@@ -467,6 +475,9 @@ function placeSheet(modal) {
 function resetSheetMode() {
   const modal = document.getElementById("modal"),
     toolbar = document.getElementById("directoryToolbar"),
+    workstationPicker = document.getElementById("workstationPicker"),
+    workstationControls = document.getElementById("workstationControls"),
+    workstationHelp = document.getElementById("workstationHelp"),
     breadcrumb = document.getElementById("directoryBreadcrumb"),
     search = document.getElementById("directorySearch"),
     hiddenToggle = document.getElementById("directoryHiddenToggle"),
@@ -475,6 +486,9 @@ function resetSheetMode() {
     contextError = document.getElementById("contextWindowError");
   modal.classList.remove("directory-mode");
   toolbar.hidden = true;
+  workstationPicker.hidden = true;
+  workstationControls.replaceChildren();
+  workstationHelp.textContent = "";
   breadcrumb.replaceChildren();
   search.value = "";
   search.oninput = null;
@@ -865,35 +879,12 @@ async function revokeSignedInDevices() {
   );
   location.href = "/logout";
 }
-async function selectNewRoute(entries, label) {
-  const online = (entries || []).filter((e) =>
-    ["online", "slow"].includes(e.state),
-  );
-  if (!online.length) {
-    await notice(
-      "No endpoint online",
-      "No online endpoint can start sessions.",
-    );
-    return null;
-  }
-  const choices = online.map((e) => ({
-    label: `Start on ${e.label || labels[e.id] || e.id}`,
-    meta: `${e.activeCount || 0}/${e.maxRunning || 0} sessions${e.canCreate ? "" : " · limit reached"}`,
-    value: e.id,
-    disabled: !e.canCreate,
-  }));
-  if (!choices.some((item) => !item.disabled)) {
-    await sheet(
-      "Agent limit reached",
-      "Close a running session first.",
-      choices,
-    );
-    return null;
-  }
-  return sheet(
-    `Start ${label}`,
-    `Choose the workstation. A new ${label} session will be created.`,
-    choices,
+function launchableEntries(entries) {
+  return (entries || []).filter(
+    (entry) =>
+      !["offline", "error"].includes(String(entry?.state || "")) &&
+      entry?.canCreate !== false &&
+      String(entry?.id || ""),
   );
 }
 async function directoryPage(route, path, showHidden = false) {
@@ -1087,6 +1078,51 @@ function directorySection(title, items, done, more) {
   section.append(heading, ...items.map((item) => directoryRow(item, done)));
   return section;
 }
+function bindWorkstationPicker(entries, state, onSelect) {
+  const picker = document.getElementById("workstationPicker"),
+    controls = document.getElementById("workstationControls"),
+    help = document.getElementById("workstationHelp"),
+    choices = launchableEntries(entries);
+  picker.hidden = choices.length < 2;
+  controls.replaceChildren(
+    ...choices.map((entry) => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.dataset.workstationRoute = entry.id;
+      button.textContent = entry.label || labels[entry.id] || entry.id;
+      button.onclick = async () => {
+        if (button.disabled || state.id === entry.id) return;
+        for (const item of controls.querySelectorAll("button"))
+          item.disabled = true;
+        help.textContent = `Loading ${button.textContent}…`;
+        try {
+          const changed = await onSelect(entry.id);
+          if (changed !== false) state.id = entry.id;
+        } catch (_error) {
+          help.textContent = `Could not load ${button.textContent}. Try again.`;
+          return;
+        } finally {
+          for (const item of controls.querySelectorAll("button"))
+            item.disabled = false;
+        }
+        sync();
+      };
+      return button;
+    }),
+  );
+  const sync = () => {
+    const selected = choices.find((entry) => entry.id === state.id);
+    for (const button of controls.querySelectorAll("button"))
+      button.setAttribute(
+        "aria-pressed",
+        String(button.dataset.workstationRoute === state.id),
+      );
+    help.textContent = selected
+      ? `${selected.activeCount || 0}/${selected.maxRunning || 0} active sessions`
+      : "Choose a workstation.";
+  };
+  sync();
+}
 function bindSessionBackendPicker(state, { appServerReady = true } = {}) {
   const buttons = [...document.querySelectorAll("[data-session-backend]")],
     help = document.getElementById("sessionBackendHelp"),
@@ -1207,7 +1243,7 @@ function directorySheet(data, recent, label, options = {}) {
     document.getElementById("modalBody").textContent =
       options.body || `Choose where this ${label} session should work.`;
     toolbar.hidden = false;
-    const readBackend = bindSessionBackendPicker(
+    let readBackend = bindSessionBackendPicker(
       options.backendState || { key: SESSION_BACKEND.APP_SERVER.key },
       { appServerReady: options.appServerReady !== false },
     );
@@ -1216,6 +1252,7 @@ function directorySheet(data, recent, label, options = {}) {
     );
     let expanded = false,
       currentData = data,
+      currentRecent = recent,
       showHidden = Boolean(data.showHidden ?? options.showHidden);
     const done = (value) => {
         modal.classList.remove("open", "anchored", "directory-mode");
@@ -1226,7 +1263,7 @@ function directorySheet(data, recent, label, options = {}) {
       render = () => {
         const model = directoryPickerModel(
             currentData,
-            recent,
+            currentRecent,
             search.value,
             expanded,
           ),
@@ -1312,6 +1349,31 @@ function directorySheet(data, recent, label, options = {}) {
         syncHiddenToggle();
       }
     };
+    bindWorkstationPicker(
+      options.routes || [],
+      options.routeState || { id: options.route || "" },
+      async (nextRoute) => {
+        if (typeof options.onRouteChange !== "function") return false;
+        const next = await options.onRouteChange(nextRoute, showHidden);
+        if (!next?.data) return false;
+        currentData = next.data;
+        currentRecent = Array.isArray(next.recent) ? next.recent : [];
+        showHidden = Boolean(next.data.showHidden ?? showHidden);
+        expanded = false;
+        search.value = "";
+        readBackend = bindSessionBackendPicker(
+          options.backendState || { key: SESSION_BACKEND.APP_SERVER.key },
+          { appServerReady: next.appServerReady !== false },
+        );
+        renderBreadcrumb();
+        syncHiddenToggle();
+        render();
+        requestAnimationFrame(() => {
+          breadcrumb.scrollLeft = breadcrumb.scrollWidth;
+        });
+        return true;
+      },
+    );
     renderBreadcrumb();
     syncHiddenToggle();
     search.oninput = render;
@@ -1332,6 +1394,7 @@ function directorySheet(data, recent, label, options = {}) {
         cwdToken: String(currentData.selectionToken || ""),
         contextWindowK,
         backend: readBackend(),
+        route: String(options.routeState?.id || options.route || ""),
       });
     });
     actions.replaceChildren(cancel, select);
@@ -1371,16 +1434,23 @@ async function firstAvailableDirectoryPage(route, recent, showHidden = false) {
 async function selectNewCwd(route, label, cwdChoices, rawOptions = {}) {
   const options =
     typeof rawOptions === "string" ? { body: rawOptions } : rawOptions || {};
-  const recent = Array.isArray(cwdChoices?.[route]) ? cwdChoices[route] : [];
+  let currentRoute = route,
+    recent = Array.isArray(cwdChoices?.[route]) ? cwdChoices[route] : [],
+    currentEntry = (options.routes || []).find((entry) => entry.id === route);
   const contextWindowState = { mode: "default", k: 0, custom: "" };
   const backendState = {
     key: sessionBackendKey(options.backend, options.source),
   };
+  const routeState = { id: route };
   let showHidden = false;
   try {
     showHidden = localStorage.getItem(DIRECTORY_HIDDEN_PREFERENCE_KEY) === "1";
   } catch (_error) {}
-  const initial = await firstAvailableDirectoryPage(route, recent, showHidden);
+  const initial = await firstAvailableDirectoryPage(
+    currentRoute,
+    recent,
+    showHidden,
+  );
   let path = initial.path,
     data = initial.data;
   while (true) {
@@ -1389,10 +1459,37 @@ async function selectNewCwd(route, label, cwdChoices, rawOptions = {}) {
       body: options.body || "",
       contextWindowState,
       backendState,
-      appServerReady: options.appServerReady !== false,
+      appServerReady:
+        currentEntry?.appServerReady ?? options.appServerReady ?? true,
+      routes: options.routes || [],
+      route: currentRoute,
+      routeState,
+      onRouteChange: async (nextRoute, nextShowHidden) => {
+        const nextRecent = Array.isArray(cwdChoices?.[nextRoute])
+          ? cwdChoices[nextRoute]
+          : [];
+        const next = await firstAvailableDirectoryPage(
+          nextRoute,
+          nextRecent,
+          nextShowHidden,
+        );
+        currentRoute = nextRoute;
+        routeState.id = nextRoute;
+        recent = nextRecent;
+        path = next.path;
+        data = next.data;
+        currentEntry = (options.routes || []).find(
+          (entry) => entry.id === nextRoute,
+        );
+        return {
+          data,
+          recent,
+          appServerReady: currentEntry?.appServerReady !== false,
+        };
+      },
       onToggleHidden: async (nextShowHidden, currentPath) => {
         const next = await directoryPage(
-          route,
+          currentRoute,
           currentPath || path,
           nextShowHidden,
         );
@@ -1407,9 +1504,10 @@ async function selectNewCwd(route, label, cwdChoices, rawOptions = {}) {
       },
     });
     if (selected === null) return null;
-    if (selected.cwd) return selected;
+    if (selected.cwd)
+      return { ...selected, route: selected.route || currentRoute };
     path = String(selected.path || "");
-    data = await directoryPage(route, path, showHidden);
+    data = await directoryPage(currentRoute, path, showHidden);
   }
 }
 function newLaunchRequestId() {
@@ -1435,6 +1533,7 @@ async function agentNew(route, command, directory) {
       "/api/agent/new",
       {
         method: "POST",
+        cache: "no-store",
         headers: {
           "Content-Type": "application/json",
           ...(await csrfHeaders()),
@@ -1451,7 +1550,15 @@ async function agentNew(route, command, directory) {
     await new Promise((resolve) => setTimeout(resolve, 350));
     data = await request();
   }
-  location.href = data.redirect;
+  if (
+    data.clientLaunchId !== payload.client_launch_id ||
+    !/^faryo[1-9][0-9]*$/.test(String(data.session || ""))
+  )
+    throw new Error("Start Codex returned a stale launch response");
+  const redirect = `/${route}/?session=${encodeURIComponent(data.session)}`;
+  if (data.redirect !== redirect)
+    throw new Error("Start Codex returned an inconsistent session target");
+  location.href = redirect;
 }
 async function resumeSession(
   route,

@@ -132,6 +132,32 @@ class WebSessionRegistry:
                 number += 1
             return f"faryo{number}"
 
+    def reassign_conflicts(self, reserved: Iterable[str] = ()) -> dict[str, str]:
+        """Move persisted Web sessions away from names owned by another backend."""
+        with self.lock:
+            external = {str(value) for value in reserved}
+            conflicts = sorted(
+                (record for record in self.records.values() if record.name in external),
+                key=lambda record: (record.created_at, record.name),
+            )
+            if not conflicts:
+                return {}
+            used = set(self.records) | external
+            renamed: dict[str, str] = {}
+            for record in conflicts:
+                old_name = record.name
+                number = 1
+                while f"faryo{number}" in used:
+                    number += 1
+                new_name = f"faryo{number}"
+                del self.records[old_name]
+                record.name = new_name
+                self.records[new_name] = record
+                used.add(new_name)
+                renamed[old_name] = new_name
+            self.save()
+            return renamed
+
     def add(
         self,
         *,

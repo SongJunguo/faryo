@@ -121,6 +121,16 @@ class FakeRuntime:
     def ready(self):
         return True
 
+    def session_records(self):
+        return [
+            {
+                "session": name,
+                "threadId": f"thread-{name}",
+                "cwd": self.cwd,
+            }
+            for name in sorted(self.sessions)
+        ]
+
 
 def free_port() -> int:
     with socket.socket() as handle:
@@ -400,6 +410,28 @@ class OwnerAsgiTest(unittest.TestCase):
         self.assertEqual(status, 200, body)
         self.assertEqual(json.loads(body)["session"], "faryo3")
         self.assertEqual(resume.call_args.args[2], "codex-cli")
+
+    def test_new_tui_launch_reserves_existing_app_server_session_names(self) -> None:
+        self.runtime.sessions.add("faryo4")
+        with (
+            mock.patch.object(server, "start_agent_runtime_async", return_value="faryo5") as start,
+            mock.patch.object(server, "agent_session_lifecycle", return_value=("starting", False)),
+        ):
+            status, _headers, body = self.request(
+                "POST",
+                "/api/agent/new",
+                {
+                    "command": "codex",
+                    "backend": "terminal-managed",
+                    "client_launch_id": "launch-tui-namespace",
+                },
+                token=True,
+            )
+
+        self.assertEqual(status, 200, body)
+        self.assertEqual(json.loads(body)["session"], "faryo5")
+        reserved = start.call_args.kwargs["reserved_names"]
+        self.assertEqual(reserved(), ["faryo4"])
 
     def test_resume_rejects_second_writer(self) -> None:
         self.runtime.registry.thread_records["thread_busy"] = object()

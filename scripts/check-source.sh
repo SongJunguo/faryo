@@ -263,6 +263,8 @@ owner_asgi_runner = (root / "apps/owner/local-tmux-owner/run_owner_asgi.py").rea
 appserver_commands_source = (root / "apps/owner/local-tmux-owner/appserver_commands.py").read_text(encoding="utf-8")
 appserver_session_source = (root / "apps/owner/local-tmux-owner/appserver_session.py").read_text(encoding="utf-8")
 appserver_history_source = (root / "apps/owner/local-tmux-owner/appserver_history.py").read_text(encoding="utf-8")
+appserver_registry_source = (root / "apps/owner/local-tmux-owner/appserver_registry.py").read_text(encoding="utf-8")
+appserver_runtime_source = (root / "apps/owner/local-tmux-owner/appserver_runtime.py").read_text(encoding="utf-8")
 real_appserver_browser_source = (root / "apps/owner/local-tmux-owner/tests/browser-real-appserver-streaming.mjs").read_text(encoding="utf-8")
 owner_session_catalog_source = (root / "apps/owner/local-tmux-owner/session_catalog.py").read_text(encoding="utf-8")
 owner_session_launch_source = (root / "apps/owner/local-tmux-owner/session_launch.py").read_text(encoding="utf-8")
@@ -294,6 +296,7 @@ application_source = (root / "src/faryo_cli/application.py").read_text(encoding=
 gateway_ui = gateway + "\n" + gateway_workbench
 assert "firstAvailableDirectoryPage" in gateway_workbench and "for (const candidate of candidates)" in gateway_workbench, "directory picker must try every recent cwd before root fallback"
 assert "START_DIRECTORY_MAX_ENTRIES" not in owner_server and "folders = (data.directories || []).map" in gateway_workbench, "directory picker must not cap or cross-section-filter real child folders"
+assert "def reassign_conflicts(" in appserver_registry_source and "namespace_lock=core.RUNTIME_LOCK" in owner_asgi_source and "reserved_names=lambda:" in owner_asgi_control_source and "r.next_faryo_session_name(config, reserved_names)" in owner_session_launch_source and "self.registry.reassign_conflicts" in appserver_runtime_source, "App Server and TUI sessions must share one faryo-number namespace"
 ci_workflow = (root / ".github/workflows/ci.yml").read_text(encoding="utf-8")
 release_workflow = (root / ".github/workflows/release.yml").read_text(encoding="utf-8")
 codeql_workflow = (root / ".github/workflows/codeql.yml").read_text(encoding="utf-8")
@@ -405,6 +408,8 @@ assert "GATEWAY_ASSET_REVISION = gateway_asset_revision()" in gateway and 'href=
 assert 'id="faryoRouteLabels" type="application/json"' in gateway, "Gateway route labels must use the nonce-protected JSON bootstrap"
 assert 'id="attentionCenter"' in gateway and 'id="notificationControl"' in gateway, "Gateway must expose body-free attention controls"
 assert "processAttention" in gateway_workbench and "A session completed or needs input." in gateway_workbench, "Gateway attention must use generic notification text"
+assert 'id="workstationPicker"' in gateway and "bindWorkstationPicker" in gateway_workbench and "routes: entries" in gateway_workbench and "selectNewRoute" not in gateway_workbench, "New Codex must choose workstation, backend, directory and context in one sheet"
+assert "clientLaunchId" in gateway_workbench and "clientLaunchId" in (root / "apps/gateway/server/asgi_agents.py").read_text(encoding="utf-8") and "returned a stale launch response" in gateway_workbench, "New Codex redirects must be fenced by the current launch identity"
 assert "syncChildren" not in gateway_workbench and "FaryoPreactWorkbench" in gateway_workbench, "Gateway card lists must remain Preact keyed components"
 assert "dangerouslySetInnerHTML" not in gateway_preact_source and "innerHTML" not in gateway_preact_source, "Gateway card components must render server strings as text"
 assert 'workbench-preact.js?v={asset_version}' in gateway and "workbench-preact.LICENSE.txt" in gateway, "Gateway Preact bundle and notice must remain local and content-versioned"

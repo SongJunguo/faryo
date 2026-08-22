@@ -54,6 +54,7 @@ class AppServerRuntime:
         registry_path: Path,
         client_version: str,
         reserved_names: Callable[[], list[str]] | None = None,
+        namespace_lock: threading.RLock | None = None,
         client_factory: Callable[[Callable[..., Any], Callable[..., Any]], Any] | None = None,
         journal_max_events: int = 4096,
         journal_max_bytes: int = 8 * 1024 * 1024,
@@ -62,6 +63,7 @@ class AppServerRuntime:
         self.registry = WebSessionRegistry(registry_path)
         self.client_version = client_version
         self.reserved_names = reserved_names or (lambda: [])
+        self.namespace_lock = namespace_lock or threading.RLock()
         self.client_factory = client_factory
         self.journal = EventJournal(max_events=journal_max_events, max_bytes=journal_max_bytes)
         self.actors: dict[str, WebSessionActor] = {}
@@ -96,6 +98,8 @@ class AppServerRuntime:
         with self.condition:
             if self.thread is not None and self.thread.is_alive():
                 return
+            with self.namespace_lock:
+                self.registry.reassign_conflicts(self.reserved_names())
             self.state = "connecting"
             self.last_error = ""
             self.started_at = time.monotonic()
@@ -464,14 +468,15 @@ class AppServerRuntime:
         thread_id = str(thread.get("id") or "") if isinstance(thread, Mapping) else ""
         if not thread_id:
             raise AppServerRuntimeError("Codex App Server did not return a thread id")
-        record = self.registry.add(
-            thread_id=thread_id,
-            cwd=cwd,
-            title=title,
-            model=model,
-            launch_id=launch_id,
-            reserved=self.reserved_names(),
-        )
+        with self.namespace_lock:
+            record = self.registry.add(
+                thread_id=thread_id,
+                cwd=cwd,
+                title=title,
+                model=model,
+                launch_id=launch_id,
+                reserved=self.reserved_names(),
+            )
         actor = WebSessionActor(session_id=record.name, thread_id=thread_id)
         if isinstance(thread, Mapping):
             actor.hydrate(thread)

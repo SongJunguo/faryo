@@ -184,6 +184,10 @@ class OwnerControlRoutes:
                 title=title,
                 launch_id=launch_id or "",
                 context_window_k=context_window_k,
+                reserved_names=lambda: [
+                    str(record.get("session") or "")
+                    for record in self.support.runtime.session_records()
+                ],
             ),
             abandon_on_cancel=True,
         )

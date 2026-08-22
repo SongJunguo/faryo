@@ -285,7 +285,9 @@ class GatewayCsrfContractTest(unittest.TestCase):
         )
         self.assertIn("Send to…", component_source)
         self.assertIn("Start ${item.label}", component_source)
-        self.assertIn("Start on ${e.label", script)
+        self.assertIn("bindWorkstationPicker", script)
+        self.assertIn("routes: entries", script)
+        self.assertNotIn("selectNewRoute", script)
         self.assertNotIn("No handoff package", body)
         self.assertIn('class="brand" href="/" aria-label="Faryo home"', body)
         self.assertNotIn('href="/projects"', body)
@@ -498,6 +500,8 @@ class GatewayCsrfContractTest(unittest.TestCase):
 
         self.assertEqual(status, HTTPStatus.OK)
         self.assertEqual(data.get("session"), "faryo1")
+        self.assertEqual(data.get("clientLaunchId"), launch_id)
+        self.assertEqual(data.get("redirect"), f"/{self.route}/?session=faryo1")
         self.assertEqual(owner_request.call_count, 3)
         first_launch = owner_request.call_args_list[1].args[2]
         retried_launch = owner_request.call_args_list[2].args[2]

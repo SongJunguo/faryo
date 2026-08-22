@@ -256,6 +256,7 @@ def routes(legacy: Any, config: Any, client: owner_client.OwnerClient, support: 
                             "ok": True,
                             "redirect": f"/{route}/?session={session}",
                             "session": session,
+                            "clientLaunchId": launch_id,
                         })
             except (UnicodeDecodeError, json.JSONDecodeError):
                 status = HTTPStatus.BAD_REQUEST

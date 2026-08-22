@@ -482,24 +482,7 @@ await withBrowser({
   }
 
   await evaluate("document.querySelector('#newSessionSlot .launcher-card').click()");
-  let launchConfirmation = {};
-  for (let attempt = 0; attempt < 40; attempt += 1) {
-    await delay(50);
-    launchConfirmation = await evaluate(`(() => ({
-      open: document.getElementById('modal')?.classList.contains('open'),
-      title: document.getElementById('modalTitle')?.textContent || '',
-      choices: document.querySelectorAll('#modalChoices .choice-btn').length,
-      hasCancel: [...document.querySelectorAll('#modalActions button')].some((item) => item.textContent === 'Cancel'),
-    }))()`);
-    if (launchConfirmation?.open) break;
-  }
-  const explicitLaunchTitle = launchConfirmation.title.startsWith('Start ') || launchConfirmation.title === 'Agent limit reached';
-  if (!launchConfirmation.open || !explicitLaunchTitle || !launchConfirmation.choices || !launchConfirmation.hasCancel) {
-    throw new Error(`Launcher confirmation did not open: ${JSON.stringify(launchConfirmation)}`);
-  }
-  if (launchConfirmation.title.startsWith('Start ')) {
-    await evaluate("document.querySelector('#modalChoices .choice-btn:not([disabled])')?.click()");
-    let cwdConfirmation = {};
+  let cwdConfirmation = {};
     for (let attempt = 0; attempt < 40; attempt += 1) {
       await delay(50);
       cwdConfirmation = await evaluate(`(() => ({
@@ -518,6 +501,8 @@ await withBrowser({
         backendDefault: document.querySelector('[data-session-backend="APP_SERVER"]')?.getAttribute('aria-pressed') === 'true',
         backendLabels: [...document.querySelectorAll('[data-session-backend]')].map((item) => item.textContent.trim()),
         backendWireHidden: !/web-managed|terminal-managed/.test(document.getElementById('sessionBackendPicker')?.textContent || ''),
+        legacyRouteSheetAbsent: !document.querySelector('#modalChoices .choice-btn'),
+        workstationChoices: document.querySelectorAll('#workstationControls [data-workstation-route]').length,
         contextDefault: document.querySelector('[data-context-window-k="0"]')?.getAttribute('aria-pressed') === 'true',
         contextOneMillion: [...document.querySelectorAll('[data-context-window-k]')].some((item) => item.textContent.trim() === '1M'),
         sections: [...document.querySelectorAll('#modalChoices .directory-section')].map((item) => item.dataset.directorySection),
@@ -543,6 +528,7 @@ await withBrowser({
       || !cwdConfirmation.headerBackAbsent || !cwdConfirmation.searchVisible || !cwdConfirmation.hiddenToggleVisible
       || !cwdConfirmation.contextPickerVisible || !cwdConfirmation.contextDefault || !cwdConfirmation.contextOneMillion
       || !cwdConfirmation.backendPickerVisible || !cwdConfirmation.backendDefault || !cwdConfirmation.backendWireHidden
+      || !cwdConfirmation.legacyRouteSheetAbsent
       || !cwdConfirmation.backendLabels.some((value) => value.includes('Codex App Server'))
       || !cwdConfirmation.backendLabels.some((value) => value.includes('Codex TUI (tmux)'))
       || !cwdConfirmation.sections.includes('folders') || cwdConfirmation.recentCount > 4
@@ -596,6 +582,62 @@ await withBrowser({
       || !parentDirectory.currentCrumb || parentDirectory.currentCrumb === cwdConfirmation.currentCrumb) {
       throw new Error(`Parent-directory navigation failed: ${JSON.stringify(parentDirectory)}`);
     }
+  await evaluate("[...document.querySelectorAll('#modalActions button')].find((item) => item.textContent === 'Cancel')?.click()");
+
+  const combinedWorkstationPicker = await evaluate(`(async () => {
+    const launchIds = [newLaunchRequestId(), newLaunchRequestId()];
+    const base = {
+      path: '/workspace/alpha',
+      displayPath: '/workspace/alpha',
+      parent: '/workspace',
+      roots: [{ path: '/workspace', displayPath: '/workspace' }],
+      directories: [{ name: 'alpha-folder', path: '/workspace/alpha/alpha-folder' }],
+      selectionToken: 'alpha-token',
+    };
+    const routeState = { id: 'alpha' };
+    window.__combinedWorkstationSheet = directorySheet(base, [], 'Codex', {
+      routes: [
+        { id: 'alpha', label: 'Alpha', state: 'online', canCreate: true, activeCount: 1, maxRunning: 3, appServerReady: true },
+        { id: 'beta', label: 'Beta', state: 'online', canCreate: true, activeCount: 0, maxRunning: 3, appServerReady: true },
+      ],
+      route: 'alpha',
+      routeState,
+      backendState: { key: 'APP_SERVER' },
+      contextWindowState: { mode: 'default', k: 0, custom: '' },
+      onRouteChange: async (route) => ({
+        data: {
+          ...base,
+          path: '/workspace/' + route,
+          displayPath: '/workspace/' + route,
+          directories: [{ name: route + '-folder', path: '/workspace/' + route + '/' + route + '-folder' }],
+          selectionToken: route + '-token',
+        },
+        recent: [],
+        appServerReady: true,
+      }),
+      onToggleHidden: async () => base,
+    });
+    const buttons = [...document.querySelectorAll('#workstationControls [data-workstation-route]')];
+    buttons.find((item) => item.dataset.workstationRoute === 'beta')?.click();
+    for (let attempt = 0; attempt < 40; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      if (document.querySelector('[data-workstation-route="beta"]')?.getAttribute('aria-pressed') === 'true') break;
+    }
+    return {
+      modalOpen: document.getElementById('modal')?.classList.contains('open'),
+      title: document.getElementById('modalTitle')?.textContent || '',
+      choices: buttons.length,
+      betaPressed: document.querySelector('[data-workstation-route="beta"]')?.getAttribute('aria-pressed') === 'true',
+      betaFolder: [...document.querySelectorAll('.directory-row-folder strong')].some((item) => item.textContent === 'beta-folder'),
+      legacyRouteSheetAbsent: !document.querySelector('#modalChoices .choice-btn'),
+      launchIdsDistinct: launchIds[0] !== launchIds[1] && launchIds.every((item) => item.startsWith('web-')),
+    };
+  })()`);
+  if (!combinedWorkstationPicker.modalOpen || combinedWorkstationPicker.title !== 'Choose working directory'
+    || combinedWorkstationPicker.choices !== 2 || !combinedWorkstationPicker.betaPressed
+    || !combinedWorkstationPicker.betaFolder || !combinedWorkstationPicker.legacyRouteSheetAbsent
+    || !combinedWorkstationPicker.launchIdsDistinct) {
+    throw new Error(`Combined workstation picker failed: ${JSON.stringify(combinedWorkstationPicker)}`);
   }
   await evaluate("[...document.querySelectorAll('#modalActions button')].find((item) => item.textContent === 'Cancel')?.click()");
 
@@ -650,17 +692,6 @@ await withBrowser({
 
   if (startCodex) {
     await evaluate("document.querySelector('#newSessionSlot .launcher-card').click()");
-    let startSheet = {};
-    for (let attempt = 0; attempt < 80; attempt += 1) {
-      await delay(50);
-      startSheet = await evaluate(`(() => ({
-        title: document.getElementById('modalTitle')?.textContent || '',
-        ready: document.getElementById('modal')?.classList.contains('open') && Boolean(document.querySelector('#modalChoices .choice-btn:not([disabled])')),
-      }))()`);
-      if (startSheet?.ready) break;
-    }
-    if (!startSheet.ready || !startSheet.title.startsWith('Start ')) throw new Error(`Start Codex route sheet did not open: ${JSON.stringify(startSheet)}`);
-    await evaluate("document.querySelector('#modalChoices .choice-btn:not([disabled])').click()");
     let directorySheet = {};
     for (let attempt = 0; attempt < 100; attempt += 1) {
       await delay(50);

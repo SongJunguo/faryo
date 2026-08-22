@@ -709,7 +709,10 @@ class AsgiReadContractTest(unittest.TestCase):
             self.asgi_base, "/api/agent/new", authenticated=True, method="POST", body=body, extra_headers=headers,
         )
         self.assertEqual(asgi_result[0], HTTPStatus.OK)
-        self.assertEqual(json.loads(asgi_result[2])["session"], "faryo4")
+        launch_result = json.loads(asgi_result[2])
+        self.assertEqual(launch_result["session"], "faryo4")
+        self.assertEqual(launch_result["clientLaunchId"], "launch-fixture")
+        self.assertEqual(launch_result["redirect"], "/lab/?session=faryo4")
         self.assertEqual(self.config.audit_calls[0]["action"], "start")
         self.assertEqual(self.config.audit_calls[0]["target"], "faryo4")
         owner_payload = json.loads(OwnerContractFixture.requests[-1]["body"])

@@ -184,11 +184,12 @@ class SessionLaunchService:
             HTTPStatus.BAD_GATEWAY,
         )
 
-    def next_faryo_session_name(self, config: Any) -> str:
+    def next_faryo_session_name(self, config: Any, reserved_names: Any = ()) -> str:
         r = self.runtime
+        reserved = reserved_names() if callable(reserved_names) else reserved_names
         used = {
             int(match.group(1))
-            for name in r.tmux_sessions(config)
+            for name in [*r.tmux_sessions(config), *(reserved or ())]
             if (match := r.FARYO_MANAGED_SESSION_RE.fullmatch(name))
         }
         index = 1
@@ -303,6 +304,7 @@ class SessionLaunchService:
         title: str = "",
         launch_id: str = "",
         context_window_k: int = 0,
+        reserved_names: Any = (),
     ) -> str:
         r = self.runtime
         clean_launch_id = r.clean_client_launch_id(launch_id)
@@ -313,7 +315,7 @@ class SessionLaunchService:
             if not name:
                 if max_running and r.active_agent_count(config) >= max_running:
                     raise r.OwnerError("running agent limit reached", HTTPStatus.CONFLICT)
-                name = r.next_faryo_session_name(config)
+                name = r.next_faryo_session_name(config, reserved_names)
                 shell = r.agent_login_shell()
                 if command == "codex":
                     argv, auto_update = r.managed_codex_launch_argv(
@@ -372,6 +374,7 @@ class SessionLaunchService:
         title: str = "",
         launch_id: str = "",
         context_window_k: int = 0,
+        reserved_names: Any = (),
     ) -> str:
         r = self.runtime
         name = r.start_agent_runtime(
@@ -385,6 +388,7 @@ class SessionLaunchService:
             title=title,
             launch_id=launch_id,
             context_window_k=context_window_k,
+            reserved_names=reserved_names,
         )
         r.ensure_agent_start_monitor(config, name)
         return name

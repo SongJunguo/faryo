@@ -272,6 +272,39 @@ class RuntimeTest(unittest.TestCase):
         self.assertEqual(status["pendingRpcCount"], 0)
         self.assertEqual(len(clients), 1)
 
+    def test_runtime_reassigns_persisted_names_that_now_belong_to_tmux(self) -> None:
+        clients = []
+
+        def factory(notification, disconnected):
+            client = FakeRuntimeClient(notification, disconnected)
+            clients.append(client)
+            return client
+
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            registry_path = root / "registry.json"
+            registry = WebSessionRegistry(registry_path)
+            registry.add(
+                name="faryo4",
+                thread_id="thread_existing",
+                cwd="/workspace",
+                launch_id="launch_existing",
+            )
+            runtime = AppServerRuntime(
+                socket_path=root / "app.sock",
+                registry_path=registry_path,
+                client_version="test",
+                reserved_names=lambda: ["faryo1", "faryo3", "faryo4"],
+                client_factory=factory,
+            )
+            runtime.start()
+            self.assertTrue(runtime.wait_ready(2))
+            records = runtime.session_records()
+            runtime.stop()
+
+        self.assertEqual([record["session"] for record in records], ["faryo2"])
+        self.assertEqual(records[0]["threadId"], "thread_existing")
+
     def test_runtime_routes_approvals_and_user_input_without_terminal_keys(self) -> None:
         clients = []
 

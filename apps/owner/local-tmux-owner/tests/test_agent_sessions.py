@@ -101,6 +101,16 @@ class AgentSessionTest(unittest.TestCase):
         with mock.patch.object(server, "tmux_sessions", return_value=["codex", "faryo1", "faryo3", "faryo-legacy"]):
             self.assertEqual(server.next_faryo_session_name(self.config), "faryo2")
 
+    def test_new_tui_session_reserves_app_server_names(self):
+        with mock.patch.object(server, "tmux_sessions", return_value=["faryo1", "faryo3"]):
+            self.assertEqual(
+                server.next_faryo_session_name(
+                    self.config,
+                    lambda: ["faryo2", "faryo4"],
+                ),
+                "faryo5",
+            )
+
     def test_active_codex_thread_id_resolves_to_its_tmux_session(self):
         with (
             mock.patch.object(server, "tmux_sessions", return_value=["faryo2"]),
