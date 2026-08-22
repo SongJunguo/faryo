@@ -15,10 +15,8 @@ import json
 import mmap
 import os
 import re
-import shlex
 import shutil
 import socket
-import sqlite3
 import subprocess
 import sys
 import threading
@@ -43,7 +41,8 @@ import codex_history
 import codex_app_server
 import appserver_runtime
 import appserver_history
-import codex_command_policy
+import session_catalog
+import session_launch
 import codex_tui_interactions
 import interaction_service
 from faryo_cli import codex_runtime
@@ -290,9 +289,6 @@ _codex_rollout_path_locks: dict[str, threading.Lock] = {}
 _codex_history_cache: dict[str, dict[str, Any]] = {}
 _codex_history_cache_lock = threading.Lock()
 _codex_history_path_locks: dict[str, threading.Lock] = {}
-_codex_session_index_cache: dict[str, str] = {}
-_codex_session_index_signature: tuple[int, int, int, int] | None = None
-_codex_session_index_lock = threading.Lock()
 _command_catalog_refresh_lock = threading.Lock()
 _command_catalog_refreshing = False
 _delivery_store = delivery_store.DeliveryStore(
@@ -502,14 +498,6 @@ def tmux_sessions(config: Config) -> list[str]:
     return [line for line in res.stdout.splitlines() if line and line != "local-tmux-owner"]
 
 
-def parse_sqlite_timestamp(value: Any) -> float:
-    if isinstance(value, (int, float)): return float(value)
-    try: return float(str(value or "").strip())
-    except ValueError: pass
-    try: return _dt.datetime.fromisoformat(str(value).strip().replace("Z", "+00:00")).timestamp()
-    except ValueError: return 0.0
-
-
 def active_codex_thread_state(config: Config) -> tuple[dict[str, str], set[str]]:
     active: dict[str, str] = {}
     superseded: set[str] = set()
@@ -541,342 +529,66 @@ def tmux_session_option(config: Config, session: str, key: str, value: str | Non
         tmux(config, ["set-option", "-q", "-t", session, key, value], timeout=2); return value
     res = tmux(config, ["show-options", "-qv", "-t", session, key], timeout=2); return res.stdout.strip() if res.returncode == 0 else ""
 
-def agent_state_rows(sql: str, params: tuple[Any, ...]) -> list[dict[str, Any]]:
-    if not AGENT_STATE_DB.exists(): return []
-    try:
-        conn = sqlite3.connect(f"file:{AGENT_STATE_DB.as_posix()}?mode=ro", uri=True, timeout=1)
-        try:
-            conn.row_factory = sqlite3.Row; return [dict(row) for row in conn.execute(sql, params).fetchall()]
-        finally:
-            conn.close()
-    except sqlite3.Error:
-        return []
-
-
-def codex_rows(where: str, params: tuple[Any, ...], limit: int | None = None, offset: int = 0) -> list[dict[str, Any]]:
-    sql = f"SELECT {THREAD_COLUMNS}, created_at FROM threads WHERE {where} ORDER BY updated_at DESC"
-    if limit is not None:
-        sql += " LIMIT ? OFFSET ?"
-        params = (*params, max(0, limit), max(0, offset))
-    return agent_state_rows(sql, params)
-
-
-def codex_count(where: str, params: tuple[Any, ...]) -> int:
-    rows = agent_state_rows(f"SELECT COUNT(*) AS total FROM threads WHERE {where}", params)
-    try:
-        return max(0, int(rows[0].get("total") or 0)) if rows else 0
-    except (TypeError, ValueError):
-        return 0
-
-
-def codex_session_index_titles() -> dict[str, str]:
-    """Return Codex's explicit thread names without rescanning an unchanged index."""
-    global _codex_session_index_cache, _codex_session_index_signature
-    try:
-        stat = CODEX_SESSION_INDEX.stat()
-        signature = (stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns)
-    except OSError:
-        with _codex_session_index_lock:
-            _codex_session_index_cache = {}
-            _codex_session_index_signature = None
-        return {}
-    with _codex_session_index_lock:
-        if signature == _codex_session_index_signature:
-            return dict(_codex_session_index_cache)
-        titles: dict[str, str] = {}
-        try:
-            with CODEX_SESSION_INDEX.open(encoding="utf-8", errors="replace") as fh:
-                for line in fh:
-                    try:
-                        row = json.loads(line)
-                    except json.JSONDecodeError:
-                        continue
-                    if not isinstance(row, dict):
-                        continue
-                    thread_id = str(row.get("id") or "").strip()
-                    title = session_index_title(row.get("thread_name"))
-                    if thread_id and title:
-                        titles[thread_id] = title
-        except OSError:
-            return dict(_codex_session_index_cache)
-        _codex_session_index_cache = titles
-        _codex_session_index_signature = signature
-        return dict(titles)
-
-
-def codex_thread_title(thread: dict[str, Any], fallback: str = "Untitled session", index_titles: dict[str, str] | None = None) -> str:
-    thread_id = str(thread.get("id") or "").strip()
-    titles = index_titles if index_titles is not None else codex_session_index_titles()
-    return titles.get(thread_id) or session_title_topic(thread.get("title"), fallback)
-
-
-def codex_capture_session_metadata(thread_id: str) -> dict[str, str]:
-    """Metadata that may change without changing the conversation transcript."""
-    clean_id = str(thread_id or "").strip()
-    if not clean_id:
-        return {}
-    payload = {"sessionId": clean_id}
-    if title := codex_session_index_titles().get(clean_id):
-        payload["sessionTitle"] = title
-    return payload
-
-
-def capture_event_digest(
-    text: str,
-    live_text: str,
-    session_metadata: dict[str, str],
-    interaction_revision: str = "",
-    queued_send_now: bool = False,
-) -> int:
-    return hash((text, live_text, session_metadata.get("sessionTitle", ""), interaction_revision, queued_send_now))
-
-
-def path_under_root(path_value: str | None, root_value: str | None) -> bool:
-    try: return bool(path_value and root_value and Path(path_value).expanduser().resolve().is_relative_to(Path(root_value).expanduser().resolve()))
-    except OSError: return False
-
-
-def codex_session_item(config: Config, item: dict[str, Any], index_titles: dict[str, str], git_labels: dict[str, str], tmux_session: str = "") -> dict[str, Any]:
-    cwd = str(item.get("cwd") or "")
-    thread_id = str(item.get("id") or "")
-    updated_ts = parse_sqlite_timestamp(item.get("updated_at"))
-    fallback = short_path(cwd) or thread_id or "Untitled session"
-    # A title supplied while launching a tmux session is only a startup
-    # fallback.  `/rename` is authoritative once Codex appends an explicit
-    # thread name to session_index.jsonl.
-    startup_title = tmux_session_option(config, tmux_session, "@faryo_session_title") if tmux_session else ""
-    title = index_titles.get(thread_id) or startup_title or codex_thread_title(item, fallback, index_titles)
-    archived = bool(item.get("archived"))
-    managed = bool(tmux_session and managed_session(config, tmux_session))
-    state = "archived" if archived else "resumable"
-    agent_running = False
-    if tmux_session:
-        target = Config(tmux_session, config.token, config.pane_width)
-        profile = agent_profile_in_pane(target)
-        state, agent_running = agent_session_lifecycle(config, tmux_session, profile, managed)
-    web_managed = item.get("source") == "appServer"
-    return {
-        "id": thread_id,
-        "title": title,
-        "gitLabel": session_git_label(session_git_cwd(config, tmux_session, cwd), git_labels, bool(tmux_session)),
-        "cwd": short_path(cwd),
-        "createdAt": item.get("created_at") or "",
-        "updatedAt": item.get("updated_at") or "",
-        "updatedTs": updated_ts,
-        "rolloutPath": item.get("rollout_path") or "",
-        "model": item.get("model") or "",
-        "reasoningEffort": item.get("reasoning_effort") or "",
-        "source": "codex-app-server" if web_managed else "codex-cli",
-        "tmuxSession": tmux_session,
-        "active": bool(tmux_session),
-        "managed": managed,
-        "agentRunning": agent_running,
-        "state": state,
-        "archived": archived,
-        "backend": "web-managed" if web_managed else "terminal-managed",
-    }
-
-
-def clean_agent_history_query(value: Any) -> str:
-    return " ".join(str(value or "").replace("\x00", "").split())[:AGENT_HISTORY_QUERY_MAX_CHARS]
-
-
-def clean_agent_history_period(value: Any) -> str:
-    period = str(value or "all").strip().lower()
-    return period if period in AGENT_HISTORY_PERIODS else "all"
-
-
-def clean_agent_history_archive(value: Any) -> str:
-    archive = str(value or "active").strip().lower()
-    return archive if archive in AGENT_HISTORY_ARCHIVE_FILTERS else "active"
-
-
-def agent_history_period_cutoff(period: str, now: float | None = None) -> float:
-    current = float(time.time() if now is None else now)
-    if period == "today":
-        local = _dt.datetime.fromtimestamp(current).astimezone()
-        return local.replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
-    if period == "7d":
-        return current - 7 * 24 * 60 * 60
-    if period == "30d":
-        return current - 30 * 24 * 60 * 60
-    return 0.0
-
-
-def agent_history_text_matches(item: dict[str, Any], query: str, index_titles: dict[str, str]) -> bool:
-    needle = clean_agent_history_query(query).casefold()
-    if not needle:
-        return True
-    cwd = str(item.get("cwd") or "")
-    fallback = short_path(cwd) or str(item.get("id") or "") or "Untitled session"
-    title = codex_thread_title(item, fallback, index_titles)
-    folder = Path(cwd).name if cwd else ""
-    return needle in title.casefold() or needle in folder.casefold()
-
-
-def interactive_top_level_thread(item: dict[str, Any]) -> bool:
-    """Accept top-level CLI, VS Code, and Faryo App Server threads."""
-
-    source = item.get("source")
-    return (
-        isinstance(source, str)
-        and source in INTERACTIVE_CODEX_THREAD_SOURCES
-        and item.get("thread_source") in {None, "user"}
+_session_catalog = session_catalog.SessionCatalog(
+    session_catalog.CatalogBindings(
+        state_db=lambda: AGENT_STATE_DB,
+        session_index=lambda: CODEX_SESSION_INDEX,
+        thread_columns=THREAD_COLUMNS,
+        interactive_top_level_sql=INTERACTIVE_TOP_LEVEL_THREAD_SQL,
+        interactive_sources=frozenset(INTERACTIVE_CODEX_THREAD_SOURCES),
+        history_query_max_chars=AGENT_HISTORY_QUERY_MAX_CHARS,
+        history_periods=frozenset(AGENT_HISTORY_PERIODS),
+        history_archive_filters=frozenset(AGENT_HISTORY_ARCHIVE_FILTERS),
+        config_factory=lambda name, token, width: Config(name, token, width),
+        short_path=lambda value: short_path(value),
+        session_index_title=lambda value: session_index_title(value),
+        session_title_topic=lambda value, fallback: session_title_topic(value, fallback),
+        tmux_session_option=lambda config, name, key, value=None: tmux_session_option(config, name, key, value),
+        session_git_label=lambda cwd, cache, active=True: session_git_label(cwd, cache, active),
+        session_git_cwd=lambda config, name, cwd: session_git_cwd(config, name, cwd),
+        managed_session=lambda config, name: managed_session(config, name),
+        agent_profile_in_pane=lambda config: agent_profile_in_pane(config),
+        agent_session_lifecycle=lambda config, name, profile, managed=None: agent_session_lifecycle(
+            config,
+            name,
+            profile,
+            managed,
+        ),
+        active_codex_thread_state=lambda config: active_codex_thread_state(config),
+        active_agent_thread=lambda config, cwd: active_agent_thread(config, cwd),
+        tmux_sessions=lambda config: tmux_sessions(config),
+        get_pane_cwd=lambda config: get_pane_cwd(config),
+        session_created_ts=lambda config: session_created_ts(config),
+        iso_from_ts=lambda value: iso_from_ts(value),
     )
+)
 
-
-def codex_history_filter(history_root: str | None, excluded_ids: set[str], archive: str = "active") -> tuple[str, tuple[Any, ...]]:
-    where = INTERACTIVE_TOP_LEVEL_THREAD_SQL
-    params: tuple[Any, ...] = ()
-    archive = clean_agent_history_archive(archive)
-    if archive == "active":
-        where += " AND COALESCE(archived, 0) = 0"
-    elif archive == "archived":
-        where += " AND COALESCE(archived, 0) != 0"
-    if excluded_ids:
-        placeholders = ",".join("?" for _ in excluded_ids)
-        where += f" AND id NOT IN ({placeholders})"
-        params += tuple(sorted(excluded_ids))
-    if history_root is not None:
-        try:
-            root = str(Path(history_root).expanduser().resolve()).rstrip(os.sep) or os.sep
-        except OSError:
-            root = str(Path(history_root).expanduser()).rstrip(os.sep) or os.sep
-        escaped = root.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-        prefix = (escaped.rstrip(os.sep) + os.sep + "%") if root != os.sep else os.sep + "%"
-        where += " AND (cwd = ? OR cwd LIKE ? ESCAPE '\\')"
-        params += (root, prefix)
-    return where, params
-
-
-def codex_history_page(config: Config, limit: int, offset: int = 0, history_root: str | None = None, excluded_ids: set[str] | None = None, query: str = "", period: str = "all", archive: str = "active", now: float | None = None) -> tuple[list[dict[str, Any]], int]:
-    query = clean_agent_history_query(query)
-    period = clean_agent_history_period(period)
-    archive = clean_agent_history_archive(archive)
-    where, params = codex_history_filter(history_root, excluded_ids or set(), archive)
-    index_titles = codex_session_index_titles(); git_labels: dict[str, str] = {}
-    if not query and period == "all":
-        total = codex_count(where, params)
-        rows = codex_rows(where, params, max(1, limit), max(0, offset))
-        return [codex_session_item(config, item, index_titles, git_labels) for item in rows], total
-    cutoff = agent_history_period_cutoff(period, now)
-    rows = [
-        item for item in codex_rows(where, params)
-        if (not cutoff or parse_sqlite_timestamp(item.get("updated_at")) >= cutoff)
-        and agent_history_text_matches(item, query, index_titles)
-    ]
-    total = len(rows)
-    rows = rows[max(0, offset):max(0, offset) + max(1, limit)]
-    return [codex_session_item(config, item, index_titles, git_labels) for item in rows], total
-
-
-def codex_history_items(config: Config, history_root: str | None = None) -> list[dict[str, Any]]:
-    active, superseded = active_codex_thread_state(config); index_titles = codex_session_index_titles(); items = []; git_labels: dict[str, str] = {}
-    for item in codex_rows(f"{INTERACTIVE_TOP_LEVEL_THREAD_SQL} AND COALESCE(archived, 0) = 0", ()):
-        cwd = str(item.get("cwd") or "")
-        if history_root is not None and not path_under_root(cwd, history_root): continue
-        thread_id = str(item.get("id") or ""); tmux_session = active.get(thread_id, "")
-        if thread_id in superseded: continue
-        items.append(codex_session_item(config, item, index_titles, git_labels, tmux_session))
-    return items
-
-
-def active_agent_session_items(config: Config, history_root: str | None = None, codex_state: tuple[dict[str, str], set[str]] | None = None) -> tuple[list[dict[str, Any]], set[str]]:
-    active_codex, superseded = codex_state or active_codex_thread_state(config)
-    index_titles = codex_session_index_titles(); git_labels: dict[str, str] = {}; items: list[dict[str, Any]] = []
-    represented_ids: set[str] = set(active_codex) | superseded
-    rows_by_id: dict[str, dict[str, Any]] = {}
-    if active_codex:
-        placeholders = ",".join("?" for _ in active_codex)
-        rows_by_id = {str(row.get("id") or ""): row for row in codex_rows(f"id IN ({placeholders})", tuple(active_codex))}
-    seen_tmux: set[str] = set()
-    for thread_id, tmux_session in active_codex.items():
-        item = rows_by_id.get(thread_id)
-        if not item:
-            continue
-        cwd = str(item.get("cwd") or "")
-        if history_root is not None and not path_under_root(cwd, history_root):
-            continue
-        items.append(codex_session_item(config, item, index_titles, git_labels, tmux_session))
-        seen_tmux.add(tmux_session)
-    for name in tmux_sessions(config):
-        if name in seen_tmux:
-            continue
-        target = Config(name, config.token, config.pane_width)
-        profile = agent_profile_in_pane(target)
-        managed = managed_session(config, name)
-        if not profile and not managed:
-            continue
-        cwd = get_pane_cwd(target)
-        if history_root is not None and not path_under_root(cwd, history_root):
-            continue
-        thread = active_agent_thread(target, cwd) if profile else None
-        thread_id = str((thread or {}).get("id") or tmux_session_option(config, name, "@faryo_agent_session_id") or name)
-        state, agent_running = agent_session_lifecycle(config, name, profile, managed)
-        updated_ts = session_created_ts(target); updated_at = iso_from_ts(updated_ts) if updated_ts else ""
-        title = index_titles.get(thread_id) or tmux_session_option(config, name, "@faryo_session_title") or (codex_thread_title(thread, short_path(cwd) or name, index_titles) if thread else short_path(cwd) or name)
-        source = profile.source if profile else tmux_session_option(config, name, "@faryo_agent_source") or "codex-cli"
-        items.append({"id": thread_id, "title": title, "gitLabel": session_git_label(session_git_cwd(config, name, cwd), git_labels), "cwd": short_path(cwd), "createdAt": "", "updatedAt": updated_at, "updatedTs": updated_ts, "rolloutPath": (thread or {}).get("rollout_path") or "", "model": (thread or {}).get("model") or "", "reasoningEffort": (thread or {}).get("reasoning_effort") or "", "source": source, "tmuxSession": name, "active": True, "managed": managed, "agentRunning": agent_running, "state": state, "archived": False})
-        if thread_id != name:
-            represented_ids.add(thread_id)
-        seen_tmux.add(name)
-    return sorted(items, key=lambda item: float(item.get("updatedTs") or 0), reverse=True), represented_ids
-
-
-def agent_session_page(config: Config, limit: int, offset: int = 0, history_root: str | None = None, query: str = "", period: str = "all", archive: str = "active") -> dict[str, Any]:
-    page_limit = max(1, limit); start = max(0, offset)
-    codex_state = active_codex_thread_state(config)
-    active, excluded_ids = active_agent_session_items(config, history_root, codex_state)
-    sessions, history_total = codex_history_page(config, page_limit, start, history_root, excluded_ids, query, period, archive)
-    return {"activeSessions": active, "sessions": sessions, "historyTotal": history_total, "historyOffset": start, "historyLimit": page_limit, "historyFilter": {"q": clean_agent_history_query(query), "period": clean_agent_history_period(period), "archive": clean_agent_history_archive(archive)}}
-
-
-def agent_session_items(config: Config, history_root: str | None = None) -> list[dict[str, Any]]:
-    items = codex_history_items(config, history_root)
-    seen_tmux = {item.get("tmuxSession") for item in items if item.get("tmuxSession")}
-    git_labels: dict[str, str] = {}; index_titles = codex_session_index_titles()
-    for name in tmux_sessions(config):
-        if name in seen_tmux: continue
-        target = Config(name, config.token, config.pane_width)
-        profile = agent_profile_in_pane(target)
-        managed = managed_session(config, name)
-        if not profile and not managed: continue
-        cwd = get_pane_cwd(target)
-        if history_root is not None and not path_under_root(cwd, history_root): continue
-        thread = (active_agent_thread(target, cwd) or {}) if profile else {}
-        thread_id = str(thread.get("id") or tmux_session_option(config, name, "@faryo_agent_session_id") or name)
-        state, agent_running = agent_session_lifecycle(config, name, profile, managed)
-        updated_ts = session_created_ts(target); updated_at = iso_from_ts(updated_ts) if updated_ts else ""
-        title = index_titles.get(thread_id) or tmux_session_option(config, name, "@faryo_session_title") or (codex_thread_title(thread, short_path(cwd) or name, index_titles) if thread else short_path(cwd) or name)
-        source = profile.source if profile else tmux_session_option(config, name, "@faryo_agent_source") or "codex-cli"
-        items.append({"id": thread_id, "title": title, "gitLabel": session_git_label(session_git_cwd(config, name, cwd), git_labels), "cwd": short_path(cwd), "createdAt": "", "updatedAt": updated_at, "updatedTs": updated_ts, "rolloutPath": "", "model": "", "reasoningEffort": "", "source": source, "tmuxSession": name, "active": True, "managed": managed, "agentRunning": agent_running, "state": state, "archived": False})
-    return sorted(items, key=lambda item: float(item.get("updatedTs") or 0), reverse=True)
-
-
-def codex_thread_record(thread_id: str) -> dict[str, Any] | None:
-    rows = codex_rows(f"id = ? AND {INTERACTIVE_TOP_LEVEL_THREAD_SQL}", (thread_id,), 1)
-    return rows[0] if rows else None
-
-
-def thread_record_archived(thread: dict[str, Any] | None) -> bool:
-    try:
-        return bool(int((thread or {}).get("archived") or 0))
-    except (TypeError, ValueError):
-        return False
-
-
-def codex_thread_by_id(thread_id: str) -> dict[str, Any] | None:
-    thread = codex_thread_record(thread_id)
-    return thread if thread and not thread_record_archived(thread) else None
-
-
-def codex_thread_lifecycle_error_status(message: str) -> HTTPStatus:
-    value = str(message or "").lower()
-    if "no rollout found" in value or "no archived rollout found" in value:
-        return HTTPStatus.NOT_FOUND
-    if any(marker in value for marker in ("active", "loaded", "owned", "in use", "descendant")):
-        return HTTPStatus.CONFLICT
-    return HTTPStatus.BAD_GATEWAY
+parse_sqlite_timestamp = _session_catalog.parse_sqlite_timestamp
+agent_state_rows = _session_catalog.agent_state_rows
+codex_rows = _session_catalog.codex_rows
+codex_count = _session_catalog.codex_count
+codex_session_index_titles = _session_catalog.codex_session_index_titles
+codex_thread_title = _session_catalog.codex_thread_title
+codex_capture_session_metadata = _session_catalog.codex_capture_session_metadata
+capture_event_digest = _session_catalog.capture_event_digest
+path_under_root = _session_catalog.path_under_root
+codex_session_item = _session_catalog.codex_session_item
+clean_agent_history_query = _session_catalog.clean_agent_history_query
+clean_agent_history_period = _session_catalog.clean_agent_history_period
+clean_agent_history_archive = _session_catalog.clean_agent_history_archive
+agent_history_period_cutoff = _session_catalog.agent_history_period_cutoff
+agent_history_text_matches = _session_catalog.agent_history_text_matches
+interactive_top_level_thread = _session_catalog.interactive_top_level_thread
+codex_history_filter = _session_catalog.codex_history_filter
+codex_history_page = _session_catalog.codex_history_page
+codex_history_items = _session_catalog.codex_history_items
+active_agent_session_items = _session_catalog.active_agent_session_items
+agent_session_page = _session_catalog.agent_session_page
+agent_session_items = _session_catalog.agent_session_items
+codex_thread_record = _session_catalog.codex_thread_record
+thread_record_archived = _session_catalog.thread_record_archived
+codex_thread_by_id = _session_catalog.codex_thread_by_id
+codex_thread_lifecycle_error_status = _session_catalog.codex_thread_lifecycle_error_status
 
 
 def change_codex_thread_archive_state(config: Config, thread_id: str, archived: bool, history_root: str | None = None) -> dict[str, Any]:
@@ -909,146 +621,6 @@ def change_codex_thread_archive_state(config: Config, thread_id: str, archived: 
     raise OwnerError("Codex thread state did not settle", HTTPStatus.BAD_GATEWAY)
 
 
-def agent_launch_executable(command: str) -> str:
-    if command == "codex":
-        configured = os.environ.get("FARYO_CODEX_BIN", "").strip()
-        resolved = codex_runtime.resolve_codex(configured, Path.home())
-        if resolved:
-            return resolved
-        if os.environ.get("FARYO_CODEX_BIN_PINNED", "").strip().lower() in {"1", "true", "yes", "on"}:
-            raise OwnerError("pinned Codex executable is missing or not executable", HTTPStatus.BAD_GATEWAY)
-    executable = shutil.which(command)
-    if not executable:
-        raise OwnerError("Codex executable was not found in the Owner environment", HTTPStatus.BAD_GATEWAY)
-    return executable
-
-
-def codex_cli_argv(*args: str) -> list[str]:
-    """Resolve Codex dynamically, then freeze one matching runtime per exec."""
-    return codex_runtime.codex_argv(agent_launch_executable("codex"), *args)
-
-
-def codex_auto_update_enabled() -> bool:
-    return os.environ.get("FARYO_CODEX_AUTO_UPDATE", "1").strip().lower() in {
-        "1",
-        "true",
-        "yes",
-        "on",
-    }
-
-
-def codex_context_window_args(context_window_k: int = 0) -> list[str]:
-    if not context_window_k:
-        return []
-    tokens = context_window_k * 1000
-    compact_tokens = tokens * CONTEXT_WINDOW_COMPACT_PERCENT // 100
-    return [
-        "-c",
-        f"model_context_window={tokens}",
-        "-c",
-        f"model_auto_compact_token_limit={compact_tokens}",
-    ]
-
-
-def managed_codex_launch_argv(name: str, *args: str) -> tuple[list[str], bool]:
-    if not codex_auto_update_enabled():
-        return codex_cli_argv(*args), False
-    launch = codex_cli_argv(
-        "-c",
-        "check_for_update_on_startup=false",
-        *args,
-    )
-    return (
-        [
-            sys.executable,
-            "-I",
-            str(CODEX_UPDATE_PREFLIGHT),
-            "--session",
-            name,
-            "--state-dir",
-            str(CODEX_UPDATE_STATE_DIR),
-            "--",
-            *launch,
-        ],
-        True,
-    )
-
-
-def agent_start_ready_timeout(config: Config, name: str) -> float:
-    update_status = tmux_session_option(config, name, "@faryo_codex_update")
-    return (
-        CODEX_UPDATE_START_READY_TIMEOUT
-        if update_status in CODEX_UPDATE_SESSION_STATES
-        else AGENT_START_READY_TIMEOUT
-    )
-
-
-def installed_codex_version() -> str:
-    try:
-        argv = codex_cli_argv("--version")
-        result = run_cmd(
-            argv,
-            timeout=4,
-            environment=codex_runtime.codex_environment(argv),
-        )
-    except (OSError, OwnerError, subprocess.TimeoutExpired):
-        return ""
-    if result.returncode != 0:
-        return ""
-    match = re.search(r"\b(\d+\.\d+\.\d+(?:[-+][A-Za-z0-9.-]+)?)\b", result.stdout)
-    return match.group(1) if match else ""
-
-
-def refresh_command_catalog() -> None:
-    global _command_catalog_refreshing
-    try:
-        script = APP_DIR / "tests" / "codex-command-inventory.sh"
-        environment = codex_runtime.codex_environment(codex_cli_argv())
-        environment["FARYO_CODEX_COMMAND_CATALOG"] = str(
-            codex_command_policy.DEFAULT_RUNTIME_CATALOG
-        )
-        result = subprocess.run(
-            [str(script), "--write-cache"],
-            cwd=str(APP_DIR),
-            env=environment,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            timeout=45,
-            check=False,
-        )
-        if result.returncode == 0:
-            codex_command_policy.reload_default_catalog()
-    except (OSError, subprocess.TimeoutExpired):
-        pass
-    finally:
-        with _command_catalog_refresh_lock:
-            _command_catalog_refreshing = False
-
-
-def refresh_command_catalog_if_needed() -> bool:
-    global _command_catalog_refreshing
-    version = installed_codex_version()
-    catalog = codex_command_policy.default_catalog()
-    if not version or version in {
-        catalog.tested_codex_version,
-        catalog.observed_codex_version,
-    }:
-        return False
-    with _command_catalog_refresh_lock:
-        if _command_catalog_refreshing:
-            return False
-        _command_catalog_refreshing = True
-    threading.Thread(
-        target=refresh_command_catalog,
-        name="faryo-command-catalog",
-        daemon=True,
-    ).start()
-    return True
-
-
 _codex_app_server_launch_version = ""
 _codex_installation_reconcile_lock = threading.Lock()
 
@@ -1067,410 +639,6 @@ _codex_app_server_client = codex_app_server.CodexAppServerClient(
 )
 
 
-def agent_login_shell() -> str:
-    candidates = [
-        os.environ.get("FARYO_AGENT_SHELL", "").strip(),
-        os.environ.get("SHELL", "").strip(),
-        shutil.which("zsh") or "",
-        shutil.which("bash") or "",
-        shutil.which("sh") or "",
-        "/bin/bash",
-        "/bin/sh",
-    ]
-    for candidate in candidates:
-        if not candidate:
-            continue
-        path = Path(candidate).expanduser() if "/" in candidate else Path(shutil.which(candidate) or "")
-        if path.is_file() and os.access(path, os.X_OK):
-            return str(path)
-    raise OwnerError("no executable login shell is available", HTTPStatus.BAD_GATEWAY)
-
-
-def next_faryo_session_name(config: Config) -> str:
-    used = {
-        int(match.group(1))
-        for name in tmux_sessions(config)
-        if (match := FARYO_MANAGED_SESSION_RE.fullmatch(name))
-    }
-    index = 1
-    while index in used:
-        index += 1
-    return f"faryo{index}"
-
-
-def managed_launch_session(config: Config, launch_id: str) -> str:
-    clean_id = clean_client_launch_id(launch_id)
-    if not clean_id:
-        return ""
-    for name in tmux_sessions(config):
-        if tmux_session_option(config, name, "@faryo_launch_id") == clean_id and managed_session(config, name):
-            return name
-    return ""
-
-
-def wait_for_agent_runtime_ready(
-    config: Config,
-    name: str,
-    *,
-    created_here: bool,
-    cleanup_on_failure: bool = True,
-    expected_pane_pid: int = 0,
-) -> str:
-    target = Config(name, config.token, config.pane_width)
-    deadline = time.monotonic() + agent_start_ready_timeout(config, name)
-    ready_since: float | None = None
-    while time.monotonic() < deadline:
-        reconcile_managed_codex_update(config, name)
-        if expected_pane_pid and get_pane_pid(target) != expected_pane_pid:
-            raise OwnerError("agent runtime identity changed", HTTPStatus.CONFLICT)
-        if has_session(target) and codex_cli_in_pane(target):
-            # A process can exist while Codex is still loading or waiting on a
-            # startup choice. New sessions require a continuous ready interval:
-            # the transient composer shown before MCP startup cannot pass.
-            pending = codex_tui_interactions.detect_interaction(
-                tmux_current_capture(target)
-            )
-            if not created_here or pending is not None:
-                tmux_session_option(config, name, "@faryo_start_error", "")
-                tmux_session_option(config, name, "@faryo_starting_at", "")
-                ensure_pane_width(target)
-                return name
-            ready = agent_ready_for_input(target, CODEX_PROFILE)
-            now = time.monotonic()
-            if ready:
-                ready_since = now if ready_since is None else ready_since
-                if now - ready_since >= AGENT_START_READY_STABLE_SECONDS:
-                    tmux_session_option(config, name, "@faryo_start_error", "")
-                    tmux_session_option(config, name, "@faryo_starting_at", "")
-                    ensure_pane_width(target)
-                    return name
-            else:
-                ready_since = None
-        else:
-            ready_since = None
-        time.sleep(0.2)
-    if created_here and cleanup_on_failure:
-        tmux(config, ["kill-session", "-t", name], timeout=3)
-    raise OwnerError("agent runtime did not become ready", HTTPStatus.BAD_GATEWAY)
-
-
-def _monitor_agent_runtime(config: Config, name: str, pane_pid: int) -> None:
-    try:
-        wait_for_agent_runtime_ready(
-            config,
-            name,
-            created_here=True,
-            cleanup_on_failure=False,
-            expected_pane_pid=pane_pid,
-        )
-    except OwnerError:
-        target = Config(name, config.token, config.pane_width)
-        if has_session(target) and get_pane_pid(target) == pane_pid:
-            tmux_session_option(config, name, "@faryo_start_error", "not-ready")
-            tmux_session_option(config, name, "@faryo_starting_at", "")
-    finally:
-        with AGENT_START_MONITOR_LOCK:
-            if AGENT_START_MONITORS.get(name) == pane_pid:
-                AGENT_START_MONITORS.pop(name, None)
-
-
-def ensure_agent_start_monitor(config: Config, name: str) -> bool:
-    if (
-        not managed_session(config, name)
-        or not tmux_session_option(config, name, "@faryo_starting_at")
-        or tmux_session_option(config, name, "@faryo_start_error")
-    ):
-        return False
-    pane_pid = get_pane_pid(Config(name, config.token, config.pane_width)) or 0
-    if not pane_pid:
-        return False
-    with AGENT_START_MONITOR_LOCK:
-        if AGENT_START_MONITORS.get(name) == pane_pid:
-            return False
-        AGENT_START_MONITORS[name] = pane_pid
-    threading.Thread(
-        target=_monitor_agent_runtime,
-        args=(config, name, pane_pid),
-        name=f"faryo-start-{name}",
-        daemon=True,
-    ).start()
-    return True
-
-
-def start_agent_runtime(config: Config, cwd: Path, command: str, args: list[str], max_running: int = 0, wait_ready: bool = True, agent_id: str = "", title: str = "", launch_id: str = "", context_window_k: int = 0) -> str:
-    clean_launch_id = clean_client_launch_id(launch_id)
-    created_here = False
-    scrub_tmux_global_environment(config)
-    with RUNTIME_LOCK:
-        name = managed_launch_session(config, clean_launch_id) if clean_launch_id else ""
-        if not name:
-            if max_running and active_agent_count(config) >= max_running: raise OwnerError("running agent limit reached", HTTPStatus.CONFLICT)
-            name = next_faryo_session_name(config)
-            shell = agent_login_shell()
-            if command == "codex":
-                argv, auto_update = managed_codex_launch_argv(
-                    name,
-                    *codex_context_window_args(context_window_k),
-                    *args,
-                )
-            else:
-                argv, auto_update = [agent_launch_executable(command), *args], False
-            launch = f"{shlex.join(argv)}; exec {shlex.quote(shell)} -l"
-            res = tmux(config, ["new-session", "-d", "-s", name, "-c", str(cwd), shell, "-lc", launch], timeout=5)
-            if res.returncode != 0: raise OwnerError(res.stderr.strip() or "tmux session start failed", HTTPStatus.INTERNAL_SERVER_ERROR)
-            created_here = True
-            tmux_session_option(config, name, "@faryo_managed", "1")
-            tmux_session_option(config, name, "@faryo_starting_at", str(time.time()))
-            tmux_session_option(config, name, "@faryo_start_error", "")
-            if git_root := git_root_for_cwd(cwd):
-                tmux_session_option(config, name, SESSION_GIT_ROOT_OPTION, git_root)
-            if source := AGENT_SOURCE_BY_COMMAND.get(command): tmux_session_option(config, name, "@faryo_agent_source", source)
-            if auto_update and tmux_session_option(config, name, "@faryo_codex_update") not in CODEX_UPDATE_SESSION_STATES:
-                tmux_session_option(config, name, "@faryo_codex_update", "pending")
-            if clean_launch_id:
-                tmux_session_option(config, name, "@faryo_launch_id", clean_launch_id)
-            if context_window_k:
-                tmux_session_option(
-                    config,
-                    name,
-                    SESSION_CONTEXT_WINDOW_OPTION,
-                    str(context_window_k),
-                )
-            if title:
-                tmux_session_option(config, name, "@faryo_session_title", clean_session_title(title))
-            if agent_id:
-                tmux_session_option(config, name, "@faryo_agent_session_id", agent_id)
-    if not wait_ready:
-        return name
-    return wait_for_agent_runtime_ready(
-        config,
-        name,
-        created_here=created_here,
-        cleanup_on_failure=True,
-    )
-
-
-def start_agent_runtime_async(
-    config: Config,
-    cwd: Path,
-    command: str,
-    args: list[str],
-    max_running: int = 0,
-    agent_id: str = "",
-    title: str = "",
-    launch_id: str = "",
-    context_window_k: int = 0,
-) -> str:
-    name = start_agent_runtime(
-        config,
-        cwd,
-        command,
-        args,
-        max_running,
-        wait_ready=False,
-        agent_id=agent_id,
-        title=title,
-        launch_id=launch_id,
-        context_window_k=context_window_k,
-    )
-    ensure_agent_start_monitor(config, name)
-    return name
-
-
-def codex_resume_directory_requirement(
-    config: Config,
-    thread_id: str,
-    history_root: str | None = None,
-) -> dict[str, Any] | None:
-    clean_id = clean_agent_session_id(thread_id)
-    if not clean_id:
-        raise OwnerError("invalid agent session id")
-    if active_codex_thread_map(config).get(clean_id):
-        return None
-    thread = codex_thread_by_id(clean_id)
-    if not thread or (
-        history_root is not None
-        and not path_under_root(str(thread.get("cwd") or ""), history_root)
-    ):
-        raise OwnerError("agent session not found", HTTPStatus.NOT_FOUND)
-    recorded = Path(str(thread.get("cwd") or "")).expanduser()
-    if recorded.is_dir():
-        return None
-    return {
-        "requiresWorkingDirectory": True,
-        "reason": "recorded-directory-unavailable",
-        "recordedDisplayCwd": short_path(str(recorded)) or "Unavailable directory",
-    }
-
-
-def resume_codex_thread_session(
-    config: Config,
-    thread_id: str,
-    max_running: int = 0,
-    history_root: str | None = None,
-    cwd_override: Path | None = None,
-    async_ready: bool = False,
-    context_window_k: int = 0,
-) -> str:
-    clean_id = clean_agent_session_id(thread_id)
-    if not clean_id: raise OwnerError("invalid agent session id")
-    with RUNTIME_LOCK:
-        active = active_codex_thread_map(config).get(clean_id)
-        if active: return active
-        thread = codex_thread_by_id(clean_id)
-        if not thread: raise OwnerError("agent session not found", HTTPStatus.NOT_FOUND)
-        if history_root is not None and not path_under_root(str(thread.get("cwd") or ""), history_root): raise OwnerError("agent session not found", HTTPStatus.NOT_FOUND)
-        cwd = cwd_override or Path(str(thread.get("cwd") or "")).expanduser()
-        if not cwd.is_dir():
-            raise OwnerError("working directory selection is required", HTTPStatus.CONFLICT)
-        starter = start_agent_runtime_async if async_ready else start_agent_runtime
-        return starter(
-            config,
-            cwd,
-            "codex",
-            ["resume", "-C", str(cwd), clean_id],
-            max_running,
-            agent_id=clean_id,
-            context_window_k=context_window_k,
-        )
-
-def resume_agent_session(
-    config: Config,
-    session_id: str,
-    source: str,
-    max_running: int = 0,
-    history_root: str | None = None,
-    cwd_override: Path | None = None,
-    async_ready: bool = False,
-    context_window_k: int = 0,
-) -> str:
-    if source == "codex-cli":
-        return resume_codex_thread_session(
-            config,
-            session_id,
-            max_running,
-            history_root,
-            cwd_override,
-            async_ready,
-            context_window_k,
-        )
-    raise OwnerError("unsupported agent source", HTTPStatus.BAD_REQUEST)
-
-def target_config(config: Config, session: str | None) -> Config:
-    if not session or session == config.session:
-        return config
-    sessions = tmux_sessions(config)
-    if session in sessions:
-        return Config(session, config.token, config.pane_width)
-    # A cached Gateway card or old bookmark may still carry the durable Codex
-    # thread id after that thread has been attached to a tmux session. Resolve
-    # only currently active top-level threads; inactive history must still pass
-    # through the authenticated resume flow and its cwd policy.
-    active_session = active_codex_thread_map(config).get(session, "")
-    if active_session in sessions:
-        return Config(active_session, config.token, config.pane_width)
-    raise OwnerError(f"tmux session not found: {session}", HTTPStatus.NOT_FOUND)
-
-
-
-def managed_session(config: Config, name: str | None) -> bool:
-    if not name or name not in tmux_sessions(config):
-        return False
-    return tmux_session_option(config, name, "@faryo_managed") == "1"
-
-
-def agent_session_lifecycle(config: Config, name: str, profile: AgentProfile | None = None, is_managed: bool | None = None, now: float | None = None) -> tuple[str, bool]:
-    """Return the user-facing lifecycle state and whether the agent is busy."""
-    target = Config(name, config.token, config.pane_width)
-    reconcile_managed_codex_update(config, name)
-    managed = managed_session(config, name) if is_managed is None else is_managed
-    detected = agent_profile_in_pane(target) if profile is None else profile
-    if managed and tmux_session_option(config, name, "@faryo_start_error"):
-        return "exited", False
-    try:
-        started_at = float(tmux_session_option(config, name, "@faryo_starting_at") or 0)
-    except ValueError:
-        started_at = 0.0
-    current = time.time() if now is None else now
-    if started_at and current - started_at <= agent_start_ready_timeout(config, name) + AGENT_START_STATE_GRACE_SECONDS:
-        ensure_agent_start_monitor(config, name)
-        return "starting", False
-    if detected is not None:
-        running = not agent_ready_for_input(target, detected)
-        if not managed:
-            return "desktop", running
-        return ("running" if running else "waiting"), running
-    if not managed:
-        return "", False
-    return "exited", False
-
-
-def session_idle_seconds(config: Config) -> float:
-    res = tmux(config, ["display-message", "-p", "-t", tmux_target(config), "#{session_activity}"], timeout=2)
-    try: return max(0.0, time.time() - float(res.stdout.strip())) if res.returncode == 0 else 0.0
-    except ValueError: return 0.0
-
-
-def session_created_ts(config: Config) -> float:
-    res = tmux(config, ["display-message", "-p", "-t", tmux_target(config), "#{session_created}"], timeout=2)
-    try: return float(res.stdout.strip()) if res.returncode == 0 else 0.0
-    except ValueError: return 0.0
-
-
-def iso_from_ts(value: float) -> str:
-    return _dt.datetime.fromtimestamp(value, _dt.timezone.utc).astimezone().isoformat(timespec="seconds") if value else ""
-
-
-def cleanup_managed_sessions(config: Config, agent_idle_seconds: int = 0) -> None:
-    for name in tmux_sessions(config):
-        target = Config(name, config.token, config.pane_width)
-        if not managed_session(config, name):
-            continue
-        profile = agent_profile_in_pane(target)
-        has_agent = profile is not None
-        idle = session_idle_seconds(target)
-        if (not has_agent and idle >= EMPTY_MANAGED_SESSION_TTL_SECONDS) or (agent_idle_seconds and profile and agent_ready_for_input(target, profile) and idle >= agent_idle_seconds):
-            tmux(config, ["kill-session", "-t", name], timeout=3)
-
-
-def active_agent_count(config: Config) -> int:
-    cleanup_managed_sessions(config)
-    count = 0
-    now = time.time()
-    for name in tmux_sessions(config):
-        target = Config(name, config.token, config.pane_width)
-        profile = agent_profile_in_pane(target)
-        if profile is not None:
-            count += 1
-            continue
-        if managed_session(config, name) and agent_session_lifecycle(config, name, None, True, now)[0] == "starting":
-            count += 1
-    return count
-
-
-def bounded_max_running(payload: dict[str, Any]) -> int:
-    return int(payload.get("max_running") or payload.get("maxRunning") or 0)
-
-
-def bounded_context_window_k(payload: dict[str, Any]) -> int:
-    value = payload.get("context_window_k")
-    if value is None:
-        value = payload.get("contextWindowK")
-    raw = str(value if value is not None else "").strip()
-    if not raw or raw == "0":
-        return 0
-    if isinstance(value, bool) or not re.fullmatch(r"[0-9]{1,4}", raw):
-        raise OwnerError(
-            f"context window must be a whole number from {CONTEXT_WINDOW_MIN_K} to {CONTEXT_WINDOW_MAX_K} K"
-        )
-    context_window_k = int(raw)
-    if not CONTEXT_WINDOW_MIN_K <= context_window_k <= CONTEXT_WINDOW_MAX_K:
-        raise OwnerError(
-            f"context window must be a whole number from {CONTEXT_WINDOW_MIN_K} to {CONTEXT_WINDOW_MAX_K} K"
-        )
-    return context_window_k
-
-
 def agent_tail_ignorable(line: str, profile: AgentProfile) -> bool:
     return agent_meta_line(line, profile)
 
@@ -1486,15 +654,6 @@ def agent_ready_for_input(config: Config, profile: AgentProfile = CODEX_PROFILE)
     return bool(lines and profile.input_prompt_re.match(lines[-1]))
 
 
-def close_shell_session(config: Config, session: str | None) -> None:
-    name = clean_tmux_session_name(session)
-    if not managed_session(config, name):
-        raise OwnerError("tmux session not found", HTTPStatus.NOT_FOUND)
-    res = tmux(config, ["kill-session", "-t", name], timeout=3)
-    if res.returncode != 0:
-        raise OwnerError(res.stderr.strip() or "tmux kill-session failed", HTTPStatus.INTERNAL_SERVER_ERROR)
-
-
 FARYO_MANAGED_SESSION_RE = re.compile(r"^faryo([1-9][0-9]*)$")
 clean_tmux_session_name = tmux_runtime.clean_tmux_session_name
 clean_agent_session_id = tmux_runtime.clean_agent_session_id
@@ -1502,9 +661,43 @@ clean_client_message_id = tmux_runtime.clean_client_message_id
 clean_client_launch_id = tmux_runtime.clean_client_launch_id
 
 
-def clean_agent_launch_command(value: str | None) -> str | None:
-    command = Path(str(value or "").strip()).name.lower()
-    return command if command in AGENT_LAUNCH_COMMANDS else None
+# Keep the Owner module as the compatibility/composition surface while the
+# terminal lifecycle policy has one implementation owner.  Late-bound calls
+# inside SessionLaunchService deliberately continue to honor test adapters and
+# deployment-specific runtime hooks patched on this module.
+_session_launch = session_launch.SessionLaunchService(sys.modules[__name__])
+agent_launch_executable = _session_launch.agent_launch_executable
+codex_cli_argv = _session_launch.codex_cli_argv
+codex_auto_update_enabled = _session_launch.codex_auto_update_enabled
+codex_context_window_args = _session_launch.codex_context_window_args
+managed_codex_launch_argv = _session_launch.managed_codex_launch_argv
+agent_start_ready_timeout = _session_launch.agent_start_ready_timeout
+installed_codex_version = _session_launch.installed_codex_version
+refresh_command_catalog = _session_launch.refresh_command_catalog
+refresh_command_catalog_if_needed = _session_launch.refresh_command_catalog_if_needed
+agent_login_shell = _session_launch.agent_login_shell
+next_faryo_session_name = _session_launch.next_faryo_session_name
+managed_launch_session = _session_launch.managed_launch_session
+wait_for_agent_runtime_ready = _session_launch.wait_for_agent_runtime_ready
+_monitor_agent_runtime = _session_launch.monitor_agent_runtime
+ensure_agent_start_monitor = _session_launch.ensure_agent_start_monitor
+start_agent_runtime = _session_launch.start_agent_runtime
+start_agent_runtime_async = _session_launch.start_agent_runtime_async
+codex_resume_directory_requirement = _session_launch.codex_resume_directory_requirement
+resume_codex_thread_session = _session_launch.resume_codex_thread_session
+resume_agent_session = _session_launch.resume_agent_session
+target_config = _session_launch.target_config
+managed_session = _session_launch.managed_session
+agent_session_lifecycle = _session_launch.agent_session_lifecycle
+session_idle_seconds = _session_launch.session_idle_seconds
+session_created_ts = _session_launch.session_created_ts
+iso_from_ts = _session_launch.iso_from_ts
+cleanup_managed_sessions = _session_launch.cleanup_managed_sessions
+active_agent_count = _session_launch.active_agent_count
+bounded_max_running = _session_launch.bounded_max_running
+bounded_context_window_k = _session_launch.bounded_context_window_k
+close_shell_session = _session_launch.close_shell_session
+clean_agent_launch_command = _session_launch.clean_agent_launch_command
 
 
 def has_session(config: Config) -> bool:

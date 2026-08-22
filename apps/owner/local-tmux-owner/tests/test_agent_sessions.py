@@ -19,9 +19,7 @@ class AgentSessionTest(unittest.TestCase):
         self.config = server.Config("owner", "test-token", 145)
         with server.AGENT_START_MONITOR_LOCK:
             server.AGENT_START_MONITORS.clear()
-        with server._codex_session_index_lock:
-            server._codex_session_index_cache = {}
-            server._codex_session_index_signature = None
+        server._session_catalog.reset_index_cache()
 
     def test_percent_encoded_unicode_owner_label_is_restored_safely(self):
         encoded = "Ubuntu%20%E5%B7%A5%E4%BD%9C%E7%AB%99"
@@ -156,7 +154,7 @@ class AgentSessionTest(unittest.TestCase):
         self.assertEqual(item["tmuxSession"], "faryo1")
 
     def test_capture_metadata_exposes_only_explicit_codex_thread_name(self):
-        with mock.patch.object(server, "codex_session_index_titles", return_value={"thread-a": "Renamed topic"}):
+        with mock.patch.object(server._session_catalog, "codex_session_index_titles", return_value={"thread-a": "Renamed topic"}):
             self.assertEqual(server.codex_capture_session_metadata("thread-a"), {
                 "sessionId": "thread-a",
                 "sessionTitle": "Renamed topic",
@@ -614,8 +612,8 @@ class AgentSessionTest(unittest.TestCase):
         page = [{"id": f"history-{index}", "tmuxSession": "", "updatedTs": 50 - index} for index in range(10)]
         with (
             mock.patch.object(server, "active_codex_thread_state", return_value=({}, set())),
-            mock.patch.object(server, "active_agent_session_items", return_value=(active, {"live"})),
-            mock.patch.object(server, "codex_history_page", return_value=(page, 437)) as history_page,
+            mock.patch.object(server._session_catalog, "active_agent_session_items", return_value=(active, {"live"})),
+            mock.patch.object(server._session_catalog, "codex_history_page", return_value=(page, 437)) as history_page,
         ):
             result = server.agent_session_page(self.config, 10, 390, "/workspace")
 
@@ -627,9 +625,9 @@ class AgentSessionTest(unittest.TestCase):
 
     def test_session_and_conversation_history_pagers_keep_distinct_contracts(self):
         with (
-            mock.patch.object(server, "codex_history_filter", return_value=("1 = 1", ())),
-            mock.patch.object(server, "codex_count", return_value=0),
-            mock.patch.object(server, "codex_rows", return_value=[]),
+            mock.patch.object(server._session_catalog, "codex_history_filter", return_value=("1 = 1", ())),
+            mock.patch.object(server._session_catalog, "codex_count", return_value=0),
+            mock.patch.object(server._session_catalog, "codex_rows", return_value=[]),
         ):
             sessions, total = server.codex_history_page(self.config, 10, 20, "/workspace", {"live"})
 
@@ -694,8 +692,8 @@ class AgentSessionTest(unittest.TestCase):
                 connection.close()
             with (
                 mock.patch.object(server, "AGENT_STATE_DB", state_db),
-                mock.patch.object(server, "codex_session_index_titles", return_value={}),
-                mock.patch.object(server, "codex_session_item", side_effect=lambda _config, item, *_args: item),
+                mock.patch.object(server._session_catalog, "codex_session_index_titles", return_value={}),
+                mock.patch.object(server._session_catalog, "codex_session_item", side_effect=lambda _config, item, *_args: item),
             ):
                 page, total = server.codex_history_page(
                     self.config,
@@ -714,10 +712,10 @@ class AgentSessionTest(unittest.TestCase):
             {"id": "symbols", "title": "Another title", "cwd": "/workspace/100%_literal", "updated_at": 190},
         ]
         with (
-            mock.patch.object(server, "codex_history_filter", return_value=("1 = 1", ())),
-            mock.patch.object(server, "codex_rows", return_value=rows),
-            mock.patch.object(server, "codex_session_index_titles", return_value={"renamed": "Section IV revised"}),
-            mock.patch.object(server, "codex_session_item", side_effect=lambda _config, item, *_args: item),
+            mock.patch.object(server._session_catalog, "codex_history_filter", return_value=("1 = 1", ())),
+            mock.patch.object(server._session_catalog, "codex_rows", return_value=rows),
+            mock.patch.object(server._session_catalog, "codex_session_index_titles", return_value={"renamed": "Section IV revised"}),
+            mock.patch.object(server._session_catalog, "codex_session_item", side_effect=lambda _config, item, *_args: item),
         ):
             renamed, renamed_total = server.codex_history_page(self.config, 10, query="section iv")
             symbols, symbols_total = server.codex_history_page(self.config, 10, query="%_")
@@ -732,9 +730,9 @@ class AgentSessionTest(unittest.TestCase):
             {"id": "old", "title": "Old", "cwd": "/workspace/old", "updated_at": now - 40 * 86400},
         ]
         with (
-            mock.patch.object(server, "codex_rows", return_value=rows),
-            mock.patch.object(server, "codex_session_index_titles", return_value={}),
-            mock.patch.object(server, "codex_session_item", side_effect=lambda _config, item, *_args: item),
+            mock.patch.object(server._session_catalog, "codex_rows", return_value=rows),
+            mock.patch.object(server._session_catalog, "codex_session_index_titles", return_value={}),
+            mock.patch.object(server._session_catalog, "codex_session_item", side_effect=lambda _config, item, *_args: item),
             mock.patch.object(server, "codex_conversation_history_page") as transcript_reader,
         ):
             sessions, total = server.codex_history_page(
@@ -787,8 +785,8 @@ class AgentSessionTest(unittest.TestCase):
                 connection.close()
             with (
                 mock.patch.object(server, "AGENT_STATE_DB", state_db),
-                mock.patch.object(server, "codex_session_index_titles", return_value={}),
-                mock.patch.object(server, "codex_session_item", side_effect=lambda _config, item, *_args: item),
+                mock.patch.object(server._session_catalog, "codex_session_index_titles", return_value={}),
+                mock.patch.object(server._session_catalog, "codex_session_item", side_effect=lambda _config, item, *_args: item),
             ):
                 page, total = server.codex_history_page(
                     self.config,
