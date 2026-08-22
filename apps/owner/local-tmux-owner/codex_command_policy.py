@@ -31,6 +31,7 @@ class CommandEntry:
     behavior: str
     argument_hint: str = ""
     aliases: tuple[str, ...] = ()
+    available_during_task: bool = False
 
     def public_value(self) -> dict[str, Any]:
         return {
@@ -40,6 +41,7 @@ class CommandEntry:
             "behavior": self.behavior,
             "argumentHint": self.argument_hint,
             "aliases": list(self.aliases),
+            "availableDuringTask": self.available_during_task,
         }
 
 
@@ -97,7 +99,12 @@ def _clean_command(value: object) -> str | None:
     return command if EXACT_COMMAND_RE.fullmatch(command) else None
 
 
-def _entries(payload: dict[str, Any], fallback: dict[str, CommandEntry] | None = None) -> tuple[CommandEntry, ...]:
+def _entries(
+    payload: dict[str, Any],
+    fallback: dict[str, CommandEntry] | None = None,
+    *,
+    allow_busy_capabilities: bool = True,
+) -> tuple[CommandEntry, ...]:
     result: list[CommandEntry] = []
     seen: set[str] = set()
     for raw in payload.get("commands") or []:
@@ -114,6 +121,15 @@ def _entries(payload: dict[str, Any], fallback: dict[str, CommandEntry] | None =
             for value in (raw.get("aliases") or (known.aliases if known else ()))
             if (alias := _clean_command(value)) is not None and alias != command
         )
+        raw_available_during_task = raw.get("availableDuringTask")
+        available_during_task = bool(
+            allow_busy_capabilities
+            and (
+                raw_available_during_task
+                if isinstance(raw_available_during_task, bool)
+                else bool(known and known.available_during_task)
+            )
+        )
         result.append(
             CommandEntry(
                 command=command,
@@ -122,6 +138,7 @@ def _entries(payload: dict[str, Any], fallback: dict[str, CommandEntry] | None =
                 behavior=str(raw.get("behavior") or (known.behavior if known else "unclassified")),
                 argument_hint=str(raw.get("argumentHint") or (known.argument_hint if known else ""))[:80],
                 aliases=aliases,
+                available_during_task=available_during_task,
             )
         )
         seen.add(command)
@@ -142,14 +159,22 @@ def load_catalog(
     runtime_payload = _read_payload(runtime_path) if runtime_path is not None else None
     if runtime_payload is None:
         return CommandCatalog(tested_version, "", fallback_entries, "fallback")
-    runtime_entries = _entries(runtime_payload, fallback_by_command)
+    observed_version = str(runtime_payload.get("observedCodexVersion") or "")
+    runtime_entries = _entries(
+        runtime_payload,
+        fallback_by_command,
+        # Runtime inventory can safely refresh which commands exist.  Busy-task
+        # behavior is a stronger capability and must not silently cross a
+        # Codex-version boundary.
+        allow_busy_capabilities=bool(observed_version and observed_version == tested_version),
+    )
     if not runtime_entries:
         return CommandCatalog(tested_version, "", fallback_entries, "fallback")
     runtime_names = {entry.command for entry in runtime_entries}
     fallback_names = set(fallback_by_command)
     return CommandCatalog(
         tested_version,
-        str(runtime_payload.get("observedCodexVersion") or ""),
+        observed_version,
         runtime_entries,
         "runtime",
         tuple(sorted(runtime_names - fallback_names)),

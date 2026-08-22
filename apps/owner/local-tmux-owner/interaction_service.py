@@ -362,11 +362,13 @@ class InteractionService:
                     HTTPStatus.CONFLICT,
                 )
             ready = self.runtime.ready_for_input(config)
-            if not ready:
-                turn_running = getattr(self.runtime, "turn_running", None)
+            turn_running = getattr(self.runtime, "turn_running", None)
+            running = bool(callable(turn_running) and turn_running(config))
+            if not ready and not (entry.available_during_task and running):
                 readiness_deadline = self._now() + min(0.75, self.transition_timeout)
                 while self._now() < readiness_deadline:
                     if callable(turn_running) and turn_running(config):
+                        running = True
                         break
                     self._sleep(self.poll_interval)
                     if self.snapshot(config).get("interaction") is not None:
@@ -377,8 +379,16 @@ class InteractionService:
                     if self.runtime.ready_for_input(config):
                         ready = True
                         break
-            if not ready:
-                raise InteractionServiceError("Codex is not ready for a local command", HTTPStatus.CONFLICT)
+            if not ready and not (entry.available_during_task and running):
+                message = (
+                    f"{entry.command} is disabled while the current Codex task is in progress"
+                    if running
+                    else "Codex is not ready for a local command"
+                )
+                raise InteractionServiceError(
+                    message,
+                    HTTPStatus.CONFLICT,
+                )
             if self.runtime.composer_has_draft(config):
                 raise InteractionServiceError(
                     "Codex TUI already has an unsent draft",

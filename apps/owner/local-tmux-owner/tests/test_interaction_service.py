@@ -237,6 +237,27 @@ class InteractionServiceTest(unittest.TestCase):
         self.assertEqual([], self.runtime.literals)
         self.assertEqual([], self.runtime.keys)
 
+    def test_verified_goal_control_executes_while_a_task_is_running(self):
+        self.runtime.screen = "Working · esc to interrupt"
+        self.runtime.ready = False
+        self.runtime.turn_running = lambda _config: True
+
+        def transition(key):
+            if key == "Enter":
+                self.runtime.command_text = ""
+                self.runtime.screen = "Working · esc to interrupt"
+
+        self.runtime.on_key = transition
+        result = self.service.begin_command(
+            self.config,
+            command="/goal clear",
+            client_request_id="command-goal-running-1",
+        )
+
+        self.assertEqual("running", result["commandState"])
+        self.assertEqual(["/goal clear"], self.runtime.literals)
+        self.assertEqual(["Enter"], self.runtime.keys)
+
     def test_inline_command_returns_completed_without_rollout_evidence(self):
         self.runtime.screen = "› Ask Codex"
         self.runtime.ready = True

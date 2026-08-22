@@ -1,6 +1,15 @@
 (() => {
   'use strict';
 
+  const TESTED_CODEX_VERSION = '0.149.0';
+
+  const busySafeCommands = new Set([
+    '/model', '/fast', '/ide', '/permissions', '/approve', '/skills', '/hooks',
+    '/rename', '/resume', '/goal', '/agents', '/side', '/copy', '/raw', '/diff',
+    '/mention', '/pwd', '/status', '/usage', '/title', '/statusline', '/mcp',
+    '/plugins', '/exit', '/feedback', '/ps', '/stop',
+  ]);
+
   let inventory = Object.freeze([
     { command: '/model', description: 'Choose the model and reasoning effort', category: 'Model' },
     { command: '/fast', description: 'Toggle faster responses with increased usage', category: 'Model' },
@@ -48,7 +57,11 @@
     { command: '/ps', description: 'List background terminals', category: 'Runtime' },
     { command: '/stop', description: 'Stop all background terminals', category: 'Runtime', risk: 'interrupts work' },
     { command: '/clear', description: 'Clear the terminal and start a new chat', category: 'Conversation', risk: 'changes thread' },
-  ].map((entry) => Object.freeze({ ...entry, aliases: Object.freeze(entry.aliases || []) })));
+  ].map((entry) => Object.freeze({
+    ...entry,
+    aliases: Object.freeze(entry.aliases || []),
+    availableDuringTask: busySafeCommands.has(entry.command),
+  })));
 
   const launchInventory = Object.freeze([
     { command: 'codex', description: 'Start Codex in the current shell', category: 'CLI' },
@@ -114,6 +127,8 @@
 
   function replaceInventory(entries, metadata = {}) {
     if (!Array.isArray(entries) || !entries.length) return false;
+    const observedVersion = String(metadata.observedCodexVersion || '');
+    const allowBusyCapabilities = Boolean(observedVersion && observedVersion === TESTED_CODEX_VERSION);
     const known = new Map(inventory.map((entry) => [entry.command, entry]));
     const next = [];
     const seen = new Set();
@@ -130,6 +145,9 @@
         category: String(raw.category || fallback.category || 'Unclassified'),
         behavior: String(raw.behavior || fallback.behavior || 'unclassified'),
         argumentHint,
+        availableDuringTask: allowBusyCapabilities && (typeof raw.availableDuringTask === 'boolean'
+          ? raw.availableDuringTask
+          : Boolean(fallback.availableDuringTask)),
         insert: fallback.insert || (argumentHint && !argumentHint.startsWith('[') ? `${command} ` : undefined),
         aliases: Object.freeze(aliases),
         risk: fallback.risk || (raw.behavior === 'unclassified' ? 'unclassified' : ''),
@@ -138,14 +156,14 @@
     }
     if (!next.length) return false;
     inventory = Object.freeze(next);
-    api.observedCodexVersion = String(metadata.observedCodexVersion || '');
+    api.observedCodexVersion = observedVersion;
     api.catalogDrifted = Boolean(metadata.drifted);
     return true;
   }
 
   const api = {
     version: '1',
-    testedCodexVersion: '0.149.0',
+    testedCodexVersion: TESTED_CODEX_VERSION,
     observedCodexVersion: '',
     catalogDrifted: false,
     get inventory() { return inventory; },

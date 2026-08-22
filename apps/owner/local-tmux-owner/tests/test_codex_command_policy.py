@@ -22,6 +22,7 @@ class CodexCommandPolicyTest(unittest.TestCase):
         self.assertEqual("menu", policy.command_behavior("/model", catalog))
         self.assertEqual("/rename Anonymous title", policy.command_invocation("/rename Anonymous title", catalog))
         self.assertEqual("argument", policy.command_behavior("/rename Anonymous title", catalog))
+        self.assertTrue(policy.command_entry("/goal clear", catalog).available_during_task)
         self.assertIsNone(policy.command_invocation("/unknown text", catalog))
         self.assertIsNone(policy.command_invocation("/rename bad\n/status", catalog))
 
@@ -39,6 +40,29 @@ class CodexCommandPolicyTest(unittest.TestCase):
         self.assertIn("/usage", catalog.removed)
         self.assertEqual("unclassified", policy.command_behavior("/future-command", catalog))
         self.assertEqual("menu", policy.command_behavior("/model", catalog))
+        self.assertTrue(policy.command_entry("/model", catalog).available_during_task)
+        self.assertFalse(policy.command_entry("/future-command", catalog).available_during_task)
+
+    def test_version_drift_never_inherits_busy_task_capability(self):
+        with tempfile.TemporaryDirectory() as temp:
+            runtime = Path(temp) / "catalog.json"
+            runtime.write_text(
+                json.dumps(
+                    {
+                        "schemaVersion": 1,
+                        "observedCodexVersion": "0.next",
+                        "commands": [
+                            {"command": "/goal", "availableDuringTask": True},
+                            "/future-command",
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            catalog = policy.load_catalog(runtime_path=runtime)
+        self.assertTrue(catalog.drifted)
+        self.assertFalse(policy.command_entry("/goal clear", catalog).available_during_task)
+        self.assertFalse(policy.command_entry("/future-command", catalog).available_during_task)
 
     def test_corrupt_or_symlink_runtime_catalog_falls_back(self):
         with tempfile.TemporaryDirectory() as temp:

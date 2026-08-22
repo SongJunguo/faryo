@@ -2306,6 +2306,11 @@
     const session = selectedSession, browserText = promptInput.value;
     const pending = commandRequest(command, session);
     const entry = commandCatalogEntry(command);
+    if (agentRunning && entry && !entry.availableDuringTask) {
+      clearCommandRequest(session);
+      setError(`${entry.command} is disabled while the current Codex task is in progress.`);
+      return false;
+    }
     const risk = String(entry?.risk || entry?.behavior || '');
     const needsConfirmation = entry?.behavior === 'dangerous'
       || entry?.behavior === 'unclassified'

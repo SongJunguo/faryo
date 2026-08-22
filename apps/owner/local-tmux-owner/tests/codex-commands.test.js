@@ -53,7 +53,13 @@ assert.equal(commands.replaceInventory([
 assert.deepEqual(commands.inventory.map((entry) => entry.command), ['/model', '/future-command']);
 assert.equal(commands.match('/future')[0].command, '/future-command');
 assert.equal(commands.inventory[1].risk, 'unclassified');
+assert.equal(commands.inventory[0].availableDuringTask, true);
+assert.equal(commands.inventory[1].availableDuringTask, false);
 assert.equal(commands.catalogDrifted, true);
+assert.equal(commands.replaceInventory([
+  { command: '/goal', availableDuringTask: true },
+], { observedCodexVersion: '0.next', drifted: true }), true);
+assert.equal(commands.inventory[0].availableDuringTask, false);
 assert.equal(commands.replaceInventory(catalog.commands, { observedCodexVersion: catalog.testedCodexVersion, drifted: false }), true);
 assert.equal(commands.inventory.length, expectedVisibleCommands.length);
 
