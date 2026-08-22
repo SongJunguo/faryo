@@ -15,6 +15,7 @@ from starlette.routing import Route
 
 import gateway_security
 import owner_client
+from faryo_cli import browser_contract
 
 
 def routes(legacy: Any, config: Any, client: owner_client.OwnerClient, support: Any) -> list[Route]:
@@ -113,6 +114,7 @@ def routes(legacy: Any, config: Any, client: owner_client.OwnerClient, support: 
                 payload = json.loads(body.decode("utf-8"))
                 if not isinstance(payload, dict):
                     raise ValueError("invalid JSON object")
+                browser_contract.require_supported_version(payload)
                 route = str(payload.get("route") or "").strip().lower()
                 target = legacy.clean_agent_session_id(
                     str(payload.get("agent_session_id") or payload.get("agentSessionId") or "")
@@ -188,6 +190,7 @@ def routes(legacy: Any, config: Any, client: owner_client.OwnerClient, support: 
                 payload = json.loads(body.decode("utf-8"))
                 if not isinstance(payload, dict):
                     raise ValueError("invalid JSON object")
+                browser_contract.require_supported_version(payload)
                 if payload.get("confirm") != "revoke":
                     raise ValueError("explicit revoke confirmation is required")
                 config.revoke_sessions(current)

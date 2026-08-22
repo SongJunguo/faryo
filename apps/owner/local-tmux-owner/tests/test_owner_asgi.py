@@ -199,6 +199,7 @@ class OwnerAsgiTest(unittest.TestCase):
         status, headers, body = self.request("GET", "/health")
         self.assertEqual(status, 200)
         self.assertEqual(json.loads(body)["ok"], True)
+        self.assertEqual(json.loads(body)["envelopeVersion"], 1)
         self.assertEqual(headers.get("x-frame-options"), "DENY")
         self.assertEqual(headers.get("cache-control"), "no-store")
 
@@ -241,6 +242,21 @@ class OwnerAsgiTest(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(json.loads(body)["deliveryState"], "submitted")
         self.assertEqual(self.runtime.sent, [("faryo1", "hello", "client-fixture-1")])
+
+        status, _headers, body = self.request(
+            "POST",
+            "/api/send",
+            {
+                "session": "faryo1",
+                "text": "future",
+                "clientMessageId": "client-fixture-2",
+                "envelopeVersion": 2,
+            },
+            token=True,
+        )
+        self.assertEqual(status, 409)
+        self.assertIn("envelope", json.loads(body)["error"])
+        self.assertEqual(len(self.runtime.sent), 1)
 
         status, headers, body = self.request("GET", "/event-stream.js", token=True)
         self.assertEqual(status, 200)

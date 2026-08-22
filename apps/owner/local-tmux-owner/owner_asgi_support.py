@@ -15,6 +15,7 @@ from starlette.requests import Request
 from starlette.responses import FileResponse, Response
 
 import owner_http
+from faryo_cli import browser_contract
 
 
 class SecurityHeadersMiddleware:
@@ -44,7 +45,11 @@ class OwnerAsgiSupport:
 
     @staticmethod
     def json_response(value: dict[str, Any], status: int = HTTPStatus.OK) -> Response:
-        body = json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        body = json.dumps(
+            browser_contract.wrap_response(value),
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ).encode("utf-8")
         return Response(
             body,
             status_code=int(status),
@@ -81,6 +86,10 @@ class OwnerAsgiSupport:
             raise self.core.OwnerError("invalid json") from exc
         if not isinstance(value, dict):
             raise self.core.OwnerError("json body must be an object")
+        try:
+            browser_contract.require_supported_version(value)
+        except browser_contract.BrowserContractError as exc:
+            raise self.core.OwnerError(str(exc), HTTPStatus.CONFLICT) from exc
         return value
 
     async def read_multipart_form(self, request: Request) -> dict[str, Any]:

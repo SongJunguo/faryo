@@ -20,7 +20,7 @@ class RuntimeDiagnosticsTest(unittest.TestCase):
     def test_capabilities_are_versioned_and_pending_queue_is_not_overclaimed(self) -> None:
         payload = runtime_diagnostics.capability_payload("v-test", True, True)
 
-        self.assertEqual(payload["schemaVersion"], 2)
+        self.assertEqual(payload["schemaVersion"], 3)
         self.assertTrue(payload["features"]["appServerStreaming"])
         self.assertTrue(payload["features"]["workspaceChanges"])
         self.assertTrue(payload["features"]["diagnostics"])
@@ -35,7 +35,10 @@ class RuntimeDiagnosticsTest(unittest.TestCase):
         self.assertEqual(payload["protocol"]["tuiInteraction"], "v1")
         self.assertEqual(payload["protocol"]["ownerHttp"], "asgi-v1")
         self.assertEqual(payload["protocol"]["eventStream"], "cursor-replay-v1")
-        self.assertEqual(payload["protocol"]["webManagedWriter"], "codex-app-server")
+        self.assertEqual(payload["protocol"]["browserEnvelope"], "v1")
+        self.assertEqual(payload["protocol"]["appServerWriter"], "codex-app-server")
+        self.assertEqual(payload["protocol"]["codexTuiWriter"], "tmux-tui")
+        self.assertNotIn("webManagedWriter", payload["protocol"])
 
     def test_diagnostics_contains_only_allowlisted_metadata(self) -> None:
         capabilities = runtime_diagnostics.capability_payload("v-test", False, False)

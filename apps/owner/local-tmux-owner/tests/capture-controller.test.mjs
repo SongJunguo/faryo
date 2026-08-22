@@ -3,7 +3,8 @@ import test from "node:test";
 
 import { createCaptureController } from "../static/owner/capture-controller.mjs";
 
-const delay = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
+const delay = (milliseconds) =>
+  new Promise((resolve) => setTimeout(resolve, milliseconds));
 const eventParser = { createParser: () => ({ push() {} }) };
 
 function fixture(overrides = {}) {
@@ -54,7 +55,10 @@ test("capture refresh applies the newest successful payload", async () => {
 test("refresh cancellation ignores a late payload", async () => {
   let resolveCapture;
   const { controller, captures } = fixture({
-    loadCapture: () => new Promise((resolve) => { resolveCapture = resolve; }),
+    loadCapture: () =>
+      new Promise((resolve) => {
+        resolveCapture = resolve;
+      }),
   });
   const pending = controller.refresh(320);
   controller.cancelRefresh();
@@ -72,7 +76,10 @@ test("a response from an obsolete conversation scope is rejected", async () => {
       candidate.session === scope.session &&
       candidate.generation === scope.generation &&
       candidate.mode === scope.mode,
-    loadCapture: () => new Promise((resolve) => { resolveCapture = resolve; }),
+    loadCapture: () =>
+      new Promise((resolve) => {
+        resolveCapture = resolve;
+      }),
   });
   const pending = controller.refresh(320);
   scope = { session: "beta", generation: 2, mode: "compact" };
@@ -115,6 +122,45 @@ test("an event from an obsolete conversation scope is rejected", async (context)
     type: "capture",
     data: JSON.stringify({ ok: true, text: "obsolete event" }),
   });
+  assert.deepEqual(captures, []);
+});
+
+test("an explicit future event envelope is rejected before capture delivery", async (context) => {
+  let applyEvent = null;
+  const { controller, captures } = fixture({
+    eventIdleTimeoutMs: 1000,
+    validateEnvelope(payload) {
+      if (payload.envelopeVersion !== 1)
+        throw new Error("unsupported envelope");
+    },
+    eventStreamParser: {
+      createParser(callback) {
+        applyEvent = callback;
+        return { push() {} };
+      },
+    },
+    fetch: async () => ({
+      ok: true,
+      status: 200,
+      body: new ReadableStream({
+        start(stream) {
+          stream.enqueue(new TextEncoder().encode(": opened\n\n"));
+        },
+      }),
+    }),
+  });
+  context.after(() => controller.closeEventStream());
+  controller.startEventStream();
+  await delay(0);
+
+  assert.throws(
+    () =>
+      applyEvent({
+        type: "capture",
+        data: JSON.stringify({ ok: true, envelopeVersion: 2, text: "future" }),
+      }),
+    /unsupported envelope/,
+  );
   assert.deepEqual(captures, []);
 });
 
@@ -194,19 +240,34 @@ test("streaming captures coalesce per frame and final state flushes immediately"
   await delay(0);
 
   for (const text of ["one", "two", "three"]) {
-    applyEvent({ type: "capture", data: JSON.stringify({ ok: true, text, streaming: true }) });
+    applyEvent({
+      type: "capture",
+      data: JSON.stringify({ ok: true, text, streaming: true }),
+    });
   }
   assert.equal(captures.length, 0);
   assert.equal(frames.size, 1);
   const callback = frames.values().next().value;
   frames.clear();
   callback();
-  assert.deepEqual(captures.map(([capture]) => capture.text), ["three"]);
+  assert.deepEqual(
+    captures.map(([capture]) => capture.text),
+    ["three"],
+  );
 
-  applyEvent({ type: "capture", data: JSON.stringify({ ok: true, text: "partial", streaming: true }) });
-  applyEvent({ type: "capture", data: JSON.stringify({ ok: true, text: "final", streaming: false }) });
+  applyEvent({
+    type: "capture",
+    data: JSON.stringify({ ok: true, text: "partial", streaming: true }),
+  });
+  applyEvent({
+    type: "capture",
+    data: JSON.stringify({ ok: true, text: "final", streaming: false }),
+  });
   assert.equal(frames.size, 0);
-  assert.deepEqual(captures.map(([capture]) => capture.text), ["three", "final"]);
+  assert.deepEqual(
+    captures.map(([capture]) => capture.text),
+    ["three", "final"],
+  );
 });
 
 test("reconnect resumes from the last accepted event id", async (context) => {
@@ -239,7 +300,11 @@ test("reconnect resumes from the last accepted event id", async (context) => {
 
   controller.startEventStream();
   await delay(0);
-  applyEvent({ id: "epoch-a:7", type: "capture", data: JSON.stringify({ ok: true, text: "seven" }) });
+  applyEvent({
+    id: "epoch-a:7",
+    type: "capture",
+    data: JSON.stringify({ ok: true, text: "seven" }),
+  });
   await delay(35);
 
   assert.equal(controller.lastEventId, "epoch-a:7");
@@ -253,7 +318,8 @@ test("a new conversation scope resets the replay cursor", async (context) => {
   const { controller } = fixture({
     getScope: () => ({ ...scope }),
     acceptScope: (candidate) =>
-      candidate.session === scope.session && candidate.generation === scope.generation,
+      candidate.session === scope.session &&
+      candidate.generation === scope.generation,
     eventIdleTimeoutMs: 1000,
     eventStreamParser: {
       createParser(callback) {
@@ -279,7 +345,11 @@ test("a new conversation scope resets the replay cursor", async (context) => {
 
   controller.startEventStream();
   await delay(0);
-  applyEvent({ id: "epoch-a:9", type: "capture", data: JSON.stringify({ ok: true, text: "alpha" }) });
+  applyEvent({
+    id: "epoch-a:9",
+    type: "capture",
+    data: JSON.stringify({ ok: true, text: "alpha" }),
+  });
   scope = { session: "beta", generation: 2, mode: "compact" };
   controller.startEventStream();
   await delay(0);
@@ -297,7 +367,10 @@ test("missing streaming support selects the polling fallback", () => {
       TextDecoder,
       clearInterval() {},
       clearTimeout,
-      setInterval: (callback, delay) => { intervals.push([callback, delay]); return 1; },
+      setInterval: (callback, delay) => {
+        intervals.push([callback, delay]);
+        return 1;
+      },
       setTimeout,
     },
   });
@@ -336,7 +409,10 @@ test("an apparently open stream with no heartbeat falls back and reconnects", as
   controller.startEventStream();
   await delay(85);
 
-  assert.ok(fetchCalls >= 2, `expected a reconnect, saw ${fetchCalls} stream request(s)`);
+  assert.ok(
+    fetchCalls >= 2,
+    `expected a reconnect, saw ${fetchCalls} stream request(s)`,
+  );
   assert.ok(states.includes("live"));
   assert.ok(states.filter((state) => state === "reconnecting").length >= 2);
 });
@@ -405,8 +481,15 @@ test("a live stream retains deduplicated capture polling as a safety net", async
   await delay(45);
 
   assert.equal(states.at(-1), "live");
-  assert.ok(refreshCalls >= 2, `expected safety refreshes, saw ${refreshCalls}`);
-  assert.equal(captures.length, 1, "unchanged safety payloads should not rerender the conversation");
+  assert.ok(
+    refreshCalls >= 2,
+    `expected safety refreshes, saw ${refreshCalls}`,
+  );
+  assert.equal(
+    captures.length,
+    1,
+    "unchanged safety payloads should not rerender the conversation",
+  );
 });
 
 test("a delayed safety response cannot replace a newer event frame", async (context) => {
@@ -421,7 +504,10 @@ test("a delayed safety response cannot replace a newer event frame", async (cont
         return { push() {} };
       },
     },
-    loadCapture: () => new Promise((resolve) => { resolveSafety = resolve; }),
+    loadCapture: () =>
+      new Promise((resolve) => {
+        resolveSafety = resolve;
+      }),
     fetch: async (_url, init) => {
       let streamController = null;
       const body = new ReadableStream({
@@ -430,11 +516,15 @@ test("a delayed safety response cannot replace a newer event frame", async (cont
           stream.enqueue(new TextEncoder().encode(": opened\n\n"));
         },
       });
-      init.signal.addEventListener("abort", () => {
-        const error = new Error("aborted");
-        error.name = "AbortError";
-        streamController.error(error);
-      }, { once: true });
+      init.signal.addEventListener(
+        "abort",
+        () => {
+          const error = new Error("aborted");
+          error.name = "AbortError";
+          streamController.error(error);
+        },
+        { once: true },
+      );
       return { ok: true, status: 200, body };
     },
   });
@@ -443,9 +533,15 @@ test("a delayed safety response cannot replace a newer event frame", async (cont
   controller.startEventStream();
   await delay(0);
   const pendingSafety = controller.refresh(320, { silent: true, safety: true });
-  applyEvent({ type: "capture", data: JSON.stringify({ ok: true, text: "new" }) });
+  applyEvent({
+    type: "capture",
+    data: JSON.stringify({ ok: true, text: "new" }),
+  });
   resolveSafety({ ok: true, text: "old" });
   await pendingSafety;
 
-  assert.deepEqual(captures.map(([capture]) => capture.text), ["new"]);
+  assert.deepEqual(
+    captures.map(([capture]) => capture.text),
+    ["new"],
+  );
 });

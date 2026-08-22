@@ -14,7 +14,7 @@
   // but never let a transient asset failure block capture/history rendering.
   const changesPanelModulePromise = ownerModule('changes-panel.mjs');
   const [
-    { createApiClient, sessionApiPath },
+    { createApiClient, sessionApiPath, validateBrowserEnvelope },
     { createAttachmentController },
     { createHistoryController, isStructuredCapture },
     { createRichBlockController, shouldRenderEagerly },
@@ -1202,6 +1202,7 @@
     ),
     ownerHeaders: ownerApiClient.ownerHeaders,
     eventStreamParser,
+    validateEnvelope: validateBrowserEnvelope,
     debug: (...args) => console.debug(...args),
   });
 

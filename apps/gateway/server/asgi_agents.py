@@ -15,7 +15,7 @@ from starlette.routing import Route
 
 import gateway_security
 import owner_client
-from faryo_cli import session_backend
+from faryo_cli import browser_contract, session_backend
 
 
 def routes(legacy: Any, config: Any, client: owner_client.OwnerClient, support: Any) -> list[Route]:
@@ -42,6 +42,7 @@ def routes(legacy: Any, config: Any, client: owner_client.OwnerClient, support: 
                 payload = json.loads(body.decode("utf-8"))
                 if not isinstance(payload, dict):
                     raise ValueError("invalid JSON object")
+                browser_contract.require_supported_version(payload)
                 route = str(payload.get("route") or "").strip()
                 target = legacy.clean_agent_session_id(str(payload.get("agent_session_id") or "")) or ""
                 source = str(payload.get("source") or "")
@@ -154,6 +155,7 @@ def routes(legacy: Any, config: Any, client: owner_client.OwnerClient, support: 
                 payload = json.loads(body.decode("utf-8"))
                 if not isinstance(payload, dict):
                     raise ValueError("invalid JSON object")
+                browser_contract.require_supported_version(payload)
                 route = str(payload.get("route") or "").strip()
                 command = legacy.clean_agent_launch_command(str(payload.get("command") or ""))
                 requested_cwd = str(payload.get("cwd") or "").strip().rstrip("/")

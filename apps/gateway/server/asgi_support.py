@@ -14,6 +14,7 @@ from starlette.responses import HTMLResponse, Response
 
 import gateway_security
 import owner_client
+from faryo_cli import browser_contract
 
 
 class SecurityHeadersMiddleware:
@@ -60,7 +61,8 @@ class AsgiSupport:
 
     @staticmethod
     def json_response(value: dict[str, Any], status: int = HTTPStatus.OK) -> Response:
-        body = json.dumps(value, ensure_ascii=False).encode("utf-8")
+        payload = browser_contract.wrap_response(value) if "ok" in value else dict(value)
+        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         return Response(body, status_code=status, headers={"Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store"})
 
     def forwarded_request_headers(self, request: Request) -> dict[str, str]:
@@ -120,4 +122,5 @@ class AsgiSupport:
             raise ValueError("invalid JSON body") from exc
         if not isinstance(payload, dict):
             raise ValueError("invalid JSON object")
+        browser_contract.require_supported_version(payload)
         return payload

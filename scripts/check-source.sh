@@ -137,6 +137,7 @@ release_checks() {
     "$ROOT/src/faryo_cli/__init__.py" \
     "$ROOT/src/faryo_cli/__main__.py" \
     "$ROOT/src/faryo_cli/application.py" \
+    "$ROOT/src/faryo_cli/browser_contract.py" \
     "$ROOT/src/faryo_cli/cli.py" \
     "$ROOT/src/faryo_cli/codex_runtime.py" \
     "$ROOT/src/faryo_cli/diagnostics.py" \
@@ -493,6 +494,7 @@ for owner_module in (
 assert "/api/workspace-changes" in owner_asgi_read_source and "/api/workspace-changes" in changes_panel_source, "workspace changes must use the scoped read-only Owner API"
 assert "/api/capabilities" in owner_asgi_read_source and "/api/diagnostics" in owner_asgi_read_source and "loadOwnerCapabilities" in app, "Owner must expose versioned redacted diagnostics"
 assert '"pendingQueueManagement": False' in runtime_diagnostics_source and '"pendingQueue": "unsupported"' in runtime_diagnostics_source, "Faryo must not overclaim editable Codex queues"
+assert '"browserEnvelope": "v1"' in runtime_diagnostics_source and '"appServerWriter"' in runtime_diagnostics_source and '"codexTuiWriter"' in runtime_diagnostics_source and '"webManagedWriter"' not in runtime_diagnostics_source, "browser protocol and backend diagnostics must use current domain names"
 assert '"queuedSendNow": True' in runtime_diagnostics_source and '"queuedSendNow": "escape-when-advertised"' in runtime_diagnostics_source, "Faryo must expose only the explicit Esc send-now capability"
 assert "shell=True" not in workspace_changes_source and "--no-ext-diff" in workspace_changes_source and "--no-textconv" in workspace_changes_source, "workspace diff must remain fixed and read-only"
 stable_blocks_source = (root / "apps/owner/local-tmux-owner/static/stable-blocks.js").read_text(encoding="utf-8")

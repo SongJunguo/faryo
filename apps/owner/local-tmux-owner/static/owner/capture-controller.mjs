@@ -25,32 +25,39 @@ export function createCaptureController(options = {}) {
   let eventCursorScope = "";
   let pendingEventDelivery = null;
   let eventDeliveryFrame = 0;
-  const requestFrame = typeof view.requestAnimationFrame === "function"
-    ? view.requestAnimationFrame.bind(view)
-    : (callback) => view.setTimeout(callback, 0);
-  const cancelFrame = typeof view.cancelAnimationFrame === "function"
-    ? view.cancelAnimationFrame.bind(view)
-    : view.clearTimeout.bind(view);
+  const requestFrame =
+    typeof view.requestAnimationFrame === "function"
+      ? view.requestAnimationFrame.bind(view)
+      : (callback) => view.setTimeout(callback, 0);
+  const cancelFrame =
+    typeof view.cancelAnimationFrame === "function"
+      ? view.cancelAnimationFrame.bind(view)
+      : view.clearTimeout.bind(view);
 
   function currentScope() {
     return typeof options.getScope === "function" ? options.getScope() : null;
   }
 
   function scopeAccepted(scope) {
-    return typeof options.acceptScope !== "function" || options.acceptScope(scope) !== false;
+    return (
+      typeof options.acceptScope !== "function" ||
+      options.acceptScope(scope) !== false
+    );
   }
 
   function sameCapture(left, right) {
     if (!left || !right) return false;
-    return left.text === right.text
-      && left.liveText === right.liveText
-      && left.captureSource === right.captureSource
-      && left.sessionId === right.sessionId
-      && left.sessionTitle === right.sessionTitle
-      && left.agentRunning === right.agentRunning
-      && left.queuedSendNowAvailable === right.queuedSendNowAvailable
-      && left.interactionRevision === right.interactionRevision
-      && left.streamRevision === right.streamRevision;
+    return (
+      left.text === right.text &&
+      left.liveText === right.liveText &&
+      left.captureSource === right.captureSource &&
+      left.sessionId === right.sessionId &&
+      left.sessionTitle === right.sessionTitle &&
+      left.agentRunning === right.agentRunning &&
+      left.queuedSendNowAvailable === right.queuedSendNowAvailable &&
+      left.interactionRevision === right.interactionRevision &&
+      left.streamRevision === right.streamRevision
+    );
   }
 
   function deliverCapture(capture, meta) {
@@ -100,7 +107,8 @@ export function createCaptureController(options = {}) {
     try {
       const capture = await options.loadCapture(lines, controller.signal);
       if (runId !== refreshRunId) return;
-      if (requestOptions.safety && deliveryRevisionAtStart !== deliveryRevision) return;
+      if (requestOptions.safety && deliveryRevisionAtStart !== deliveryRevision)
+        return;
       deliverCapture(capture, {
         source: "refresh",
         safety: Boolean(requestOptions.safety),
@@ -111,12 +119,16 @@ export function createCaptureController(options = {}) {
       throw error;
     } finally {
       view.clearTimeout(timeoutId);
-      if (activeRefreshController === controller) activeRefreshController = null;
+      if (activeRefreshController === controller)
+        activeRefreshController = null;
       if (runId === refreshRunId) {
         refreshInFlight = false;
         const pendingLines = pendingRefreshLines;
         pendingRefreshLines = null;
-        if (pendingLines) refresh(pendingLines, { silent: true }).catch(options.handleBackgroundError);
+        if (pendingLines)
+          refresh(pendingLines, { silent: true }).catch(
+            options.handleBackgroundError,
+          );
       }
     }
   }
@@ -126,7 +138,9 @@ export function createCaptureController(options = {}) {
     fullTimer = null;
     if (on && !options.isHidden()) {
       fullTimer = view.setInterval(() => {
-        refresh(fullLines, { silent: true }).catch(options.handleBackgroundError);
+        refresh(fullLines, { silent: true }).catch(
+          options.handleBackgroundError,
+        );
       }, fullRefreshMs);
     }
   }
@@ -136,7 +150,9 @@ export function createCaptureController(options = {}) {
     fallbackTimer = null;
     if (on && !options.isHidden() && options.getOutputMode() === "compact") {
       fallbackTimer = view.setInterval(() => {
-        refresh(compactLines, { silent: true }).catch(options.handleBackgroundError);
+        refresh(compactLines, { silent: true }).catch(
+          options.handleBackgroundError,
+        );
       }, fallbackRefreshMs);
     }
   }
@@ -146,21 +162,27 @@ export function createCaptureController(options = {}) {
     safetyTimer = null;
     if (on && !options.isHidden() && options.getOutputMode() === "compact") {
       safetyTimer = view.setInterval(() => {
-        refresh(compactLines, { silent: true, safety: true }).catch(options.handleBackgroundError);
+        refresh(compactLines, { silent: true, safety: true }).catch(
+          options.handleBackgroundError,
+        );
       }, safetyRefreshMs);
     }
   }
 
   function applyEvent(event, scope, controller, runId) {
     if (
-      controller.signal.aborted
-      || eventController !== controller
-      || eventRunId !== runId
-    ) return;
+      controller.signal.aborted ||
+      eventController !== controller ||
+      eventRunId !== runId
+    )
+      return;
     if (!scopeAccepted(scope)) return;
     if (event.id) lastEventId = String(event.id);
     if (event.type !== "capture") return;
     const capture = JSON.parse(event.data || "{}");
+    if (typeof options.validateEnvelope === "function") {
+      options.validateEnvelope(capture);
+    }
     options.setLiveState("live");
     queueEventCapture(capture, { source: "event", safety: false, scope });
   }
@@ -176,7 +198,12 @@ export function createCaptureController(options = {}) {
   }
 
   function retryEventStream(controller, runId, scope, error) {
-    if (controller.signal.aborted || eventController !== controller || eventRunId !== runId) return;
+    if (
+      controller.signal.aborted ||
+      eventController !== controller ||
+      eventRunId !== runId
+    )
+      return;
     if (!scopeAccepted(scope)) {
       eventController = null;
       return;
@@ -186,7 +213,8 @@ export function createCaptureController(options = {}) {
     options.refreshStatusIfVisible();
     setSafetyRefresh(false);
     setFallback(true);
-    if (error && error.name !== "AbortError") options.debug?.("event stream reconnecting", error);
+    if (error && error.name !== "AbortError")
+      options.debug?.("event stream reconnecting", error);
     const delay = retryDelayMs;
     retryDelayMs = Math.min(15000, Math.round(retryDelayMs * 1.7));
     if (options.getOutputMode() === "compact" && !options.isHidden()) {
@@ -206,14 +234,19 @@ export function createCaptureController(options = {}) {
       error.status = response.status;
       throw error;
     }
-    if (!response.body || typeof options.eventStreamParser?.createParser !== "function") {
+    if (
+      !response.body ||
+      typeof options.eventStreamParser?.createParser !== "function"
+    ) {
       throw new Error("Streaming response is unavailable");
     }
     retryDelayMs = eventRetryInitialMs;
     setFallback(false);
     setSafetyRefresh(true);
     options.setLiveState("live");
-    const parser = options.eventStreamParser.createParser((event) => applyEvent(event, scope, controller, runId));
+    const parser = options.eventStreamParser.createParser((event) =>
+      applyEvent(event, scope, controller, runId),
+    );
     const reader = response.body.getReader();
     try {
       const decoder = new view.TextDecoder();
@@ -238,7 +271,8 @@ export function createCaptureController(options = {}) {
       parser.push(decoder.decode(), true);
       if (!controller.signal.aborted) throw new Error("Event stream ended");
     } finally {
-      if (eventController === controller && eventRunId === runId) setSafetyRefresh(false);
+      if (eventController === controller && eventRunId === runId)
+        setSafetyRefresh(false);
       try {
         await reader.cancel();
       } catch (_error) {
@@ -250,10 +284,10 @@ export function createCaptureController(options = {}) {
 
   function startEventStream() {
     if (
-      typeof options.fetch !== "function"
-      || !view.ReadableStream
-      || options.getOutputMode() !== "compact"
-      || options.isHidden()
+      typeof options.fetch !== "function" ||
+      !view.ReadableStream ||
+      options.getOutputMode() !== "compact" ||
+      options.isHidden()
     ) {
       options.setLiveState("fallback");
       setSafetyRefresh(false);
@@ -271,8 +305,9 @@ export function createCaptureController(options = {}) {
       lastEventId = "";
     }
     eventController = controller;
-    consumeEventStream(controller, runId, scope)
-      .catch((error) => retryEventStream(controller, runId, scope, error));
+    consumeEventStream(controller, runId, scope).catch((error) =>
+      retryEventStream(controller, runId, scope, error),
+    );
   }
 
   function cancelRefresh() {
@@ -291,7 +326,11 @@ export function createCaptureController(options = {}) {
     startEventStream,
     closeEventStream,
     cancelRefresh,
-    get refreshInFlight() { return refreshInFlight; },
-    get lastEventId() { return lastEventId; },
+    get refreshInFlight() {
+      return refreshInFlight;
+    },
+    get lastEventId() {
+      return lastEventId;
+    },
   };
 }

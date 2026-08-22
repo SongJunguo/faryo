@@ -12,9 +12,15 @@ from anyio import to_thread
 from starlette.requests import Request
 from starlette.responses import Response, StreamingResponse
 
+from faryo_cli import browser_contract
+
 
 def event_frame(event: str, payload: dict[str, Any], event_id: str = "") -> bytes:
-    data = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+    data = json.dumps(
+        browser_contract.wrap_response(payload),
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
     prefix = f"id: {event_id}\n" if event_id else ""
     return f"{prefix}event: {event}\ndata: {data}\n\n".encode("utf-8")
 

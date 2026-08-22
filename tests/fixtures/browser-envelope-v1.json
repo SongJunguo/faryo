@@ -1,0 +1,7 @@
+{
+  "envelopeVersion": 1,
+  "ok": true,
+  "session": "fixture-session",
+  "revision": "fixture-revision",
+  "futureField": "ignored-by-older-readers"
+}

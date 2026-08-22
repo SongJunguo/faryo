@@ -1,4 +1,33 @@
 const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
+export const BROWSER_ENVELOPE_VERSION = 1;
+
+export function validateBrowserEnvelope(value, { allowLegacy = true } = {}) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return value;
+  const version = value.envelopeVersion;
+  if (version === undefined && allowLegacy) return value;
+  if (version !== BROWSER_ENVELOPE_VERSION) {
+    const error = new Error("Unsupported Faryo browser protocol version");
+    error.status = 409;
+    error.protocolVersion = version;
+    throw error;
+  }
+  return value;
+}
+
+function versionedJsonBody(body) {
+  if (typeof body !== "string" || !body) return body;
+  try {
+    const value = JSON.parse(body);
+    if (!value || typeof value !== "object" || Array.isArray(value))
+      return body;
+    return JSON.stringify({
+      ...value,
+      envelopeVersion: BROWSER_ENVELOPE_VERSION,
+    });
+  } catch (_error) {
+    return body;
+  }
+}
 
 export function sessionApiPath(path, session = "") {
   if (!session || !String(path).startsWith("/api/")) return String(path);
@@ -11,7 +40,8 @@ export function createApiClient(options = {}) {
   const ownerToken = String(options.ownerToken || "");
   const fetchRequest = options.fetch;
   const FormDataType = options.FormData || globalThis.FormData;
-  if (typeof fetchRequest !== "function") throw new TypeError("Owner API client requires fetch");
+  if (typeof fetchRequest !== "function")
+    throw new TypeError("Owner API client requires fetch");
   let gatewayCsrfToken = "";
 
   function ownerHeaders() {
@@ -23,6 +53,7 @@ export function createApiClient(options = {}) {
     if (!gatewayCsrfToken) {
       const response = await fetchRequest("/api/csrf", { cache: "no-store" });
       const data = await response.json();
+      validateBrowserEnvelope(data);
       if (!response.ok || !data.csrf) {
         const error = new Error(data.error || "CSRF token unavailable");
         error.status = response.status;
@@ -38,16 +69,23 @@ export function createApiClient(options = {}) {
     const method = String(requestOptions.method || "GET").toUpperCase();
     if (!SAFE_METHODS.has(method)) Object.assign(headers, await csrfHeaders());
     const isFormData = Boolean(
-      requestOptions.body
-      && typeof FormDataType === "function"
-      && requestOptions.body instanceof FormDataType
+      requestOptions.body &&
+      typeof FormDataType === "function" &&
+      requestOptions.body instanceof FormDataType,
     );
     if (requestOptions.body && !headers["Content-Type"] && !isFormData) {
       headers["Content-Type"] = "application/json";
     }
-    const requestPath = String(path).startsWith("/api/") ? `${routeBase}${path}` : String(path);
+    const body =
+      !SAFE_METHODS.has(method) && !isFormData
+        ? versionedJsonBody(requestOptions.body)
+        : requestOptions.body;
+    const requestPath = String(path).startsWith("/api/")
+      ? `${routeBase}${path}`
+      : String(path);
     const response = await fetchRequest(requestPath, {
       ...requestOptions,
+      body,
       headers,
       cache: "no-store",
     });
@@ -65,8 +103,11 @@ export function createApiClient(options = {}) {
       error.nonJson = true;
       throw error;
     }
+    validateBrowserEnvelope(data);
     if (!response.ok || data.ok === false) {
-      const error = new Error(data.error || `${response.status} ${response.statusText}`);
+      const error = new Error(
+        data.error || `${response.status} ${response.statusText}`,
+      );
       error.status = response.status;
       error.payload = data;
       throw error;

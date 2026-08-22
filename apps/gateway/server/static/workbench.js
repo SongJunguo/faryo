@@ -1,6 +1,38 @@
 let installPrompt = null,
   lastAnchorRect = null,
   csrfToken = null;
+const BROWSER_ENVELOPE_VERSION = 1;
+function validateBrowserEnvelope(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return value;
+  if (
+    value.envelopeVersion !== undefined &&
+    value.envelopeVersion !== BROWSER_ENVELOPE_VERSION
+  ) {
+    const error = new Error("Unsupported Faryo browser protocol version");
+    error.status = 409;
+    throw error;
+  }
+  return value;
+}
+function versionedRequestOptions(options = {}) {
+  const method = String(options.method || "GET").toUpperCase();
+  if (["GET", "HEAD", "OPTIONS"].includes(method)) return options;
+  if (typeof options.body !== "string" || !options.body) return options;
+  try {
+    const value = JSON.parse(options.body);
+    if (!value || typeof value !== "object" || Array.isArray(value))
+      return options;
+    return {
+      ...options,
+      body: JSON.stringify({
+        ...value,
+        envelopeVersion: BROWSER_ENVELOPE_VERSION,
+      }),
+    };
+  } catch (_error) {
+    return options;
+  }
+}
 async function readJsonResponse(response, label) {
   const text = await response.text();
   let data = null;
@@ -31,6 +63,7 @@ async function readJsonResponse(response, label) {
     error.retryable = temporary;
     throw error;
   }
+  validateBrowserEnvelope(data);
   if (!response.ok || data.ok === false) {
     const error = new Error(
       data.error || `${label} failed (${response.status})`,
@@ -42,7 +75,7 @@ async function readJsonResponse(response, label) {
   return data;
 }
 async function fetchJson(url, options, label) {
-  const response = await fetch(url, options);
+  const response = await fetch(url, versionedRequestOptions(options));
   return readJsonResponse(response, label || "Request");
 }
 async function csrfHeaders() {
